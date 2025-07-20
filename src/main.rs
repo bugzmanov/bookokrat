@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -96,6 +96,9 @@ struct App {
     animation_progress: f32,  // 0.0 = file list mode, 1.0 = reading mode
     target_progress: f32,     // Target animation value
     is_animating: bool,
+    // Highlight state for navigation aid
+    highlight_visual_line: Option<usize>,  // Visual line number to highlight (0-based)
+    highlight_end_time: std::time::Instant,  // When to stop highlighting
 }
 
 #[derive(PartialEq)]
@@ -150,7 +153,7 @@ impl App {
             Bookmarks::new()
         });
 
-        Self {
+        let mut app = Self {
             epub_files: epub_files.clone(),
             selected: if has_files { 0 } else { 0 },
             current_content: None,
@@ -179,7 +182,24 @@ impl App {
             animation_progress: 0.0,  // Start in file list mode
             target_progress: 0.0,
             is_animating: false,
+            // Initialize highlight state
+            highlight_visual_line: None,
+            highlight_end_time: std::time::Instant::now(),
+        };
+
+        // Auto-load the most recently read book if available
+        if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
+            // Check if the most recent book still exists in the current directory
+            if app.epub_files.contains(&recent_path) {
+                info!("Auto-loading most recent book: {}", recent_path);
+                app.load_epub(&recent_path);
+                app.mode = Mode::Content;
+                app.target_progress = 1.0;
+                app.animation_progress = 1.0; // Skip animation on startup
+            }
         }
+
+        app
     }
 
     fn load_epub(&mut self, path: &str) {
@@ -255,6 +275,13 @@ impl App {
                 self.animation_progress += diff * animation_speed;
             }
         }
+        
+        // Clear expired highlight
+        if let Some(_) = self.highlight_visual_line {
+            if std::time::Instant::now() >= self.highlight_end_time {
+                self.highlight_visual_line = None;
+            }
+        }
     }
 
     fn start_animation(&mut self, target: f32) {
@@ -293,21 +320,27 @@ impl App {
             lines.push(Line::from("")); // Empty line after title
         }
         
-        for line in text.lines() {
+        let text_lines: Vec<&str> = text.lines().collect();
+        for (_visible_line_index, line) in text_lines.iter().enumerate() {
             let mut spans = Vec::new();
             let chars: Vec<char> = line.chars().collect();
             let mut i = 0;
             let mut current_text = String::new();
+            
+            // Use overlay highlighting instead of text-level highlighting
+            let should_highlight = false;
             
             while i < chars.len() {
                 // Check for bold markers (**)
                 if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
                     // Save any accumulated text
                     if !current_text.is_empty() {
-                        spans.push(Span::styled(
-                            current_text.clone(),
+                        let style = if should_highlight {
+                            Style::default().fg(Color::Black).bg(Color::Yellow)
+                        } else {
                             Style::default().fg(OCEANIC_NEXT.base_07)
-                        ));
+                        };
+                        spans.push(Span::styled(current_text.clone(), style));
                         current_text.clear();
                     }
                     
@@ -350,10 +383,12 @@ impl App {
                     
                     // Save any accumulated text
                     if !current_text.is_empty() {
-                        spans.push(Span::styled(
-                            current_text.clone(),
+                        let style = if should_highlight {
+                            Style::default().fg(Color::Black).bg(Color::Yellow)
+                        } else {
                             Style::default().fg(OCEANIC_NEXT.base_07)
-                        ));
+                        };
+                        spans.push(Span::styled(current_text.clone(), style));
                         current_text.clear();
                     }
                     
@@ -397,10 +432,12 @@ impl App {
             
             // Add any remaining text
             if !current_text.is_empty() {
-                spans.push(Span::styled(
-                    current_text,
+                let style = if should_highlight {
+                    Style::default().fg(OCEANIC_NEXT.base_07).bg(OCEANIC_NEXT.base_0a)
+                } else {
                     Style::default().fg(OCEANIC_NEXT.base_07)
-                ));
+                };
+                spans.push(Span::styled(current_text, style));
             }
             
             if spans.is_empty() {
@@ -651,6 +688,46 @@ impl App {
         }
     }
 
+    fn scroll_half_screen_down(&mut self, screen_height: usize) {
+        if let Some(content) = &self.current_content {
+            let half_screen = (screen_height / 2).max(1);
+            self.scroll_offset = self.scroll_offset.saturating_add(half_screen);
+            
+            // Simply highlight the middle line of the current window
+            let middle_line = screen_height / 2;
+            
+            let total_lines = content.lines().count();
+            debug!("Half-screen down to offset: {}/{}, highlighting middle line at screen position: {}", 
+                   self.scroll_offset, total_lines, middle_line);
+            
+            // Set up highlighting for 2 seconds
+            self.highlight_visual_line = Some(middle_line);
+            self.highlight_end_time = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            
+            self.save_bookmark();
+        }
+    }
+
+    fn scroll_half_screen_up(&mut self, screen_height: usize) {
+        if let Some(content) = &self.current_content {
+            let half_screen = (screen_height / 2).max(1);
+            self.scroll_offset = self.scroll_offset.saturating_sub(half_screen);
+            
+            // Simply highlight the middle line of the current window
+            let middle_line = screen_height / 2;
+            
+            let total_lines = content.lines().count();
+            debug!("Half-screen up to offset: {}/{}, highlighting middle line at screen position: {}", 
+                   self.scroll_offset, total_lines, middle_line);
+            
+            // Set up highlighting for 2 seconds
+            self.highlight_visual_line = Some(middle_line);
+            self.highlight_end_time = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            
+            self.save_bookmark();
+        }
+    }
+
     fn draw(&mut self, f: &mut ratatui::Frame) {
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
@@ -737,8 +814,8 @@ impl App {
         let title = if self.current_epub.is_some() {
             let chapter_progress = if self.content_length > 0 {
                 // Get the visible area width and height (accounting for margins and borders)
-                // We subtract 8 for left/right margins (4 each) and 2 for borders
-                let visible_width = content_area.width.saturating_sub(10) as usize;
+                // We subtract 10 for left/right margins (5 each) and 2 for borders
+                let visible_width = content_area.width.saturating_sub(12) as usize;
                 // We subtract 2 for borders and 1 for top margin
                 let visible_height = content_area.height.saturating_sub(3) as usize;
                 
@@ -821,9 +898,9 @@ impl App {
         let margined_content_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(4),  // Left margin
+                Constraint::Length(5),  // Left margin (increased from 4)
                 Constraint::Min(0),     // Content area
-                Constraint::Length(4),  // Right margin
+                Constraint::Length(5),  // Right margin (increased from 4)
             ])
             .split(vertical_margined_area[1]);
         
@@ -841,10 +918,29 @@ impl App {
             
         f.render_widget(content_paragraph, margined_content_area[1]);
 
+        // Draw highlight overlay if active
+        if let Some(highlight_line) = self.highlight_visual_line {
+            if std::time::Instant::now() < self.highlight_end_time {
+                let content_area = margined_content_area[1];
+                // Only highlight if the line is within the visible area
+                if highlight_line < content_area.height as usize {
+                    let highlight_area = ratatui::layout::Rect {
+                        x: content_area.x,
+                        y: content_area.y + highlight_line as u16,
+                        width: content_area.width,
+                        height: 1,
+                    };
+                    let highlight_block = Block::default()
+                        .style(Style::default().bg(Color::Yellow));
+                    f.render_widget(highlight_block, highlight_area);
+                }
+            }
+        }
+
         // Draw help bar
         let help_text = match self.mode {
             Mode::FileList => "j/k: Navigate | Enter: Select | Tab: Switch View | q: Quit",
-            Mode::Content => "j/k: Scroll | h/l: Change Chapter | Tab: Switch View | q: Quit",
+            Mode::Content => "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Tab: Switch | q: Quit",
         };
         let help = Paragraph::new(help_text)
             .block(Block::default().borders(Borders::ALL)
@@ -909,7 +1005,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
-                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('q') => {
+                        // Save bookmark before quitting
+                        app.save_bookmark();
+                        return Ok(());
+                    },
                     KeyCode::Char('j') => {
                         if app.mode == Mode::FileList {
                             if app.selected < app.epub_files.len().saturating_sub(1) {
@@ -943,6 +1043,8 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     KeyCode::Enter => {
                         if app.mode == Mode::FileList {
                             if let Some(path) = app.epub_files.get(app.selected).cloned() {
+                                // Save bookmark for current file before switching
+                                app.save_bookmark();
                                 app.load_epub(&path);
                             }
                         }
@@ -962,6 +1064,20 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                             app.mode = Mode::FileList;
                             app.start_animation(0.0); // Contract to file list mode
                         };
+                    }
+                    KeyCode::Char('d') => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && app.mode == Mode::Content {
+                            // Get the visible height for half-screen calculation
+                            let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                            app.scroll_half_screen_down(visible_height);
+                        }
+                    }
+                    KeyCode::Char('u') => {
+                        if key.modifiers.contains(KeyModifiers::CONTROL) && app.mode == Mode::Content {
+                            // Get the visible height for half-screen calculation
+                            let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                            app.scroll_half_screen_up(visible_height);
+                        }
                     }
                     _ => {}
                 }

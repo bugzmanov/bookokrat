@@ -42,6 +42,13 @@ impl Bookmarks {
         self.books.get(path)
     }
 
+    pub fn get_most_recent(&self) -> Option<(String, &Bookmark)> {
+        self.books
+            .iter()
+            .max_by_key(|(_, bookmark)| bookmark.last_read)
+            .map(|(path, bookmark)| (path.clone(), bookmark))
+    }
+
     pub fn update_bookmark(&mut self, path: &str, chapter: usize, scroll_offset: usize) {
         self.books.insert(
             path.to_string(),
