@@ -18,8 +18,8 @@ use log::{debug, error, info, warn};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    text::{Line, Span},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Terminal,
 };
@@ -243,9 +243,169 @@ impl App {
         None
     }
 
+    fn parse_styled_text(&self, text: &str) -> Text<'static> {
+        let mut lines = Vec::new();
+        
+        // Add chapter title if available
+        if let Some(ref title) = self.current_chapter_title {
+            lines.push(Line::from(vec![
+                Span::styled(title.clone(), Style::default().add_modifier(Modifier::BOLD))
+            ]));
+            lines.push(Line::from("")); // Empty line after title
+        }
+        
+        for line in text.lines() {
+            let mut spans = Vec::new();
+            let chars: Vec<char> = line.chars().collect();
+            let mut i = 0;
+            let mut current_text = String::new();
+            
+            while i < chars.len() {
+                // Check for bold markers (**)
+                if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
+                    // Save any accumulated text
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(
+                            current_text.clone(),
+                            Style::default().fg(Color::Rgb(255, 255, 255))
+                        ));
+                        current_text.clear();
+                    }
+                    
+                    // Find closing **
+                    i += 2;
+                    let mut bold_text = String::new();
+                    let mut found_closing = false;
+                    while i + 1 < chars.len() {
+                        if chars[i] == '*' && chars[i + 1] == '*' {
+                            found_closing = true;
+                            i += 2;
+                            break;
+                        } else {
+                            bold_text.push(chars[i]);
+                            i += 1;
+                        }
+                    }
+                    if found_closing {
+                        spans.push(Span::styled(
+                            bold_text,
+                            Style::default().add_modifier(Modifier::BOLD)
+                        ));
+                    } else {
+                        // No closing marker
+                        current_text.push_str("**");
+                        current_text.push_str(&bold_text);
+                    }
+                }
+                // Check for quotes (but not apostrophes in contractions)
+                else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}') ||  // Double quotes
+                        ((chars[i] == '\'' || chars[i] == '\u{2018}' || chars[i] == '\u{2019}') &&  // Single quotes
+                         // Check it's not an apostrophe in a contraction
+                         !(i > 0 && i < chars.len() - 1 && 
+                           chars[i-1].is_alphabetic() && chars[i+1].is_alphabetic())) {
+                    
+                    let quote_char = chars[i];
+                    // For single quotes, only treat as quote if at word boundary
+                    if (quote_char == '\'' || quote_char == '\u{2018}' || quote_char == '\u{2019}') {
+                        // Check if this looks like the start of a quote (preceded by space or start of line)
+                        let is_start_quote = i == 0 || !chars[i-1].is_alphabetic();
+                        if !is_start_quote {
+                            current_text.push(chars[i]);
+                            i += 1;
+                            continue;
+                        }
+                    }
+                    
+                    let closing_quote = match quote_char {
+                        '"' => '"',
+                        '\'' => '\'',
+                        '\u{201C}' => '\u{201D}',  // Opening smart quote to closing
+                        '\u{201D}' => '\u{201D}',  // Closing smart quote stays same
+                        '\u{2018}' => '\u{2019}',  // Opening single to closing
+                        '\u{2019}' => '\u{2019}',  // Closing single stays same
+                        _ => quote_char
+                    };
+                    
+                    // Save any accumulated text
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(
+                            current_text.clone(),
+                            Style::default().fg(Color::Rgb(255, 255, 255))
+                        ));
+                        current_text.clear();
+                    }
+                    
+                    // Collect the quoted content
+                    let start_pos = i;
+                    i += 1;
+                    let mut quoted_text = String::new();
+                    let mut found_closing = false;
+                    
+                    // Look for closing quote, but limit search to reasonable distance
+                    let max_quote_length = 200; // Maximum characters in a quote
+                    let search_limit = (i + max_quote_length).min(chars.len());
+                    
+                    while i < search_limit {
+                        if chars[i] == closing_quote || chars[i] == quote_char {
+                            // For single quotes, check it's at word boundary
+                            if (closing_quote == '\'' || closing_quote == '\u{2019}') {
+                                let is_end_quote = i == chars.len() - 1 || !chars[i+1].is_alphabetic();
+                                if !is_end_quote {
+                                    quoted_text.push(chars[i]);
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            
+                            // Found valid closing quote
+                            spans.push(Span::styled(
+                                format!("{}{}{}", quote_char, quoted_text, chars[i]),
+                                Style::default().fg(Color::Rgb(255, 255, 255)).add_modifier(Modifier::BOLD)
+                            ));
+                            i += 1;
+                            found_closing = true;
+                            break;
+                        } else {
+                            quoted_text.push(chars[i]);
+                            i += 1;
+                        }
+                    }
+                    
+                    if !found_closing {
+                        // No closing quote found, treat the opening quote as normal text
+                        current_text.push(chars[start_pos]);
+                        i = start_pos + 1;
+                    }
+                }
+                else {
+                    current_text.push(chars[i]);
+                    i += 1;
+                }
+            }
+            
+            // Add any remaining text
+            if !current_text.is_empty() {
+                spans.push(Span::styled(
+                    current_text,
+                    Style::default().fg(Color::Rgb(255, 255, 255))
+                ));
+            }
+            
+            if spans.is_empty() {
+                lines.push(Line::from(""));
+            } else {
+                lines.push(Line::from(spans));
+            }
+        }
+        
+        Text::from(lines)
+    }
+
     fn format_text_with_spacing(&self, text: &str) -> String {
         let mut formatted = String::new();
-        let paragraphs: Vec<&str> = text.split("\n\n").collect();
+        // First, normalize multiple newlines to ensure consistent spacing
+        let normalized_text = self.multi_newline_re.replace_all(text, "\n\n");
+        let paragraphs: Vec<&str> = normalized_text.split("\n\n").collect();
         
         for (i, paragraph) in paragraphs.iter().enumerate() {
             if paragraph.trim().is_empty() {
@@ -274,6 +434,7 @@ impl App {
             }
             
             // Add spacing between paragraphs
+            // Only add spacing if this isn't the last paragraph
             if i < paragraphs.len() - 1 {
                 formatted.push_str("\n\n"); // 2 newlines = 1 empty line between paragraphs
             }
@@ -293,8 +454,15 @@ impl App {
                 // First pass: Remove CSS and script blocks entirely
                 let style_re = regex::Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
                 let script_re = regex::Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
-                let content = style_re.replace_all(&content, "");
-                let content = script_re.replace_all(&content, "");
+                let mut content = style_re.replace_all(&content, "").into_owned();
+                content = script_re.replace_all(&content, "").into_owned();
+                
+                // Remove the extracted title from content to avoid duplication
+                if let Some(ref title) = self.current_chapter_title {
+                    // Remove h1/h2 tags containing the title
+                    let title_removal_re = regex::Regex::new(&format!(r"<h[12][^>]*>\s*{}\s*</h[12]>", regex::escape(title))).unwrap();
+                    content = title_removal_re.replace_all(&content, "").into_owned();
+                }
                 
                 // Second pass: Replace HTML entities
                 let text = content
@@ -333,7 +501,10 @@ impl App {
                     .replace("<strong>", "**")
                     .replace("</strong>", "**")
                     .replace("<b>", "**")
-                    .replace("</b>", "**");
+                    .replace("</b>", "**")
+                    // Handle divs that might create extra spacing
+                    .replace("<div>", "")
+                    .replace("</div>", "\n");
 
                 // Handle headers
                 let text = self.h_open_re.replace_all(&text, "\n\n").to_string();
@@ -344,6 +515,11 @@ impl App {
 
                 // Fifth pass: Clean up whitespace while preserving intentional formatting
                 let text = self.multi_space_re.replace_all(&text, " ").to_string();
+                // First collapse any sequence of 3+ newlines to just 2
+                let text = self.multi_newline_re.replace_all(&text, "\n\n").to_string();
+                // Then handle any sequences of newline + spaces + newline
+                let text = regex::Regex::new(r"\n\s*\n").unwrap().replace_all(&text, "\n\n").to_string();
+                // Finally collapse any remaining 3+ newlines that might have been created
                 let text = self.multi_newline_re.replace_all(&text, "\n\n").to_string();
                 let text = self.leading_space_re.replace_all(&text, "").to_string();
                 let text = self.line_leading_space_re.replace_all(&text, "\n").to_string();
@@ -358,7 +534,18 @@ impl App {
                 } else {
                     debug!("Final text length: {} bytes", text.len());
                     // Apply typography formatting with line spacing and indentation
-                    let formatted_text = self.format_text_with_spacing(&text);
+                    let mut formatted_text = self.format_text_with_spacing(&text);
+                    
+                    // Remove title from the beginning of content if it appears there
+                    if let Some(ref title) = self.current_chapter_title {
+                        // Check if the content starts with the title (possibly with some whitespace)
+                        let trimmed_content = formatted_text.trim_start();
+                        if trimmed_content.starts_with(title) {
+                            // Remove the title and any following whitespace
+                            formatted_text = trimmed_content[title.len()..].trim_start().to_string();
+                        }
+                    }
+                    
                     self.current_content = Some(formatted_text);
                     self.content_length = self.current_content.as_ref().unwrap().len();
                 }
@@ -586,13 +773,7 @@ impl App {
                 " • Done".to_string()
             };
             
-            let chapter_info = if let Some(ref title) = self.current_chapter_title {
-                format!("Chapter {}: {}", self.current_chapter + 1, title)
-            } else {
-                format!("Chapter {}/{}", self.current_chapter + 1, self.total_chapters)
-            };
-            
-            format!("{} {}%{}", chapter_info, chapter_progress, time_text)
+            format!("Chapter {}/{} {}%{}", self.current_chapter + 1, self.total_chapters, chapter_progress, time_text)
         } else {
             "Content".to_string()
         };
@@ -626,7 +807,13 @@ impl App {
             .split(vertical_margined_area[1]);
         
         // Render the actual content in the margined area
-        let content_paragraph = Paragraph::new(content)
+        let styled_content = if self.current_content.is_some() {
+            self.parse_styled_text(content)
+        } else {
+            Text::raw(content)
+        };
+        
+        let content_paragraph = Paragraph::new(styled_content)
             .wrap(Wrap { trim: true })
             .scroll((self.scroll_offset as u16, 0))
             .style(Style::default().fg(text_color));
