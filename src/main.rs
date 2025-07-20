@@ -28,6 +28,45 @@ use regex;
 
 use crate::bookmark::Bookmarks;
 
+// Color palette structure
+struct Base16Palette {
+    base_00: Color, // Background
+    base_01: Color, // Lighter background
+    base_02: Color, // Selection background
+    base_03: Color, // Comments, invisibles
+    base_04: Color, // Dark foreground
+    base_05: Color, // Default foreground
+    base_06: Color, // Light foreground
+    base_07: Color, // Light background
+    base_08: Color, // Red
+    base_09: Color, // Orange
+    base_0a: Color, // Yellow
+    base_0b: Color, // Green
+    base_0c: Color, // Cyan
+    base_0d: Color, // Blue
+    base_0e: Color, // Purple
+    base_0f: Color, // Brown
+}
+
+const OCEANIC_NEXT: Base16Palette = Base16Palette {
+    base_00: Color::from_u32(0x1B2B34),
+    base_01: Color::from_u32(0x343D46),
+    base_02: Color::from_u32(0x4F5B66),
+    base_03: Color::from_u32(0x65737E),
+    base_04: Color::from_u32(0xA7ADBA),
+    base_05: Color::from_u32(0xC0C5CE),
+    base_06: Color::from_u32(0xCDD3DE),
+    base_07: Color::from_u32(0xD8DEE9),
+    base_08: Color::from_u32(0xEC5f67),
+    base_09: Color::from_u32(0xF99157),
+    base_0a: Color::from_u32(0xFAC863),
+    base_0b: Color::from_u32(0x99C794),
+    base_0c: Color::from_u32(0x5FB3B3),
+    base_0d: Color::from_u32(0x6699CC),
+    base_0e: Color::from_u32(0xC594C5),
+    base_0f: Color::from_u32(0xAB7967),
+};
+
 struct App {
     epub_files: Vec<String>,
     selected: usize,
@@ -249,7 +288,7 @@ impl App {
         // Add chapter title if available
         if let Some(ref title) = self.current_chapter_title {
             lines.push(Line::from(vec![
-                Span::styled(title.clone(), Style::default().add_modifier(Modifier::BOLD))
+                Span::styled(title.clone(), Style::default().fg(OCEANIC_NEXT.base_0d).add_modifier(Modifier::BOLD))
             ]));
             lines.push(Line::from("")); // Empty line after title
         }
@@ -267,7 +306,7 @@ impl App {
                     if !current_text.is_empty() {
                         spans.push(Span::styled(
                             current_text.clone(),
-                            Style::default().fg(Color::Rgb(255, 255, 255))
+                            Style::default().fg(OCEANIC_NEXT.base_07)
                         ));
                         current_text.clear();
                     }
@@ -289,7 +328,7 @@ impl App {
                     if found_closing {
                         spans.push(Span::styled(
                             bold_text,
-                            Style::default().add_modifier(Modifier::BOLD)
+                            Style::default().fg(OCEANIC_NEXT.base_08).add_modifier(Modifier::BOLD)
                         ));
                     } else {
                         // No closing marker
@@ -330,7 +369,7 @@ impl App {
                     if !current_text.is_empty() {
                         spans.push(Span::styled(
                             current_text.clone(),
-                            Style::default().fg(Color::Rgb(255, 255, 255))
+                            Style::default().fg(OCEANIC_NEXT.base_07)
                         ));
                         current_text.clear();
                     }
@@ -360,7 +399,7 @@ impl App {
                             // Found valid closing quote
                             spans.push(Span::styled(
                                 format!("{}{}{}", quote_char, quoted_text, chars[i]),
-                                Style::default().fg(Color::Rgb(255, 255, 255)).add_modifier(Modifier::BOLD)
+                                Style::default().fg(OCEANIC_NEXT.base_0a).add_modifier(Modifier::BOLD)
                             ));
                             i += 1;
                             found_closing = true;
@@ -387,7 +426,7 @@ impl App {
             if !current_text.is_empty() {
                 spans.push(Span::styled(
                     current_text,
-                    Style::default().fg(Color::Rgb(255, 255, 255))
+                    Style::default().fg(OCEANIC_NEXT.base_07)
                 ));
             }
             
@@ -640,13 +679,17 @@ impl App {
     }
 
     fn draw(&mut self, f: &mut ratatui::Frame) {
-        // Define colors based on current mode
+        // Clear the entire frame with the dark background first
+        let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
+        f.render_widget(background_block, f.size());
+        
+        // Define colors using Oceanic Next palette
         let (interface_color, text_color, border_color, highlight_bg, highlight_fg) = if self.mode == Mode::Content {
-            // In reading mode, gray out interface elements but keep text prominent
-            (Color::DarkGray, Color::White, Color::DarkGray, Color::DarkGray, Color::White)
+            // In reading mode, muted interface with prominent text
+            (OCEANIC_NEXT.base_03, OCEANIC_NEXT.base_07, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_06)
         } else {
-            // In file list mode, use normal colors
-            (Color::White, Color::White, Color::White, Color::White, Color::Black)
+            // In file list mode, normal colors
+            (OCEANIC_NEXT.base_05, OCEANIC_NEXT.base_07, OCEANIC_NEXT.base_04, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_06)
         };
         
         let chunks = Layout::default()
@@ -694,7 +737,7 @@ impl App {
                     ),
                     Span::styled(
                         format!(" ({})", last_read),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(OCEANIC_NEXT.base_03),
                     ),
                 ]);
                 ListItem::new(content)
@@ -702,8 +745,11 @@ impl App {
             .collect();
 
         let files = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Books").border_style(Style::default().fg(border_color)))
-            .highlight_style(Style::default().bg(highlight_bg).fg(highlight_fg));
+            .block(Block::default().borders(Borders::ALL).title("Books")
+                .border_style(Style::default().fg(border_color))
+                .style(Style::default().bg(OCEANIC_NEXT.base_00)))
+            .highlight_style(Style::default().bg(highlight_bg).fg(highlight_fg))
+            .style(Style::default().bg(OCEANIC_NEXT.base_00));
 
         f.render_stateful_widget(files, main_chunks[0], &mut self.list_state.clone());
 
@@ -779,7 +825,9 @@ impl App {
         };
 
         // Draw the border with title around the entire content area
-        let content_border = Block::default().borders(Borders::ALL).title(title).border_style(Style::default().fg(border_color));
+        let content_border = Block::default().borders(Borders::ALL).title(title)
+            .border_style(Style::default().fg(border_color))
+            .style(Style::default().bg(OCEANIC_NEXT.base_00));
         
         // Get the inner area (inside the borders) before rendering the block
         let inner_area = content_border.inner(content_area);
@@ -816,7 +864,7 @@ impl App {
         let content_paragraph = Paragraph::new(styled_content)
             .wrap(Wrap { trim: true })
             .scroll((self.scroll_offset as u16, 0))
-            .style(Style::default().fg(text_color));
+            .style(Style::default().fg(text_color).bg(OCEANIC_NEXT.base_00));
             
         f.render_widget(content_paragraph, margined_content_area[1]);
 
@@ -826,8 +874,10 @@ impl App {
             Mode::Content => "j/k: Scroll | h/l: Change Chapter | Tab: Switch View | q: Quit",
         };
         let help = Paragraph::new(help_text)
-            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(border_color)))
-            .style(Style::default().fg(Color::DarkGray));
+            .block(Block::default().borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .style(Style::default().bg(OCEANIC_NEXT.base_00)))
+            .style(Style::default().fg(OCEANIC_NEXT.base_03).bg(OCEANIC_NEXT.base_00));
         f.render_widget(help, chunks[1]);
     }
 }
