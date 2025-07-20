@@ -336,32 +336,15 @@ impl App {
                         current_text.push_str(&bold_text);
                     }
                 }
-                // Check for quotes (but not apostrophes in contractions)
-                else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}') ||  // Double quotes
-                        ((chars[i] == '\'' || chars[i] == '\u{2018}' || chars[i] == '\u{2019}') &&  // Single quotes
-                         // Check it's not an apostrophe in a contraction
-                         !(i > 0 && i < chars.len() - 1 && 
-                           chars[i-1].is_alphabetic() && chars[i+1].is_alphabetic())) {
-                    
+                // Check for double quotes only (regular and smart double quotes)
+                // Explicitly exclude single quotes and apostrophes (\u{2018}, \u{2019}, ')
+                else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}') &&
+                        chars[i] != '\'' && chars[i] != '\u{2018}' && chars[i] != '\u{2019}' {
                     let quote_char = chars[i];
-                    // For single quotes, only treat as quote if at word boundary
-                    if (quote_char == '\'' || quote_char == '\u{2018}' || quote_char == '\u{2019}') {
-                        // Check if this looks like the start of a quote (preceded by space or start of line)
-                        let is_start_quote = i == 0 || !chars[i-1].is_alphabetic();
-                        if !is_start_quote {
-                            current_text.push(chars[i]);
-                            i += 1;
-                            continue;
-                        }
-                    }
-                    
                     let closing_quote = match quote_char {
                         '"' => '"',
-                        '\'' => '\'',
                         '\u{201C}' => '\u{201D}',  // Opening smart quote to closing
-                        '\u{201D}' => '\u{201D}',  // Closing smart quote stays same
-                        '\u{2018}' => '\u{2019}',  // Opening single to closing
-                        '\u{2019}' => '\u{2019}',  // Closing single stays same
+                        '\u{201D}' => '\u{201D}',  // Closing smart quote (can also close)
                         _ => quote_char
                     };
                     
@@ -386,20 +369,10 @@ impl App {
                     
                     while i < search_limit {
                         if chars[i] == closing_quote || chars[i] == quote_char {
-                            // For single quotes, check it's at word boundary
-                            if (closing_quote == '\'' || closing_quote == '\u{2019}') {
-                                let is_end_quote = i == chars.len() - 1 || !chars[i+1].is_alphabetic();
-                                if !is_end_quote {
-                                    quoted_text.push(chars[i]);
-                                    i += 1;
-                                    continue;
-                                }
-                            }
-                            
                             // Found valid closing quote
                             spans.push(Span::styled(
                                 format!("{}{}{}", quote_char, quoted_text, chars[i]),
-                                Style::default().fg(OCEANIC_NEXT.base_0a).add_modifier(Modifier::BOLD)
+                                Style::default().fg(OCEANIC_NEXT.base_0d).add_modifier(Modifier::BOLD)
                             ));
                             i += 1;
                             found_closing = true;
