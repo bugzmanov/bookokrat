@@ -1,10 +1,13 @@
 mod bookmark;
+mod text_generator;
+mod book_list;
+mod text_renderer;
+mod theme;
 
 use std::{
     fs::File,
     io::{stdout, BufReader},
     time::Duration,
-    path::Path,
 };
 
 use anyhow::Result;
@@ -14,83 +17,36 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use epub::doc::EpubDoc;
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use simplelog::{Config, LevelFilter, WriteLogger};
-use regex;
+use crate::text_generator::TextGenerator;
+use crate::book_list::BookList;
+use crate::text_renderer::TextRenderer;
+use crate::theme::OCEANIC_NEXT;
 
-use crate::bookmark::Bookmarks;
-
-// Color palette structure
-struct Base16Palette {
-    base_00: Color, // Background
-    base_01: Color, // Lighter background
-    base_02: Color, // Selection background
-    base_03: Color, // Comments, invisibles
-    base_04: Color, // Dark foreground
-    base_05: Color, // Default foreground
-    base_06: Color, // Light foreground
-    base_07: Color, // Light background
-    base_08: Color, // Red
-    base_09: Color, // Orange
-    base_0a: Color, // Yellow
-    base_0b: Color, // Green
-    base_0c: Color, // Cyan
-    base_0d: Color, // Blue
-    base_0e: Color, // Purple
-    base_0f: Color, // Brown
-}
-
-const OCEANIC_NEXT: Base16Palette = Base16Palette {
-    base_00: Color::from_u32(0x1B2B34),
-    base_01: Color::from_u32(0x343D46),
-    base_02: Color::from_u32(0x4F5B66),
-    base_03: Color::from_u32(0x65737E),
-    base_04: Color::from_u32(0xA7ADBA),
-    base_05: Color::from_u32(0xC0C5CE),
-    base_06: Color::from_u32(0xCDD3DE),
-    base_07: Color::from_u32(0xF0F4F8),
-    base_08: Color::from_u32(0xEC5f67),
-    base_09: Color::from_u32(0xF99157),
-    base_0a: Color::from_u32(0xFAC863),
-    base_0b: Color::from_u32(0x99C794),
-    base_0c: Color::from_u32(0x5FB3B3),
-    base_0d: Color::from_u32(0x6699CC),
-    base_0e: Color::from_u32(0xC594C5),
-    base_0f: Color::from_u32(0xAB7967),
-};
 
 struct App {
-    epub_files: Vec<String>,
-    selected: usize,
+    book_list: BookList,
+    text_generator: TextGenerator,
+    text_renderer: TextRenderer,
     current_content: Option<String>,
-    list_state: ListState,
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
     current_chapter: usize,
     total_chapters: usize,
     scroll_offset: usize,
     mode: Mode,
-    bookmarks: Bookmarks,
     current_file: Option<String>,
     content_length: usize,
     last_scroll_time: std::time::Instant,
     scroll_speed: usize,
-    p_tag_re: regex::Regex,
-    h_open_re: regex::Regex,
-    h_close_re: regex::Regex,
-    remaining_tags_re: regex::Regex,
-    multi_space_re: regex::Regex,
-    multi_newline_re: regex::Regex,
-    leading_space_re: regex::Regex,
-    line_leading_space_re: regex::Regex,
-    words_per_minute: f32,
     current_chapter_title: Option<String>,
     // Animation state
     animation_progress: f32,  // 0.0 = file list mode, 1.0 = reading mode
@@ -110,73 +66,24 @@ enum Mode {
 
 impl App {
     fn new() -> Self {
-        let p_tag_re = regex::Regex::new(r"<p[^>]*>")
-            .expect("Failed to compile paragraph tag regex");
-        let h_open_re = regex::Regex::new(r"<h[1-6][^>]*>")
-            .expect("Failed to compile header open tag regex");
-        let h_close_re = regex::Regex::new(r"</h[1-6]>")
-            .expect("Failed to compile header close tag regex");
-        let remaining_tags_re = regex::Regex::new(r"<[^>]*>")
-            .expect("Failed to compile remaining tags regex");
-        let multi_space_re = regex::Regex::new(r" +")
-            .expect("Failed to compile multi space regex");
-        let multi_newline_re = regex::Regex::new(r"\n{3,}")
-            .expect("Failed to compile multi newline regex");
-        let leading_space_re = regex::Regex::new(r"^ +")
-            .expect("Failed to compile leading space regex");
-        let line_leading_space_re = regex::Regex::new(r"\n +")
-            .expect("Failed to compile line leading space regex");
-
-        let epub_files: Vec<String> = std::fs::read_dir(".")
-            .unwrap()
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                if path.extension()?.to_str()? == "epub" {
-                    // Store full path for internal use
-                    Some(path.to_str()?.to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        let mut list_state = ListState::default();
-        // Select first book if available
-        let has_files = !epub_files.is_empty();
-        if has_files {
-            list_state.select(Some(0));
-        }
-
-        let bookmarks = Bookmarks::load().unwrap_or_else(|e| {
-            error!("Failed to load bookmarks: {}", e);
-            Bookmarks::new()
-        });
-
+        let book_list = BookList::new();
+        let text_generator = TextGenerator::new();
+        let text_renderer = TextRenderer::new();
+        
         let mut app = Self {
-            epub_files: epub_files.clone(),
-            selected: if has_files { 0 } else { 0 },
+            book_list,
+            text_generator,
+            text_renderer,
             current_content: None,
-            list_state,
             current_epub: None,
             current_chapter: 0,
             total_chapters: 0,
             scroll_offset: 0,
             mode: Mode::FileList,
-            bookmarks,
             current_file: None,
             content_length: 0,
             last_scroll_time: std::time::Instant::now(),
             scroll_speed: 1,
-            p_tag_re,
-            h_open_re,
-            h_close_re,
-            remaining_tags_re,
-            multi_space_re,
-            multi_newline_re,
-            leading_space_re,
-            line_leading_space_re,
-            words_per_minute: 250.0,  // Average reading speed
             current_chapter_title: None,
             // Initialize animation state
             animation_progress: 0.0,  // Start in file list mode
@@ -188,15 +95,12 @@ impl App {
         };
 
         // Auto-load the most recently read book if available
-        if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
-            // Check if the most recent book still exists in the current directory
-            if app.epub_files.contains(&recent_path) {
-                info!("Auto-loading most recent book: {}", recent_path);
-                app.load_epub(&recent_path);
-                app.mode = Mode::Content;
-                app.target_progress = 1.0;
-                app.animation_progress = 1.0; // Skip animation on startup
-            }
+        if let Some(recent_path) = app.book_list.get_most_recent_book() {
+            info!("Auto-loading most recent book: {}", recent_path);
+            app.load_epub(&recent_path);
+            app.mode = Mode::Content;
+            app.target_progress = 1.0;
+            app.animation_progress = 1.0; // Skip animation on startup
         }
 
         app
@@ -210,7 +114,7 @@ impl App {
             info!("Total chapters: {}", self.total_chapters);
             
             // Try to load bookmark
-            if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
+            if let Some(bookmark) = self.book_list.bookmarks.get_bookmark(path) {
                 info!("Found bookmark: chapter {}, offset {}", bookmark.chapter, bookmark.scroll_offset);
                 // Skip metadata page if needed
                 if bookmark.chapter > 0 {
@@ -246,19 +150,15 @@ impl App {
 
     fn save_bookmark(&mut self) {
         if let Some(path) = &self.current_file {
-            self.bookmarks.update_bookmark(path, self.current_chapter, self.scroll_offset);
-            if let Err(e) = self.bookmarks.save() {
+            self.book_list.bookmarks.update_bookmark(path, self.current_chapter, self.scroll_offset);
+            if let Err(e) = self.book_list.bookmarks.save() {
                 error!("Failed to save bookmark: {}", e);
             }
         }
     }
 
     fn calculate_reading_time(&self, text: &str) -> (u32, u32) {
-        let word_count = text.split_whitespace().count() as f32;
-        let total_minutes = word_count / self.words_per_minute;
-        let hours = (total_minutes / 60.0) as u32;
-        let minutes = (total_minutes % 60.0) as u32;
-        (hours, minutes)
+        self.text_renderer.calculate_reading_time(text)
     }
 
     fn update_animation(&mut self) {
@@ -289,319 +189,25 @@ impl App {
         self.is_animating = true;
     }
 
-    fn extract_chapter_title(&self, html_content: &str) -> Option<String> {
-        // Try to extract title from h1, h2, or title tags
-        let title_patterns = [
-            regex::Regex::new(r"<h[12][^>]*>([^<]+)</h[12]>").ok()?,
-            regex::Regex::new(r"<title[^>]*>([^<]+)</title>").ok()?,
-        ];
-        
-        for pattern in &title_patterns {
-            if let Some(captures) = pattern.captures(html_content) {
-                if let Some(title_match) = captures.get(1) {
-                    let title = title_match.as_str().trim();
-                    if !title.is_empty() && title.len() < 100 {
-                        return Some(title.to_string());
-                    }
-                }
-            }
-        }
-        None
-    }
 
     fn parse_styled_text(&self, text: &str) -> Text<'static> {
-        let mut lines = Vec::new();
-        
-        // Add chapter title if available
-        if let Some(ref title) = self.current_chapter_title {
-            lines.push(Line::from(vec![
-                Span::styled(title.clone(), Style::default().fg(OCEANIC_NEXT.base_0d).add_modifier(Modifier::BOLD))
-            ]));
-            lines.push(Line::from("")); // Empty line after title
-        }
-        
-        let text_lines: Vec<&str> = text.lines().collect();
-        for (_visible_line_index, line) in text_lines.iter().enumerate() {
-            let mut spans = Vec::new();
-            let chars: Vec<char> = line.chars().collect();
-            let mut i = 0;
-            let mut current_text = String::new();
-            
-            // Use overlay highlighting instead of text-level highlighting
-            let should_highlight = false;
-            
-            while i < chars.len() {
-                // Check for bold markers (**)
-                if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-                    // Save any accumulated text
-                    if !current_text.is_empty() {
-                        let style = if should_highlight {
-                            Style::default().fg(Color::Black).bg(Color::Yellow)
-                        } else {
-                            Style::default().fg(OCEANIC_NEXT.base_07)
-                        };
-                        spans.push(Span::styled(current_text.clone(), style));
-                        current_text.clear();
-                    }
-                    
-                    // Find closing **
-                    i += 2;
-                    let mut bold_text = String::new();
-                    let mut found_closing = false;
-                    while i + 1 < chars.len() {
-                        if chars[i] == '*' && chars[i + 1] == '*' {
-                            found_closing = true;
-                            i += 2;
-                            break;
-                        } else {
-                            bold_text.push(chars[i]);
-                            i += 1;
-                        }
-                    }
-                    if found_closing {
-                        spans.push(Span::styled(
-                            bold_text,
-                            Style::default().fg(OCEANIC_NEXT.base_08).add_modifier(Modifier::BOLD)
-                        ));
-                    } else {
-                        // No closing marker
-                        current_text.push_str("**");
-                        current_text.push_str(&bold_text);
-                    }
-                }
-                // Check for double quotes only (regular and smart double quotes)
-                // Explicitly exclude single quotes and apostrophes (\u{2018}, \u{2019}, ')
-                else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}') &&
-                        chars[i] != '\'' && chars[i] != '\u{2018}' && chars[i] != '\u{2019}' {
-                    let quote_char = chars[i];
-                    let closing_quote = match quote_char {
-                        '"' => '"',
-                        '\u{201C}' => '\u{201D}',  // Opening smart quote to closing
-                        '\u{201D}' => '\u{201D}',  // Closing smart quote (can also close)
-                        _ => quote_char
-                    };
-                    
-                    // Save any accumulated text
-                    if !current_text.is_empty() {
-                        let style = if should_highlight {
-                            Style::default().fg(Color::Black).bg(Color::Yellow)
-                        } else {
-                            Style::default().fg(OCEANIC_NEXT.base_07)
-                        };
-                        spans.push(Span::styled(current_text.clone(), style));
-                        current_text.clear();
-                    }
-                    
-                    // Collect the quoted content
-                    let start_pos = i;
-                    i += 1;
-                    let mut quoted_text = String::new();
-                    let mut found_closing = false;
-                    
-                    // Look for closing quote, but limit search to reasonable distance
-                    let max_quote_length = 200; // Maximum characters in a quote
-                    let search_limit = (i + max_quote_length).min(chars.len());
-                    
-                    while i < search_limit {
-                        if chars[i] == closing_quote || chars[i] == quote_char {
-                            // Found valid closing quote
-                            spans.push(Span::styled(
-                                format!("{}{}{}", quote_char, quoted_text, chars[i]),
-                                Style::default().fg(OCEANIC_NEXT.base_0d).add_modifier(Modifier::BOLD)
-                            ));
-                            i += 1;
-                            found_closing = true;
-                            break;
-                        } else {
-                            quoted_text.push(chars[i]);
-                            i += 1;
-                        }
-                    }
-                    
-                    if !found_closing {
-                        // No closing quote found, treat the opening quote as normal text
-                        current_text.push(chars[start_pos]);
-                        i = start_pos + 1;
-                    }
-                }
-                else {
-                    current_text.push(chars[i]);
-                    i += 1;
-                }
-            }
-            
-            // Add any remaining text
-            if !current_text.is_empty() {
-                let style = if should_highlight {
-                    Style::default().fg(OCEANIC_NEXT.base_07).bg(OCEANIC_NEXT.base_0a)
-                } else {
-                    Style::default().fg(OCEANIC_NEXT.base_07)
-                };
-                spans.push(Span::styled(current_text, style));
-            }
-            
-            if spans.is_empty() {
-                lines.push(Line::from(""));
-            } else {
-                lines.push(Line::from(spans));
-            }
-        }
-        
-        Text::from(lines)
+        self.text_renderer.parse_styled_text(text, &self.current_chapter_title, &OCEANIC_NEXT)
     }
 
-    fn format_text_with_spacing(&self, text: &str) -> String {
-        let mut formatted = String::new();
-        // First, normalize multiple newlines to ensure consistent spacing
-        let normalized_text = self.multi_newline_re.replace_all(text, "\n\n");
-        let paragraphs: Vec<&str> = normalized_text.split("\n\n").collect();
-        
-        for (i, paragraph) in paragraphs.iter().enumerate() {
-            if paragraph.trim().is_empty() {
-                continue;
-            }
-            
-            // Add indentation to the first line of each paragraph (except headers)
-            let trimmed = paragraph.trim();
-            // Detect headers: short lines (< 60 chars) with mostly uppercase or numbers
-            let is_header = trimmed.len() > 0 && trimmed.len() < 60 && 
-                           (trimmed.chars().filter(|c| c.is_alphabetic()).count() > 0) &&
-                           (trimmed.chars().filter(|c| c.is_uppercase()).count() as f32 / 
-                            trimmed.chars().filter(|c| c.is_alphabetic()).count() as f32 > 0.7);
-            
-            if !is_header && !trimmed.starts_with("    ") { // Don't indent blockquotes
-                formatted.push_str("    "); // 4-space indent for paragraphs
-            }
-            
-            // Process lines within the paragraph
-            let lines: Vec<&str> = paragraph.lines().collect();
-            for (j, line) in lines.iter().enumerate() {
-                formatted.push_str(line);
-                if j < lines.len() - 1 {
-                    formatted.push('\n');
-                }
-            }
-            
-            // Add spacing between paragraphs
-            // Only add spacing if this isn't the last paragraph
-            if i < paragraphs.len() - 1 {
-                formatted.push_str("\n\n"); // 2 newlines = 1 empty line between paragraphs
-            }
-        }
-        
-        formatted
-    }
 
     fn update_content(&mut self) {
         if let Some(doc) = &mut self.current_epub {
-            if let Ok(content) = doc.get_current_str() {
-                debug!("Raw content length: {} bytes", content.len());
-                
-                // Extract chapter title before processing
-                self.current_chapter_title = self.extract_chapter_title(&content);
-                
-                // First pass: Remove CSS and script blocks entirely
-                let style_re = regex::Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
-                let script_re = regex::Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
-                let mut content = style_re.replace_all(&content, "").into_owned();
-                content = script_re.replace_all(&content, "").into_owned();
-                
-                // Remove the extracted title from content to avoid duplication
-                if let Some(ref title) = self.current_chapter_title {
-                    // Remove h1/h2 tags containing the title
-                    let title_removal_re = regex::Regex::new(&format!(r"<h[12][^>]*>\s*{}\s*</h[12]>", regex::escape(title))).unwrap();
-                    content = title_removal_re.replace_all(&content, "").into_owned();
-                }
-                
-                // Second pass: Replace HTML entities
-                let text = content
-                    .replace("&nbsp;", " ")
-                    .replace("&amp;", "&")
-                    .replace("&lt;", "<")
-                    .replace("&gt;", ">")
-                    .replace("&quot;", "\"")
-                    .replace("&apos;", "'")
-                    .replace("&mdash;", "—")
-                    .replace("&ndash;", "–")
-                    .replace("&hellip;", "...")
-                    .replace("&ldquo;", "\u{201C}")  // Opening double quote
-                    .replace("&rdquo;", "\u{201D}")  // Closing double quote
-                    .replace("&lsquo;", "\u{2018}")  // Opening single quote
-                    .replace("&rsquo;", "\u{2019}"); // Closing single quote
-
-                // Third pass: Convert semantic HTML elements to plain text with proper formatting
-                let text = self.p_tag_re.replace_all(&text, "").to_string();
-                
-                let text = text
-                    .replace("</p>", "\n\n")
-                    // Preserve line breaks
-                    .replace("<br>", "\n")
-                    .replace("<br/>", "\n")
-                    .replace("<br />", "\n")
-                    // Handle blockquotes (for direct speech or citations)
-                    .replace("<blockquote>", "\n    ")
-                    .replace("</blockquote>", "\n")
-                    // Handle emphasis
-                    .replace("<em>", "_")
-                    .replace("</em>", "_")
-                    .replace("<i>", "_")
-                    .replace("</i>", "_")
-                    // Handle strong emphasis
-                    .replace("<strong>", "**")
-                    .replace("</strong>", "**")
-                    .replace("<b>", "**")
-                    .replace("</b>", "**")
-                    // Handle divs that might create extra spacing
-                    .replace("<div>", "")
-                    .replace("</div>", "\n");
-
-                // Handle headers
-                let text = self.h_open_re.replace_all(&text, "\n\n").to_string();
-                let text = self.h_close_re.replace_all(&text, "\n\n").to_string();
-
-                // Fourth pass: Remove any remaining HTML tags
-                let text = self.remaining_tags_re.replace_all(&text, "").to_string();
-
-                // Fifth pass: Clean up whitespace while preserving intentional formatting
-                let text = self.multi_space_re.replace_all(&text, " ").to_string();
-                // First collapse any sequence of 3+ newlines to just 2
-                let text = self.multi_newline_re.replace_all(&text, "\n\n").to_string();
-                // Then handle any sequences of newline + spaces + newline
-                let text = regex::Regex::new(r"\n\s*\n").unwrap().replace_all(&text, "\n\n").to_string();
-                // Finally collapse any remaining 3+ newlines that might have been created
-                let text = self.multi_newline_re.replace_all(&text, "\n\n").to_string();
-                let text = self.leading_space_re.replace_all(&text, "").to_string();
-                let text = self.line_leading_space_re.replace_all(&text, "\n").to_string();
-                let text = text.trim().to_string();
-
-                debug!("Text after HTML cleanup: {}", text.chars().take(100).collect::<String>());
-                
-                if text.is_empty() {
-                    warn!("Converted text is empty");
-                    self.current_content = Some("No content available in this chapter.".to_string());
-                    self.content_length = 0;
-                } else {
-                    debug!("Final text length: {} bytes", text.len());
-                    // Apply typography formatting with line spacing and indentation
-                    let mut formatted_text = self.format_text_with_spacing(&text);
-                    
-                    // Remove title from the beginning of content if it appears there
-                    if let Some(ref title) = self.current_chapter_title {
-                        // Check if the content starts with the title (possibly with some whitespace)
-                        let trimmed_content = formatted_text.trim_start();
-                        if trimmed_content.starts_with(title) {
-                            // Remove the title and any following whitespace
-                            formatted_text = trimmed_content[title.len()..].trim_start().to_string();
-                        }
-                    }
-                    
-                    self.current_content = Some(formatted_text);
+            match self.text_generator.process_chapter_content(doc) {
+                Ok((content, title)) => {
+                    self.current_chapter_title = title;
+                    self.current_content = Some(content);
                     self.content_length = self.current_content.as_ref().unwrap().len();
                 }
-            } else {
-                error!("Failed to get current chapter content");
-                self.current_content = Some("Error reading chapter content.".to_string());
-                self.content_length = 0;
+                Err(e) => {
+                    error!("Failed to process chapter: {}", e);
+                    self.current_content = Some("Error reading chapter content.".to_string());
+                    self.content_length = 0;
+                }
             }
         } else {
             error!("No EPUB document loaded");
@@ -734,13 +340,8 @@ impl App {
         f.render_widget(background_block, f.size());
         
         // Define colors using Oceanic Next palette
-        let (interface_color, text_color, border_color, highlight_bg, highlight_fg) = if self.mode == Mode::Content {
-            // In reading mode, muted interface with prominent text
-            (OCEANIC_NEXT.base_03, OCEANIC_NEXT.base_07, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_06)
-        } else {
-            // In file list mode, normal colors
-            (OCEANIC_NEXT.base_05, OCEANIC_NEXT.base_07, OCEANIC_NEXT.base_04, OCEANIC_NEXT.base_02, OCEANIC_NEXT.base_06)
-        };
+        let (interface_color, text_color, border_color, highlight_bg, highlight_fg) = 
+            OCEANIC_NEXT.get_interface_colors(self.mode == Mode::Content);
         
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -765,20 +366,16 @@ impl App {
 
         // Draw file list
         let items: Vec<ListItem> = self
+            .book_list
             .epub_files
             .iter()
             .map(|file| {
-                let bookmark = self.bookmarks.get_bookmark(file);
+                let bookmark = self.book_list.bookmarks.get_bookmark(file);
                 let last_read = bookmark
                     .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
                     .unwrap_or_else(|| "Never".to_string());
                 
-                // Get filename without path and extension for display
-                let display_name = Path::new(file)
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
+                let display_name = BookList::get_display_name(file);
                 
                 let content = Line::from(vec![
                     Span::styled(
@@ -801,7 +398,7 @@ impl App {
             .highlight_style(Style::default().bg(highlight_bg).fg(highlight_fg))
             .style(Style::default().bg(OCEANIC_NEXT.base_00));
 
-        f.render_stateful_widget(files, main_chunks[0], &mut self.list_state.clone());
+        f.render_stateful_widget(files, main_chunks[0], &mut self.book_list.list_state.clone());
 
         // Draw content with margins
         let content_area = main_chunks[1];
@@ -819,35 +416,8 @@ impl App {
                 // We subtract 2 for borders and 1 for top margin
                 let visible_height = content_area.height.saturating_sub(3) as usize;
                 
-                // Calculate total scrollable lines by counting actual content lines
                 let content = self.current_content.as_ref().unwrap();
-                let total_lines = content
-                    .lines()
-                    .filter(|line| !line.trim().is_empty()) // Skip empty lines
-                    .map(|line| {
-                        // Calculate how many terminal lines this content line will take
-                        (line.len() as f32 / visible_width as f32).ceil() as usize
-                    })
-                    .sum::<usize>();
-                
-                // Calculate current visible line based on scroll offset
-                let current_line = self.scroll_offset;
-                
-                // Calculate the maximum scroll position (when last line becomes visible at the bottom)
-                let max_scroll = if total_lines > visible_height {
-                    total_lines - visible_height
-                } else {
-                    0
-                };
-                
-                // Calculate percentage based on how far we've scrolled to the max position
-                let progress = if max_scroll > 0 {
-                    ((current_line as f32 / max_scroll as f32) * 100.0).min(100.0) as u32
-                } else {
-                    100 // If content fits in one screen, we're at 100%
-                };
-                
-                progress
+                self.text_renderer.calculate_progress(self.scroll_offset, content, visible_width, visible_height)
             } else {
                 0
             };
@@ -1012,20 +582,14 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     },
                     KeyCode::Char('j') => {
                         if app.mode == Mode::FileList {
-                            if app.selected < app.epub_files.len().saturating_sub(1) {
-                                app.selected += 1;
-                                app.list_state.select(Some(app.selected));
-                            }
+                            app.book_list.move_selection_down();
                         } else {
                             app.scroll_down();
                         }
                     }
                     KeyCode::Char('k') => {
                         if app.mode == Mode::FileList {
-                            if app.selected > 0 {
-                                app.selected -= 1;
-                                app.list_state.select(Some(app.selected));
-                            }
+                            app.book_list.move_selection_up();
                         } else {
                             app.scroll_up();
                         }
@@ -1042,10 +606,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Enter => {
                         if app.mode == Mode::FileList {
-                            if let Some(path) = app.epub_files.get(app.selected).cloned() {
+                            if let Some(path) = app.book_list.get_selected_file() {
+                                let path_owned = path.to_string();
                                 // Save bookmark for current file before switching
                                 app.save_bookmark();
-                                app.load_epub(&path);
+                                app.load_epub(&path_owned);
                             }
                         }
                     }
@@ -1056,10 +621,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         } else {
                             // When switching back to file list, restore selection to current file
                             if let Some(current_file) = &app.current_file {
-                                if let Some(pos) = app.epub_files.iter().position(|f| f == current_file) {
-                                    app.selected = pos;
-                                    app.list_state.select(Some(pos));
-                                }
+                                app.book_list.set_selection_to_file(current_file);
                             }
                             app.mode = Mode::FileList;
                             app.start_animation(0.0); // Contract to file list mode
