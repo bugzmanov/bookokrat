@@ -3,6 +3,7 @@ mod text_generator;
 mod book_list;
 mod text_reader;
 mod theme;
+mod book_manager;
 
 use std::{
     fs::File,
@@ -31,9 +32,11 @@ use crate::book_list::BookList;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 use crate::bookmark::Bookmarks;
+use crate::book_manager::BookManager;
 
 
 struct App {
+    book_manager: BookManager,
     book_list: BookList,
     text_generator: TextGenerator,
     text_reader: TextReader,
@@ -60,7 +63,8 @@ enum Mode {
 
 impl App {
     fn new() -> Self {
-        let book_list = BookList::new();
+        let book_manager = BookManager::new();
+        let book_list = BookList::new(&book_manager);
         let text_generator = TextGenerator::new();
         let text_reader = TextReader::new();
         
@@ -70,6 +74,7 @@ impl App {
         });
         
         let mut app = Self {
+            book_manager,
             book_list,
             text_generator,
             text_reader,
@@ -89,8 +94,8 @@ impl App {
 
         // Auto-load the most recently read book if available
         if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
-            // Check if the most recent book still exists in the current directory
-            if app.book_list.epub_files.contains(&recent_path) {
+            // Check if the most recent book still exists in the managed books
+            if app.book_manager.contains_book(&recent_path) {
                 info!("Auto-loading most recent book: {}", recent_path);
                 app.load_epub(&recent_path);
                 app.mode = Mode::Content;
@@ -103,44 +108,46 @@ impl App {
     }
 
     fn load_epub(&mut self, path: &str) {
-        info!("Attempting to load EPUB: {}", path);
-        if let Ok(mut doc) = EpubDoc::new(path) {
-            info!("Successfully created EPUB document");
-            self.total_chapters = doc.get_num_pages();
-            info!("Total chapters: {}", self.total_chapters);
-            
-            // Try to load bookmark
-            if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
-                info!("Found bookmark: chapter {}, offset {}", bookmark.chapter, bookmark.scroll_offset);
-                // Skip metadata page if needed
-                if bookmark.chapter > 0 {
-                    for _ in 0..bookmark.chapter {
-                        if doc.go_next().is_err() {
-                            error!("Failed to navigate to bookmarked chapter");
-                            break;
+        match self.book_manager.load_epub(path) {
+            Ok(mut doc) => {
+                info!("Successfully loaded EPUB document");
+                self.total_chapters = doc.get_num_pages();
+                info!("Total chapters: {}", self.total_chapters);
+                
+                // Try to load bookmark
+                if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
+                    info!("Found bookmark: chapter {}, offset {}", bookmark.chapter, bookmark.scroll_offset);
+                    // Skip metadata page if needed
+                    if bookmark.chapter > 0 {
+                        for _ in 0..bookmark.chapter {
+                            if doc.go_next().is_err() {
+                                error!("Failed to navigate to bookmarked chapter");
+                                break;
+                            }
+                        }
+                        self.current_chapter = bookmark.chapter;
+                        self.text_reader.restore_scroll_position(bookmark.scroll_offset);
+                    }
+                } else {
+                    // Skip the first chapter if it's just metadata
+                    if self.total_chapters > 1 {
+                        if doc.go_next().is_ok() {
+                            self.current_chapter = 1;
+                            info!("Skipped metadata page, moved to chapter 2");
+                        } else {
+                            error!("Failed to move to next chapter");
                         }
                     }
-                    self.current_chapter = bookmark.chapter;
-                    self.text_reader.restore_scroll_position(bookmark.scroll_offset);
                 }
-            } else {
-                // Skip the first chapter if it's just metadata
-                if self.total_chapters > 1 {
-                    if doc.go_next().is_ok() {
-                        self.current_chapter = 1;
-                        info!("Skipped metadata page, moved to chapter 2");
-                    } else {
-                        error!("Failed to move to next chapter");
-                    }
-                }
+                
+                self.current_epub = Some(doc);
+                self.current_file = Some(path.to_string());
+                self.update_content();
+                self.mode = Mode::Content;
             }
-            
-            self.current_epub = Some(doc);
-            self.current_file = Some(path.to_string());
-            self.update_content();
-            self.mode = Mode::Content;
-        } else {
-            error!("Failed to load EPUB: {}", path);
+            Err(e) => {
+                error!("Failed to load EPUB: {}", e);
+            }
         }
     }
 
@@ -298,7 +305,8 @@ impl App {
             main_chunks[0], 
             self.mode == Mode::FileList, 
             &OCEANIC_NEXT,
-            &self.bookmarks
+            &self.bookmarks,
+            &self.book_manager
         );
 
         // Render text content or default message
@@ -422,7 +430,7 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     },
                     KeyCode::Char('j') => {
                         if app.mode == Mode::FileList {
-                            app.book_list.move_selection_down();
+                            app.book_list.move_selection_down(&app.book_manager);
                         } else {
                             app.scroll_down();
                         }
@@ -446,11 +454,11 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                     }
                     KeyCode::Enter => {
                         if app.mode == Mode::FileList {
-                            if let Some(path) = app.book_list.get_selected_file() {
-                                let path_owned = path.to_string();
+                            if let Some(book_info) = app.book_manager.get_book_info(app.book_list.selected) {
+                                let path = book_info.path.clone();
                                 // Save bookmark for current file before switching
                                 app.save_bookmark();
-                                app.load_epub(&path_owned);
+                                app.load_epub(&path);
                             }
                         }
                     }
@@ -461,7 +469,9 @@ fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: &mut A
                         } else {
                             // When switching back to file list, restore selection to current file
                             if let Some(current_file) = &app.current_file {
-                                app.book_list.set_selection_to_file(current_file);
+                                if let Some(index) = app.book_manager.find_book_by_path(current_file) {
+                                    app.book_list.set_selection_to_index(index);
+                                }
                             }
                             app.mode = Mode::FileList;
                             app.start_animation(0.0); // Contract to file list mode
