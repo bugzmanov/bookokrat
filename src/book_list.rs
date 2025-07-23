@@ -1,13 +1,19 @@
 use std::path::Path;
-use ratatui::widgets::ListState;
-use log::{info, error};
+use ratatui::{
+    widgets::{ListState, List, ListItem, Block, Borders},
+    style::Style,
+    text::{Line, Span},
+    Frame,
+    layout::Rect,
+};
+use log::error;
 use crate::bookmark::Bookmarks;
+use crate::theme::Base16Palette;
 
 pub struct BookList {
     pub epub_files: Vec<String>,
     pub selected: usize,
     pub list_state: ListState,
-    pub bookmarks: Bookmarks,
 }
 
 impl BookList {
@@ -20,16 +26,10 @@ impl BookList {
             list_state.select(Some(0));
         }
         
-        let bookmarks = Bookmarks::load().unwrap_or_else(|e| {
-            error!("Failed to load bookmarks: {}", e);
-            Bookmarks::new()
-        });
-        
         Self {
             epub_files,
             selected: 0,
             list_state,
-            bookmarks,
         }
     }
     
@@ -51,15 +51,6 @@ impl BookList {
             .collect()
     }
     
-    pub fn get_most_recent_book(&self) -> Option<String> {
-        if let Some((recent_path, _)) = self.bookmarks.get_most_recent() {
-            if self.epub_files.contains(&recent_path) {
-                info!("Found most recent book: {}", recent_path);
-                return Some(recent_path);
-            }
-        }
-        None
-    }
     
     pub fn move_selection_down(&mut self) {
         if self.selected < self.epub_files.len().saturating_sub(1) {
@@ -92,5 +83,47 @@ impl BookList {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string()
+    }
+    
+    pub fn render(&mut self, f: &mut Frame, area: Rect, _is_active: bool, palette: &Base16Palette, bookmarks: &Bookmarks) {
+        let (interface_color, _, border_color, highlight_bg, highlight_fg) = 
+            palette.get_interface_colors(false);
+        
+        // Create list items with last read timestamps
+        let items: Vec<ListItem> = self
+            .epub_files
+            .iter()
+            .map(|file| {
+                let bookmark = bookmarks.get_bookmark(file);
+                let last_read = bookmark
+                    .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_else(|| "Never".to_string());
+                
+                let display_name = Self::get_display_name(file);
+                
+                let content = Line::from(vec![
+                    Span::styled(
+                        display_name,
+                        Style::default().fg(interface_color),
+                    ),
+                    Span::styled(
+                        format!(" ({})", last_read),
+                        Style::default().fg(palette.base_03),
+                    ),
+                ]);
+                ListItem::new(content)
+            })
+            .collect();
+
+        let files = List::new(items)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Books")
+                .border_style(Style::default().fg(border_color))
+                .style(Style::default().bg(palette.base_00)))
+            .highlight_style(Style::default().bg(highlight_bg).fg(highlight_fg))
+            .style(Style::default().bg(palette.base_00));
+
+        f.render_stateful_widget(files, area, &mut self.list_state);
     }
 }
