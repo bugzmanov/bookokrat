@@ -9,3 +9,4 @@ Cargo.lock
 bookmarks.json
 !testdata/*.epub
 experiments/
+tests/snapshots/debug_*

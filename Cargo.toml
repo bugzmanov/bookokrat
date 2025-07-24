@@ -5,6 +5,14 @@ edition = "2021"
 authors = ["Your Name <your.email@example.com>"]
 description = "A TUI EPUB reader application"
 
+[lib]
+name = "bookrat"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bookrat"
+path = "src/main.rs"
+
 [dependencies]
 ratatui = "0.26.1"
 crossterm = "0.27.0"
@@ -17,3 +25,8 @@ log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+snapbox = { version = "0.6", features = ["term-svg"] }
+anstyle = "1.0"
+anstyle-svg = "0.1.5"
