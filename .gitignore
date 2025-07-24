@@ -7,3 +7,5 @@ Cargo.lock
 .vscode/
 *.epub
 bookmarks.json
+!testdata/*.epub
+experiments/
