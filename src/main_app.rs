@@ -203,17 +203,24 @@ impl App {
                     self.current_chapter_title = title;
                     self.current_content = Some(content);
                     self.text_reader.set_content_length(self.current_content.as_ref().unwrap().len());
+                    // Reset wrapped lines count - it will be calculated on next render
+                    self.text_reader.total_wrapped_lines = 0;
+                    self.text_reader.visible_height = 0;
                 }
                 Err(e) => {
                     error!("Failed to process chapter: {}", e);
                     self.current_content = Some("Error reading chapter content.".to_string());
                     self.text_reader.set_content_length(0);
+                    self.text_reader.total_wrapped_lines = 0;
+                    self.text_reader.visible_height = 0;
                 }
             }
         } else {
             error!("No EPUB document loaded");
             self.current_content = Some("No EPUB document loaded.".to_string());
             self.text_reader.set_content_length(0);
+            self.text_reader.total_wrapped_lines = 0;
+            self.text_reader.visible_height = 0;
         }
     }
 
@@ -325,6 +332,9 @@ impl App {
         // Render text content or default message
         if let Some(content) = &self.current_content {
             if self.current_epub.is_some() {
+                // Update wrapped lines based on current area dimensions
+                self.text_reader.update_wrapped_lines_if_needed(content, main_chunks[1]);
+                
                 self.text_reader.render(
                     f,
                     main_chunks[1],
