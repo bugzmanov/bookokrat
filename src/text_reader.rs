@@ -10,7 +10,6 @@ use log::{debug};
 use crate::theme::Base16Palette;
 
 pub struct TextReader {
-    pub words_per_minute: f32,
     pub scroll_offset: usize,
     pub content_length: usize,
     last_scroll_time: Instant,
@@ -23,7 +22,6 @@ pub struct TextReader {
 impl TextReader {
     pub fn new() -> Self {
         Self {
-            words_per_minute: 250.0,
             scroll_offset: 0,
             content_length: 0,
             last_scroll_time: Instant::now(),
@@ -31,14 +29,6 @@ impl TextReader {
             highlight_visual_line: None,
             highlight_end_time: Instant::now(),
         }
-    }
-    
-    pub fn calculate_reading_time(&self, text: &str) -> (u32, u32) {
-        let word_count = text.split_whitespace().count() as f32;
-        let total_minutes = word_count / self.words_per_minute;
-        let hours = (total_minutes / 60.0) as u32;
-        let minutes = (total_minutes % 60.0) as u32;
-        (hours, minutes)
     }
     
     pub fn parse_styled_text<'a>(&self, text: &str, chapter_title: &Option<String>, palette: &Base16Palette) -> Text<'a> {
@@ -283,30 +273,11 @@ impl TextReader {
             0
         };
         
-        // Calculate remaining reading time
-        let remaining_content = if self.scroll_offset < content.lines().count() {
-            let lines: Vec<&str> = content.lines().collect();
-            let remaining_lines = &lines[self.scroll_offset.min(lines.len())..];
-            remaining_lines.join("\n")
-        } else {
-            String::new()
-        };
-        
-        let (hours, minutes) = self.calculate_reading_time(&remaining_content);
-        let time_text = if hours > 0 {
-            format!(" • {}h {}m left", hours, minutes)
-        } else if minutes > 0 {
-            format!(" • {}m left", minutes)
-        } else {
-            " • Done".to_string()
-        };
-        
         let title = format!(
-            "Chapter {}/{} {}%{}",
+            "Chapter {}/{} {}%",
             current_chapter + 1,
             total_chapters,
-            chapter_progress,
-            time_text
+            chapter_progress
         );
         
         // Draw the border with title

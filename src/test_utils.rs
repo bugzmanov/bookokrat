@@ -134,9 +134,9 @@ pub mod test_helpers {
     /// - No auto-loading of recent books
     pub fn create_test_app() -> crate::App {
         crate::App::new_with_config(
-            Some("testdata"),    // Use testdata directory
-            Some("/dev/null"),   // Non-existent bookmark file = empty bookmarks
-            false,               // Don't auto-load recent books
+            Some("tests/testdata"),  // Use tests/testdata directory
+            Some("/dev/null"),       // Non-existent bookmark file = empty bookmarks
+            false,                   // Don't auto-load recent books
         )
     }
 

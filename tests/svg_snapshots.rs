@@ -4,6 +4,20 @@ use bookrat::{App, Mode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
+mod visual_diff;
+mod snapshot_assertions;
+mod test_report;
+use snapshot_assertions::assert_svg_snapshot;
+use std::sync::Once;
+
+static INIT: Once = Once::new();
+
+fn ensure_test_report_initialized() {
+    INIT.call_once(|| {
+        test_report::init_test_report();
+    });
+}
+
 // Convert terminal to SVG (directly in test file to access anstyle_svg)
 fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
     let buffer = terminal.backend().buffer();
@@ -100,8 +114,9 @@ fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
 
 #[test]
 fn test_file_list_svg() {
+    ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
-    let mut app = App::new();
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);
@@ -110,17 +125,34 @@ fn test_file_list_svg() {
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write("tests/snapshots/debug_file_list.svg", &svg_output).unwrap();
 
-    // Use snapbox for snapshot testing
-    snapbox::assert_data_eq!(
-        svg_output,
-        snapbox::Data::read_from(&std::path::Path::new("tests/snapshots/file_list.svg"), None)
+    // Use our custom assertion with visual diff
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/file_list.svg"),
+        "test_file_list_svg",
+        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_file_list_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        }
     );
 }
 
 #[test]
 fn test_content_view_svg() {
+    ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new();
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
     // Switch to content view
     app.mode = Mode::Content;
@@ -133,11 +165,77 @@ fn test_content_view_svg() {
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write("tests/snapshots/debug_content_view.svg", &svg_output).unwrap();
 
-    snapbox::assert_data_eq!(
-        svg_output,
-        snapbox::Data::read_from(
-            &std::path::Path::new("tests/snapshots/content_view.svg"),
-            None
-        )
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/content_view.svg"),
+        "test_content_view_svg",
+        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_content_view_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        }
+    );
+}
+
+#[test]
+fn test_content_scrolling_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        // Force animation to complete for testing
+        app.animation_progress = 1.0;
+    }
+
+    // Perform scrolling - 5 lines down
+    for _ in 0..5 {
+        app.scroll_down();
+    }
+
+    // Then half-screen scroll
+    let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize;
+    app.scroll_half_screen_down(visible_height);
+
+    // Draw the final state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_content_scrolling.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/content_scrolling.svg"),
+        "test_content_scrolling_svg",
+        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_content_scrolling_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        }
     );
 }

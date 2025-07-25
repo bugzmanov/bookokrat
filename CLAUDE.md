@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## CRITICAL RULES FOR AI ASSISTANTS
+
+1. **Testing**: ALWAYS use the existing SVG-based snapshot testing in `tests/svg_snapshots.rs`. NEVER introduce new testing frameworks or approaches.
+2. **Golden Snapshots**: NEVER update golden snapshot files with `SNAPSHOTS=overwrite` unless explicitly requested by the user. This is critical for test integrity.
+3. **File Creation**: Prefer editing existing files over creating new ones. Only create new files when absolutely necessary.
+
 ## Project Overview
 
 BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It allows users to browse and read EPUB files from the terminal with features like chapter navigation, scrolling, bookmark persistence, and reading progress tracking.
@@ -114,6 +120,85 @@ The application maintains state through the `App` struct which includes:
 - `Tab`: Switch between file list and content view
 - `Enter`: Select a file to read
 - `q`: Quit the application
+
+## Snapshot Testing
+
+**IMPORTANT FOR AI ASSISTANTS:**
+1. **ALWAYS use SVG-based snapshot tests** - All UI tests MUST use the existing SVG snapshot testing infrastructure in `tests/svg_snapshots.rs`. DO NOT introduce any new testing approaches or frameworks.
+2. **NEVER update golden snapshots without explicit permission** - Golden snapshot files in `tests/snapshots/` should NEVER be updated with `SNAPSHOTS=overwrite` unless the user explicitly asks for it. This is critical for maintaining test integrity.
+
+BookRat uses visual snapshot testing for its terminal UI to ensure the rendering remains consistent across changes.
+
+### Running Snapshot Tests
+
+```bash
+# Run snapshot tests
+cargo test --test svg_snapshots
+
+# Run with automatic browser report opening
+OPEN_REPORT=1 cargo test --test svg_snapshots
+```
+
+### When Tests Fail
+
+When snapshot tests fail, the system generates a comprehensive HTML report showing:
+- Side-by-side visual comparison (Expected vs Actual)
+- Line statistics and diff information
+- Buttons to copy update commands to clipboard
+
+The report is saved to: `target/test-reports/svg_snapshot_report.html`
+
+### Updating Snapshots
+
+After reviewing the visual differences, you can update snapshots in two ways:
+
+1. **Update individual test**: Click "📋 Copy Update Command" button in the report
+   ```bash
+   SNAPSHOTS=overwrite cargo test test_file_list_svg
+   ```
+
+2. **Update all snapshots**: Click "📋 Copy Update All Command" button
+   ```bash
+   SNAPSHOTS=overwrite cargo test --test svg_snapshots
+   ```
+
+The `SNAPSHOTS=overwrite` environment variable tells snapbox to update the snapshot files with the current test output instead of failing when differences are found.
+
+### Test Architecture
+
+The snapshot testing system consists of:
+
+1. **svg_snapshots.rs** - Main test file that renders the TUI and captures SVG output. ALL NEW UI TESTS MUST BE ADDED HERE.
+2. **snapshot_assertions.rs** - Custom assertion function that compares snapshots
+3. **test_report.rs** - Generates the HTML visual diff report
+4. **visual_diff.rs** - Creates visual comparisons (no longer used directly)
+
+When adding new tests:
+- Add them to `tests/svg_snapshots.rs` following the existing pattern
+- Use `terminal_to_svg()` to convert terminal output to SVG
+- Use `assert_svg_snapshot()` for assertions
+- Never create new test files or testing approaches
+
+### Environment Variables
+
+- `OPEN_REPORT=1` - Automatically opens the HTML report in your default browser
+- `SNAPSHOTS=overwrite` - Updates snapshot files with current test output
+
+### Workflow
+
+1. Make changes to the TUI code
+2. Run `cargo test --test svg_snapshots`
+3. If tests fail, review the HTML report (saved to `target/test-reports/`)
+4. Click to copy the update command for accepted changes
+5. Paste and run the command to update snapshots
+6. Commit the updated snapshot files
+
+### Tips
+
+- Always review visual changes before updating snapshots
+- The report uses synchronized scrolling for easy comparison
+- Each test can be updated individually or all at once
+- Snapshot files are stored in `tests/snapshots/`
 
 ## Important Notes
 - The application scans the current directory for EPUB files on startup

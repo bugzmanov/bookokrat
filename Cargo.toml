@@ -30,3 +30,4 @@ chrono = { version = "0.4", features = ["serde"] }
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"
+once_cell = "1.19"

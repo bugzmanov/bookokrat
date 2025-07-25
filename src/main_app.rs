@@ -267,11 +267,16 @@ impl App {
         }
     }
 
-    fn scroll_half_screen_down(&mut self, screen_height: usize) {
+    pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
         if let Some(content) = &self.current_content {
             self.text_reader.scroll_half_screen_down(content, screen_height);
             self.save_bookmark();
         }
+    }
+    
+    #[cfg(test)]
+    pub fn get_scroll_offset(&self) -> usize {
+        self.text_reader.scroll_offset
     }
 
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
