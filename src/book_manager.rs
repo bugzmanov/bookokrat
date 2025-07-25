@@ -5,6 +5,7 @@ use log::{info, error};
 
 pub struct BookManager {
     pub books: Vec<BookInfo>,
+    scan_directory: String,
 }
 
 #[derive(Clone)]
@@ -15,15 +16,21 @@ pub struct BookInfo {
 
 impl BookManager {
     pub fn new() -> Self {
-        let books = Self::discover_books();
-        Self { books }
+        Self::new_with_directory(".")
+    }
+
+    pub fn new_with_directory(directory: &str) -> Self {
+        let scan_directory = directory.to_string();
+        let books = Self::discover_books_in_dir(&scan_directory);
+        Self { books, scan_directory }
     }
     
-    fn discover_books() -> Vec<BookInfo> {
-        std::fs::read_dir(".")
+
+    fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
+        std::fs::read_dir(dir)
             .unwrap_or_else(|e| {
-                error!("Failed to read directory: {}", e);
-                panic!("Failed to read directory: {}", e);
+                error!("Failed to read directory {}: {}", dir, e);
+                panic!("Failed to read directory {}: {}", dir, e);
             })
             .filter_map(|entry| {
                 let entry = entry.ok()?;
@@ -84,7 +91,7 @@ impl BookManager {
     
     pub fn refresh_books(&mut self) {
         info!("Refreshing book list");
-        self.books = Self::discover_books();
+        self.books = Self::discover_books_in_dir(&self.scan_directory);
     }
     
     pub fn book_count(&self) -> usize {

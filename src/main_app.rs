@@ -51,15 +51,33 @@ pub enum Mode {
 
 impl App {
     pub fn new() -> Self {
-        let book_manager = BookManager::new();
+        Self::new_with_config(None, None, true)
+    }
+
+    pub fn new_with_config(
+        book_directory: Option<&str>,
+        bookmark_file: Option<&str>,
+        auto_load_recent: bool,
+    ) -> Self {
+        let book_manager = match book_directory {
+            Some(dir) => BookManager::new_with_directory(dir),
+            None => BookManager::new(),
+        };
+        
         let book_list = BookList::new(&book_manager);
         let text_generator = TextGenerator::new();
         let text_reader = TextReader::new();
         
-        let bookmarks = Bookmarks::load().unwrap_or_else(|e| {
-            error!("Failed to load bookmarks: {}", e);
-            Bookmarks::new()
-        });
+        let bookmarks = match bookmark_file {
+            Some(file) => Bookmarks::load_from_file(file).unwrap_or_else(|e| {
+                error!("Failed to load bookmarks from {}: {}", file, e);
+                Bookmarks::new()
+            }),
+            None => Bookmarks::load().unwrap_or_else(|e| {
+                error!("Failed to load bookmarks: {}", e);
+                Bookmarks::new()
+            }),
+        };
         
         let mut app = Self {
             book_manager,
@@ -81,14 +99,16 @@ impl App {
         };
 
         // Auto-load the most recently read book if available
-        if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
-            // Check if the most recent book still exists in the managed books
-            if app.book_manager.contains_book(&recent_path) {
-                info!("Auto-loading most recent book: {}", recent_path);
-                app.load_epub(&recent_path);
-                app.mode = Mode::Content;
-                app.target_progress = 1.0;
-                app.animation_progress = 1.0; // Skip animation on startup
+        if auto_load_recent {
+            if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
+                // Check if the most recent book still exists in the managed books
+                if app.book_manager.contains_book(&recent_path) {
+                    info!("Auto-loading most recent book: {}", recent_path);
+                    app.load_epub(&recent_path);
+                    app.mode = Mode::Content;
+                    app.target_progress = 1.0;
+                    app.animation_progress = 1.0; // Skip animation on startup
+                }
             }
         }
 

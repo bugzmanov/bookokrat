@@ -23,7 +23,11 @@ impl Bookmarks {
     }
 
     pub fn load() -> anyhow::Result<Self> {
-        let path = Path::new("bookmarks.json");
+        Self::load_from_file("bookmarks.json")
+    }
+
+    pub fn load_from_file(file_path: &str) -> anyhow::Result<Self> {
+        let path = Path::new(file_path);
         if path.exists() {
             let content = fs::read_to_string(path)?;
             Ok(serde_json::from_str(&content)?)

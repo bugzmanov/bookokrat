@@ -128,6 +128,18 @@ pub mod test_helpers {
         lines.join("\n")
     }
 
+    /// Create a test App instance with clean initial conditions
+    /// - Uses testdata directory for EPUBs
+    /// - No bookmark file (starts with empty bookmarks)
+    /// - No auto-loading of recent books
+    pub fn create_test_app() -> crate::App {
+        crate::App::new_with_config(
+            Some("testdata"),    // Use testdata directory
+            Some("/dev/null"),   // Non-existent bookmark file = empty bookmarks
+            false,               // Don't auto-load recent books
+        )
+    }
+
 }
 
 #[cfg(test)]
