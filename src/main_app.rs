@@ -6,10 +6,10 @@ use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 
-use std::{io::BufReader, process::Command, time::Duration};
+use std::{io::BufReader, process::Command, time::{Duration, Instant}};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -289,12 +289,23 @@ pub struct App {
     is_animating: bool,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
     last_bookmark_save: std::time::Instant,
+    // Click tracking for double/triple-click detection
+    last_click_time: Option<Instant>,
+    last_click_position: Option<(u16, u16)>,
+    click_count: u32,
 }
 
 #[derive(PartialEq, Debug)]
 pub enum Mode {
     FileList,
     Content,
+}
+
+#[derive(PartialEq, Debug)]
+enum ClickType {
+    Single,
+    Double,
+    Triple,
 }
 
 impl App {
@@ -374,6 +385,10 @@ impl App {
             is_animating: false,
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
+            // Initialize click tracking
+            last_click_time: None,
+            last_click_position: None,
+            click_count: 0,
         };
 
         // Auto-load the most recently read book if available
@@ -624,6 +639,64 @@ impl App {
                 // Explicitly return after handling to ensure no further processing
                 return;
             }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if self.mode == Mode::Content {
+                    // Get the content area for coordinate conversion
+                    let content_area = self.get_content_area_rect();
+                    
+                    // Handle click detection (double-click, triple-click)
+                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+                    
+                    match click_type {
+                        ClickType::Single => {
+                            self.text_reader.handle_mouse_down(
+                                mouse_event.column,
+                                mouse_event.row,
+                                content_area,
+                            );
+                        }
+                        ClickType::Double => {
+                            self.text_reader.handle_double_click(
+                                mouse_event.column,
+                                mouse_event.row,
+                                content_area,
+                            );
+                        }
+                        ClickType::Triple => {
+                            self.text_reader.handle_triple_click(
+                                mouse_event.column,
+                                mouse_event.row,
+                                content_area,
+                            );
+                        }
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.mode == Mode::Content {
+                    let content_area = self.get_content_area_rect();
+                    self.text_reader.handle_mouse_up(
+                        mouse_event.column,
+                        mouse_event.row,
+                        content_area,
+                    );
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if self.mode == Mode::Content {
+                    let content_area = self.get_content_area_rect();
+                    let old_scroll_offset = self.text_reader.scroll_offset;
+                    self.text_reader.handle_mouse_drag(
+                        mouse_event.column,
+                        mouse_event.row,
+                        content_area,
+                    );
+                    // Save bookmark if auto-scroll occurred
+                    if self.text_reader.scroll_offset != old_scroll_offset {
+                        self.save_bookmark();
+                    }
+                }
+            }
             _ => {
                 // Handle other mouse events like clicks, moves, etc.
                 debug!("Unhandled mouse event: {:?}", mouse_event.kind);
@@ -820,6 +893,22 @@ impl App {
         true
     }
 
+    /// Calculate the content area rectangle for coordinate conversion
+    fn get_content_area_rect(&self) -> Rect {
+        // Use the stored content area from the last render
+        if let Some(area) = self.text_reader.last_content_area {
+            area
+        } else {
+            // Fallback to a reasonable default
+            Rect {
+                x: 40,
+                y: 1,
+                width: 80,
+                height: 20,
+            }
+        }
+    }
+
     pub fn open_with_system_viewer(&self) {
         if let Some(path) = &self.current_file {
             info!(
@@ -842,9 +931,45 @@ impl App {
         }
     }
 
-    #[cfg(test)]
     pub fn get_scroll_offset(&self) -> usize {
         self.text_reader.scroll_offset
+    }
+
+    fn detect_click_type(&mut self, column: u16, row: u16) -> ClickType {
+        const DOUBLE_CLICK_TIME_MS: u64 = 500; // Maximum time between clicks for double-click
+        const CLICK_DISTANCE_THRESHOLD: u16 = 3; // Maximum distance between clicks
+        
+        let now = Instant::now();
+        let position = (column, row);
+        
+        let is_within_time = if let Some(last_time) = self.last_click_time {
+            now.duration_since(last_time).as_millis() <= DOUBLE_CLICK_TIME_MS as u128
+        } else {
+            false
+        };
+        
+        let is_within_distance = if let Some(last_pos) = self.last_click_position {
+            let distance_x = if column > last_pos.0 { column - last_pos.0 } else { last_pos.0 - column };
+            let distance_y = if row > last_pos.1 { row - last_pos.1 } else { last_pos.1 - row };
+            distance_x <= CLICK_DISTANCE_THRESHOLD && distance_y <= CLICK_DISTANCE_THRESHOLD
+        } else {
+            false
+        };
+        
+        if is_within_time && is_within_distance {
+            self.click_count += 1;
+        } else {
+            self.click_count = 1;
+        }
+        
+        self.last_click_time = Some(now);
+        self.last_click_position = Some(position);
+        
+        match self.click_count {
+            2 => ClickType::Double,
+            3 => ClickType::Triple,
+            _ => ClickType::Single,
+        }
     }
 
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
@@ -856,6 +981,13 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame) {
+        // Update auto-scroll state for continuous scrolling during text selection
+        let auto_scroll_updated = self.text_reader.update_auto_scroll();
+        if auto_scroll_updated {
+            // Save bookmark when auto-scrolling changes position
+            self.save_bookmark();
+        }
+        
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
         f.render_widget(background_block, f.size());
@@ -938,7 +1070,7 @@ impl App {
 
         let help_text = match self.mode {
             Mode::FileList => "j/k: Navigate | Enter: Select | Tab: Switch View | q: Quit",
-            Mode::Content => "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Ctrl+O: Open | Tab: Switch | q: Quit",
+            Mode::Content => "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Mouse: Select text | Ctrl+O: Open | Tab: Switch | q: Quit",
         };
 
         let help = Paragraph::new(help_text)

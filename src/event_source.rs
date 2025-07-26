@@ -77,6 +77,36 @@ impl SimulatedEventSource {
             modifiers: KeyModifiers::empty(),
         })
     }
+
+    /// Helper method to create a mouse button down event
+    pub fn mouse_down(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    /// Helper method to create a mouse button up event
+    pub fn mouse_up(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Up(crossterm::event::MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
+
+    /// Helper method to create a mouse drag event
+    pub fn mouse_drag(column: u16, row: u16) -> Event {
+        Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(crossterm::event::MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    }
 }
 
 impl EventSource for SimulatedEventSource {

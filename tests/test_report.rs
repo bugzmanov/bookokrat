@@ -21,11 +21,13 @@ pub struct LineStats {
 
 pub struct TestReport {
     failures: Vec<TestFailure>,
+    browser_opened: bool,
 }
 
 static TEST_REPORT: Lazy<Mutex<TestReport>> = Lazy::new(|| {
     Mutex::new(TestReport {
         failures: Vec::new(),
+        browser_opened: false,
     })
 });
 
@@ -37,8 +39,22 @@ impl TestReport {
     }
 
     pub fn generate_and_open_if_failures() {
-        if let Ok(report) = TEST_REPORT.lock() {
+        if let Ok(mut report) = TEST_REPORT.lock() {
+            if !report.failures.is_empty() && !report.browser_opened {
+                report.browser_opened = true;
+                let html = report.generate_html();
+                if let Err(e) = report.save_and_open(html) {
+                    eprintln!("Failed to generate test report: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Force generate and open the report if there are failures, regardless of whether it was already opened
+    pub fn force_generate_and_open_if_failures() {
+        if let Ok(mut report) = TEST_REPORT.lock() {
             if !report.failures.is_empty() {
+                report.browser_opened = true;
                 let html = report.generate_html();
                 if let Err(e) = report.save_and_open(html) {
                     eprintln!("Failed to generate test report: {}", e);
@@ -167,6 +183,41 @@ impl TestReport {
             border-radius: 3px;
             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
         }}
+        .failures-list {{
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }}
+        .failures-list h2 {{
+            margin: 0 0 15px 0;
+            color: #333;
+            font-size: 20px;
+        }}
+        .failures-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 10px;
+            margin-top: 15px;
+        }}
+        .failure-link {{
+            display: block;
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 6px;
+            color: #d32f2f;
+            text-decoration: none;
+            font-size: 14px;
+            font-family: monospace;
+            transition: all 0.2s;
+        }}
+        .failure-link:hover {{
+            background: #e3f2fd;
+            border-color: #bbdefb;
+            text-decoration: none;
+        }}
         .test-actions {{
             margin-top: 20px;
             text-align: center;
@@ -284,39 +335,6 @@ impl TestReport {
             display: block;
             margin: 0 auto;
         }}
-        .navigation {{
-            position: fixed;
-            right: 20px;
-            top: 120px;
-            background: white;
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-            max-width: 200px;
-        }}
-        .navigation h3 {{
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: #666;
-        }}
-        .navigation a {{
-            display: block;
-            padding: 5px 0;
-            color: #1976d2;
-            text-decoration: none;
-            font-size: 14px;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }}
-        .navigation a:hover {{
-            text-decoration: underline;
-        }}
-        @media (max-width: 1400px) {{
-            .navigation {{
-                display: none;
-            }}
-        }}
     </style>
 </head>
 <body>
@@ -340,11 +358,14 @@ impl TestReport {
             </button>
         </div>
         
-        {}
-    </div>
-    
-    <div class="navigation">
-        <h3>Quick Navigation</h3>
+        <div class="failures-list">
+            <h2>Failed Tests</h2>
+            <p>Click on any test name to jump to its detailed comparison:</p>
+            <div class="failures-grid">
+                {}
+            </div>
+        </div>
+        
         {}
     </div>
     
@@ -451,15 +472,19 @@ impl TestReport {
 </html>"#,
             self.failures.len(),
             if self.failures.len() == 1 { "" } else { "s" },
-            test_sections,
             self.failures.iter().map(|f| {
-                format!(r##"<a href="#" onclick="document.querySelector('[data-test="{}"]').scrollIntoView({{behavior: 'smooth'}}); return false;">{}</a>"##, 
+                format!(r##"<a href="#" class="failure-link" onclick="document.querySelector('[data-test=\"{}\"]').scrollIntoView({{behavior: 'smooth'}}); return false;">{}</a>"##, 
                     f.test_name, f.test_name)
-            }).collect::<Vec<_>>().join("\n        ")
+            }).collect::<Vec<_>>().join("\n                "),
+            test_sections
         )
     }
 
     fn save_and_open(&self, html: String) -> std::io::Result<()> {
+        self.save_and_open_with_flag(html, true)
+    }
+
+    fn save_and_open_with_flag(&self, html: String, should_open: bool) -> std::io::Result<()> {
         // Create output directory
         let output_dir = Path::new("target/test-reports");
         fs::create_dir_all(output_dir)?;
@@ -471,7 +496,7 @@ impl TestReport {
         fs::write(&output_path, html)?;
 
         // Check if we should open the browser
-        if std::env::var("OPEN_REPORT").is_ok() {
+        if should_open && std::env::var("OPEN_REPORT").is_ok() {
             // Try to open in browser
             let open_result = if cfg!(target_os = "macos") {
                 Command::new("open").arg(&output_path).spawn()
@@ -499,7 +524,9 @@ impl TestReport {
             }
         } else {
             eprintln!("\n📊 Snapshot report saved to: {}", output_path.display());
-            eprintln!("   💡 Run with OPEN_REPORT=1 to automatically open in browser");
+            if !should_open {
+                eprintln!("   💡 Run with OPEN_REPORT=1 to automatically open in browser");
+            }
         }
 
         Ok(())
@@ -508,13 +535,22 @@ impl TestReport {
 
 // Initialize the report system and set up finalization
 pub fn init_test_report() {
-    // Register a panic hook to generate report even on panic
+    // Set up an atexit handler to generate the report when the process finishes
+    // This ensures we only open the browser once at the end, after all tests complete
+    extern "C" fn generate_final_report() {
+        TestReport::force_generate_and_open_if_failures();
+    }
+    
+    unsafe {
+        libc::atexit(generate_final_report);
+    }
+
+    // Register a panic hook that just collects failures but doesn't generate/open anything
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         // Call the original panic hook
         original_hook(panic_info);
-
-        // Generate the test report
-        TestReport::generate_and_open_if_failures();
+        
+        // Don't generate reports here - let atexit handle everything
     }));
 }

@@ -18,6 +18,7 @@ mod main_app;
 mod panic_handler;
 mod text_generator;
 mod text_reader;
+mod text_selection;
 mod theme;
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use bookrat::test_utils::test_helpers::create_test_terminal;
 // SVG snapshot tests using snapbox
 use bookrat::{App, Mode};
-use crossterm::event::{MouseEvent, MouseEventKind};
+use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -843,6 +843,765 @@ fn test_edge_case_mouse_coordinates_svg() {
          first_diff_line| {
             test_report::TestReport::add_failure(test_report::TestFailure {
                 test_name: "test_edge_case_mouse_coordinates_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_text_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Simulate text selection: mouse down, drag, mouse up
+    // Use coordinates starting from the left margin to test margin selection
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,  // Click on left margin - should start from beginning of line
+        row: 10,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_drag = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 70,  // Drag to select text
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 70,
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply the mouse events
+    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_drag);
+    app.handle_mouse_event(mouse_up);
+
+    // Redraw to show the selection
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_text_selection.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/text_selection.svg"),
+        "test_text_selection_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_text_selection_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_text_selection_with_auto_scroll_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Start selection in the middle of the screen
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    // Drag beyond the bottom of the content area to trigger auto-scroll
+    let mouse_drag_beyond_bottom = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 60,
+        row: 35,  // Beyond the content area height
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 60,
+        row: 35,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply the mouse events to test auto-scroll
+    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_drag_beyond_bottom);
+    app.handle_mouse_event(mouse_up);
+
+    // Redraw to show the selection and scroll state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_text_selection_auto_scroll.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/text_selection_auto_scroll.svg"),
+        "test_text_selection_with_auto_scroll_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_text_selection_with_auto_scroll_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_continuous_auto_scroll_down_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let initial_scroll_offset = app.get_scroll_offset();
+
+    // Start selection in the middle of the screen
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_down);
+
+    // Simulate continuous dragging beyond bottom - should keep scrolling
+    let mouse_drag_beyond_bottom = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 60,
+        row: 35,  // Beyond the content area height
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    // Apply multiple drag events to simulate continuous scrolling
+    let mut scroll_offsets = Vec::new();
+    for i in 0..10 {
+        app.handle_mouse_event(mouse_drag_beyond_bottom);
+        scroll_offsets.push(app.get_scroll_offset());
+        // Each drag should continue scrolling until we hit the bottom
+        if i > 0 {
+            // Verify that scrolling continues (offset increases or stays at max)
+            assert!(scroll_offsets[i] >= scroll_offsets[i-1], 
+                "Auto-scroll stopped prematurely at iteration {}: offset {} -> {}", 
+                i, scroll_offsets[i-1], scroll_offsets[i]);
+        }
+    }
+
+    // The scroll offset should have increased significantly from initial
+    assert!(app.get_scroll_offset() > initial_scroll_offset,
+        "Auto-scroll should have moved from initial offset {} to {}",
+        initial_scroll_offset, app.get_scroll_offset());
+
+    // End selection
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 60,
+        row: 35,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_up);
+
+    // Redraw to show final state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_continuous_auto_scroll_down.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/continuous_auto_scroll_down.svg"),
+        "test_continuous_auto_scroll_down_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_continuous_auto_scroll_down_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_continuous_auto_scroll_up_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Scroll down first to create room for upward auto-scroll
+    // Only scroll a small amount to ensure we don't hit max
+    for _ in 0..3 {
+        app.scroll_down();
+    }
+    let initial_scroll_offset = app.get_scroll_offset();
+
+    // Start selection in the middle of the screen
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_down);
+
+    // Simulate continuous dragging above top - should keep scrolling up
+    let mouse_drag_above_top = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 60,
+        row: 0,  // Definitely above the content area (top of terminal)
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    // Apply multiple drag events to simulate continuous scrolling
+    let mut scroll_offsets = Vec::new();
+    for i in 0..10 {
+        app.handle_mouse_event(mouse_drag_above_top);
+        scroll_offsets.push(app.get_scroll_offset());
+        // Each drag should continue scrolling until we hit the top
+        if i > 0 {
+            // Verify that scrolling continues (offset decreases or stays at 0)
+            assert!(scroll_offsets[i] <= scroll_offsets[i-1], 
+                "Auto-scroll up stopped prematurely at iteration {}: offset {} -> {}", 
+                i, scroll_offsets[i-1], scroll_offsets[i]);
+        }
+    }
+
+    // The scroll offset should have decreased significantly from initial
+    assert!(app.get_scroll_offset() < initial_scroll_offset,
+        "Auto-scroll up should have moved from initial offset {} to {}",
+        initial_scroll_offset, app.get_scroll_offset());
+
+    // End selection
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 60,
+        row: 2,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_up);
+
+    // Redraw to show final state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_continuous_auto_scroll_up.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/continuous_auto_scroll_up.svg"),
+        "test_continuous_auto_scroll_up_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_continuous_auto_scroll_up_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_timer_based_auto_scroll_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let initial_scroll_offset = app.get_scroll_offset();
+
+    // Start selection in the middle of the screen
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_down);
+
+    // Drag beyond bottom ONCE (simulating user holding mouse in position)
+    let mouse_drag_beyond_bottom = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 60,
+        row: 35,  // Beyond the content area height
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_drag_beyond_bottom);
+
+    // Now simulate multiple draw calls (which trigger auto-scroll updates)
+    // This simulates the real-world scenario where the user holds the mouse
+    // outside the content area and the auto-scroll timer continues scrolling
+    let mut scroll_offsets = Vec::new();
+    for i in 0..10 {
+        // Simulate a redraw happening (which calls update_auto_scroll)
+        terminal.draw(|f| app.draw(f)).unwrap();
+        scroll_offsets.push(app.get_scroll_offset());
+        
+        // Add a small delay to ensure the timer can trigger
+        std::thread::sleep(std::time::Duration::from_millis(110));
+    }
+
+    // Verify that scrolling continued automatically without additional mouse events
+    let final_scroll_offset = app.get_scroll_offset();
+    assert!(final_scroll_offset > initial_scroll_offset,
+        "Timer-based auto-scroll should have moved from initial offset {} to {}",
+        initial_scroll_offset, final_scroll_offset);
+
+    // Verify progressive scrolling occurred
+    for i in 1..scroll_offsets.len() {
+        assert!(scroll_offsets[i] >= scroll_offsets[i-1],
+            "Auto-scroll should continue progressing: iteration {} went from {} to {}",
+            i, scroll_offsets[i-1], scroll_offsets[i]);
+    }
+
+    // End selection
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 60,
+        row: 35,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_up);
+
+    // Final redraw
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_timer_based_auto_scroll.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/timer_based_auto_scroll.svg"),
+        "test_timer_based_auto_scroll_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_timer_based_auto_scroll_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_auto_scroll_stops_when_cursor_returns_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Start selection in the middle of the screen
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_down);
+
+    // Drag beyond bottom to trigger auto-scroll
+    let mouse_drag_beyond_bottom = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 60,
+        row: 35,  // Beyond the content area height
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_drag_beyond_bottom);
+    let scroll_after_auto = app.get_scroll_offset();
+
+    // Move cursor back to within content area - auto-scroll should stop
+    let mouse_drag_back_in_area = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 70,
+        row: 20,  // Back within content area
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_drag_back_in_area);
+    let scroll_after_return = app.get_scroll_offset();
+
+    // Scroll should stop when cursor returns to content area
+    assert_eq!(scroll_after_auto, scroll_after_return,
+        "Auto-scroll should stop when cursor returns to content area");
+
+    // Another drag within area should not cause more scrolling
+    let mouse_drag_within_area = MouseEvent {
+        kind: MouseEventKind::Drag(MouseButton::Left),
+        column: 80,
+        row: 25,  // Still within content area
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_drag_within_area);
+    let final_scroll = app.get_scroll_offset();
+
+    assert_eq!(scroll_after_return, final_scroll,
+        "No additional scrolling should occur when dragging within content area");
+
+    // End selection
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 80,
+        row: 25,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_up);
+
+    // Redraw to show final state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_auto_scroll_cursor_return.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/auto_scroll_stops_when_cursor_returns.svg"),
+        "test_auto_scroll_stops_when_cursor_returns_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_auto_scroll_stops_when_cursor_returns_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_double_click_word_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Simulate double-click to select a word
+    // Click on a word in the middle of the content
+    let mouse_click1 = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,  // Click on a word
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up1 = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 45,
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    let mouse_click2 = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 45,  // Second click on same position
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up2 = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 45,
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply the double-click sequence
+    app.handle_mouse_event(mouse_click1);
+    app.handle_mouse_event(mouse_up1);
+    app.handle_mouse_event(mouse_click2);
+    app.handle_mouse_event(mouse_up2);
+
+    // Redraw to show the word selection
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_double_click_word_selection.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/double_click_word_selection.svg"),
+        "test_double_click_word_selection_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_double_click_word_selection_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_triple_click_paragraph_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // First draw to initialize the content area
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Simulate triple-click to select a paragraph
+    // Click on a paragraph in the middle of the content
+    let mouse_click1 = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,  // Click on a paragraph
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up1 = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 50,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    let mouse_click2 = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,  // Second click on same position
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up2 = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 50,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    let mouse_click3 = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,  // Third click on same position
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    
+    let mouse_up3 = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 50,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply the triple-click sequence
+    app.handle_mouse_event(mouse_click1);
+    app.handle_mouse_event(mouse_up1);
+    app.handle_mouse_event(mouse_click2);
+    app.handle_mouse_event(mouse_up2);
+    app.handle_mouse_event(mouse_click3);
+    app.handle_mouse_event(mouse_up3);
+
+    // Redraw to show the paragraph selection
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_triple_click_paragraph_selection.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/triple_click_paragraph_selection.svg"),
+        "test_triple_click_paragraph_selection_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_triple_click_paragraph_selection_svg".to_string(),
                 expected,
                 actual,
                 line_stats: test_report::LineStats {

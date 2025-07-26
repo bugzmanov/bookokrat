@@ -1,4 +1,5 @@
 use crate::theme::Base16Palette;
+use crate::text_selection::TextSelection;
 use log::debug;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,6 +10,21 @@ use ratatui::{
 };
 use std::time::Instant;
 use textwrap;
+
+#[derive(Debug, Clone)]
+struct AutoScrollState {
+    direction: AutoScrollDirection,
+    mouse_x: u16,
+    mouse_y: u16,
+    content_area: Rect,
+    last_scroll_time: Instant,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum AutoScrollDirection {
+    Up,
+    Down,
+}
 
 pub struct TextReader {
     pub scroll_offset: usize,
@@ -28,6 +44,14 @@ pub struct TextReader {
     cached_styled_content: Option<Text<'static>>,
     cached_styled_width: usize,
     cached_chapter_title_hash: u64,
+    // Text selection state
+    pub text_selection: TextSelection,
+    // Store raw text lines for selection extraction
+    raw_text_lines: Vec<String>,
+    // Store the last content area for mouse coordinate conversion
+    pub last_content_area: Option<Rect>,
+    // Auto-scroll state for continuous scrolling during text selection
+    auto_scroll_state: Option<AutoScrollState>,
 }
 
 impl TextReader {
@@ -46,6 +70,10 @@ impl TextReader {
             cached_styled_content: None,
             cached_styled_width: 0,
             cached_chapter_title_hash: 0,
+            text_selection: TextSelection::new(),
+            raw_text_lines: Vec::new(),
+            last_content_area: None,
+            auto_scroll_state: None,
         }
     }
 
@@ -131,27 +159,54 @@ impl TextReader {
                    self.cached_content_hash != content_hash,
                    self.cached_chapter_title_hash != chapter_title_hash);
 
-            let styled_content =
-                self.parse_styled_text_internal(text, chapter_title, palette, width);
+            let (styled_content, raw_lines) =
+                self.parse_styled_text_internal_with_raw(text, chapter_title, palette, width);
             self.cached_styled_content = Some(styled_content);
+            self.raw_text_lines = raw_lines;
             self.cached_styled_width = width;
             self.cached_content_hash = content_hash;
             self.cached_chapter_title_hash = chapter_title_hash;
         }
 
-        self.cached_styled_content.as_ref().unwrap().clone()
+        let mut result = self.cached_styled_content.as_ref().unwrap().clone();
+        
+        // Apply selection highlighting if there's an active selection
+        if self.text_selection.has_selection() {
+            // Use theme color for selection - base_02 is typically used for selection/highlight
+            let selection_bg_color = palette.base_02;
+            let highlighted_lines: Vec<Line> = result
+                .lines
+                .into_iter()
+                .enumerate()
+                .map(|(line_idx, line)| {
+                    self.text_selection.apply_selection_highlighting(
+                        line_idx,
+                        line.spans,
+                        selection_bg_color,
+                    )
+                })
+                .collect();
+            result = ratatui::text::Text::from(highlighted_lines);
+        }
+        
+        result
     }
 
-    fn parse_styled_text_internal(
-        &self,
+    fn parse_styled_text_internal_with_raw(
+        &mut self,
         text: &str,
         chapter_title: &Option<String>,
         palette: &Base16Palette,
         width: usize,
-    ) -> Text<'static> {
+    ) -> (Text<'static>, Vec<String>) {
         let mut lines = Vec::new();
+        let mut raw_lines = Vec::new();
 
+        // Add chapter title lines to raw text
         if let Some(ref title) = chapter_title {
+            raw_lines.push(title.clone());
+            raw_lines.push(String::new());
+            
             lines.push(Line::from(vec![Span::styled(
                 title.clone(),
                 Style::default()
@@ -164,6 +219,7 @@ impl TextReader {
         // Process each line with manual wrapping
         for line in text.lines() {
             if line.trim().is_empty() {
+                raw_lines.push(String::new());
                 lines.push(Line::from(String::new()));
                 continue;
             }
@@ -172,12 +228,14 @@ impl TextReader {
             let wrapped_lines = textwrap::wrap(line, width);
             for wrapped_line in wrapped_lines {
                 let line_str = wrapped_line.to_string();
+                raw_lines.push(line_str.clone());
                 let styled_line = self.parse_line_styling_owned(&line_str, palette);
                 lines.push(styled_line);
             }
         }
 
-        Text::from(lines)
+        // Return both styled content and raw lines
+        (Text::from(lines), raw_lines)
     }
 
     /// Parse styling for a single line (bold, quotes, etc.) - owned version for caching
@@ -438,6 +496,11 @@ impl TextReader {
         self.cached_styled_content = None;
         self.cached_content_hash = 0;
         self.cached_chapter_title_hash = 0;
+        // Clear text selection when changing chapters
+        self.text_selection.clear_selection();
+        self.raw_text_lines.clear();
+        // Clear auto-scroll state
+        self.auto_scroll_state = None;
     }
 
     pub fn restore_scroll_position(&mut self, offset: usize) {
@@ -544,6 +607,156 @@ impl TextReader {
         if self.highlight_visual_line.is_some() && Instant::now() >= self.highlight_end_time {
             self.highlight_visual_line = None;
         }
+    }
+
+    /// Handle mouse down event for text selection
+    pub fn handle_mouse_down(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            debug!("Mouse down at text coordinates: line {}, column {}", line, column);
+            self.text_selection.start_selection(line, column);
+        }
+    }
+
+    /// Handle mouse drag event for text selection
+    pub fn handle_mouse_drag(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        // Check if we need to auto-scroll due to dragging outside the visible area
+        let needs_scroll_up = screen_y < content_area.y;
+        let needs_scroll_down = screen_y >= content_area.y + content_area.height;
+        
+        if needs_scroll_up {
+            // Set up auto-scroll state for continuous upward scrolling
+            self.auto_scroll_state = Some(AutoScrollState {
+                direction: AutoScrollDirection::Up,
+                mouse_x: screen_x,
+                mouse_y: screen_y,
+                content_area,
+                last_scroll_time: Instant::now(),
+            });
+            // Perform initial scroll
+            self.perform_auto_scroll();
+        } else if needs_scroll_down {
+            // Set up auto-scroll state for continuous downward scrolling
+            self.auto_scroll_state = Some(AutoScrollState {
+                direction: AutoScrollDirection::Down,
+                mouse_x: screen_x,
+                mouse_y: screen_y,
+                content_area,
+                last_scroll_time: Instant::now(),
+            });
+            // Perform initial scroll
+            self.perform_auto_scroll();
+        } else {
+            // Mouse is back in content area - stop auto-scrolling
+            self.auto_scroll_state = None;
+            // Normal drag within visible area
+            if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+                self.text_selection.update_selection(line, column);
+            }
+        }
+    }
+
+    /// Handle mouse up event for text selection
+    pub fn handle_mouse_up(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        // Stop auto-scrolling when mouse is released
+        self.auto_scroll_state = None;
+        if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            self.text_selection.update_selection(line, column);
+        }
+        self.text_selection.end_selection();
+    }
+
+    /// Clear text selection
+    pub fn clear_selection(&mut self) {
+        self.text_selection.clear_selection();
+        self.auto_scroll_state = None;
+    }
+
+    /// Handle double-click for word selection
+    pub fn handle_double_click(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            debug!("Double-click at text coordinates: line {}, column {}", line, column);
+            self.text_selection.select_word_at(line, column, &self.raw_text_lines);
+        }
+    }
+
+    /// Handle triple-click for paragraph selection
+    pub fn handle_triple_click(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            debug!("Triple-click at text coordinates: line {}, column {}", line, column);
+            self.text_selection.select_paragraph_at(line, column, &self.raw_text_lines);
+        }
+    }
+
+    /// Perform auto-scroll based on current auto-scroll state
+    fn perform_auto_scroll(&mut self) {
+        if let Some(ref state) = self.auto_scroll_state.clone() {
+            match state.direction {
+                AutoScrollDirection::Up => {
+                    if self.scroll_offset > 0 {
+                        // Calculate scroll distance based on how far above the content area the mouse is
+                        let distance_above = state.content_area.y.saturating_sub(state.mouse_y);
+                        let scroll_amount = ((distance_above as f32 / 10.0).ceil() as usize).max(1).min(3);
+                        
+                        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+                        debug!("Auto-scroll up by {} to offset: {}", scroll_amount, self.scroll_offset);
+                        
+                        // Update selection to the top line of the visible area
+                        let top_line = self.scroll_offset;
+                        let column = if state.mouse_x < state.content_area.x { 0 } else { (state.mouse_x - state.content_area.x) as usize };
+                        self.text_selection.update_selection(top_line, column);
+                    }
+                }
+                AutoScrollDirection::Down => {
+                    let max_offset = self.get_max_scroll_offset();
+                    if self.scroll_offset < max_offset {
+                        // Calculate scroll distance based on how far below the content area the mouse is
+                        let distance_below = state.mouse_y.saturating_sub(state.content_area.y + state.content_area.height);
+                        let scroll_amount = ((distance_below as f32 / 10.0).ceil() as usize).max(1).min(3);
+                        
+                        let new_offset = (self.scroll_offset + scroll_amount).min(max_offset);
+                        self.scroll_offset = new_offset;
+                        debug!("Auto-scroll down by {} to offset: {}", scroll_amount, self.scroll_offset);
+                        
+                        // Update selection to the bottom line of the visible area
+                        let bottom_line = self.scroll_offset + self.visible_height.saturating_sub(1);
+                        let column = if state.mouse_x < state.content_area.x { 0 } else { (state.mouse_x - state.content_area.x) as usize };
+                        self.text_selection.update_selection(bottom_line, column);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update auto-scroll - should be called continuously from the main loop
+    pub fn update_auto_scroll(&mut self) -> bool {
+        let should_scroll = if let Some(ref state) = self.auto_scroll_state {
+            let now = Instant::now();
+            // Auto-scroll every 100ms (10 FPS)
+            now.duration_since(state.last_scroll_time) >= std::time::Duration::from_millis(100)
+        } else {
+            false
+        };
+
+        if should_scroll {
+            self.perform_auto_scroll();
+            if let Some(ref mut state) = self.auto_scroll_state {
+                state.last_scroll_time = Instant::now();
+            }
+            true // Indicates that scrolling occurred and a redraw is needed
+        } else {
+            false
+        }
+    }
+
+    /// Convert screen coordinates to logical text coordinates
+    fn screen_to_text_coords(&self, screen_x: u16, screen_y: u16, content_area: Rect) -> Option<(usize, usize)> {
+        self.text_selection.screen_to_text_coords(
+            screen_x,
+            screen_y,
+            self.scroll_offset,
+            content_area.x,
+            content_area.y,
+        )
     }
 
     /// Update wrapped lines if dimensions or content have changed
@@ -654,7 +867,7 @@ impl TextReader {
             ])
             .split(vertical_margined_area[1]);
 
-        // Render the actual content with manual wrapping
+        // Render the actual content with manual wrapping and selection highlighting
         let text_width = margined_content_area[1].width as usize;
         let scroll_offset = self.scroll_offset;
         let styled_content =
@@ -665,6 +878,9 @@ impl TextReader {
             .style(Style::default().fg(text_color).bg(palette.base_00));
 
         f.render_widget(content_paragraph, margined_content_area[1]);
+        
+        // Store the content area for mouse coordinate conversion
+        self.last_content_area = Some(margined_content_area[1]);
 
         // Draw highlight overlay if active
         if let Some(highlight_line) = self.highlight_visual_line {

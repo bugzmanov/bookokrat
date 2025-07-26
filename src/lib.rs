@@ -7,6 +7,7 @@ pub mod main_app;
 pub mod panic_handler;
 pub mod text_generator;
 pub mod text_reader;
+pub mod text_selection;
 pub mod theme;
 
 pub mod test_utils;
