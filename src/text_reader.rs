@@ -390,12 +390,43 @@ impl TextReader {
             0
         };
 
-        let title = format!(
+        let mut title = format!(
             "Chapter {}/{} {}%",
             current_chapter + 1,
             total_chapters,
             chapter_progress
         );
+
+        // Add chapter title if available, with truncation if necessary
+        if let Some(ref chapter_title_str) = chapter_title {
+            let separator = " : ";
+            let title_with_separator = format!("{}{}{}", title, separator, chapter_title_str);
+
+            // Calculate available space for title (leave some padding for border)
+            let available_width = area.width.saturating_sub(4) as usize; // Account for borders and padding
+
+            if title_with_separator.len() <= available_width {
+                title = title_with_separator;
+            } else {
+                // Truncate chapter title to fit
+                let base_length = title.len() + separator.len();
+                let available_for_chapter = available_width.saturating_sub(base_length);
+
+                if available_for_chapter >= 4 {
+                    // Minimum space for "..." + at least 1 char
+                    let truncated_chapter = if available_for_chapter >= chapter_title_str.len() {
+                        chapter_title_str.clone()
+                    } else {
+                        let max_chars = available_for_chapter.saturating_sub(3); // Reserve space for "..."
+                        format!(
+                            "{}...",
+                            &chapter_title_str[..max_chars.min(chapter_title_str.len())]
+                        )
+                    };
+                    title = format!("{}{}{}", title, separator, truncated_chapter);
+                }
+            }
+        }
 
         // Draw the border with title
         let content_border = Block::default()

@@ -257,3 +257,162 @@ fn test_content_scrolling_svg() {
         },
     );
 }
+
+#[test]
+fn test_chapter_title_normal_length_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the 7-chapter test book to get chapter with title
+    if let Some(book_info) = app.book_manager.get_book_info(1) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        // Force animation to complete for testing
+        app.animation_progress = 1.0;
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_chapter_title_normal.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/chapter_title_normal_length.svg"),
+        "test_chapter_title_normal_length_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_chapter_title_normal_length_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_chapter_title_narrow_terminal_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(50, 24); // Narrow terminal
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the 7-chapter test book to get chapter with title
+    if let Some(book_info) = app.book_manager.get_book_info(1) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        // Force animation to complete for testing
+        app.animation_progress = 1.0;
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_chapter_title_narrow.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/chapter_title_narrow_terminal.svg"),
+        "test_chapter_title_narrow_terminal_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_chapter_title_narrow_terminal_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_chapter_title_no_title_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the digital frontier book (which may not have chapter titles)
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        // Force animation to complete for testing
+        app.animation_progress = 1.0;
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_chapter_title_no_title.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/chapter_title_no_title.svg"),
+        "test_chapter_title_no_title_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            // Add to test report
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_chapter_title_no_title_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}

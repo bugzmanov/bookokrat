@@ -40,7 +40,10 @@ fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
         .get_executed_commands();
 
     assert_eq!(executed_commands.len(), 1);
-    assert_eq!(executed_commands[0], "tests/testdata/digital_frontier.epub@chapter1");
+    assert_eq!(
+        executed_commands[0],
+        "tests/testdata/digital_frontier.epub@chapter1"
+    );
 }
 
 #[test]
