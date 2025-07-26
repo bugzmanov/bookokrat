@@ -418,10 +418,11 @@ impl TextReader {
                         chapter_title_str.clone()
                     } else {
                         let max_chars = available_for_chapter.saturating_sub(3); // Reserve space for "..."
-                        format!(
-                            "{}...",
-                            &chapter_title_str[..max_chars.min(chapter_title_str.len())]
-                        )
+                        let truncated = chapter_title_str
+                            .chars()
+                            .take(max_chars)
+                            .collect::<String>();
+                        format!("{}...", truncated)
                     };
                     title = format!("{}{}{}", title, separator, truncated_chapter);
                 }
