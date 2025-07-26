@@ -9,9 +9,9 @@ use crate::theme::OCEANIC_NEXT;
 use std::{io::BufReader, process::Command, time::Duration};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
-use log::{error, info};
+use log::{debug, error, info};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::Style,
@@ -68,7 +68,11 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
         } else {
             // Linux and other Unix-like systems
             self.open_with_linux_epub_reader(absolute_path_str.as_ref(), chapter)
-                .or_else(|_| Command::new("xdg-open").arg(absolute_path_str.as_ref()).spawn())
+                .or_else(|_| {
+                    Command::new("xdg-open")
+                        .arg(absolute_path_str.as_ref())
+                        .spawn()
+                })
         };
 
         match result {
@@ -88,61 +92,88 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
 
 impl RealSystemCommandExecutor {
     /// Try to open EPUB with macOS-specific readers at the given chapter
-    fn open_with_macos_epub_reader(&self, path: &str, chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn open_with_macos_epub_reader(
+        &self,
+        path: &str,
+        chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // Try ClearView first
         if let Ok(child) = self.try_clearview(path, chapter) {
             return Ok(child);
         }
-        
+
         // Try Calibre ebook-viewer
         if let Ok(child) = self.try_calibre_viewer(path, chapter) {
             return Ok(child);
         }
-        
+
         // Try Skim (PDF/EPUB viewer)
         if let Ok(child) = self.try_skim(path, chapter) {
             return Ok(child);
         }
-        
-        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "No compatible EPUB reader found"))
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No compatible EPUB reader found",
+        ))
     }
-    
+
     /// Try to open EPUB with Windows-specific readers at the given chapter
-    fn open_with_windows_epub_reader(&self, path: &str, chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn open_with_windows_epub_reader(
+        &self,
+        path: &str,
+        chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // Try Calibre ebook-viewer first
         if let Ok(child) = self.try_calibre_viewer(path, chapter) {
             return Ok(child);
         }
-        
-        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "No compatible EPUB reader found"))
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No compatible EPUB reader found",
+        ))
     }
-    
+
     /// Try to open EPUB with Linux-specific readers at the given chapter
-    fn open_with_linux_epub_reader(&self, path: &str, chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn open_with_linux_epub_reader(
+        &self,
+        path: &str,
+        chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // Try Calibre ebook-viewer first
         if let Ok(child) = self.try_calibre_viewer(path, chapter) {
             return Ok(child);
         }
-        
+
         // Try FBReader
         if let Ok(child) = self.try_fbreader(path, chapter) {
             return Ok(child);
         }
-        
-        Err(std::io::Error::new(std::io::ErrorKind::NotFound, "No compatible EPUB reader found"))
+
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No compatible EPUB reader found",
+        ))
     }
-    
+
     /// Try to open with ClearView (macOS)
-    fn try_clearview(&self, path: &str, _chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn try_clearview(
+        &self,
+        path: &str,
+        _chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // ClearView is a GUI-only application without CLI chapter navigation support
         // Just open the file normally - user will need to navigate manually
-        Command::new("open")
-            .args(["-a", "ClearView", path])
-            .spawn()
+        Command::new("open").args(["-a", "ClearView", path]).spawn()
     }
-    
+
     /// Try to open with Calibre ebook-viewer (cross-platform)
-    fn try_calibre_viewer(&self, path: &str, chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn try_calibre_viewer(
+        &self,
+        path: &str,
+        chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // Calibre ebook-viewer supports --goto option with TOC navigation
         // We'll try to navigate to the chapter using TOC pattern matching
         if chapter > 0 {
@@ -153,38 +184,37 @@ impl RealSystemCommandExecutor {
                 format!("toc:{}", chapter + 1),         // Just the number
                 format!("toc:Chapter{}", chapter + 1),  // Chapter1, Chapter2, etc.
             ];
-            
+
             // Try each pattern
             for pattern in &chapter_patterns {
                 if let Ok(child) = Command::new("ebook-viewer")
                     .arg(format!("--goto={}", pattern))
                     .arg(path)
-                    .spawn() {
+                    .spawn()
+                {
                     return Ok(child);
                 }
             }
         }
-        
+
         // Fallback: just open the file normally
-        Command::new("ebook-viewer")
-            .arg(path)
-            .spawn()
+        Command::new("ebook-viewer").arg(path).spawn()
     }
-    
+
     /// Try to open with Skim (macOS)
     fn try_skim(&self, path: &str, _chapter: usize) -> Result<std::process::Child, std::io::Error> {
         // Skim doesn't support command-line chapter navigation
-        Command::new("open")
-            .args(["-a", "Skim", path])
-            .spawn()
+        Command::new("open").args(["-a", "Skim", path]).spawn()
     }
-    
+
     /// Try to open with FBReader (Linux)
-    fn try_fbreader(&self, path: &str, _chapter: usize) -> Result<std::process::Child, std::io::Error> {
+    fn try_fbreader(
+        &self,
+        path: &str,
+        _chapter: usize,
+    ) -> Result<std::process::Child, std::io::Error> {
         // FBReader doesn't support command-line chapter navigation
-        Command::new("fbreader")
-            .arg(path)
-            .spawn()
+        Command::new("fbreader").arg(path).spawn()
     }
 }
 
@@ -225,7 +255,9 @@ impl SystemCommandExecutor for MockSystemCommandExecutor {
     }
 
     fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String> {
-        self.executed_commands.borrow_mut().push(format!("{}@chapter{}", path, chapter));
+        self.executed_commands
+            .borrow_mut()
+            .push(format!("{}@chapter{}", path, chapter));
         if self.should_fail {
             Err("Mock failure".to_string())
         } else {
@@ -256,6 +288,7 @@ pub struct App {
     target_progress: f32,        // Target animation value
     is_animating: bool,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
+    last_bookmark_save: std::time::Instant,
 }
 
 #[derive(PartialEq, Debug)]
@@ -340,6 +373,7 @@ impl App {
             target_progress: 0.0,
             is_animating: false,
             system_command_executor: system_executor,
+            last_bookmark_save: std::time::Instant::now(),
         };
 
         // Auto-load the most recently read book if available
@@ -408,14 +442,27 @@ impl App {
     }
 
     pub fn save_bookmark(&mut self) {
+        self.save_bookmark_with_throttle(false);
+    }
+
+    pub fn save_bookmark_with_throttle(&mut self, force: bool) {
         if let Some(path) = &self.current_file {
             self.bookmarks.update_bookmark(
                 path,
                 self.current_chapter,
                 self.text_reader.scroll_offset,
             );
-            if let Err(e) = self.bookmarks.save() {
-                error!("Failed to save bookmark: {}", e);
+
+            // Only save to disk if enough time has passed or if forced
+            let now = std::time::Instant::now();
+            if force
+                || now.duration_since(self.last_bookmark_save)
+                    > std::time::Duration::from_millis(500)
+            {
+                if let Err(e) = self.bookmarks.save() {
+                    error!("Failed to save bookmark: {}", e);
+                }
+                self.last_bookmark_save = now;
             }
         }
     }
@@ -481,7 +528,7 @@ impl App {
                     info!("Moving to next chapter: {}", self.current_chapter + 1);
                     self.update_content();
                     self.text_reader.reset_scroll();
-                    self.save_bookmark();
+                    self.save_bookmark_with_throttle(true);
                 } else {
                     error!("Failed to move to next chapter");
                 }
@@ -499,7 +546,7 @@ impl App {
                     info!("Moving to previous chapter: {}", self.current_chapter + 1);
                     self.update_content();
                     self.text_reader.reset_scroll();
-                    self.save_bookmark();
+                    self.save_bookmark_with_throttle(true);
                 } else {
                     error!("Failed to move to previous chapter");
                 }
@@ -531,12 +578,263 @@ impl App {
         }
     }
 
+    pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+        let start_time = std::time::Instant::now();
+        debug!(
+            "handle_mouse_event called with: {:?} at ({}, {})",
+            mouse_event.kind, mouse_event.column, mouse_event.row
+        );
+
+        // Extra validation for horizontal scrolls to prevent crossterm overflow bug
+        if matches!(
+            mouse_event.kind,
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
+        ) {
+            if !self.is_valid_mouse_coordinates(mouse_event.column, mouse_event.row) {
+                debug!(
+                    "Dropping horizontal scroll event with invalid coordinates: ({}, {})",
+                    mouse_event.column, mouse_event.row
+                );
+                return;
+            }
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::ScrollDown => {
+                if self.mode == Mode::FileList {
+                    self.book_list.move_selection_down(&self.book_manager);
+                } else {
+                    self.scroll_down();
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if self.mode == Mode::FileList {
+                    self.book_list.move_selection_up();
+                } else {
+                    self.scroll_up();
+                }
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                // Horizontal scrolling is not supported in this app, but we handle it
+                // explicitly to avoid issues with event processing
+                debug!(
+                    "Horizontal scroll event ignored: {:?} at ({}, {})",
+                    mouse_event.kind, mouse_event.column, mouse_event.row
+                );
+                // Explicitly return after handling to ensure no further processing
+                return;
+            }
+            _ => {
+                // Handle other mouse events like clicks, moves, etc.
+                debug!("Unhandled mouse event: {:?}", mouse_event.kind);
+            }
+        }
+
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(10) {
+            debug!(
+                "handle_mouse_event took {}ms for event {:?}",
+                elapsed.as_millis(),
+                mouse_event.kind
+            );
+        }
+    }
+
+    pub fn handle_mouse_event_with_batching(
+        &mut self,
+        initial_mouse_event: MouseEvent,
+        event_source: &mut dyn crate::event_source::EventSource,
+    ) {
+        use std::time::Duration;
+
+        debug!("Processing mouse event: {:?}", initial_mouse_event.kind);
+
+        let mut scroll_down_count = 0;
+        let mut scroll_up_count = 0;
+
+        // Count the initial event
+        match initial_mouse_event.kind {
+            MouseEventKind::ScrollDown => {
+                scroll_down_count += 1;
+                debug!("Starting vertical scroll batching with ScrollDown");
+            }
+            MouseEventKind::ScrollUp => {
+                scroll_up_count += 1;
+                debug!("Starting vertical scroll batching with ScrollUp");
+            }
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                // Horizontal scroll events are not batched, handle individually and return
+                debug!(
+                    "Handling horizontal scroll event individually: {:?} at ({}, {})",
+                    initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
+                );
+
+                // Validate coordinates to prevent crossterm overflow bug
+                if self
+                    .is_valid_mouse_coordinates(initial_mouse_event.column, initial_mouse_event.row)
+                {
+                    self.handle_mouse_event(initial_mouse_event);
+                } else {
+                    debug!(
+                        "Skipping horizontal scroll event with invalid coordinates: ({}, {})",
+                        initial_mouse_event.column, initial_mouse_event.row
+                    );
+                }
+                return;
+            }
+            _ => {
+                // Other mouse events are handled normally
+                debug!(
+                    "Handling non-scroll mouse event: {:?}",
+                    initial_mouse_event.kind
+                );
+                self.handle_mouse_event(initial_mouse_event);
+                return;
+            }
+        }
+
+        // Drain additional mouse scroll events that are queued up
+        // Use a very short timeout to avoid blocking but catch rapid events
+        let drain_timeout = Duration::from_millis(0); // Non-blocking poll
+        let max_drain_iterations = 50; // Safety limit to prevent infinite loops
+        let mut drain_count = 0;
+        let start_time = std::time::Instant::now();
+
+        while drain_count < max_drain_iterations
+            && event_source.poll(drain_timeout).unwrap_or(false)
+        {
+            drain_count += 1;
+
+            // Timeout circuit breaker - prevent infinite loops or excessive processing
+            if start_time.elapsed() > std::time::Duration::from_millis(100) {
+                debug!(
+                    "Batching timeout reached ({}ms), breaking out of event drain loop",
+                    start_time.elapsed().as_millis()
+                );
+                break;
+            }
+
+            // Safety check - if we're draining too many events, something might be wrong
+            if drain_count > 20 {
+                debug!(
+                    "Warning: draining many events ({}), may indicate event accumulation issue",
+                    drain_count
+                );
+            }
+
+            match event_source.read() {
+                Ok(Event::Mouse(mouse_event)) => {
+                    match mouse_event.kind {
+                        MouseEventKind::ScrollDown => scroll_down_count += 1,
+                        MouseEventKind::ScrollUp => scroll_up_count += 1,
+                        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                            // Horizontal scroll events during batching - handle individually and stop batching
+                            debug!("Horizontal scroll during vertical batch, handling individually: {:?} at ({}, {})",
+                                   mouse_event.kind, mouse_event.column, mouse_event.row);
+
+                            // Validate coordinates to prevent crossterm overflow bug
+                            if self.is_valid_mouse_coordinates(mouse_event.column, mouse_event.row)
+                            {
+                                self.handle_mouse_event(mouse_event);
+                                debug!(
+                                    "Completed horizontal scroll handling, breaking out of batch"
+                                );
+                            } else {
+                                debug!("Skipping horizontal scroll event with invalid coordinates during batching: ({}, {})",
+                                       mouse_event.column, mouse_event.row);
+                            }
+                            break;
+                        }
+                        _ => {
+                            // Other mouse events, handle normally and stop batching
+                            self.handle_mouse_event(mouse_event);
+                            break;
+                        }
+                    }
+                }
+                Ok(_) => {
+                    // Non-mouse event, stop draining (we'll process it in the next iteration)
+                    break;
+                }
+                Err(e) => {
+                    // Error reading event, log and stop draining
+                    debug!("Error reading event during batching: {:?}", e);
+                    break;
+                }
+            }
+        }
+
+        // Process the net scroll effect
+        let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
+
+        debug!(
+            "Batched mouse events: {} down, {} up, net: {}, drained: {} events",
+            scroll_down_count, scroll_up_count, net_scroll, drain_count
+        );
+
+        if net_scroll > 0 {
+            // Net scroll down
+            for _ in 0..net_scroll.min(10) {
+                // Limit to prevent excessive scrolling
+                if self.mode == Mode::FileList {
+                    self.book_list.move_selection_down(&self.book_manager);
+                } else {
+                    self.scroll_down();
+                }
+            }
+        } else if net_scroll < 0 {
+            // Net scroll up
+            for _ in 0..(-net_scroll).min(10) {
+                // Limit to prevent excessive scrolling
+                if self.mode == Mode::FileList {
+                    self.book_list.move_selection_up();
+                } else {
+                    self.scroll_up();
+                }
+            }
+        }
+    }
+
+    /// Validate mouse coordinates to prevent crossterm overflow bug
+    pub fn is_valid_mouse_coordinates(&self, column: u16, row: u16) -> bool {
+        // Crossterm overflow bug occurs when coordinates are at edge values
+        // The bug happens when column or row is 0, which can cause underflow
+        // in crossterm's internal parsing logic
+        if column == 0 || row == 0 {
+            debug!(
+                "Invalid mouse coordinates detected: column={}, row={}",
+                column, row
+            );
+            return false;
+        }
+
+        // Also check for suspiciously high values that might indicate corruption
+        if column > 10000 || row > 10000 {
+            debug!(
+                "Suspiciously large mouse coordinates detected: column={}, row={}",
+                column, row
+            );
+            return false;
+        }
+
+        true
+    }
+
     pub fn open_with_system_viewer(&self) {
         if let Some(path) = &self.current_file {
-            info!("Opening EPUB with system viewer: {} at chapter {}", path, self.current_chapter);
+            info!(
+                "Opening EPUB with system viewer: {} at chapter {}",
+                path, self.current_chapter
+            );
 
-            match self.system_command_executor.open_file_at_chapter(path, self.current_chapter) {
-                Ok(_) => info!("Successfully opened EPUB with system viewer at chapter {}", self.current_chapter),
+            match self
+                .system_command_executor
+                .open_file_at_chapter(path, self.current_chapter)
+            {
+                Ok(_) => info!(
+                    "Successfully opened EPUB with system viewer at chapter {}",
+                    self.current_chapter
+                ),
                 Err(e) => error!("Failed to open EPUB with system viewer: {}", e),
             }
         } else {
@@ -669,110 +967,152 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
     let mut last_tick = std::time::Instant::now();
 
     loop {
-        terminal.draw(|f| app.draw(f))?;
-        let timeout = if app.is_animating {
-            Duration::from_millis(16) // ~60 FPS when animating
-        } else {
-            tick_rate
-                .checked_sub(last_tick.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0))
-        };
-        if event_source.poll(timeout)? {
-            if let Event::Key(key) = event_source.read()? {
-                match key.code {
-                    KeyCode::Char('q') => {
-                        // Save bookmark before quitting
-                        app.save_bookmark();
-                        return Ok(());
-                    }
-                    KeyCode::Char('j') => {
-                        if app.mode == Mode::FileList {
-                            app.book_list.move_selection_down(&app.book_manager);
-                        } else {
-                            app.scroll_down();
+        // Process all available events first before drawing
+        let mut events_processed = 0;
+        let mut should_quit = false;
+
+        // Drain all available events without blocking
+        while event_source.poll(Duration::from_millis(0))? && events_processed < 50 {
+            let event = event_source.read()?;
+            events_processed += 1;
+
+            match event {
+                Event::Mouse(mouse_event) => {
+                    // Handle horizontal scroll events immediately without batching
+                    match mouse_event.kind {
+                        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                            // Completely ignore horizontal scroll events to prevent flooding
+                        }
+                        _ => {
+                            // Handle other mouse events with potential batching for rapid scrolling
+                            app.handle_mouse_event_with_batching(mouse_event, event_source);
                         }
                     }
-                    KeyCode::Char('k') => {
-                        if app.mode == Mode::FileList {
-                            app.book_list.move_selection_up();
-                        } else {
-                            app.scroll_up();
+                }
+                Event::Key(key) => {
+                    match key.code {
+                        KeyCode::Char('q') => {
+                            // Save bookmark before quitting
+                            app.save_bookmark_with_throttle(true);
+                            should_quit = true;
                         }
-                    }
-                    KeyCode::Char('h') => {
-                        if app.mode == Mode::Content {
-                            app.prev_chapter();
+                        KeyCode::Char('j') => {
+                            if app.mode == Mode::FileList {
+                                app.book_list.move_selection_down(&app.book_manager);
+                            } else {
+                                app.scroll_down();
+                            }
                         }
-                    }
-                    KeyCode::Char('l') => {
-                        if app.mode == Mode::Content {
-                            app.next_chapter();
+                        KeyCode::Char('k') => {
+                            if app.mode == Mode::FileList {
+                                app.book_list.move_selection_up();
+                            } else {
+                                app.scroll_up();
+                            }
                         }
-                    }
-                    KeyCode::Char('o') => {
-                        if key.modifiers.contains(KeyModifiers::CONTROL) {
-                            // Ctrl+O: Open current EPUB with system viewer
+                        KeyCode::Char('h') => {
                             if app.mode == Mode::Content {
-                                app.open_with_system_viewer();
+                                app.prev_chapter();
                             }
                         }
-                    }
-                    KeyCode::Enter => {
-                        if app.mode == Mode::FileList {
-                            if let Some(book_info) =
-                                app.book_manager.get_book_info(app.book_list.selected)
-                            {
-                                let path = book_info.path.clone();
-                                // Save bookmark for current file before switching
-                                app.save_bookmark();
-                                app.load_epub(&path);
+                        KeyCode::Char('l') => {
+                            if app.mode == Mode::Content {
+                                app.next_chapter();
                             }
                         }
-                    }
-                    KeyCode::Tab => {
-                        if app.mode == Mode::FileList {
-                            app.mode = Mode::Content;
-                            app.start_animation(1.0); // Expand to reading mode
-                        } else {
-                            // When switching back to file list, restore selection to current file
-                            if let Some(current_file) = &app.current_file {
-                                if let Some(index) =
-                                    app.book_manager.find_book_by_path(current_file)
-                                {
-                                    app.book_list.set_selection_to_index(index);
+                        KeyCode::Char('o') => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                // Ctrl+O: Open current EPUB with system viewer
+                                if app.mode == Mode::Content {
+                                    app.open_with_system_viewer();
                                 }
                             }
-                            app.mode = Mode::FileList;
-                            app.start_animation(0.0); // Contract to file list mode
-                        };
-                    }
-                    KeyCode::Char('d') => {
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && app.mode == Mode::Content
-                        {
-                            // Get the visible height for half-screen calculation
-                            let visible_height =
-                                terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                            app.scroll_half_screen_down(visible_height);
                         }
-                    }
-                    KeyCode::Char('u') => {
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && app.mode == Mode::Content
-                        {
-                            // Get the visible height for half-screen calculation
-                            let visible_height =
-                                terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                            app.scroll_half_screen_up(visible_height);
+                        KeyCode::Enter => {
+                            if app.mode == Mode::FileList {
+                                if let Some(book_info) =
+                                    app.book_manager.get_book_info(app.book_list.selected)
+                                {
+                                    let path = book_info.path.clone();
+                                    // Save bookmark for current file before switching
+                                    app.save_bookmark_with_throttle(true);
+                                    app.load_epub(&path);
+                                }
+                            }
                         }
+                        KeyCode::Tab => {
+                            if app.mode == Mode::FileList {
+                                app.mode = Mode::Content;
+                                app.start_animation(1.0); // Expand to reading mode
+                            } else {
+                                // When switching back to file list, restore selection to current file
+                                if let Some(current_file) = &app.current_file {
+                                    if let Some(index) =
+                                        app.book_manager.find_book_by_path(current_file)
+                                    {
+                                        app.book_list.set_selection_to_index(index);
+                                    }
+                                }
+                                app.mode = Mode::FileList;
+                                app.start_animation(0.0); // Contract to file list mode
+                            };
+                        }
+                        KeyCode::Char('d') => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && app.mode == Mode::Content
+                            {
+                                // Get the visible height for half-screen calculation
+                                let visible_height =
+                                    terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                                app.scroll_half_screen_down(visible_height);
+                            }
+                        }
+                        KeyCode::Char('u') => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL)
+                                && app.mode == Mode::Content
+                            {
+                                // Get the visible height for half-screen calculation
+                                let visible_height =
+                                    terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                                app.scroll_half_screen_up(visible_height);
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+                _ => {}
+            }
+
+            if should_quit {
+                break;
             }
         }
+
+        // Only draw if we processed events or need animation update
+        if events_processed > 0 || app.is_animating || last_tick.elapsed() >= tick_rate {
+            terminal.draw(|f| app.draw(f))?;
+        }
+
+        // Handle animations and timing
         if last_tick.elapsed() >= tick_rate {
             app.update_animation(); // Update animation state
             last_tick = std::time::Instant::now();
+        }
+
+        // If no events were processed, wait a bit to avoid busy-waiting
+        if events_processed == 0 {
+            let timeout = if app.is_animating {
+                Duration::from_millis(16) // ~60 FPS when animating
+            } else {
+                tick_rate
+                    .checked_sub(last_tick.elapsed())
+                    .unwrap_or_else(|| Duration::from_secs(0))
+            };
+            let _ = event_source.poll(timeout);
+        }
+
+        if should_quit {
+            return Ok(());
         }
     }
 }

@@ -95,7 +95,7 @@ impl TextGenerator {
             // This handles complex nested structures by removing the entire h1/h2 tag
             let title_removal_re = Regex::new(r"(?s)<h[12][^>]*>.*?</h[12]>").unwrap();
             content = title_removal_re.replace_all(&content, "").into_owned();
-            
+
             // Also remove title tags since they can contain duplicate title text
             let title_tag_re = Regex::new(r"(?s)<title[^>]*>.*?</title>").unwrap();
             content = title_tag_re.replace_all(&content, "").into_owned();

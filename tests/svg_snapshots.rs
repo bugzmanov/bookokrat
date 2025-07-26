@@ -1,6 +1,7 @@
 use bookrat::test_utils::test_helpers::create_test_terminal;
 // SVG snapshot tests using snapbox
 use bookrat::{App, Mode};
+use crossterm::event::{MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
@@ -403,6 +404,445 @@ fn test_chapter_title_no_title_svg() {
             // Add to test report
             test_report::TestReport::add_failure(test_report::TestFailure {
                 test_name: "test_chapter_title_no_title_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+
+
+#[test]
+fn test_mouse_scroll_file_list_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Ensure we're in file list mode
+    app.mode = Mode::FileList;
+    app.animation_progress = 1.0;
+
+    // Simulate mouse scroll down in file list - should move selection down
+    let mouse_event = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 40,
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply mouse scroll event in file list
+    app.handle_mouse_event(mouse_event);
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_mouse_scroll_file_list.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/mouse_scroll_file_list.svg"),
+        "test_mouse_scroll_file_list_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_mouse_scroll_file_list_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+
+#[test]
+fn test_mouse_scroll_bounds_checking_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // Scroll to the bottom first using keyboard
+    for _ in 0..50 {
+        app.scroll_down();
+    }
+
+    // Now try excessive mouse scrolling at the bottom - this used to cause CPU spike
+    let mouse_event = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 50,
+        row: 15,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+
+    // Apply many scroll down events to test bounds checking
+    for _ in 0..20 {
+        app.handle_mouse_event(mouse_event);
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_mouse_bounds_check.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/mouse_scroll_bounds_checking.svg"),
+        "test_mouse_scroll_bounds_checking_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_mouse_scroll_bounds_checking_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_mouse_event_batching_svg() {
+    use bookrat::event_source::{EventSource, SimulatedEventSource};
+
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // Create a simulated event source with many rapid scroll events
+    let events = vec![
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+    ];
+
+    let mut event_source = SimulatedEventSource::new(events);
+
+    // Test batching - read first event and let it batch the rest
+    if event_source
+        .poll(std::time::Duration::from_millis(0))
+        .unwrap()
+    {
+        let first_event = event_source.read().unwrap();
+        if let crossterm::event::Event::Mouse(mouse_event) = first_event {
+            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+        }
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_mouse_batching.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/mouse_event_batching.svg"),
+        "test_mouse_event_batching_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_mouse_event_batching_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_horizontal_scroll_handling_svg() {
+    use bookrat::event_source::{EventSource, SimulatedEventSource};
+
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // Create a simulated event source with many rapid horizontal scroll events
+    // This simulates the "5 log scrolls" that cause freezing
+    let events = vec![
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+    ];
+
+    let mut event_source = SimulatedEventSource::new(events);
+
+    // Test horizontal scroll handling - should not cause freezing
+    while event_source
+        .poll(std::time::Duration::from_millis(0))
+        .unwrap()
+    {
+        let event = event_source.read().unwrap();
+        if let crossterm::event::Event::Mouse(mouse_event) = event {
+            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+        }
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_horizontal_scroll.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/horizontal_scroll_handling.svg"),
+        "test_horizontal_scroll_handling_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_horizontal_scroll_handling_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}
+
+#[test]
+fn test_edge_case_mouse_coordinates_svg() {
+    use bookrat::event_source::{EventSource, SimulatedEventSource};
+
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+        app.mode = Mode::Content;
+        app.animation_progress = 1.0;
+    }
+
+    // Create a simulated event source with edge case coordinates that would trigger crossterm overflow bug
+    let events = vec![
+        // Edge case coordinates that trigger the crossterm overflow bug
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 0, // This causes the overflow in crossterm
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 0, // This also causes the overflow in crossterm
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollLeft,
+            column: 65535, // Max u16 value
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+        // Valid coordinates that should work
+        crossterm::event::Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollRight,
+            column: 50,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        }),
+    ];
+
+    let mut event_source = SimulatedEventSource::new(events);
+
+    // Test edge case coordinate handling - should not panic or freeze
+    while event_source
+        .poll(std::time::Duration::from_millis(0))
+        .unwrap()
+    {
+        let event = event_source.read().unwrap();
+        if let crossterm::event::Event::Mouse(mouse_event) = event {
+            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+        }
+    }
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_edge_case_coordinates.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/edge_case_mouse_coordinates.svg"),
+        "test_edge_case_mouse_coordinates_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_edge_case_mouse_coordinates_svg".to_string(),
                 expected,
                 actual,
                 line_stats: test_report::LineStats {

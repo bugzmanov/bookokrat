@@ -29,6 +29,7 @@ textwrap = "0.16"
 better-panic = "0.3"
 human-panic = "2.0"
 libc = "0.2"
+pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 
 [dev-dependencies]
 snapbox = { version = "0.6", features = ["term-svg"] }
