@@ -28,6 +28,9 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It allow
 - Run specific test: `cargo test <test_name>`
 - Run tests with output: `cargo test -- --nocapture`
 
+### Development Tools
+- EPUB Inspector: `cargo run --example epub_inspector <file.epub>` - Extracts and displays raw HTML content from EPUB chapters for debugging text processing issues
+
 ## Architecture
 
 ### Core Components

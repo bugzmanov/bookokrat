@@ -90,13 +90,15 @@ impl TextGenerator {
         let mut content = style_re.replace_all(content, "").into_owned();
         content = script_re.replace_all(&content, "").into_owned();
 
-        if let Some(ref title) = chapter_title {
-            let title_removal_re = Regex::new(&format!(
-                r"<h[12][^>]*>\s*{}\s*</h[12]>",
-                regex::escape(title)
-            ))
-            .unwrap();
+        if let Some(ref _title) = chapter_title {
+            // Remove h1/h2 tags that contain the chapter title
+            // This handles complex nested structures by removing the entire h1/h2 tag
+            let title_removal_re = Regex::new(r"(?s)<h[12][^>]*>.*?</h[12]>").unwrap();
             content = title_removal_re.replace_all(&content, "").into_owned();
+            
+            // Also remove title tags since they can contain duplicate title text
+            let title_tag_re = Regex::new(r"(?s)<title[^>]*>.*?</title>").unwrap();
+            content = title_tag_re.replace_all(&content, "").into_owned();
         }
 
         let text = content
@@ -164,8 +166,6 @@ impl TextGenerator {
                 continue;
             }
 
-
-
             let lines: Vec<&str> = paragraph.lines().collect();
             for (j, line) in lines.iter().enumerate() {
                 formatted.push_str(line);
@@ -180,5 +180,53 @@ impl TextGenerator {
         }
 
         formatted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_duplicate_title_removal() {
+        let generator = TextGenerator::new();
+
+        // Simulate the HTML structure found in careless.epub
+        // This reproduces the exact scenario where title appears twice:
+        // 1. Title extraction finds "Simpleminded Hope" from h1 tag
+        // 2. But after HTML processing, the h1 content still appears in text
+        // 3. The duplicate removal logic fails because it tries to remove the h1 tag but content remains
+        let html_content = r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>1. Simpleminded Hope</title>
+</head>
+<body>
+    <h1 class="CHAPTER" id="ch1">
+        <a href="contents.xhtml#c_ch1"><span class="CN">1</span>
+        <span class="CT">Simpleminded Hope</span></a>
+    </h1>
+    <p>This is the chapter content that should not be duplicated.</p>
+</body>
+</html>
+        "#;
+
+        let extracted_title = generator.extract_chapter_title(html_content);
+        assert_eq!(extracted_title, Some("1. Simpleminded Hope".to_string()));
+
+        let cleaned_content = generator.clean_html_content(html_content, &extracted_title);
+
+        assert!(
+            !cleaned_content.contains("Simpleminded Hope"),
+            "DUPLICATE TITLE BUG: Content contains duplicate title text in: '{}'",
+            cleaned_content
+        );
+
+        assert!(
+            cleaned_content.contains("This is the chapter content"),
+            "Content should contain the actual chapter text but found: '{}'",
+            cleaned_content
+        );
     }
 }
