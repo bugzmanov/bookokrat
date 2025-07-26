@@ -31,6 +31,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It allow
 
 ### Development Tools
 - EPUB Inspector: `cargo run --example epub_inspector <file.epub>` - Extracts and displays raw HTML content from EPUB chapters for debugging text processing issues
+- Panic Test: `cargo run --example panic_test` - Interactive test to verify panic handler properly restores mouse functionality
 
 ## Architecture
 
@@ -81,6 +82,13 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It allow
    - Oceanic Next theme implementation
    - Dynamic color selection based on UI mode
 
+8. **panic_handler.rs** - Enhanced panic handling (src/panic_handler.rs:1-66)
+   - `initialize_panic_handler()`: Sets up panic hooks based on build type
+   - Debug builds: Uses `better-panic` for detailed backtraces
+   - Release builds: Uses `human-panic` for user-friendly crash reports
+   - Terminal state restoration on panic to prevent broken terminal
+   - Proper mouse capture restoration to maintain mouse functionality post-panic
+
 ### Key Dependencies (Cargo.toml)
 - `ratatui` (0.26.1): Terminal UI framework
 - `crossterm` (0.27.0): Cross-platform terminal manipulation
@@ -91,6 +99,9 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It allow
 - `anyhow` (1.0.79): Error handling
 - `simplelog` (0.12.1): Logging framework
 - `log` (0.4): Logging facade
+- `better-panic` (0.3): Enhanced panic handling with backtraces (debug builds)
+- `human-panic` (2.0): User-friendly crash reports (release builds)
+- `libc` (0.2): System interface for exit codes
 
 ### State Management
 The application maintains state through the `App` struct which includes:

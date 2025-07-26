@@ -15,6 +15,7 @@ mod book_manager;
 mod bookmark;
 mod event_source;
 mod main_app;
+mod panic_handler;
 mod text_generator;
 mod text_reader;
 mod theme;
@@ -26,6 +27,9 @@ use crate::event_source::KeyboardEventSource;
 use crate::main_app::{run_app_with_event_source, App};
 
 fn main() -> Result<()> {
+    // Initialize panic handler first, before any other setup
+    panic_handler::initialize_panic_handler();
+
     // Initialize logging
     WriteLogger::init(
         LevelFilter::Debug,
