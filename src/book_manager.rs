@@ -1,7 +1,7 @@
-use std::path::Path;
-use std::io::BufReader;
 use epub::doc::EpubDoc;
-use log::{info, error};
+use log::{error, info};
+use std::io::BufReader;
+use std::path::Path;
 
 pub struct BookManager {
     pub books: Vec<BookInfo>,
@@ -22,9 +22,11 @@ impl BookManager {
     pub fn new_with_directory(directory: &str) -> Self {
         let scan_directory = directory.to_string();
         let books = Self::discover_books_in_dir(&scan_directory);
-        Self { books, scan_directory }
+        Self {
+            books,
+            scan_directory,
+        }
     }
-    
 
     fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
         std::fs::read_dir(dir)
@@ -48,7 +50,7 @@ impl BookManager {
             })
             .collect()
     }
-    
+
     fn extract_display_name(file_path: &str) -> String {
         Path::new(file_path)
             .file_stem()
@@ -56,27 +58,27 @@ impl BookManager {
             .to_string_lossy()
             .to_string()
     }
-    
+
     pub fn get_book_paths(&self) -> Vec<String> {
         self.books.iter().map(|book| book.path.clone()).collect()
     }
-    
+
     pub fn get_book_info(&self, index: usize) -> Option<&BookInfo> {
         self.books.get(index)
     }
-    
+
     pub fn find_book_by_path(&self, path: &str) -> Option<usize> {
         self.books.iter().position(|book| book.path == path)
     }
-    
+
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
         info!("Loading EPUB from path: {}", path);
-        
+
         // Verify the book exists in our managed list
         if !self.books.iter().any(|book| book.path == path) {
             return Err(format!("Book not found in managed list: {}", path));
         }
-        
+
         match EpubDoc::new(path) {
             Ok(doc) => {
                 info!("Successfully loaded EPUB: {}", path);
@@ -88,20 +90,20 @@ impl BookManager {
             }
         }
     }
-    
+
     pub fn refresh_books(&mut self) {
         info!("Refreshing book list");
         self.books = Self::discover_books_in_dir(&self.scan_directory);
     }
-    
+
     pub fn book_count(&self) -> usize {
         self.books.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.books.is_empty()
     }
-    
+
     pub fn contains_book(&self, path: &str) -> bool {
         self.books.iter().any(|book| book.path == path)
     }

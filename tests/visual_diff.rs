@@ -19,7 +19,7 @@ impl VisualDiffViewer {
 
     pub fn generate_html_report(&self) -> String {
         let diff_html = self.generate_diff_html();
-        
+
         format!(
             r#"<!DOCTYPE html>
 <html lang="en">
@@ -234,28 +234,23 @@ impl VisualDiffViewer {
     </script>
 </body>
 </html>"#,
-            self.test_name,
-            self.test_name,
-            self.test_name,
-            self.expected,
-            self.actual,
-            diff_html
+            self.test_name, self.test_name, self.test_name, self.expected, self.actual, diff_html
         )
     }
 
     fn generate_diff_html(&self) -> String {
         let expected_lines: Vec<&str> = self.expected.lines().collect();
         let actual_lines: Vec<&str> = self.actual.lines().collect();
-        
+
         let mut diff_html = String::new();
-        
+
         // Simple line-by-line diff
         let max_lines = expected_lines.len().max(actual_lines.len());
-        
+
         for i in 0..max_lines {
             let expected_line = expected_lines.get(i).copied().unwrap_or("");
             let actual_line = actual_lines.get(i).copied().unwrap_or("");
-            
+
             if expected_line != actual_line {
                 // Show context before (if available)
                 if i > 0 && i < expected_lines.len() && i < actual_lines.len() {
@@ -266,7 +261,7 @@ impl VisualDiffViewer {
                         html_escape(prev_line)
                     ));
                 }
-                
+
                 // Show removed line
                 if i < expected_lines.len() && expected_line != actual_line {
                     diff_html.push_str(&format!(
@@ -275,7 +270,7 @@ impl VisualDiffViewer {
                         html_escape(expected_line)
                     ));
                 }
-                
+
                 // Show added line
                 if i < actual_lines.len() && expected_line != actual_line {
                     diff_html.push_str(&format!(
@@ -284,7 +279,7 @@ impl VisualDiffViewer {
                         html_escape(actual_line)
                     ));
                 }
-                
+
                 // Show context after (if available)
                 if i + 1 < expected_lines.len() && i + 1 < actual_lines.len() {
                     let next_line = expected_lines.get(i + 1).copied().unwrap_or("");
@@ -298,11 +293,12 @@ impl VisualDiffViewer {
                 }
             }
         }
-        
+
         if diff_html.is_empty() {
-            diff_html = r#"<div class="diff-line diff-context">No differences found</div>"#.to_string();
+            diff_html =
+                r#"<div class="diff-line diff-context">No differences found</div>"#.to_string();
         }
-        
+
         diff_html
     }
 
@@ -310,32 +306,41 @@ impl VisualDiffViewer {
         // Create output directory
         let output_dir = Path::new("target/test-reports");
         fs::create_dir_all(output_dir)?;
-        
+
         // Generate filename
         let filename = format!("{}_diff.html", self.test_name);
         let output_path = output_dir.join(&filename);
-        
+
         // Write HTML
         let html = self.generate_html_report();
         fs::write(&output_path, html)?;
-        
+
         // Try to open in browser
         let open_result = if cfg!(target_os = "macos") {
             Command::new("open").arg(&output_path).spawn()
         } else if cfg!(target_os = "linux") {
             Command::new("xdg-open").arg(&output_path).spawn()
         } else if cfg!(target_os = "windows") {
-            Command::new("cmd").args(&["/C", "start", output_path.to_str().unwrap()]).spawn()
+            Command::new("cmd")
+                .args(&["/C", "start", output_path.to_str().unwrap()])
+                .spawn()
         } else {
             return Ok(());
         };
-        
+
         if let Err(e) = open_result {
-            eprintln!("Failed to open browser: {}. Report saved to: {}", e, output_path.display());
+            eprintln!(
+                "Failed to open browser: {}. Report saved to: {}",
+                e,
+                output_path.display()
+            );
         } else {
-            eprintln!("\n📊 Visual diff report opened in browser: {}", output_path.display());
+            eprintln!(
+                "\n📊 Visual diff report opened in browser: {}",
+                output_path.display()
+            );
         }
-        
+
         Ok(())
     }
 }

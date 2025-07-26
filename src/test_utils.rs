@@ -36,6 +36,17 @@ pub mod test_helpers {
             self
         }
 
+        /// Press Ctrl+O (Open with system viewer)
+        pub fn press_ctrl_o(mut self) -> Self {
+            self.events.push(Event::Key(KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: crossterm::event::KeyEventKind::Press,
+                state: crossterm::event::KeyEventState::empty(),
+            }));
+            self
+        }
+
         /// Press Tab
         pub fn press_tab(mut self) -> Self {
             self.events.push(Event::Key(KeyEvent {
@@ -134,12 +145,11 @@ pub mod test_helpers {
     /// - No auto-loading of recent books
     pub fn create_test_app() -> crate::App {
         crate::App::new_with_config(
-            Some("tests/testdata"),  // Use tests/testdata directory
-            Some("/dev/null"),       // Non-existent bookmark file = empty bookmarks
-            false,                   // Don't auto-load recent books
+            Some("tests/testdata"), // Use tests/testdata directory
+            Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
+            false,                  // Don't auto-load recent books
         )
     }
-
 }
 
 #[cfg(test)]

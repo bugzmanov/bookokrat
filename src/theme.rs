@@ -41,13 +41,28 @@ pub const OCEANIC_NEXT: Base16Palette = Base16Palette {
 
 // Additional theme constants or functions can be added here
 impl Base16Palette {
-    pub fn get_interface_colors(&self, is_content_mode: bool) -> (Color, Color, Color, Color, Color) {
+    pub fn get_interface_colors(
+        &self,
+        is_content_mode: bool,
+    ) -> (Color, Color, Color, Color, Color) {
         if is_content_mode {
             // In reading mode, muted interface with prominent text
-            (self.base_03, self.base_07, self.base_02, self.base_02, self.base_06)
+            (
+                self.base_03,
+                self.base_07,
+                self.base_02,
+                self.base_02,
+                self.base_06,
+            )
         } else {
             // In file list mode, normal colors
-            (self.base_05, self.base_07, self.base_04, self.base_02, self.base_06)
+            (
+                self.base_05,
+                self.base_07,
+                self.base_04,
+                self.base_02,
+                self.base_06,
+            )
         }
     }
 }

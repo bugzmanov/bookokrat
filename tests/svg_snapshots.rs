@@ -4,9 +4,9 @@ use bookrat::{App, Mode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 
-mod visual_diff;
 mod snapshot_assertions;
 mod test_report;
+mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
 use std::sync::Once;
 
@@ -130,7 +130,13 @@ fn test_file_list_svg() {
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/file_list.svg"),
         "test_file_list_svg",
-        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
             // Add to test report
             test_report::TestReport::add_failure(test_report::TestFailure {
                 test_name: "test_file_list_svg".to_string(),
@@ -144,7 +150,7 @@ fn test_file_list_svg() {
                 },
                 snapshot_path,
             });
-        }
+        },
     );
 }
 
@@ -169,7 +175,13 @@ fn test_content_view_svg() {
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/content_view.svg"),
         "test_content_view_svg",
-        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
             // Add to test report
             test_report::TestReport::add_failure(test_report::TestFailure {
                 test_name: "test_content_view_svg".to_string(),
@@ -183,7 +195,7 @@ fn test_content_view_svg() {
                 },
                 snapshot_path,
             });
-        }
+        },
     );
 }
 
@@ -222,7 +234,13 @@ fn test_content_scrolling_svg() {
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/content_scrolling.svg"),
         "test_content_scrolling_svg",
-        |expected, actual, snapshot_path, expected_lines, actual_lines, diff_count, first_diff_line| {
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
             // Add to test report
             test_report::TestReport::add_failure(test_report::TestFailure {
                 test_name: "test_content_scrolling_svg".to_string(),
@@ -236,6 +254,6 @@ fn test_content_scrolling_svg() {
                 },
                 snapshot_path,
             });
-        }
+        },
     );
 }

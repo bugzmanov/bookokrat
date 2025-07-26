@@ -1,8 +1,8 @@
-use std::sync::Mutex;
+use once_cell::sync::Lazy;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
 pub struct TestFailure {
     pub test_name: String,
@@ -48,9 +48,12 @@ impl TestReport {
     }
 
     fn generate_html(&self) -> String {
-        let test_sections: String = self.failures.iter().map(|failure| {
-            format!(
-                r#"
+        let test_sections: String = self
+            .failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    r#"
         <div class="test-section" data-test="{}">
             <div class="test-header">
                 <h2>❌ {}</h2>
@@ -83,20 +86,23 @@ impl TestReport {
                 </button>
             </div>
         </div>"#,
-                failure.test_name,
-                failure.test_name,
-                failure.line_stats.expected_lines,
-                failure.line_stats.actual_lines,
-                failure.line_stats.diff_count,
-                failure.line_stats.first_diff_line
-                    .map(|line| format!("<span>📍 First diff: line {}</span>", line))
-                    .unwrap_or_default(),
-                failure.expected,
-                failure.actual,
-                failure.test_name,
-                failure.test_name
-            )
-        }).collect();
+                    failure.test_name,
+                    failure.test_name,
+                    failure.line_stats.expected_lines,
+                    failure.line_stats.actual_lines,
+                    failure.line_stats.diff_count,
+                    failure
+                        .line_stats
+                        .first_diff_line
+                        .map(|line| format!("<span>📍 First diff: line {}</span>", line))
+                        .unwrap_or_default(),
+                    failure.expected,
+                    failure.actual,
+                    failure.test_name,
+                    failure.test_name
+                )
+            })
+            .collect();
 
         format!(
             r#"<!DOCTYPE html>
@@ -457,13 +463,13 @@ impl TestReport {
         // Create output directory
         let output_dir = Path::new("target/test-reports");
         fs::create_dir_all(output_dir)?;
-        
+
         // Generate filename
         let output_path = output_dir.join("svg_snapshot_report.html");
-        
+
         // Write HTML
         fs::write(&output_path, html)?;
-        
+
         // Check if we should open the browser
         if std::env::var("OPEN_REPORT").is_ok() {
             // Try to open in browser
@@ -472,21 +478,30 @@ impl TestReport {
             } else if cfg!(target_os = "linux") {
                 Command::new("xdg-open").arg(&output_path).spawn()
             } else if cfg!(target_os = "windows") {
-                Command::new("cmd").args(&["/C", "start", output_path.to_str().unwrap()]).spawn()
+                Command::new("cmd")
+                    .args(&["/C", "start", output_path.to_str().unwrap()])
+                    .spawn()
             } else {
                 return Ok(());
             };
-            
+
             if let Err(e) = open_result {
-                eprintln!("\n⚠️  Failed to open browser: {}. Report saved to: {}", e, output_path.display());
+                eprintln!(
+                    "\n⚠️  Failed to open browser: {}. Report saved to: {}",
+                    e,
+                    output_path.display()
+                );
             } else {
-                eprintln!("\n📊 Full snapshot report opened in browser: {}", output_path.display());
+                eprintln!(
+                    "\n📊 Full snapshot report opened in browser: {}",
+                    output_path.display()
+                );
             }
         } else {
             eprintln!("\n📊 Snapshot report saved to: {}", output_path.display());
             eprintln!("   💡 Run with OPEN_REPORT=1 to automatically open in browser");
         }
-        
+
         Ok(())
     }
 }
@@ -498,7 +513,7 @@ pub fn init_test_report() {
     std::panic::set_hook(Box::new(move |panic_info| {
         // Call the original panic hook
         original_hook(panic_info);
-        
+
         // Generate the test report
         TestReport::generate_and_open_if_failures();
     }));

@@ -1,7 +1,4 @@
-use std::{
-    fs::File,
-    io::stdout,
-};
+use std::{fs::File, io::stdout};
 
 use anyhow::Result;
 use crossterm::{
@@ -10,26 +7,23 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use log::{error, info};
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use simplelog::{Config, LevelFilter, WriteLogger};
 
-mod bookmark;
-mod text_generator;
 mod book_list;
-mod text_reader;
-mod theme;
 mod book_manager;
+mod bookmark;
 mod event_source;
 mod main_app;
+mod text_generator;
+mod text_reader;
+mod theme;
 
 #[cfg(test)]
 mod test_utils;
 
-use crate::main_app::{App, run_app_with_event_source};
 use crate::event_source::KeyboardEventSource;
+use crate::main_app::{run_app_with_event_source, App};
 
 fn main() -> Result<()> {
     // Initialize logging
