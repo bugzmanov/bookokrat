@@ -360,10 +360,7 @@ impl App {
                 error!("Failed to load bookmarks from {}: {}", file, e);
                 Bookmarks::new()
             }),
-            None => Bookmarks::load().unwrap_or_else(|e| {
-                error!("Failed to load bookmarks: {}", e);
-                Bookmarks::new()
-            }),
+            None => Bookmarks::new(),
         };
 
         let mut app = Self {

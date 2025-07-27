@@ -469,7 +469,11 @@ impl TextReader {
         let total_lines = content
             .lines()
             .filter(|line| !line.trim().is_empty())
-            .map(|line| (line.len() as f32 / visible_width as f32).ceil() as usize)
+            .map(|line| {
+                // Use integer arithmetic for stable line wrapping calculation
+                // This is equivalent to ceil(line.len() / visible_width)
+                (line.len() + visible_width - 1) / visible_width
+            })
             .sum::<usize>();
 
         let max_scroll = if total_lines > visible_height {
@@ -479,7 +483,10 @@ impl TextReader {
         };
 
         if max_scroll > 0 {
-            ((self.scroll_offset as f32 / max_scroll as f32) * 100.0).min(100.0) as u32
+            // Use integer arithmetic for stable rounding
+            // This ensures consistent results across different runs
+            let progress = (self.scroll_offset * 100) / max_scroll;
+            progress.min(100) as u32
         } else {
             100
         }
@@ -694,8 +701,9 @@ impl TextReader {
                 AutoScrollDirection::Up => {
                     if self.scroll_offset > 0 {
                         // Calculate scroll distance based on how far above the content area the mouse is
-                        let distance_above = state.content_area.y.saturating_sub(state.mouse_y);
-                        let scroll_amount = ((distance_above as f32 / 10.0).ceil() as usize).max(1).min(3);
+                        let distance_above = state.content_area.y.saturating_sub(state.mouse_y) as usize;
+                        // Use integer arithmetic for stable scroll amount calculation
+                        let scroll_amount = ((distance_above + 9) / 10).max(1).min(3);
                         
                         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
                         debug!("Auto-scroll up by {} to offset: {}", scroll_amount, self.scroll_offset);
@@ -710,8 +718,9 @@ impl TextReader {
                     let max_offset = self.get_max_scroll_offset();
                     if self.scroll_offset < max_offset {
                         // Calculate scroll distance based on how far below the content area the mouse is
-                        let distance_below = state.mouse_y.saturating_sub(state.content_area.y + state.content_area.height);
-                        let scroll_amount = ((distance_below as f32 / 10.0).ceil() as usize).max(1).min(3);
+                        let distance_below = state.mouse_y.saturating_sub(state.content_area.y + state.content_area.height) as usize;
+                        // Use integer arithmetic for stable scroll amount calculation
+                        let scroll_amount = ((distance_below + 9) / 10).max(1).min(3);
                         
                         let new_offset = (self.scroll_offset + scroll_amount).min(max_offset);
                         self.scroll_offset = new_offset;
