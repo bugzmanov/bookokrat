@@ -1,5 +1,5 @@
-use crate::theme::Base16Palette;
 use crate::text_selection::TextSelection;
+use crate::theme::Base16Palette;
 use log::debug;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -169,7 +169,7 @@ impl TextReader {
         }
 
         let mut result = self.cached_styled_content.as_ref().unwrap().clone();
-        
+
         // Apply selection highlighting if there's an active selection
         if self.text_selection.has_selection() {
             // Use theme color for selection - base_02 is typically used for selection/highlight
@@ -188,7 +188,7 @@ impl TextReader {
                 .collect();
             result = ratatui::text::Text::from(highlighted_lines);
         }
-        
+
         result
     }
 
@@ -206,7 +206,7 @@ impl TextReader {
         if let Some(ref title) = chapter_title {
             raw_lines.push(title.clone());
             raw_lines.push(String::new());
-            
+
             lines.push(Line::from(vec![Span::styled(
                 title.clone(),
                 Style::default()
@@ -619,7 +619,10 @@ impl TextReader {
     /// Handle mouse down event for text selection
     pub fn handle_mouse_down(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
         if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
-            debug!("Mouse down at text coordinates: line {}, column {}", line, column);
+            debug!(
+                "Mouse down at text coordinates: line {}, column {}",
+                line, column
+            );
             self.text_selection.start_selection(line, column);
         }
     }
@@ -629,7 +632,7 @@ impl TextReader {
         // Check if we need to auto-scroll due to dragging outside the visible area
         let needs_scroll_up = screen_y < content_area.y;
         let needs_scroll_down = screen_y >= content_area.y + content_area.height;
-        
+
         if needs_scroll_up {
             // Set up auto-scroll state for continuous upward scrolling
             self.auto_scroll_state = Some(AutoScrollState {
@@ -656,7 +659,9 @@ impl TextReader {
             // Mouse is back in content area - stop auto-scrolling
             self.auto_scroll_state = None;
             // Normal drag within visible area
-            if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            if let Some((line, column)) =
+                self.screen_to_text_coords(screen_x, screen_y, content_area)
+            {
                 self.text_selection.update_selection(line, column);
             }
         }
@@ -678,19 +683,63 @@ impl TextReader {
         self.auto_scroll_state = None;
     }
 
+    /// Copy selected text to clipboard
+    pub fn copy_selection_to_clipboard(&self) -> Result<(), String> {
+        if let Some(selected_text) = self
+            .text_selection
+            .extract_selected_text(&self.raw_text_lines)
+        {
+            match arboard::Clipboard::new() {
+                Ok(mut clipboard) => match clipboard.set_text(selected_text) {
+                    Ok(()) => {
+                        debug!("Successfully copied selected text to clipboard");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to copy text to clipboard: {}", e);
+                        debug!("{}", error_msg);
+                        Err(error_msg)
+                    }
+                },
+                Err(e) => {
+                    let error_msg = format!("Failed to access clipboard: {}", e);
+                    debug!("{}", error_msg);
+                    Err(error_msg)
+                }
+            }
+        } else {
+            let error_msg = "No text selected".to_string();
+            debug!("{}", error_msg);
+            Err(error_msg)
+        }
+    }
+
+    /// Check if there is text currently selected
+    pub fn has_text_selection(&self) -> bool {
+        self.text_selection.has_selection()
+    }
+
     /// Handle double-click for word selection
     pub fn handle_double_click(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
         if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
-            debug!("Double-click at text coordinates: line {}, column {}", line, column);
-            self.text_selection.select_word_at(line, column, &self.raw_text_lines);
+            debug!(
+                "Double-click at text coordinates: line {}, column {}",
+                line, column
+            );
+            self.text_selection
+                .select_word_at(line, column, &self.raw_text_lines);
         }
     }
 
     /// Handle triple-click for paragraph selection
     pub fn handle_triple_click(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
         if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
-            debug!("Triple-click at text coordinates: line {}, column {}", line, column);
-            self.text_selection.select_paragraph_at(line, column, &self.raw_text_lines);
+            debug!(
+                "Triple-click at text coordinates: line {}, column {}",
+                line, column
+            );
+            self.text_selection
+                .select_paragraph_at(line, column, &self.raw_text_lines);
         }
     }
 
@@ -701,16 +750,24 @@ impl TextReader {
                 AutoScrollDirection::Up => {
                     if self.scroll_offset > 0 {
                         // Calculate scroll distance based on how far above the content area the mouse is
-                        let distance_above = state.content_area.y.saturating_sub(state.mouse_y) as usize;
+                        let distance_above =
+                            state.content_area.y.saturating_sub(state.mouse_y) as usize;
                         // Use integer arithmetic for stable scroll amount calculation
                         let scroll_amount = ((distance_above + 9) / 10).max(1).min(3);
-                        
+
                         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
-                        debug!("Auto-scroll up by {} to offset: {}", scroll_amount, self.scroll_offset);
-                        
+                        debug!(
+                            "Auto-scroll up by {} to offset: {}",
+                            scroll_amount, self.scroll_offset
+                        );
+
                         // Update selection to the top line of the visible area
                         let top_line = self.scroll_offset;
-                        let column = if state.mouse_x < state.content_area.x { 0 } else { (state.mouse_x - state.content_area.x) as usize };
+                        let column = if state.mouse_x < state.content_area.x {
+                            0
+                        } else {
+                            (state.mouse_x - state.content_area.x) as usize
+                        };
                         self.text_selection.update_selection(top_line, column);
                     }
                 }
@@ -718,17 +775,28 @@ impl TextReader {
                     let max_offset = self.get_max_scroll_offset();
                     if self.scroll_offset < max_offset {
                         // Calculate scroll distance based on how far below the content area the mouse is
-                        let distance_below = state.mouse_y.saturating_sub(state.content_area.y + state.content_area.height) as usize;
+                        let distance_below = state
+                            .mouse_y
+                            .saturating_sub(state.content_area.y + state.content_area.height)
+                            as usize;
                         // Use integer arithmetic for stable scroll amount calculation
                         let scroll_amount = ((distance_below + 9) / 10).max(1).min(3);
-                        
+
                         let new_offset = (self.scroll_offset + scroll_amount).min(max_offset);
                         self.scroll_offset = new_offset;
-                        debug!("Auto-scroll down by {} to offset: {}", scroll_amount, self.scroll_offset);
-                        
+                        debug!(
+                            "Auto-scroll down by {} to offset: {}",
+                            scroll_amount, self.scroll_offset
+                        );
+
                         // Update selection to the bottom line of the visible area
-                        let bottom_line = self.scroll_offset + self.visible_height.saturating_sub(1);
-                        let column = if state.mouse_x < state.content_area.x { 0 } else { (state.mouse_x - state.content_area.x) as usize };
+                        let bottom_line =
+                            self.scroll_offset + self.visible_height.saturating_sub(1);
+                        let column = if state.mouse_x < state.content_area.x {
+                            0
+                        } else {
+                            (state.mouse_x - state.content_area.x) as usize
+                        };
                         self.text_selection.update_selection(bottom_line, column);
                     }
                 }
@@ -758,7 +826,12 @@ impl TextReader {
     }
 
     /// Convert screen coordinates to logical text coordinates
-    fn screen_to_text_coords(&self, screen_x: u16, screen_y: u16, content_area: Rect) -> Option<(usize, usize)> {
+    fn screen_to_text_coords(
+        &self,
+        screen_x: u16,
+        screen_y: u16,
+        content_area: Rect,
+    ) -> Option<(usize, usize)> {
         self.text_selection.screen_to_text_coords(
             screen_x,
             screen_y,
@@ -887,7 +960,7 @@ impl TextReader {
             .style(Style::default().fg(text_color).bg(palette.base_00));
 
         f.render_widget(content_paragraph, margined_content_area[1]);
-        
+
         // Store the content area for mouse coordinate conversion
         self.last_content_area = Some(margined_content_area[1]);
 

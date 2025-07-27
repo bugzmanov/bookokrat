@@ -50,6 +50,7 @@ pub fn initialize_panic_handler() {
 /// - Disabling raw mode
 /// - Exiting alternate screen
 /// - Disabling mouse capture (important for restoring mouse functionality)
+/// - Disabling keyboard enhancement flags
 /// - Showing the cursor
 fn restore_terminal() {
     // Attempt to restore terminal state

@@ -540,7 +540,7 @@ pub fn init_test_report() {
     extern "C" fn generate_final_report() {
         TestReport::force_generate_and_open_if_failures();
     }
-    
+
     unsafe {
         libc::atexit(generate_final_report);
     }
@@ -550,7 +550,7 @@ pub fn init_test_report() {
     std::panic::set_hook(Box::new(move |panic_info| {
         // Call the original panic hook
         original_hook(panic_info);
-        
+
         // Don't generate reports here - let atexit handle everything
     }));
 }

@@ -6,7 +6,11 @@ use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 
-use std::{io::BufReader, process::Command, time::{Duration, Instant}};
+use std::{
+    io::BufReader,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -640,10 +644,10 @@ impl App {
                 if self.mode == Mode::Content {
                     // Get the content area for coordinate conversion
                     let content_area = self.get_content_area_rect();
-                    
+
                     // Handle click detection (double-click, triple-click)
                     let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
-                    
+
                     match click_type {
                         ClickType::Single => {
                             self.text_reader.handle_mouse_down(
@@ -935,33 +939,41 @@ impl App {
     fn detect_click_type(&mut self, column: u16, row: u16) -> ClickType {
         const DOUBLE_CLICK_TIME_MS: u64 = 500; // Maximum time between clicks for double-click
         const CLICK_DISTANCE_THRESHOLD: u16 = 3; // Maximum distance between clicks
-        
+
         let now = Instant::now();
         let position = (column, row);
-        
+
         let is_within_time = if let Some(last_time) = self.last_click_time {
             now.duration_since(last_time).as_millis() <= DOUBLE_CLICK_TIME_MS as u128
         } else {
             false
         };
-        
+
         let is_within_distance = if let Some(last_pos) = self.last_click_position {
-            let distance_x = if column > last_pos.0 { column - last_pos.0 } else { last_pos.0 - column };
-            let distance_y = if row > last_pos.1 { row - last_pos.1 } else { last_pos.1 - row };
+            let distance_x = if column > last_pos.0 {
+                column - last_pos.0
+            } else {
+                last_pos.0 - column
+            };
+            let distance_y = if row > last_pos.1 {
+                row - last_pos.1
+            } else {
+                last_pos.1 - row
+            };
             distance_x <= CLICK_DISTANCE_THRESHOLD && distance_y <= CLICK_DISTANCE_THRESHOLD
         } else {
             false
         };
-        
+
         if is_within_time && is_within_distance {
             self.click_count += 1;
         } else {
             self.click_count = 1;
         }
-        
+
         self.last_click_time = Some(now);
         self.last_click_position = Some(position);
-        
+
         match self.click_count {
             2 => ClickType::Double,
             3 => ClickType::Triple,
@@ -984,7 +996,7 @@ impl App {
             // Save bookmark when auto-scrolling changes position
             self.save_bookmark();
         }
-        
+
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
         f.render_widget(background_block, f.size());
@@ -1067,7 +1079,14 @@ impl App {
 
         let help_text = match self.mode {
             Mode::FileList => "j/k: Navigate | Enter: Select | Tab: Switch View | q: Quit",
-            Mode::Content => "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Mouse: Select text | Ctrl+O: Open | Tab: Switch | q: Quit",
+            Mode::Content => {
+                // Check if text is selected and show appropriate help
+                if self.text_reader.has_text_selection() {
+                    "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
+                } else {
+                    "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Mouse: Select text | Ctrl+O: Open | Tab: Switch | q: Quit"
+                }
+            }
         };
 
         let help = Paragraph::new(help_text)
@@ -1204,6 +1223,22 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                                 let visible_height =
                                     terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
                                 app.scroll_half_screen_up(visible_height);
+                            }
+                        }
+                        KeyCode::Char('c') => {
+                            if app.mode == Mode::Content {
+                                // Handle 'c' with any modifiers (c, Ctrl+C, Cmd+C, etc.) for copy functionality
+                                debug!("Copy key 'c' pressed with modifiers: {:?}", key.modifiers);
+                                if let Err(e) = app.text_reader.copy_selection_to_clipboard() {
+                                    debug!("Copy failed: {}", e);
+                                }
+                            }
+                        }
+                        KeyCode::Esc => {
+                            if app.mode == Mode::Content && app.text_reader.has_text_selection() {
+                                // Clear text selection when ESC is pressed
+                                app.text_reader.clear_selection();
+                                debug!("Text selection cleared via ESC key");
                             }
                         }
                         _ => {}

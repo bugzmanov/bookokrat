@@ -418,8 +418,6 @@ fn test_chapter_title_no_title_svg() {
     );
 }
 
-
-
 #[test]
 fn test_mouse_scroll_file_list_svg() {
     ensure_test_report_initialized();
@@ -477,7 +475,6 @@ fn test_mouse_scroll_file_list_svg() {
         },
     );
 }
-
 
 #[test]
 fn test_mouse_scroll_bounds_checking_svg() {
@@ -878,18 +875,18 @@ fn test_text_selection_svg() {
     // Use coordinates starting from the left margin to test margin selection
     let mouse_down = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 10,  // Click on left margin - should start from beginning of line
+        column: 10, // Click on left margin - should start from beginning of line
         row: 10,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_drag = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
-        column: 70,  // Drag to select text
+        column: 70, // Drag to select text
         row: 12,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 70,
@@ -960,15 +957,15 @@ fn test_text_selection_with_auto_scroll_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     // Drag beyond the bottom of the content area to trigger auto-scroll
     let mouse_drag_beyond_bottom = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 60,
-        row: 35,  // Beyond the content area height
+        row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 60,
@@ -986,7 +983,11 @@ fn test_text_selection_with_auto_scroll_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_text_selection_auto_scroll.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_text_selection_auto_scroll.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1046,10 +1047,10 @@ fn test_continuous_auto_scroll_down_svg() {
     let mouse_drag_beyond_bottom = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 60,
-        row: 35,  // Beyond the content area height
+        row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
@@ -1058,16 +1059,23 @@ fn test_continuous_auto_scroll_down_svg() {
         // Each drag should continue scrolling until we hit the bottom
         if i > 0 {
             // Verify that scrolling continues (offset increases or stays at max)
-            assert!(scroll_offsets[i] >= scroll_offsets[i-1], 
-                "Auto-scroll stopped prematurely at iteration {}: offset {} -> {}", 
-                i, scroll_offsets[i-1], scroll_offsets[i]);
+            assert!(
+                scroll_offsets[i] >= scroll_offsets[i - 1],
+                "Auto-scroll stopped prematurely at iteration {}: offset {} -> {}",
+                i,
+                scroll_offsets[i - 1],
+                scroll_offsets[i]
+            );
         }
     }
 
     // The scroll offset should have increased significantly from initial
-    assert!(app.get_scroll_offset() > initial_scroll_offset,
+    assert!(
+        app.get_scroll_offset() > initial_scroll_offset,
         "Auto-scroll should have moved from initial offset {} to {}",
-        initial_scroll_offset, app.get_scroll_offset());
+        initial_scroll_offset,
+        app.get_scroll_offset()
+    );
 
     // End selection
     let mouse_up = MouseEvent {
@@ -1083,7 +1091,11 @@ fn test_continuous_auto_scroll_down_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_continuous_auto_scroll_down.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_continuous_auto_scroll_down.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1149,10 +1161,10 @@ fn test_continuous_auto_scroll_up_svg() {
     let mouse_drag_above_top = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 60,
-        row: 0,  // Definitely above the content area (top of terminal)
+        row: 0, // Definitely above the content area (top of terminal)
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
@@ -1161,16 +1173,23 @@ fn test_continuous_auto_scroll_up_svg() {
         // Each drag should continue scrolling until we hit the top
         if i > 0 {
             // Verify that scrolling continues (offset decreases or stays at 0)
-            assert!(scroll_offsets[i] <= scroll_offsets[i-1], 
-                "Auto-scroll up stopped prematurely at iteration {}: offset {} -> {}", 
-                i, scroll_offsets[i-1], scroll_offsets[i]);
+            assert!(
+                scroll_offsets[i] <= scroll_offsets[i - 1],
+                "Auto-scroll up stopped prematurely at iteration {}: offset {} -> {}",
+                i,
+                scroll_offsets[i - 1],
+                scroll_offsets[i]
+            );
         }
     }
 
     // The scroll offset should have decreased significantly from initial
-    assert!(app.get_scroll_offset() < initial_scroll_offset,
+    assert!(
+        app.get_scroll_offset() < initial_scroll_offset,
         "Auto-scroll up should have moved from initial offset {} to {}",
-        initial_scroll_offset, app.get_scroll_offset());
+        initial_scroll_offset,
+        app.get_scroll_offset()
+    );
 
     // End selection
     let mouse_up = MouseEvent {
@@ -1186,7 +1205,11 @@ fn test_continuous_auto_scroll_up_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_continuous_auto_scroll_up.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_continuous_auto_scroll_up.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1246,7 +1269,7 @@ fn test_timer_based_auto_scroll_svg() {
     let mouse_drag_beyond_bottom = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 60,
-        row: 35,  // Beyond the content area height
+        row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
     app.handle_mouse_event(mouse_drag_beyond_bottom);
@@ -1259,22 +1282,29 @@ fn test_timer_based_auto_scroll_svg() {
         // Simulate a redraw happening (which calls update_auto_scroll)
         terminal.draw(|f| app.draw(f)).unwrap();
         scroll_offsets.push(app.get_scroll_offset());
-        
+
         // Add a small delay to ensure the timer can trigger
         std::thread::sleep(std::time::Duration::from_millis(110));
     }
 
     // Verify that scrolling continued automatically without additional mouse events
     let final_scroll_offset = app.get_scroll_offset();
-    assert!(final_scroll_offset > initial_scroll_offset,
+    assert!(
+        final_scroll_offset > initial_scroll_offset,
         "Timer-based auto-scroll should have moved from initial offset {} to {}",
-        initial_scroll_offset, final_scroll_offset);
+        initial_scroll_offset,
+        final_scroll_offset
+    );
 
     // Verify progressive scrolling occurred
     for i in 1..scroll_offsets.len() {
-        assert!(scroll_offsets[i] >= scroll_offsets[i-1],
+        assert!(
+            scroll_offsets[i] >= scroll_offsets[i - 1],
             "Auto-scroll should continue progressing: iteration {} went from {} to {}",
-            i, scroll_offsets[i-1], scroll_offsets[i]);
+            i,
+            scroll_offsets[i - 1],
+            scroll_offsets[i]
+        );
     }
 
     // End selection
@@ -1291,7 +1321,11 @@ fn test_timer_based_auto_scroll_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_timer_based_auto_scroll.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_timer_based_auto_scroll.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1350,7 +1384,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     let mouse_drag_beyond_bottom = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 60,
-        row: 35,  // Beyond the content area height
+        row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
     app.handle_mouse_event(mouse_drag_beyond_bottom);
@@ -1360,28 +1394,32 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     let mouse_drag_back_in_area = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 70,
-        row: 20,  // Back within content area
+        row: 20, // Back within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
     app.handle_mouse_event(mouse_drag_back_in_area);
     let scroll_after_return = app.get_scroll_offset();
 
     // Scroll should stop when cursor returns to content area
-    assert_eq!(scroll_after_auto, scroll_after_return,
-        "Auto-scroll should stop when cursor returns to content area");
+    assert_eq!(
+        scroll_after_auto, scroll_after_return,
+        "Auto-scroll should stop when cursor returns to content area"
+    );
 
     // Another drag within area should not cause more scrolling
     let mouse_drag_within_area = MouseEvent {
         kind: MouseEventKind::Drag(MouseButton::Left),
         column: 80,
-        row: 25,  // Still within content area
+        row: 25, // Still within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
     app.handle_mouse_event(mouse_drag_within_area);
     let final_scroll = app.get_scroll_offset();
 
-    assert_eq!(scroll_after_return, final_scroll,
-        "No additional scrolling should occur when dragging within content area");
+    assert_eq!(
+        scroll_after_return, final_scroll,
+        "No additional scrolling should occur when dragging within content area"
+    );
 
     // End selection
     let mouse_up = MouseEvent {
@@ -1397,7 +1435,11 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_auto_scroll_cursor_return.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_auto_scroll_cursor_return.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1447,11 +1489,11 @@ fn test_double_click_word_selection_svg() {
     // Click on a word in the middle of the content
     let mouse_click1 = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 45,  // Click on a word
+        column: 45, // Click on a word
         row: 12,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up1 = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 45,
@@ -1461,11 +1503,11 @@ fn test_double_click_word_selection_svg() {
 
     let mouse_click2 = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 45,  // Second click on same position
+        column: 45, // Second click on same position
         row: 12,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up2 = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 45,
@@ -1484,7 +1526,11 @@ fn test_double_click_word_selection_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_double_click_word_selection.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_double_click_word_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1534,11 +1580,11 @@ fn test_triple_click_paragraph_selection_svg() {
     // Click on a paragraph in the middle of the content
     let mouse_click1 = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 50,  // Click on a paragraph
+        column: 50, // Click on a paragraph
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up1 = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
@@ -1548,11 +1594,11 @@ fn test_triple_click_paragraph_selection_svg() {
 
     let mouse_click2 = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 50,  // Second click on same position
+        column: 50, // Second click on same position
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up2 = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
@@ -1562,11 +1608,11 @@ fn test_triple_click_paragraph_selection_svg() {
 
     let mouse_click3 = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 50,  // Third click on same position
+        column: 50, // Third click on same position
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    
+
     let mouse_up3 = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: 50,
@@ -1587,7 +1633,11 @@ fn test_triple_click_paragraph_selection_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write("tests/snapshots/debug_triple_click_paragraph_selection.svg", &svg_output).unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_triple_click_paragraph_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),

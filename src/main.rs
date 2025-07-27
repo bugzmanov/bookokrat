@@ -43,6 +43,7 @@ fn main() -> Result<()> {
     // Terminal initialization
     enable_raw_mode()?;
     let mut stdout = stdout();
+
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -52,7 +53,7 @@ fn main() -> Result<()> {
     let mut event_source = KeyboardEventSource;
     let res = run_app_with_event_source(&mut terminal, &mut app, &mut event_source);
 
-    // Restore terminal
+    // Restore terminal state
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
