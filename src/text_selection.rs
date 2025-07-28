@@ -49,15 +49,6 @@ impl TextSelection {
     pub fn end_selection(&mut self) {
         debug!("Ending text selection");
         self.is_selecting = false;
-
-        // If start and end are the same, it was just a click, not a selection
-        // Clear the selection to avoid showing text selection mode in the status bar
-        if let (Some(start), Some(end)) = (&self.start, &self.end) {
-            if start.line == end.line && start.column == end.column {
-                debug!("Click detected (start == end), clearing selection");
-                self.clear_selection();
-            }
-        }
     }
 
     pub fn clear_selection(&mut self) {
@@ -68,7 +59,13 @@ impl TextSelection {
     }
 
     pub fn has_selection(&self) -> bool {
-        self.start.is_some() && self.end.is_some()
+        if let (Some(start), Some(end)) = (&self.start, &self.end) {
+            // Only consider it a selection if start and end are different
+            // This prevents flickering when just clicking (start == end)
+            start.line != end.line || start.column != end.column
+        } else {
+            false
+        }
     }
 
     pub fn get_selection_range(&self) -> Option<(SelectionPoint, SelectionPoint)> {
@@ -390,7 +387,6 @@ mod tests {
         // Start selection
         selection.start_selection(1, 5);
         assert!(selection.is_selecting);
-        assert!(selection.has_selection());
 
         // Update selection
         selection.update_selection(2, 10);
