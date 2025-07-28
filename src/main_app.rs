@@ -618,6 +618,8 @@ impl App {
                     if self.focused_panel != FocusedPanel::FileList {
                         self.focused_panel = FocusedPanel::FileList;
                     }
+                    // Clear any text selection when clicking outside the content area
+                    self.text_reader.clear_selection();
                 } else {
                     // Click in content area (right 70% of screen)
                     if self.focused_panel != FocusedPanel::Content {

@@ -1635,3 +1635,81 @@ fn test_triple_click_paragraph_selection_svg() {
         },
     );
 }
+
+#[test]
+fn test_text_selection_click_on_book_text_bug_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and ensure we're in content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+    }
+
+    // Ensure content panel has focus
+    app.focused_panel = bookrat::main_app::FocusedPanel::Content;
+
+    // Draw initial state
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Now simulate clicking on book text in the content area
+    // According to the bug report: "when i click on a book text: nothing got selected,
+    // but the status bar shows as if we are in text selection mode"
+    let mouse_click_on_text = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50, // Click on book text in content area
+        row: 12,    // Where book text should be displayed
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_click_on_text);
+
+    // Complete the click with mouse up
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::Up(MouseButton::Left),
+        column: 50,
+        row: 12,
+        modifiers: crossterm::event::KeyModifiers::empty(),
+    };
+    app.handle_mouse_event(mouse_up);
+
+    // Draw to see the current state
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_text_selection_click_on_book_text_bug.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // This test should capture the bug: if the status bar shows text selection mode
+    // but no actual text is selected, we'll see it in the snapshot
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/text_selection_click_on_book_text_bug.svg"),
+        "test_text_selection_click_on_book_text_bug_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_text_selection_click_on_book_text_bug_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}

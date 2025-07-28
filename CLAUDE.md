@@ -196,6 +196,27 @@ When adding new tests:
 - Use `assert_svg_snapshot()` for assertions
 - Never create new test files or testing approaches
 
+### Working with New Snapshot Tests
+
+**CRITICAL FOR AI ASSISTANTS:**
+When adding a new snapshot test, it is **expected and normal** for the test to fail initially because there is no saved golden snapshot file yet. This is not an error - it's the intended workflow.
+
+**Key Points:**
+1. **Test failure is expected** - New snapshot tests will always fail on first run since no golden snapshot exists
+2. **Focus on the generated snapshot** - When a new test fails, examine the debug SVG file (e.g., `tests/snapshots/debug_test_name.svg`) to verify it shows what the test scenario should display
+3. **Analyze the visual output** - Check that the generated snapshot accurately represents the UI state being tested
+4. **Verify test correctness** - Ensure the snapshot captures the intended behavior, UI elements, status messages, etc.
+5. **Only then consider updating** - If the generated snapshot looks correct for the test scenario, then it may be appropriate to create the golden snapshot
+
+**Example Workflow:**
+1. Add new test to `tests/svg_snapshots.rs`
+2. Run the test - it will fail (this is expected)
+3. Examine the debug SVG file to see the actual rendered output
+4. Verify the output matches what the test scenario should produce
+5. If correct, the golden snapshot can be created; if incorrect, fix the test logic first
+
+This approach ensures that snapshot tests accurately capture the intended UI behavior rather than just making tests pass.
+
 ### Environment Variables
 
 - `OPEN_REPORT=1` - Automatically opens the HTML report in your default browser
