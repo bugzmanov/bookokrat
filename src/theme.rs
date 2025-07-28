@@ -39,7 +39,7 @@ pub const OCEANIC_NEXT: Base16Palette = Base16Palette {
     base_0f: Color::from_u32(0xAB7967),
 };
 
-// Additional theme constants or functions can be added here
+// Color utilities for focus states
 impl Base16Palette {
     pub fn get_interface_colors(
         &self,
@@ -63,6 +63,36 @@ impl Base16Palette {
                 self.base_02,
                 self.base_06,
             )
+        }
+    }
+
+    // Get colors for focused/unfocused panels
+    pub fn get_panel_colors(&self, is_focused: bool) -> (Color, Color, Color) {
+        if is_focused {
+            // Focused panel: use the brightest possible colors like in snapshots
+            (
+                self.base_07, // Brightest text (matches content area in snapshots)
+                self.base_04, // Bright border (matches snapshot borders)
+                self.base_00, // Normal background
+            )
+        } else {
+            // Unfocused panel: significantly dimmed for dramatic contrast
+            (
+                self.base_03, // Even more dimmed text (darker than base_02)
+                self.base_03, // Very dimmed border (darker than current)
+                self.base_00, // Same background
+            )
+        }
+    }
+
+    // Get selection colors for focused/unfocused states
+    pub fn get_selection_colors(&self, is_focused: bool) -> (Color, Color) {
+        if is_focused {
+            // Focused selection: bright and prominent like in snapshots
+            (self.base_02, self.base_06) // selection_bg, bright selection_fg
+        } else {
+            // Unfocused selection: very dimmed for dramatic contrast
+            (self.base_02, self.base_03) // very dimmed selection_bg, very dimmed selection_fg
         }
     }
 }

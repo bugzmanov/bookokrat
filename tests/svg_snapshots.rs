@@ -1,6 +1,6 @@
 use bookrat::test_utils::test_helpers::create_test_terminal;
 // SVG snapshot tests using snapbox
-use bookrat::{App, Mode};
+use bookrat::App;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -162,8 +162,6 @@ fn test_content_view_svg() {
     let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
     // Switch to content view
-    app.mode = Mode::Content;
-    app.animation_progress = 1.0;
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);
@@ -211,7 +209,6 @@ fn test_content_scrolling_svg() {
         let path = book_info.path.clone();
         app.load_epub(&path);
         // Force animation to complete for testing
-        app.animation_progress = 1.0;
     }
 
     // Perform scrolling - 5 lines down
@@ -269,8 +266,9 @@ fn test_chapter_title_normal_length_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(1) {
         let path = book_info.path.clone();
         app.load_epub(&path);
+        // Switch to content focus like runtime behavior after loading
+        app.focused_panel = bookrat::main_app::FocusedPanel::Content;
         // Force animation to complete for testing
-        app.animation_progress = 1.0;
     }
 
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -323,7 +321,6 @@ fn test_chapter_title_narrow_terminal_svg() {
         let path = book_info.path.clone();
         app.load_epub(&path);
         // Force animation to complete for testing
-        app.animation_progress = 1.0;
     }
 
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -376,7 +373,6 @@ fn test_chapter_title_no_title_svg() {
         let path = book_info.path.clone();
         app.load_epub(&path);
         // Force animation to complete for testing
-        app.animation_progress = 1.0;
     }
 
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -425,8 +421,6 @@ fn test_mouse_scroll_file_list_svg() {
     let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
     // Ensure we're in file list mode
-    app.mode = Mode::FileList;
-    app.animation_progress = 1.0;
 
     // Simulate mouse scroll down in file list - should move selection down
     let mouse_event = MouseEvent {
@@ -486,8 +480,6 @@ fn test_mouse_scroll_bounds_checking_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // Scroll to the bottom first using keyboard
@@ -553,8 +545,6 @@ fn test_mouse_event_batching_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // Create a simulated event source with many rapid scroll events
@@ -643,8 +633,6 @@ fn test_horizontal_scroll_handling_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // Create a simulated event source with many rapid horizontal scroll events
@@ -770,8 +758,6 @@ fn test_edge_case_mouse_coordinates_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // Create a simulated event source with edge case coordinates that would trigger crossterm overflow bug
@@ -864,8 +850,6 @@ fn test_text_selection_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -943,8 +927,6 @@ fn test_text_selection_with_auto_scroll_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1026,8 +1008,6 @@ fn test_continuous_auto_scroll_down_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1134,8 +1114,6 @@ fn test_continuous_auto_scroll_up_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1248,8 +1226,6 @@ fn test_timer_based_auto_scroll_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1364,8 +1340,6 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1478,8 +1452,6 @@ fn test_double_click_word_selection_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area
@@ -1569,8 +1541,6 @@ fn test_triple_click_paragraph_selection_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        app.mode = Mode::Content;
-        app.animation_progress = 1.0;
     }
 
     // First draw to initialize the content area

@@ -13,4 +13,4 @@ pub mod theme;
 pub mod test_utils;
 
 // Re-export main app components
-pub use main_app::{run_app_with_event_source, App, Mode};
+pub use main_app::{run_app_with_event_source, App, FocusedPanel};

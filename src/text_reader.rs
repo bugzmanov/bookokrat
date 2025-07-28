@@ -44,6 +44,7 @@ pub struct TextReader {
     cached_styled_content: Option<Text<'static>>,
     cached_styled_width: usize,
     cached_chapter_title_hash: u64,
+    cached_focus_state: bool,
     // Text selection state
     pub text_selection: TextSelection,
     // Store raw text lines for selection extraction
@@ -70,6 +71,7 @@ impl TextReader {
             cached_styled_content: None,
             cached_styled_width: 0,
             cached_chapter_title_hash: 0,
+            cached_focus_state: false,
             text_selection: TextSelection::new(),
             raw_text_lines: Vec::new(),
             last_content_area: None,
@@ -140,6 +142,7 @@ impl TextReader {
         chapter_title: &Option<String>,
         palette: &Base16Palette,
         width: usize,
+        is_focused: bool,
     ) -> Text {
         let content_hash = Self::simple_hash(text);
         let chapter_title_hash = chapter_title
@@ -151,7 +154,8 @@ impl TextReader {
         let needs_update = self.cached_styled_content.is_none()
             || self.cached_styled_width != width
             || self.cached_content_hash != content_hash
-            || self.cached_chapter_title_hash != chapter_title_hash;
+            || self.cached_chapter_title_hash != chapter_title_hash
+            || self.cached_focus_state != is_focused;
 
         if needs_update {
             debug!("Regenerating styled content cache: width {} -> {}, content changed: {}, title changed: {}",
@@ -159,21 +163,27 @@ impl TextReader {
                    self.cached_content_hash != content_hash,
                    self.cached_chapter_title_hash != chapter_title_hash);
 
-            let (styled_content, raw_lines) =
-                self.parse_styled_text_internal_with_raw(text, chapter_title, palette, width);
+            let (styled_content, raw_lines) = self.parse_styled_text_internal_with_raw(
+                text,
+                chapter_title,
+                palette,
+                width,
+                is_focused,
+            );
             self.cached_styled_content = Some(styled_content);
             self.raw_text_lines = raw_lines;
             self.cached_styled_width = width;
             self.cached_content_hash = content_hash;
             self.cached_chapter_title_hash = chapter_title_hash;
+            self.cached_focus_state = is_focused;
         }
 
         let mut result = self.cached_styled_content.as_ref().unwrap().clone();
 
         // Apply selection highlighting if there's an active selection
         if self.text_selection.has_selection() {
-            // Use theme color for selection - base_02 is typically used for selection/highlight
-            let selection_bg_color = palette.base_02;
+            // Use focus-aware selection color
+            let (selection_bg_color, _) = palette.get_selection_colors(is_focused);
             let highlighted_lines: Vec<Line> = result
                 .lines
                 .into_iter()
@@ -198,6 +208,7 @@ impl TextReader {
         chapter_title: &Option<String>,
         palette: &Base16Palette,
         width: usize,
+        is_focused: bool,
     ) -> (Text<'static>, Vec<String>) {
         let mut lines = Vec::new();
         let mut raw_lines = Vec::new();
@@ -207,10 +218,16 @@ impl TextReader {
             raw_lines.push(title.clone());
             raw_lines.push(String::new());
 
+            // Use focus-aware color for chapter title
+            let title_color = if is_focused {
+                palette.base_0d // Keep bright blue for focused chapter titles
+            } else {
+                palette.base_02 // Much dimmer for unfocused
+            };
             lines.push(Line::from(vec![Span::styled(
                 title.clone(),
                 Style::default()
-                    .fg(palette.base_0d)
+                    .fg(title_color)
                     .add_modifier(Modifier::BOLD),
             )]));
             lines.push(Line::from(String::new()));
@@ -229,7 +246,7 @@ impl TextReader {
             for wrapped_line in wrapped_lines {
                 let line_str = wrapped_line.to_string();
                 raw_lines.push(line_str.clone());
-                let styled_line = self.parse_line_styling_owned(&line_str, palette);
+                let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
                 lines.push(styled_line);
             }
         }
@@ -239,18 +256,31 @@ impl TextReader {
     }
 
     /// Parse styling for a single line (bold, quotes, etc.) - owned version for caching
-    fn parse_line_styling_owned(&self, line: &str, palette: &Base16Palette) -> Line<'static> {
+    fn parse_line_styling_owned(
+        &self,
+        line: &str,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) -> Line<'static> {
         let mut spans = Vec::new();
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;
         let mut current_text = String::new();
+
+        // Get focus-aware colors
+        let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+        let bold_text_color = if is_focused {
+            palette.base_08 // Bright red for focused bold text
+        } else {
+            palette.base_01 // Even more dimmed for unfocused bold text
+        };
 
         while i < chars.len() {
             if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
                 if !current_text.is_empty() {
                     spans.push(Span::styled(
                         current_text.clone(),
-                        Style::default().fg(palette.base_07),
+                        Style::default().fg(normal_text_color),
                     ));
                     current_text.clear();
                 }
@@ -272,7 +302,7 @@ impl TextReader {
                     spans.push(Span::styled(
                         bold_text,
                         Style::default()
-                            .fg(palette.base_08)
+                            .fg(bold_text_color)
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
@@ -295,7 +325,7 @@ impl TextReader {
                 if !current_text.is_empty() {
                     spans.push(Span::styled(
                         current_text.clone(),
-                        Style::default().fg(palette.base_07),
+                        Style::default().fg(normal_text_color),
                     ));
                     current_text.clear();
                 }
@@ -338,7 +368,7 @@ impl TextReader {
         if !current_text.is_empty() {
             spans.push(Span::styled(
                 current_text,
-                Style::default().fg(palette.base_07),
+                Style::default().fg(normal_text_color),
             ));
         }
 
@@ -349,19 +379,23 @@ impl TextReader {
         }
     }
 
-    /// Parse styling for a single line (bold, quotes, etc.)
+    /// Parse styling for a single line (bold, quotes, etc.) - legacy version
     fn parse_line_styling(&self, line: &str, palette: &Base16Palette) -> Line {
         let mut spans = Vec::new();
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;
         let mut current_text = String::new();
 
+        // Use original colors for legacy function
+        let normal_text_color = palette.base_07;
+        let bold_text_color = palette.base_08;
+
         while i < chars.len() {
             if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
                 if !current_text.is_empty() {
                     spans.push(Span::styled(
                         current_text.clone(),
-                        Style::default().fg(palette.base_07),
+                        Style::default().fg(normal_text_color),
                     ));
                     current_text.clear();
                 }
@@ -383,7 +417,7 @@ impl TextReader {
                     spans.push(Span::styled(
                         bold_text,
                         Style::default()
-                            .fg(palette.base_08)
+                            .fg(bold_text_color)
                             .add_modifier(Modifier::BOLD),
                     ));
                 } else {
@@ -406,7 +440,7 @@ impl TextReader {
                 if !current_text.is_empty() {
                     spans.push(Span::styled(
                         current_text.clone(),
-                        Style::default().fg(palette.base_07),
+                        Style::default().fg(normal_text_color),
                     ));
                     current_text.clear();
                 }
@@ -449,7 +483,7 @@ impl TextReader {
         if !current_text.is_empty() {
             spans.push(Span::styled(
                 current_text,
-                Style::default().fg(palette.base_07),
+                Style::default().fg(normal_text_color),
             ));
         }
 
@@ -503,6 +537,7 @@ impl TextReader {
         self.cached_styled_content = None;
         self.cached_content_hash = 0;
         self.cached_chapter_title_hash = 0;
+        self.cached_focus_state = false;
         // Clear text selection when changing chapters
         self.text_selection.clear_selection();
         self.raw_text_lines.clear();
@@ -868,9 +903,10 @@ impl TextReader {
         current_chapter: usize,
         total_chapters: usize,
         palette: &Base16Palette,
-        is_active: bool,
+        is_focused: bool,
     ) {
-        let (_, text_color, border_color, _, _) = palette.get_interface_colors(is_active);
+        // Get focus-aware colors
+        let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
 
         // Calculate reading progress
         let visible_width = area.width.saturating_sub(12) as usize;
@@ -953,7 +989,7 @@ impl TextReader {
         let text_width = margined_content_area[1].width as usize;
         let scroll_offset = self.scroll_offset;
         let styled_content =
-            self.parse_styled_text_cached(content, chapter_title, palette, text_width);
+            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
 
         let content_paragraph = Paragraph::new(styled_content)
             .scroll((scroll_offset as u16, 0))

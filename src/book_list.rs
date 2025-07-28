@@ -52,13 +52,19 @@ impl BookList {
         &mut self,
         f: &mut Frame,
         area: Rect,
-        _is_active: bool,
+        is_focused: bool,
         palette: &Base16Palette,
         bookmarks: &Bookmarks,
         book_manager: &BookManager,
     ) {
-        let (interface_color, _, border_color, highlight_bg, highlight_fg) =
-            palette.get_interface_colors(false);
+        // Get focus-aware colors
+        let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
+        let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
+        let timestamp_color = if is_focused {
+            palette.base_04 // Brighter timestamp for focused
+        } else {
+            palette.base_01 // Much dimmer timestamp for unfocused
+        };
 
         // Create list items with last read timestamps
         let items: Vec<ListItem> = book_manager
@@ -73,11 +79,11 @@ impl BookList {
                 let content = Line::from(vec![
                     Span::styled(
                         book_info.display_name.clone(),
-                        Style::default().fg(interface_color),
+                        Style::default().fg(text_color),
                     ),
                     Span::styled(
                         format!(" ({})", last_read),
-                        Style::default().fg(palette.base_03),
+                        Style::default().fg(timestamp_color),
                     ),
                 ]);
                 ListItem::new(content)
@@ -92,7 +98,7 @@ impl BookList {
                     .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(palette.base_00)),
             )
-            .highlight_style(Style::default().bg(highlight_bg).fg(highlight_fg))
+            .highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
             .style(Style::default().bg(palette.base_00));
 
         f.render_stateful_widget(files, area, &mut self.list_state);

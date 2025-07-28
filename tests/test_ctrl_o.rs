@@ -1,5 +1,5 @@
 use bookrat::main_app::run_app_with_event_source;
-use bookrat::main_app::{App, MockSystemCommandExecutor, Mode};
+use bookrat::main_app::{App, MockSystemCommandExecutor};
 use bookrat::test_utils::test_helpers::TestScenarioBuilder;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -19,7 +19,6 @@ fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
 
     // Load an EPUB file first
     app.load_epub("tests/testdata/digital_frontier.epub");
-    app.mode = Mode::Content; // Ensure we're in content mode
 
     // Create event source with Ctrl+O followed by quit
     let mut event_source = TestScenarioBuilder::new().press_ctrl_o().quit().build();
@@ -47,7 +46,7 @@ fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
 }
 
 #[test]
-fn test_ctrl_o_does_nothing_in_file_list_mode() {
+fn test_ctrl_o_works_without_epub_loaded() {
     // Create a mock system command executor
     let mock_executor = MockSystemCommandExecutor::new();
 
@@ -59,8 +58,7 @@ fn test_ctrl_o_does_nothing_in_file_list_mode() {
         mock_executor,
     );
 
-    // Stay in file list mode (don't load any EPUB)
-    assert_eq!(app.mode, Mode::FileList);
+    // Don't load any EPUB - test that Ctrl+O works in all cases now
 
     // Create event source with Ctrl+O followed by quit
     let mut event_source = TestScenarioBuilder::new().press_ctrl_o().quit().build();
@@ -72,7 +70,7 @@ fn test_ctrl_o_does_nothing_in_file_list_mode() {
     // Run the app with the simulated input
     let _ = run_app_with_event_source(&mut terminal, &mut app, &mut event_source);
 
-    // Verify that no system command was executed
+    // Verify that no system command was executed (no EPUB loaded)
     let executed_commands = app
         .system_command_executor
         .as_any()
@@ -84,7 +82,7 @@ fn test_ctrl_o_does_nothing_in_file_list_mode() {
 }
 
 #[test]
-fn test_ctrl_o_does_nothing_when_no_epub_loaded() {
+fn test_ctrl_o_handles_no_epub_gracefully() {
     // Create a mock system command executor
     let mock_executor = MockSystemCommandExecutor::new();
 
@@ -96,8 +94,7 @@ fn test_ctrl_o_does_nothing_when_no_epub_loaded() {
         mock_executor,
     );
 
-    // Switch to content mode but don't load any EPUB
-    app.mode = Mode::Content;
+    // Don't load any EPUB - test that Ctrl+O still works
 
     // Create event source with Ctrl+O followed by quit
     let mut event_source = TestScenarioBuilder::new().press_ctrl_o().quit().build();
@@ -109,7 +106,7 @@ fn test_ctrl_o_does_nothing_when_no_epub_loaded() {
     // Run the app with the simulated input
     let _ = run_app_with_event_source(&mut terminal, &mut app, &mut event_source);
 
-    // Verify that no system command was executed
+    // Verify that no system command was executed (no EPUB loaded)
     let executed_commands = app
         .system_command_executor
         .as_any()

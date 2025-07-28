@@ -284,13 +284,9 @@ pub struct App {
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
     current_chapter: usize,
     total_chapters: usize,
-    pub mode: Mode,
     current_file: Option<String>,
     current_chapter_title: Option<String>,
-    // Animation state
-    pub animation_progress: f32, // 0.0 = file list mode, 1.0 = reading mode
-    target_progress: f32,        // Target animation value
-    is_animating: bool,
+    pub focused_panel: FocusedPanel,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
     last_bookmark_save: std::time::Instant,
     // Click tracking for double/triple-click detection
@@ -300,7 +296,7 @@ pub struct App {
 }
 
 #[derive(PartialEq, Debug)]
-pub enum Mode {
+pub enum FocusedPanel {
     FileList,
     Content,
 }
@@ -377,13 +373,9 @@ impl App {
             current_epub: None,
             current_chapter: 0,
             total_chapters: 0,
-            mode: Mode::FileList,
             current_file: None,
             current_chapter_title: None,
-            // Initialize animation state
-            animation_progress: 0.0, // Start in file list mode
-            target_progress: 0.0,
-            is_animating: false,
+            focused_panel: FocusedPanel::FileList,
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
             // Initialize click tracking
@@ -399,9 +391,6 @@ impl App {
                 if app.book_manager.contains_book(&recent_path) {
                     info!("Auto-loading most recent book: {}", recent_path);
                     app.load_epub(&recent_path);
-                    app.mode = Mode::Content;
-                    app.target_progress = 1.0;
-                    app.animation_progress = 1.0; // Skip animation on startup
                 }
             }
         }
@@ -449,7 +438,6 @@ impl App {
                 self.current_epub = Some(doc);
                 self.current_file = Some(path.to_string());
                 self.update_content();
-                self.mode = Mode::Content;
             }
             Err(e) => {
                 error!("Failed to load EPUB: {}", e);
@@ -483,28 +471,9 @@ impl App {
         }
     }
 
-    fn update_animation(&mut self) {
-        if self.is_animating {
-            let animation_speed = 0.15; // Animation speed (higher = faster)
-            let diff = self.target_progress - self.animation_progress;
-
-            if diff.abs() < 0.01 {
-                // Animation complete
-                self.animation_progress = self.target_progress;
-                self.is_animating = false;
-            } else {
-                // Continue animation
-                self.animation_progress += diff * animation_speed;
-            }
-        }
-
+    fn update_highlight(&mut self) {
         // Update highlight state in text reader
         self.text_reader.update_highlight();
-    }
-
-    fn start_animation(&mut self, target: f32) {
-        self.target_progress = target;
-        self.is_animating = true;
     }
 
     fn update_content(&mut self) {
@@ -617,14 +586,16 @@ impl App {
 
         match mouse_event.kind {
             MouseEventKind::ScrollDown => {
-                if self.mode == Mode::FileList {
+                // Allow scrolling in both file list and content
+                if mouse_event.column < 30 {
                     self.book_list.move_selection_down(&self.book_manager);
                 } else {
                     self.scroll_down();
                 }
             }
             MouseEventKind::ScrollUp => {
-                if self.mode == Mode::FileList {
+                // Allow scrolling in both file list and content
+                if mouse_event.column < 30 {
                     self.book_list.move_selection_up();
                 } else {
                     self.scroll_up();
@@ -641,7 +612,18 @@ impl App {
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.mode == Mode::Content {
+                // Handle panel switching based on click location
+                if mouse_event.column < 30 {
+                    // Click in book list area (left 30% of screen)
+                    if self.focused_panel != FocusedPanel::FileList {
+                        self.focused_panel = FocusedPanel::FileList;
+                    }
+                } else {
+                    // Click in content area (right 70% of screen)
+                    if self.focused_panel != FocusedPanel::Content {
+                        self.focused_panel = FocusedPanel::Content;
+                    }
+
                     // Get the content area for coordinate conversion
                     let content_area = self.get_content_area_rect();
 
@@ -674,7 +656,8 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if self.mode == Mode::Content {
+                // Handle mouse up in content area only (right side)
+                if mouse_event.column >= 30 {
                     let content_area = self.get_content_area_rect();
                     self.text_reader.handle_mouse_up(
                         mouse_event.column,
@@ -684,7 +667,8 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                if self.mode == Mode::Content {
+                // Handle mouse drag in content area only (right side)
+                if mouse_event.column >= 30 {
                     let content_area = self.get_content_area_rect();
                     let old_scroll_offset = self.text_reader.scroll_offset;
                     self.text_reader.handle_mouse_drag(
@@ -847,24 +831,14 @@ impl App {
         );
 
         if net_scroll > 0 {
-            // Net scroll down
+            // Net scroll down - content area only
             for _ in 0..net_scroll.min(10) {
-                // Limit to prevent excessive scrolling
-                if self.mode == Mode::FileList {
-                    self.book_list.move_selection_down(&self.book_manager);
-                } else {
-                    self.scroll_down();
-                }
+                self.scroll_down();
             }
         } else if net_scroll < 0 {
-            // Net scroll up
+            // Net scroll up - content area only
             for _ in 0..(-net_scroll).min(10) {
-                // Limit to prevent excessive scrolling
-                if self.mode == Mode::FileList {
-                    self.book_list.move_selection_up();
-                } else {
-                    self.scroll_up();
-                }
+                self.scroll_up();
             }
         }
     }
@@ -1006,24 +980,17 @@ impl App {
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(f.size());
 
-        // Calculate animated layout percentages
-        // animation_progress: 0.0 = (30%, 70%), 1.0 = (10%, 90%)
-        let file_list_percentage = 30 - (20.0 * self.animation_progress) as u16;
-        let content_percentage = 70 + (20.0 * self.animation_progress) as u16;
-
+        // Fixed layout: 30% file list, 70% content
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(file_list_percentage),
-                Constraint::Percentage(content_percentage),
-            ])
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(chunks[0]);
 
         // Delegate rendering to components
         self.book_list.render(
             f,
             main_chunks[0],
-            self.mode == Mode::FileList,
+            self.focused_panel == FocusedPanel::FileList,
             &OCEANIC_NEXT,
             &self.bookmarks,
             &self.book_manager,
@@ -1044,7 +1011,7 @@ impl App {
                     self.current_chapter,
                     self.total_chapters,
                     &OCEANIC_NEXT,
-                    self.mode == Mode::Content,
+                    self.focused_panel == FocusedPanel::Content,
                 );
             } else {
                 // Render default content area when no EPUB is loaded
@@ -1059,7 +1026,9 @@ impl App {
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
-        let (_, text_color, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
+        // Use focus-aware colors instead of hardcoded false
+        let (text_color, border_color, _bg_color) =
+            OCEANIC_NEXT.get_panel_colors(self.focused_panel == FocusedPanel::Content);
 
         let content_border = Block::default()
             .borders(Borders::ALL)
@@ -1077,15 +1046,12 @@ impl App {
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect) {
         let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
 
-        let help_text = match self.mode {
-            Mode::FileList => "j/k: Navigate | Enter: Select | Tab: Switch View | q: Quit",
-            Mode::Content => {
-                // Check if text is selected and show appropriate help
-                if self.text_reader.has_text_selection() {
-                    "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
-                } else {
-                    "j/k: Scroll | Ctrl+d/u: Half-screen | h/l: Chapter | Mouse: Select text | Ctrl+O: Open | Tab: Switch | q: Quit"
-                }
+        let help_text = if self.text_reader.has_text_selection() {
+            "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
+        } else {
+            match self.focused_panel {
+                FocusedPanel::FileList => "j/k: Navigate files | Enter: Select | Tab: Switch to content | q: Quit",
+                FocusedPanel::Content => "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch to files | Ctrl+O: Open | q: Quit",
             }
         };
 
@@ -1145,70 +1111,57 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             should_quit = true;
                         }
                         KeyCode::Char('j') => {
-                            if app.mode == Mode::FileList {
+                            // Navigate based on focused panel
+                            if app.focused_panel == FocusedPanel::FileList {
                                 app.book_list.move_selection_down(&app.book_manager);
                             } else {
                                 app.scroll_down();
                             }
                         }
                         KeyCode::Char('k') => {
-                            if app.mode == Mode::FileList {
+                            // Navigate based on focused panel
+                            if app.focused_panel == FocusedPanel::FileList {
                                 app.book_list.move_selection_up();
                             } else {
                                 app.scroll_up();
                             }
                         }
                         KeyCode::Char('h') => {
-                            if app.mode == Mode::Content {
-                                app.prev_chapter();
-                            }
+                            // Always allow chapter navigation
+                            app.prev_chapter();
                         }
                         KeyCode::Char('l') => {
-                            if app.mode == Mode::Content {
-                                app.next_chapter();
-                            }
+                            // Always allow chapter navigation
+                            app.next_chapter();
                         }
                         KeyCode::Char('o') => {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 // Ctrl+O: Open current EPUB with system viewer
-                                if app.mode == Mode::Content {
-                                    app.open_with_system_viewer();
-                                }
+                                app.open_with_system_viewer();
                             }
                         }
                         KeyCode::Enter => {
-                            if app.mode == Mode::FileList {
-                                if let Some(book_info) =
-                                    app.book_manager.get_book_info(app.book_list.selected)
-                                {
-                                    let path = book_info.path.clone();
-                                    // Save bookmark for current file before switching
-                                    app.save_bookmark_with_throttle(true);
-                                    app.load_epub(&path);
-                                }
+                            // Select book from file list (works from any panel)
+                            if let Some(book_info) =
+                                app.book_manager.get_book_info(app.book_list.selected)
+                            {
+                                let path = book_info.path.clone();
+                                // Save bookmark for current file before switching
+                                app.save_bookmark_with_throttle(true);
+                                app.load_epub(&path);
+                                // Switch focus to content after loading
+                                app.focused_panel = FocusedPanel::Content;
                             }
                         }
                         KeyCode::Tab => {
-                            if app.mode == Mode::FileList {
-                                app.mode = Mode::Content;
-                                app.start_animation(1.0); // Expand to reading mode
-                            } else {
-                                // When switching back to file list, restore selection to current file
-                                if let Some(current_file) = &app.current_file {
-                                    if let Some(index) =
-                                        app.book_manager.find_book_by_path(current_file)
-                                    {
-                                        app.book_list.set_selection_to_index(index);
-                                    }
-                                }
-                                app.mode = Mode::FileList;
-                                app.start_animation(0.0); // Contract to file list mode
+                            // Switch focus between panels
+                            app.focused_panel = match app.focused_panel {
+                                FocusedPanel::FileList => FocusedPanel::Content,
+                                FocusedPanel::Content => FocusedPanel::FileList,
                             };
                         }
                         KeyCode::Char('d') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL)
-                                && app.mode == Mode::Content
-                            {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 // Get the visible height for half-screen calculation
                                 let visible_height =
                                     terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
@@ -1216,9 +1169,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             }
                         }
                         KeyCode::Char('u') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL)
-                                && app.mode == Mode::Content
-                            {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 // Get the visible height for half-screen calculation
                                 let visible_height =
                                     terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
@@ -1226,16 +1177,14 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             }
                         }
                         KeyCode::Char('c') => {
-                            if app.mode == Mode::Content {
-                                // Handle 'c' with any modifiers (c, Ctrl+C, Cmd+C, etc.) for copy functionality
-                                debug!("Copy key 'c' pressed with modifiers: {:?}", key.modifiers);
-                                if let Err(e) = app.text_reader.copy_selection_to_clipboard() {
-                                    debug!("Copy failed: {}", e);
-                                }
+                            // Handle 'c' with any modifiers (c, Ctrl+C, Cmd+C, etc.) for copy functionality
+                            debug!("Copy key 'c' pressed with modifiers: {:?}", key.modifiers);
+                            if let Err(e) = app.text_reader.copy_selection_to_clipboard() {
+                                debug!("Copy failed: {}", e);
                             }
                         }
                         KeyCode::Esc => {
-                            if app.mode == Mode::Content && app.text_reader.has_text_selection() {
+                            if app.text_reader.has_text_selection() {
                                 // Clear text selection when ESC is pressed
                                 app.text_reader.clear_selection();
                                 debug!("Text selection cleared via ESC key");
@@ -1252,26 +1201,22 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             }
         }
 
-        // Only draw if we processed events or need animation update
-        if events_processed > 0 || app.is_animating || last_tick.elapsed() >= tick_rate {
+        // Draw if we processed events or on tick
+        if events_processed > 0 || last_tick.elapsed() >= tick_rate {
             terminal.draw(|f| app.draw(f))?;
         }
 
-        // Handle animations and timing
+        // Handle timing
         if last_tick.elapsed() >= tick_rate {
-            app.update_animation(); // Update animation state
+            app.update_highlight(); // Update highlight state
             last_tick = std::time::Instant::now();
         }
 
         // If no events were processed, wait a bit to avoid busy-waiting
         if events_processed == 0 {
-            let timeout = if app.is_animating {
-                Duration::from_millis(16) // ~60 FPS when animating
-            } else {
-                tick_rate
-                    .checked_sub(last_tick.elapsed())
-                    .unwrap_or_else(|| Duration::from_secs(0))
-            };
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
             let _ = event_source.poll(timeout);
         }
 
