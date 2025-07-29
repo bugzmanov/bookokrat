@@ -463,103 +463,116 @@ impl App {
         None
     }
 
+    /// Convert TOC entries to section structure
+
     fn refresh_chapter_cache(&mut self) {
+        debug!("refresh_chapter_cache called");
         if let (Some(ref current_file), Some(ref mut epub)) =
             (&self.current_file, &mut self.current_epub)
         {
+            debug!("refresh_chapter_cache: processing book '{}'", current_file);
             let mut chapters = Vec::new();
             let mut sections = Vec::new();
-            let mut current_section: Option<SectionInfo> = None;
-            let mut chapters_before_sections = Vec::new();
 
-            // Parse TOC structure to determine section headers
+            // Parse TOC structure to create hierarchical sections
             let toc_entries = self.text_generator.parse_toc_structure(epub);
+
+            // Debug: Log the parsed TOC structure
+            debug!("Parsed {} TOC entries", toc_entries.len());
+            for (i, entry) in toc_entries.iter().enumerate() {
+                debug!(
+                    "TOC Entry {}: '{}' -> '{}' (children: {})",
+                    i,
+                    entry.title,
+                    entry.href,
+                    entry.children.len()
+                );
+                for (j, child) in entry.children.iter().enumerate() {
+                    debug!("  Child {}: '{}' -> '{}'", j, child.title, child.href);
+                }
+            }
 
             // Store current position to restore later
             let original_chapter = epub.get_current_page();
 
-            // Iterate through all chapters to extract titles and build hierarchy
+            // First, get chapter information for all chapters
+            let mut chapter_map = std::collections::HashMap::new();
+            debug!("Building chapter map for {} chapters", self.total_chapters);
             for i in 0..self.total_chapters {
                 if epub.set_current_page(i).is_ok() {
                     if let Ok(content) = epub.get_current_str() {
-                        // Determine if this chapter is a section header by checking TOC structure
-                        let is_section_header =
-                            if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
-                                self.text_generator
-                                    .is_section_header(&chapter_href, &toc_entries)
-                            } else {
-                                false
+                        if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
+                            let title = self
+                                .text_generator
+                                .extract_chapter_title(&content)
+                                .unwrap_or_else(|| format!("Chapter {}", i + 1));
+
+                            let is_section_header = self
+                                .text_generator
+                                .is_section_header(&chapter_href, &toc_entries);
+
+                            let chapter_info = ChapterInfo {
+                                title,
+                                index: i,
+                                is_section_header,
                             };
 
-                        if is_section_header {
-                            // Save previous section if exists
-                            if let Some(section) = current_section.take() {
-                                sections.push(section);
-                            }
+                            chapters.push(chapter_info.clone());
 
-                            // Start new section
-                            let section_title = self
-                                .text_generator
-                                .extract_section_title(&content)
-                                .unwrap_or_else(|| format!("Section {}", sections.len() + 1));
-
-                            current_section = Some(SectionInfo {
-                                title: section_title,
-                                start_chapter: i,
-                                chapters: Vec::new(),
-                                is_expanded: true, // Default to expanded
-                            });
-                        }
-
-                        let title = self
-                            .text_generator
-                            .extract_chapter_title(&content)
-                            .unwrap_or_else(|| format!("Chapter {}", i + 1));
-
-                        let chapter_info = ChapterInfo {
-                            title,
-                            index: i,
-                            is_section_header,
-                        };
-
-                        chapters.push(chapter_info.clone());
-
-                        // Add to current section if it exists and this isn't a section header
-                        if let Some(ref mut section) = current_section {
-                            if !is_section_header {
-                                section.chapters.push(chapter_info);
-                            }
-                        } else if !is_section_header {
-                            // This is a chapter before any section header
-                            chapters_before_sections.push(chapter_info);
+                            // Normalize href for matching
+                            let normalized_href = self.text_generator.normalize_href(&chapter_href);
+                            debug!(
+                                "Chapter {}: '{}' -> normalized: '{}'",
+                                i, chapter_href, normalized_href
+                            );
+                            chapter_map.insert(normalized_href, (i, chapter_info));
                         }
                     }
                 }
             }
 
-            // Don't forget the last section
-            if let Some(section) = current_section.take() {
-                sections.push(section);
+            debug!("Chapter map contains {} entries", chapter_map.keys().len());
+
+            // Convert TOC structure to sections
+            sections =
+                BookList::convert_toc_to_sections(&self.text_generator, &toc_entries, &chapter_map);
+
+            // Debug: Log the created sections
+            debug!("Created {} sections", sections.len());
+            for (i, section) in sections.iter().enumerate() {
+                debug!(
+                    "Section {}: '{}' (chapters: {})",
+                    i,
+                    section.title,
+                    section.chapters.len()
+                );
+                for (j, chapter) in section.chapters.iter().enumerate() {
+                    debug!("  Chapter {}: '{}'", j, chapter.title);
+                }
             }
 
-            // If we have chapters before any section, create a default section for them
-            if !chapters_before_sections.is_empty() {
+            // If no sections were created from TOC, fall back to flat structure
+            if sections.is_empty() && !chapters.is_empty() {
                 let intro_section = SectionInfo {
-                    title: "Введение".to_string(), // Or use book title
-                    start_chapter: chapters_before_sections[0].index,
-                    chapters: chapters_before_sections,
+                    title: "Chapters".to_string(),
+                    start_chapter: 0,
+                    chapters: chapters.clone(),
                     is_expanded: true,
                 };
-                sections.insert(0, intro_section);
+                sections.push(intro_section);
             }
 
             // Restore original position
             let _ = epub.set_current_page(original_chapter);
 
+            // Convert to new ADT-based structure
+            let toc_items = BookList::convert_toc_to_items(&self.text_generator, &toc_entries, &chapter_map);
+
             self.cached_current_book_info = Some(CurrentBookInfo {
                 path: current_file.clone(),
                 chapters,
                 sections,
+                toc_items,
                 current_chapter: self.current_chapter,
             });
         } else {
@@ -1390,4 +1403,9 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             return Ok(());
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+
 }

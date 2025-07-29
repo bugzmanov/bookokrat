@@ -1,5 +1,6 @@
 use crate::book_list::TocEntry;
 use epub::doc::EpubDoc;
+use log::debug;
 use regex::Regex;
 use std::io::BufReader;
 
@@ -17,8 +18,11 @@ impl TocParser {
     ) -> Vec<TocEntry> {
         // Try NCX document first (EPUB2 style) - more reliable parsing
         if let Some(ncx_id) = self.find_ncx_document(doc) {
+            debug!("Found NCX document: {}", ncx_id);
             if let Ok(ncx_content) = doc.get_resource_str(&ncx_id) {
+                debug!("NCX content length: {} chars", ncx_content.len());
                 let ncx_entries = self.parse_ncx_document(&ncx_content);
+                debug!("NCX parsing returned {} entries", ncx_entries.len());
                 if !ncx_entries.is_empty() {
                     return ncx_entries;
                 }
@@ -69,9 +73,20 @@ impl TocParser {
         if let Ok(navmap_regex) = Regex::new(r#"(?s)<navMap[^>]*>(.*?)</navMap>"#) {
             if let Some(captures) = navmap_regex.captures(content) {
                 if let Some(navmap_content) = captures.get(1) {
+                    debug!(
+                        "Found navMap content, length: {} chars",
+                        navmap_content.as_str().len()
+                    );
                     entries.extend(self.parse_ncx_nav_points(navmap_content.as_str()));
+                    debug!("Parsed {} entries from navMap", entries.len());
+                } else {
+                    debug!("navMap regex matched but no content captured");
                 }
+            } else {
+                debug!("navMap regex did not match");
             }
+        } else {
+            debug!("Failed to compile navMap regex");
         }
 
         entries
@@ -267,6 +282,12 @@ impl TocParser {
 
     /// Parse single NCX navigation point with proper nesting
     fn parse_single_ncx_navpoint(&self, content: &str) -> Option<TocEntry> {
+        debug!(
+            "Parsing navPoint content ({}chars): {}...",
+            content.len(),
+            content.chars().take(200).collect::<String>()
+        );
+
         // Extract navLabel and content with multiline support
         let title = if let Ok(label_regex) =
             Regex::new(r#"(?s)<navLabel[^>]*>.*?<text[^>]*>([^<]+)</text>.*?</navLabel>"#)
@@ -278,6 +299,7 @@ impl TocParser {
                 .trim()
                 .to_string()
         } else {
+            debug!("Failed to extract title from navPoint");
             return None;
         };
 
@@ -304,8 +326,15 @@ impl TocParser {
                 let search_start = label_end + content_end;
                 let remaining_content = &content[search_start..];
 
+                debug!(
+                    "Looking for children in remaining content ({}chars): {}...",
+                    remaining_content.len(),
+                    remaining_content.chars().take(100).collect::<String>()
+                );
+
                 // Parse any nested navPoints in the remaining content
                 children.extend(self.parse_ncx_nav_points(remaining_content));
+                debug!("Found {} children for '{}'", children.len(), title);
             }
         }
 
@@ -486,6 +515,70 @@ mod tests {
         // Validate nested chapter under Интерес
         assert_eq!(entries[2].children[0].title, "Великое школьное искажение");
         assert_eq!(entries[2].children[0].href, "../Text/content23.html");
+    }
+
+    #[test]
+    fn test_careless_flat_ncx_structure() {
+        let parser = TocParser::new();
+
+        // Sample NCX content from careless.epub - flat structure with no nesting
+        let ncx_content = r#"<?xml version="1.0" encoding="UTF-8"?><ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="en-US">
+<head>
+<meta name="dtb:uid" content="9781250391247"/>
+<meta name="dtb:depth" content="1"/>
+<meta name="dtb:totalPageCount" content="400"/>
+<meta name="dtb:maxPageNumber" content="0"/>
+</head>
+<docTitle><text>Careless People</text></docTitle>
+<docAuthor><text>Sarah Wynn-Williams</text></docAuthor>
+<navMap>
+<navPoint class="other" id="navpoint-1" playOrder="1"><navLabel><text>Cover</text></navLabel><content src="xhtml/cover.xhtml"/></navPoint>
+<navPoint class="other" id="navpoint-2" playOrder="2"><navLabel><text>Title Page</text></navLabel><content src="xhtml/title.xhtml#tit"/></navPoint>
+<navPoint class="other" id="navpoint-3" playOrder="3"><navLabel><text>Copyright Notice</text></navLabel><content src="xhtml/copyrightnotice.xhtml"/></navPoint>
+<navPoint class="other" id="navpoint-4" playOrder="4"><navLabel><text>Dedication</text></navLabel><content src="xhtml/dedication.xhtml#ded"/></navPoint>
+<navPoint class="other" id="navpoint-5" playOrder="5"><navLabel><text>Epigraph</text></navLabel><content src="xhtml/epigraph.xhtml#epi"/></navPoint>
+<navPoint class="other" id="navpoint-6" playOrder="6"><navLabel><text>Prologue</text></navLabel><content src="xhtml/prologue.xhtml#pro"/></navPoint>
+<navPoint class="other" id="navpoint-7" playOrder="7"><navLabel><text>1. Simpleminded Hope</text></navLabel><content src="xhtml/chapter1.xhtml#ch1"/></navPoint>
+<navPoint class="other" id="navpoint-8" playOrder="8"><navLabel><text>2. Pitching the Revolution</text></navLabel><content src="xhtml/chapter2.xhtml#ch2"/></navPoint>
+<navPoint class="other" id="navpoint-9" playOrder="9"><navLabel><text>3. This Is Going to Be Fun</text></navLabel><content src="xhtml/chapter3.xhtml#ch3"/></navPoint>
+<navPoint class="other" id="navpoint-10" playOrder="10"><navLabel><text>4. Auf Wiedersehen to All That</text></navLabel><content src="xhtml/chapter4.xhtml#ch4"/></navPoint>
+<navPoint class="other" id="navpoint-11" playOrder="11"><navLabel><text>5. The Little Red Book</text></navLabel><content src="xhtml/chapter5.xhtml#ch5"/></navPoint>
+</navMap>
+</ncx>"#;
+
+        let entries = parser.parse_ncx_document(ncx_content);
+
+        // Should have 11 flat entries (no hierarchy)
+        assert_eq!(entries.len(), 11);
+
+        // All entries should have no children (flat structure)
+        for entry in &entries {
+            assert_eq!(
+                entry.children.len(),
+                0,
+                "Entry '{}' should have no children in flat structure",
+                entry.title
+            );
+        }
+
+        // Verify specific entries
+        assert_eq!(entries[0].title, "Cover");
+        assert_eq!(entries[0].href, "xhtml/cover.xhtml");
+
+        assert_eq!(entries[1].title, "Title Page");
+        assert_eq!(entries[1].href, "xhtml/title.xhtml#tit");
+
+        assert_eq!(entries[2].title, "Copyright Notice");
+        assert_eq!(entries[2].href, "xhtml/copyrightnotice.xhtml");
+
+        assert_eq!(entries[6].title, "1. Simpleminded Hope");
+        assert_eq!(entries[6].href, "xhtml/chapter1.xhtml#ch1");
+
+        assert_eq!(entries[7].title, "2. Pitching the Revolution");
+        assert_eq!(entries[7].href, "xhtml/chapter2.xhtml#ch2");
+
+        assert_eq!(entries[10].title, "5. The Little Red Book");
+        assert_eq!(entries[10].href, "xhtml/chapter5.xhtml#ch5");
     }
 
     #[test]

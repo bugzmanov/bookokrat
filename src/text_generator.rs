@@ -79,11 +79,19 @@ impl TextGenerator {
         false
     }
 
-    /// Normalize href for comparison by removing relative path prefixes
-    fn normalize_href(&self, href: &str) -> String {
-        href.trim_start_matches("../")
+    /// Normalize href for comparison by removing relative path prefixes, OEBPS directory, and fragments
+    pub fn normalize_href(&self, href: &str) -> String {
+        let normalized = href
+            .trim_start_matches("../")
             .trim_start_matches("./")
-            .to_string()
+            .trim_start_matches("OEBPS/");
+
+        // Remove fragment identifiers (e.g., "#ch1", "#tit") for matching
+        if let Some(fragment_pos) = normalized.find('#') {
+            normalized[..fragment_pos].to_string()
+        } else {
+            normalized.to_string()
+        }
     }
 
     /// Extract section title - will be handled by TOC parsing
@@ -97,7 +105,13 @@ impl TextGenerator {
         &self,
         doc: &mut EpubDoc<BufReader<std::fs::File>>,
     ) -> Vec<TocEntry> {
-        self.toc_parser.parse_toc_structure(doc)
+        debug!("TextGenerator::parse_toc_structure called");
+        let result = self.toc_parser.parse_toc_structure(doc);
+        debug!(
+            "TextGenerator::parse_toc_structure returning {} entries",
+            result.len()
+        );
+        result
     }
 
     pub fn process_chapter_content(
@@ -275,9 +289,13 @@ mod tests {
         // Test that chapters with children are section headers
         assert!(generator.is_section_header("Text/chapter1.html", &toc_entries));
 
-        // Test href normalization (relative paths)
+        // Test href normalization (relative paths, OEBPS directory, and fragments)
         assert!(generator.is_section_header("../Text/chapter1.html", &toc_entries));
         assert!(generator.is_section_header("./Text/chapter1.html", &toc_entries));
+        assert!(generator.is_section_header("OEBPS/Text/chapter1.html", &toc_entries));
+        assert!(generator.is_section_header("../OEBPS/Text/chapter1.html", &toc_entries));
+        assert!(generator.is_section_header("Text/chapter1.html#ch1", &toc_entries));
+        assert!(generator.is_section_header("OEBPS/Text/chapter1.html#anchor", &toc_entries));
 
         // Test non-existent hrefs
         assert!(!generator.is_section_header("Text/nonexistent.html", &toc_entries));
