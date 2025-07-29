@@ -1,4 +1,4 @@
-use crate::book_list::BookList;
+use crate::book_list::{BookList, ChapterInfo, CurrentBookInfo, SectionInfo};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
@@ -293,6 +293,8 @@ pub struct App {
     last_click_time: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     click_count: u32,
+    // Cached chapter information to avoid re-parsing on every render
+    cached_current_book_info: Option<CurrentBookInfo>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -382,6 +384,7 @@ impl App {
             last_click_time: None,
             last_click_position: None,
             click_count: 0,
+            cached_current_book_info: None,
         };
 
         // Auto-load the most recently read book if available
@@ -438,10 +441,139 @@ impl App {
                 self.current_epub = Some(doc);
                 self.current_file = Some(path.to_string());
                 self.update_content();
+                self.refresh_chapter_cache();
             }
             Err(e) => {
                 error!("Failed to load EPUB: {}", e);
             }
+        }
+    }
+
+    /// Get the href/path for a chapter at a specific index using the EPUB spine
+    fn get_chapter_href(
+        doc: &EpubDoc<BufReader<std::fs::File>>,
+        chapter_index: usize,
+    ) -> Option<String> {
+        if chapter_index < doc.spine.len() {
+            let spine_id = &doc.spine[chapter_index];
+            if let Some((path, _)) = doc.resources.get(spine_id) {
+                return Some(path.to_string_lossy().to_string());
+            }
+        }
+        None
+    }
+
+    fn refresh_chapter_cache(&mut self) {
+        if let (Some(ref current_file), Some(ref mut epub)) =
+            (&self.current_file, &mut self.current_epub)
+        {
+            let mut chapters = Vec::new();
+            let mut sections = Vec::new();
+            let mut current_section: Option<SectionInfo> = None;
+            let mut chapters_before_sections = Vec::new();
+
+            // Parse TOC structure to determine section headers
+            let toc_entries = self.text_generator.parse_toc_structure(epub);
+
+            // Store current position to restore later
+            let original_chapter = epub.get_current_page();
+
+            // Iterate through all chapters to extract titles and build hierarchy
+            for i in 0..self.total_chapters {
+                if epub.set_current_page(i).is_ok() {
+                    if let Ok(content) = epub.get_current_str() {
+                        // Determine if this chapter is a section header by checking TOC structure
+                        let is_section_header =
+                            if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
+                                self.text_generator
+                                    .is_section_header(&chapter_href, &toc_entries)
+                            } else {
+                                false
+                            };
+
+                        if is_section_header {
+                            // Save previous section if exists
+                            if let Some(section) = current_section.take() {
+                                sections.push(section);
+                            }
+
+                            // Start new section
+                            let section_title = self
+                                .text_generator
+                                .extract_section_title(&content)
+                                .unwrap_or_else(|| format!("Section {}", sections.len() + 1));
+
+                            current_section = Some(SectionInfo {
+                                title: section_title,
+                                start_chapter: i,
+                                chapters: Vec::new(),
+                                is_expanded: true, // Default to expanded
+                            });
+                        }
+
+                        let title = self
+                            .text_generator
+                            .extract_chapter_title(&content)
+                            .unwrap_or_else(|| format!("Chapter {}", i + 1));
+
+                        let chapter_info = ChapterInfo {
+                            title,
+                            index: i,
+                            is_section_header,
+                        };
+
+                        chapters.push(chapter_info.clone());
+
+                        // Add to current section if it exists and this isn't a section header
+                        if let Some(ref mut section) = current_section {
+                            if !is_section_header {
+                                section.chapters.push(chapter_info);
+                            }
+                        } else if !is_section_header {
+                            // This is a chapter before any section header
+                            chapters_before_sections.push(chapter_info);
+                        }
+                    }
+                }
+            }
+
+            // Don't forget the last section
+            if let Some(section) = current_section.take() {
+                sections.push(section);
+            }
+
+            // If we have chapters before any section, create a default section for them
+            if !chapters_before_sections.is_empty() {
+                let intro_section = SectionInfo {
+                    title: "Введение".to_string(), // Or use book title
+                    start_chapter: chapters_before_sections[0].index,
+                    chapters: chapters_before_sections,
+                    is_expanded: true,
+                };
+                sections.insert(0, intro_section);
+            }
+
+            // Restore original position
+            let _ = epub.set_current_page(original_chapter);
+
+            self.cached_current_book_info = Some(CurrentBookInfo {
+                path: current_file.clone(),
+                chapters,
+                sections,
+                current_chapter: self.current_chapter,
+            });
+        } else {
+            self.cached_current_book_info = None;
+        }
+    }
+
+    pub fn get_current_book_info(&self) -> Option<&CurrentBookInfo> {
+        self.cached_current_book_info.as_ref()
+    }
+
+    fn update_current_chapter_in_cache(&mut self) {
+        if let Some(ref mut cached_info) = self.cached_current_book_info {
+            cached_info.current_chapter = self.current_chapter;
         }
     }
 
@@ -513,6 +645,7 @@ impl App {
                     info!("Moving to next chapter: {}", self.current_chapter + 1);
                     self.update_content();
                     self.text_reader.reset_scroll();
+                    self.update_current_chapter_in_cache();
                     self.save_bookmark_with_throttle(true);
                 } else {
                     error!("Failed to move to next chapter");
@@ -531,12 +664,25 @@ impl App {
                     info!("Moving to previous chapter: {}", self.current_chapter + 1);
                     self.update_content();
                     self.text_reader.reset_scroll();
+                    self.update_current_chapter_in_cache();
                     self.save_bookmark_with_throttle(true);
                 } else {
                     error!("Failed to move to previous chapter");
                 }
             } else {
                 info!("Already at first chapter");
+            }
+        }
+    }
+
+    /// Toggle expansion of a section by its title
+    pub fn toggle_section_expansion(&mut self, section_title: &str) {
+        if let Some(ref mut cached_info) = self.cached_current_book_info {
+            for section in &mut cached_info.sections {
+                if section.title == section_title {
+                    section.is_expanded = !section.is_expanded;
+                    break;
+                }
             }
         }
     }
@@ -988,6 +1134,9 @@ impl App {
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(chunks[0]);
 
+        // Get current book info for TOC display (clone to avoid borrowing issues)
+        let current_book_info = self.get_current_book_info().cloned();
+
         // Delegate rendering to components
         self.book_list.render(
             f,
@@ -996,6 +1145,7 @@ impl App {
             &OCEANIC_NEXT,
             &self.bookmarks,
             &self.book_manager,
+            current_book_info.as_ref(),
         );
 
         // Render text content or default message
@@ -1153,6 +1303,20 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                                 app.load_epub(&path);
                                 // Switch focus to content after loading
                                 app.focused_panel = FocusedPanel::Content;
+                            }
+                        }
+                        KeyCode::Char(' ') => {
+                            // Toggle section expansion when focused on file list
+                            if app.focused_panel == FocusedPanel::FileList {
+                                // This is a simplified approach - in a real implementation,
+                                // we'd need to track which section is selected
+                                // For now, just toggle the first section as a demo
+                                if let Some(ref cached_info) = app.cached_current_book_info {
+                                    if !cached_info.sections.is_empty() {
+                                        let section_title = cached_info.sections[0].title.clone();
+                                        app.toggle_section_expansion(&section_title);
+                                    }
+                                }
                             }
                         }
                         KeyCode::Tab => {

@@ -20,6 +20,7 @@ mod text_generator;
 mod text_reader;
 mod text_selection;
 mod theme;
+mod toc_parser;
 
 #[cfg(test)]
 mod test_utils;

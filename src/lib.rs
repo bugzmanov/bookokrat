@@ -9,6 +9,7 @@ pub mod text_generator;
 pub mod text_reader;
 pub mod text_selection;
 pub mod theme;
+pub mod toc_parser;
 
 pub mod test_utils;
 

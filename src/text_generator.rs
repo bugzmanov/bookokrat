@@ -1,3 +1,5 @@
+use crate::book_list::TocEntry;
+use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
 use log::{debug, warn};
 use regex::Regex;
@@ -12,6 +14,7 @@ pub struct TextGenerator {
     multi_newline_re: Regex,
     leading_space_re: Regex,
     line_leading_space_re: Regex,
+    toc_parser: TocParser,
 }
 
 impl TextGenerator {
@@ -28,6 +31,7 @@ impl TextGenerator {
             leading_space_re: Regex::new(r"^ +").expect("Failed to compile leading space regex"),
             line_leading_space_re: Regex::new(r"\n +")
                 .expect("Failed to compile line leading space regex"),
+            toc_parser: TocParser::new(),
         }
     }
 
@@ -48,6 +52,52 @@ impl TextGenerator {
             }
         }
         None
+    }
+
+    /// Check if this chapter is a section header by comparing its href with the TOC structure
+    /// A chapter is a section header if it appears in the TOC and has children
+    pub fn is_section_header(&self, chapter_href: &str, toc_entries: &[TocEntry]) -> bool {
+        self.find_entry_with_children(chapter_href, toc_entries)
+    }
+
+    /// Recursively search for an entry with the given href that has children
+    fn find_entry_with_children(&self, href: &str, entries: &[TocEntry]) -> bool {
+        for entry in entries {
+            // Normalize hrefs for comparison (remove leading ../ and ./)
+            let normalized_entry_href = self.normalize_href(&entry.href);
+            let normalized_target_href = self.normalize_href(href);
+
+            if normalized_entry_href == normalized_target_href && !entry.children.is_empty() {
+                return true;
+            }
+
+            // Also check children recursively
+            if self.find_entry_with_children(href, &entry.children) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Normalize href for comparison by removing relative path prefixes
+    fn normalize_href(&self, href: &str) -> String {
+        href.trim_start_matches("../")
+            .trim_start_matches("./")
+            .to_string()
+    }
+
+    /// Extract section title - will be handled by TOC parsing
+    pub fn extract_section_title(&self, html_content: &str) -> Option<String> {
+        // Fallback to regular chapter title extraction
+        self.extract_chapter_title(html_content)
+    }
+
+    /// Parse EPUB table of contents to get hierarchical structure
+    pub fn parse_toc_structure(
+        &self,
+        doc: &mut EpubDoc<BufReader<std::fs::File>>,
+    ) -> Vec<TocEntry> {
+        self.toc_parser.parse_toc_structure(doc)
     }
 
     pub fn process_chapter_content(
@@ -186,6 +236,52 @@ impl TextGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_section_header_with_toc_structure() {
+        let generator = TextGenerator::new();
+
+        // Create a sample TOC structure with sections and chapters
+        let toc_entries = vec![
+            TocEntry {
+                title: "Introduction".to_string(),
+                href: "Text/intro.html".to_string(),
+                children: vec![], // No children - not a section header
+            },
+            TocEntry {
+                title: "Chapter 1: Getting Started".to_string(),
+                href: "Text/chapter1.html".to_string(),
+                children: vec![
+                    // Has children - is a section header
+                    TocEntry {
+                        title: "1.1 Setup".to_string(),
+                        href: "Text/chapter1_1.html".to_string(),
+                        children: vec![],
+                    },
+                    TocEntry {
+                        title: "1.2 Configuration".to_string(),
+                        href: "Text/chapter1_2.html".to_string(),
+                        children: vec![],
+                    },
+                ],
+            },
+        ];
+
+        // Test that chapters without children are not section headers
+        assert!(!generator.is_section_header("Text/intro.html", &toc_entries));
+        assert!(!generator.is_section_header("Text/chapter1_1.html", &toc_entries));
+        assert!(!generator.is_section_header("Text/chapter1_2.html", &toc_entries));
+
+        // Test that chapters with children are section headers
+        assert!(generator.is_section_header("Text/chapter1.html", &toc_entries));
+
+        // Test href normalization (relative paths)
+        assert!(generator.is_section_header("../Text/chapter1.html", &toc_entries));
+        assert!(generator.is_section_header("./Text/chapter1.html", &toc_entries));
+
+        // Test non-existent hrefs
+        assert!(!generator.is_section_header("Text/nonexistent.html", &toc_entries));
+    }
 
     #[test]
     fn test_duplicate_title_removal() {
