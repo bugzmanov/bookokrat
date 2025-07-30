@@ -3,6 +3,7 @@ ideas to implement:
  - table of contents of a book
  - images in ghosty terminal
  - Recent books
+     - drop dates from book reads. and instead make a separate list of most recent read books
  - AI integreration
  - Mouse support: 
    - scroll
@@ -14,3 +15,5 @@ ideas to implement:
  - integration with GOODREADS
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - ASCII art animation
+
+

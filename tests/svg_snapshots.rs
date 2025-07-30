@@ -1713,3 +1713,70 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         },
     );
 }
+
+#[test]
+fn test_toc_navigation_bug_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load a book that has hierarchical TOC structure
+    if let Some(book_info) = app.book_manager.get_book_info(1) {
+        let path = book_info.path.clone();
+        app.load_epub(&path);
+    }
+
+    // Start with file list panel focused to show the TOC
+    app.focused_panel = bookrat::main_app::FocusedPanel::FileList;
+
+    // Draw initial state - should show book with expanded TOC
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Simulate pressing 'j' key 4 times to navigate down through TOC items
+    for _ in 0..4 {
+        app.handle_key_event(crossterm::event::KeyEvent {
+            code: crossterm::event::KeyCode::Char('j'),
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
+    }
+
+    // Draw the state after navigation
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_toc_navigation_bug.svg", &svg_output).unwrap();
+
+    // This test captures the TOC navigation bug:
+    // When a book is loaded with TOC visible in the left panel,
+    // the user should be able to navigate through the TOC items with j/k keys
+    // and select specific chapters with Enter key.
+    // Currently, only book selection works, not individual chapter selection.
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/toc_navigation_bug.svg"),
+        "test_toc_navigation_bug_svg",
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_toc_navigation_bug_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
+    );
+}

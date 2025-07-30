@@ -566,7 +566,8 @@ impl App {
             let _ = epub.set_current_page(original_chapter);
 
             // Convert to new ADT-based structure
-            let toc_items = BookList::convert_toc_to_items(&self.text_generator, &toc_entries, &chapter_map);
+            let toc_items =
+                BookList::convert_toc_to_items(&self.text_generator, &toc_entries, &chapter_map);
 
             self.cached_current_book_info = Some(CurrentBookInfo {
                 path: current_file.clone(),
@@ -684,6 +685,30 @@ impl App {
                 }
             } else {
                 info!("Already at first chapter");
+            }
+        }
+    }
+
+    /// Navigate to a specific chapter by index
+    pub fn goto_chapter(&mut self, chapter_index: usize) {
+        if let Some(doc) = &mut self.current_epub {
+            if chapter_index < self.total_chapters {
+                if doc.set_current_page(chapter_index).is_ok() {
+                    self.current_chapter = chapter_index;
+                    info!("Navigating to chapter: {}", self.current_chapter + 1);
+                    self.update_content();
+                    self.text_reader.reset_scroll();
+                    self.update_current_chapter_in_cache();
+                    self.save_bookmark_with_throttle(true);
+                } else {
+                    error!("Failed to navigate to chapter {}", chapter_index);
+                }
+            } else {
+                error!(
+                    "Chapter index {} out of range (max: {})",
+                    chapter_index,
+                    self.total_chapters - 1
+                );
             }
         }
     }
@@ -1235,6 +1260,138 @@ impl App {
 
         f.render_widget(help, area);
     }
+
+    /// Handle a single key event - useful for testing
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
+        self.handle_key_event_with_screen_height(key, None);
+    }
+
+    /// Handle a single key event with optional screen height for half-screen scrolling
+    pub fn handle_key_event_with_screen_height(&mut self, key: crossterm::event::KeyEvent, screen_height: Option<usize>) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        
+        match key.code {
+            KeyCode::Char('j') => {
+                // Navigate based on focused panel
+                if self.focused_panel == FocusedPanel::FileList {
+                    let current_book_info = self.get_current_book_info().cloned();
+                    self.book_list.move_selection_down_with_toc(
+                        &self.book_manager,
+                        current_book_info.as_ref(),
+                    );
+                } else {
+                    self.scroll_down();
+                }
+            }
+            KeyCode::Char('k') => {
+                // Navigate based on focused panel
+                if self.focused_panel == FocusedPanel::FileList {
+                    let current_book_info = self.get_current_book_info().cloned();
+                    self.book_list.move_selection_up_with_toc(
+                        &self.book_manager,
+                        current_book_info.as_ref(),
+                    );
+                } else {
+                    self.scroll_up();
+                }
+            }
+            KeyCode::Char('h') => {
+                // Always allow chapter navigation
+                self.prev_chapter();
+            }
+            KeyCode::Char('l') => {
+                // Always allow chapter navigation
+                self.next_chapter();
+            }
+            KeyCode::Char('o') => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // Ctrl+O: Open current EPUB with system viewer
+                    self.open_with_system_viewer();
+                }
+            }
+            KeyCode::Enter => {
+                // Handle selection based on what's currently selected
+                let current_book_info = self.get_current_book_info().cloned();
+
+                // Check if we're selecting a TOC item
+                if let Some(selected_toc_item) =
+                    self.book_list.get_selected_toc_item(current_book_info.as_ref())
+                {
+                    // Navigate to the selected chapter from TOC
+                    if let Some(chapter_index) = selected_toc_item.chapter_index() {
+                        self.goto_chapter(chapter_index);
+                        self.focused_panel = FocusedPanel::Content;
+                    } else {
+                        // This is a section without content, just toggle expansion
+                        // TODO: Implement section expansion toggle
+                    }
+                } else {
+                    // Select book from file list
+                    if let Some(book_info) =
+                        self.book_manager.get_book_info(self.book_list.selected)
+                    {
+                        let path = book_info.path.clone();
+                        // Save bookmark for current file before switching
+                        self.save_bookmark_with_throttle(true);
+                        self.load_epub(&path);
+                        // Reset TOC selection when loading new book
+                        self.book_list.reset_toc_selection();
+                        // Switch focus to content after loading
+                        self.focused_panel = FocusedPanel::Content;
+                    }
+                }
+            }
+            KeyCode::Char(' ') => {
+                // Toggle section expansion when focused on file list
+                if self.focused_panel == FocusedPanel::FileList {
+                    // This is a simplified approach - in a real implementation,
+                    // we'd need to track which section is selected
+                    // For now, just toggle the first section as a demo
+                    if let Some(ref cached_info) = self.cached_current_book_info {
+                        if !cached_info.sections.is_empty() {
+                            let section_title = cached_info.sections[0].title.clone();
+                            self.toggle_section_expansion(&section_title);
+                        }
+                    }
+                }
+            }
+            KeyCode::Tab => {
+                // Switch focus between panels
+                self.focused_panel = match self.focused_panel {
+                    FocusedPanel::FileList => FocusedPanel::Content,
+                    FocusedPanel::Content => FocusedPanel::FileList,
+                };
+            }
+            KeyCode::Char('d') => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if let Some(visible_height) = screen_height {
+                        self.scroll_half_screen_down(visible_height);
+                    }
+                }
+            }
+            KeyCode::Char('u') => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if let Some(visible_height) = screen_height {
+                        self.scroll_half_screen_up(visible_height);
+                    }
+                }
+            }
+            KeyCode::Char('c') => {
+                // Handle copy
+                if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
+                    debug!("Copy failed: {}", e);
+                }
+            }
+            KeyCode::Esc => {
+                if self.text_reader.has_text_selection() {
+                    // Clear text selection when ESC is pressed
+                    self.text_reader.clear_selection();
+                    debug!("Text selection cleared via ESC key");
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
@@ -1275,101 +1432,12 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             app.save_bookmark_with_throttle(true);
                             should_quit = true;
                         }
-                        KeyCode::Char('j') => {
-                            // Navigate based on focused panel
-                            if app.focused_panel == FocusedPanel::FileList {
-                                app.book_list.move_selection_down(&app.book_manager);
-                            } else {
-                                app.scroll_down();
-                            }
+                        _ => {
+                            // Calculate screen height for half-screen scrolling commands
+                            let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                            // Handle all keys through the common handler
+                            app.handle_key_event_with_screen_height(key, Some(visible_height));
                         }
-                        KeyCode::Char('k') => {
-                            // Navigate based on focused panel
-                            if app.focused_panel == FocusedPanel::FileList {
-                                app.book_list.move_selection_up();
-                            } else {
-                                app.scroll_up();
-                            }
-                        }
-                        KeyCode::Char('h') => {
-                            // Always allow chapter navigation
-                            app.prev_chapter();
-                        }
-                        KeyCode::Char('l') => {
-                            // Always allow chapter navigation
-                            app.next_chapter();
-                        }
-                        KeyCode::Char('o') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                // Ctrl+O: Open current EPUB with system viewer
-                                app.open_with_system_viewer();
-                            }
-                        }
-                        KeyCode::Enter => {
-                            // Select book from file list (works from any panel)
-                            if let Some(book_info) =
-                                app.book_manager.get_book_info(app.book_list.selected)
-                            {
-                                let path = book_info.path.clone();
-                                // Save bookmark for current file before switching
-                                app.save_bookmark_with_throttle(true);
-                                app.load_epub(&path);
-                                // Switch focus to content after loading
-                                app.focused_panel = FocusedPanel::Content;
-                            }
-                        }
-                        KeyCode::Char(' ') => {
-                            // Toggle section expansion when focused on file list
-                            if app.focused_panel == FocusedPanel::FileList {
-                                // This is a simplified approach - in a real implementation,
-                                // we'd need to track which section is selected
-                                // For now, just toggle the first section as a demo
-                                if let Some(ref cached_info) = app.cached_current_book_info {
-                                    if !cached_info.sections.is_empty() {
-                                        let section_title = cached_info.sections[0].title.clone();
-                                        app.toggle_section_expansion(&section_title);
-                                    }
-                                }
-                            }
-                        }
-                        KeyCode::Tab => {
-                            // Switch focus between panels
-                            app.focused_panel = match app.focused_panel {
-                                FocusedPanel::FileList => FocusedPanel::Content,
-                                FocusedPanel::Content => FocusedPanel::FileList,
-                            };
-                        }
-                        KeyCode::Char('d') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                // Get the visible height for half-screen calculation
-                                let visible_height =
-                                    terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                                app.scroll_half_screen_down(visible_height);
-                            }
-                        }
-                        KeyCode::Char('u') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                // Get the visible height for half-screen calculation
-                                let visible_height =
-                                    terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                                app.scroll_half_screen_up(visible_height);
-                            }
-                        }
-                        KeyCode::Char('c') => {
-                            // Handle 'c' with any modifiers (c, Ctrl+C, Cmd+C, etc.) for copy functionality
-                            debug!("Copy key 'c' pressed with modifiers: {:?}", key.modifiers);
-                            if let Err(e) = app.text_reader.copy_selection_to_clipboard() {
-                                debug!("Copy failed: {}", e);
-                            }
-                        }
-                        KeyCode::Esc => {
-                            if app.text_reader.has_text_selection() {
-                                // Clear text selection when ESC is pressed
-                                app.text_reader.clear_selection();
-                                debug!("Text selection cleared via ESC key");
-                            }
-                        }
-                        _ => {}
                     }
                 }
                 _ => {}
@@ -1406,6 +1474,4 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 }
 
 #[cfg(test)]
-mod tests {
-
-}
+mod tests {}

@@ -3,7 +3,6 @@ use crate::bookmark::Bookmarks;
 use crate::text_generator::TextGenerator;
 use crate::theme::Base16Palette;
 use log::debug;
-use std::collections::HashMap;
 use ratatui::{
     layout::Rect,
     style::Style,
@@ -11,6 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
     Frame,
 };
+use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct ChapterInfo {
@@ -107,13 +107,14 @@ pub struct CurrentBookInfo {
     pub path: String,
     pub chapters: Vec<ChapterInfo>, // Keep for backward compatibility
     pub sections: Vec<SectionInfo>, // Old hierarchical structure - keep for compatibility
-    pub toc_items: Vec<TocItem>, // New ADT-based hierarchical structure
+    pub toc_items: Vec<TocItem>,    // New ADT-based hierarchical structure
     pub current_chapter: usize,
 }
 
 pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
+    pub toc_selected: Option<usize>, // Index of selected TOC item when book is open
 }
 
 impl BookList {
@@ -128,6 +129,7 @@ impl BookList {
         Self {
             selected: 0,
             list_state,
+            toc_selected: None,
         }
     }
 
@@ -148,6 +150,180 @@ impl BookList {
     pub fn set_selection_to_index(&mut self, index: usize) {
         self.selected = index;
         self.list_state.select(Some(index));
+    }
+
+    /// Move selection down considering both books and TOC items
+    pub fn move_selection_down_with_toc(
+        &mut self,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) {
+        let total_items = self.count_total_visible_items(book_manager, current_book_info);
+        let current_selection = self.get_current_list_selection(book_manager, current_book_info);
+
+        if current_selection + 1 < total_items {
+            self.set_list_selection(current_selection + 1, book_manager, current_book_info);
+        }
+    }
+
+    /// Move selection up considering both books and TOC items
+    pub fn move_selection_up_with_toc(
+        &mut self,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) {
+        let current_selection = self.get_current_list_selection(book_manager, current_book_info);
+
+        if current_selection > 0 {
+            self.set_list_selection(current_selection - 1, book_manager, current_book_info);
+        }
+    }
+
+    /// Get the current unified selection index (books + TOC items)
+    fn get_current_list_selection(
+        &self,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) -> usize {
+        // If we're selecting a TOC item, return book count + toc selection
+        if let (Some(toc_selected), Some(current_book)) = (self.toc_selected, current_book_info) {
+            let book_index = book_manager
+                .books
+                .iter()
+                .position(|book| book.path == current_book.path)
+                .unwrap_or(0);
+            return book_index + 1 + toc_selected;
+        }
+
+        // Otherwise return book selection
+        self.selected
+    }
+
+    /// Set the unified selection index, updating either book or TOC selection
+    fn set_list_selection(
+        &mut self,
+        index: usize,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) {
+        let book_count = book_manager.book_count();
+
+        if index < book_count {
+            // Selecting a book
+            self.selected = index;
+            self.toc_selected = None;
+            self.list_state.select(Some(index));
+        } else if let Some(current_book) = current_book_info {
+            // Selecting a TOC item
+            let book_index = book_manager
+                .books
+                .iter()
+                .position(|book| book.path == current_book.path)
+                .unwrap_or(0);
+            let toc_start = book_index + 1;
+            let toc_index = index - toc_start;
+            let total_toc_items = self.count_toc_items(&current_book.toc_items);
+
+            if toc_index < total_toc_items {
+                self.selected = book_index;
+                self.toc_selected = Some(toc_index);
+                self.list_state.select(Some(index));
+            }
+        }
+    }
+
+    /// Count total visible items (books + expanded TOC items)
+    fn count_total_visible_items(
+        &self,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) -> usize {
+        let mut total = book_manager.book_count();
+
+        if let Some(current_book) = current_book_info {
+            total += self.count_toc_items(&current_book.toc_items);
+        }
+
+        total
+    }
+
+    /// Count visible TOC items (considering expansion state)
+    fn count_toc_items(&self, toc_items: &[TocItem]) -> usize {
+        let mut count = 0;
+        for item in toc_items {
+            count += 1; // Count the item itself
+            match item {
+                TocItem::Section {
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    if *is_expanded {
+                        count += self.count_toc_items(children);
+                    }
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+        count
+    }
+
+    /// Get the selected TOC item if any
+    pub fn get_selected_toc_item<'a>(
+        &self,
+        current_book_info: Option<&'a CurrentBookInfo>,
+    ) -> Option<&'a TocItem> {
+        if let (Some(toc_index), Some(current_book)) = (self.toc_selected, current_book_info) {
+            return self.get_toc_item_by_index(&current_book.toc_items, toc_index);
+        }
+        None
+    }
+
+    /// Get TOC item by flat index
+    fn get_toc_item_by_index<'a>(
+        &self,
+        toc_items: &'a [TocItem],
+        target_index: usize,
+    ) -> Option<&'a TocItem> {
+        self.get_toc_item_by_index_helper(toc_items, target_index, &mut 0)
+    }
+
+    fn get_toc_item_by_index_helper<'a>(
+        &self,
+        toc_items: &'a [TocItem],
+        target_index: usize,
+        current_index: &mut usize,
+    ) -> Option<&'a TocItem> {
+        for item in toc_items {
+            if *current_index == target_index {
+                return Some(item);
+            }
+            *current_index += 1;
+
+            match item {
+                TocItem::Section {
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    if *is_expanded {
+                        if let Some(child_item) =
+                            self.get_toc_item_by_index_helper(children, target_index, current_index)
+                        {
+                            return Some(child_item);
+                        }
+                    }
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+
+        None
+    }
+
+    /// Reset TOC selection when switching books
+    pub fn reset_toc_selection(&mut self) {
+        self.toc_selected = None;
     }
 
     pub fn render(
@@ -195,7 +371,15 @@ impl BookList {
                 if current_book.path == book_info.path {
                     // Prefer new ADT-based structure, fall back to old structure, then flat chapters
                     if !current_book.toc_items.is_empty() {
-                        self.render_toc_items(current_book, &mut items, palette, &current_book.toc_items, 0);
+                        let mut toc_item_index = 0;
+                        self.render_toc_items(
+                            current_book,
+                            &mut items,
+                            palette,
+                            &current_book.toc_items,
+                            0,
+                            &mut toc_item_index,
+                        );
                     } else if !current_book.sections.is_empty() {
                         self.render_hierarchical_chapters(current_book, &mut items, palette);
                     } else {
@@ -286,12 +470,18 @@ impl BookList {
         palette: &Base16Palette,
         toc_items: &[TocItem],
         indent_level: usize,
+        toc_item_index: &mut usize,
     ) {
         for item in toc_items {
+            let is_selected_toc_item = self.toc_selected == Some(*toc_item_index);
+
             match item {
                 TocItem::Chapter { title, index, .. } => {
                     // Render a simple chapter
-                    let chapter_style = if *index == current_book.current_chapter {
+                    let chapter_style = if is_selected_toc_item {
+                        Style::default().fg(palette.base_0f).bg(palette.base_01)
+                    // Highlight selected TOC item
+                    } else if *index == current_book.current_chapter {
                         Style::default().fg(palette.base_08) // Highlight current chapter
                     } else {
                         Style::default().fg(palette.base_03) // Dimmer for other chapters
@@ -303,13 +493,22 @@ impl BookList {
                         chapter_style,
                     )]);
                     items.push(ListItem::new(chapter_content));
-                },
-                TocItem::Section { title, index, children, is_expanded, .. } => {
+                }
+                TocItem::Section {
+                    title,
+                    index,
+                    children,
+                    is_expanded,
+                    ..
+                } => {
                     // Render section header with expand/collapse indicator
                     let section_icon = if *is_expanded { "▼" } else { "▶" };
-                    
-                    // Determine the style based on whether this section is also a readable chapter
-                    let section_style = if let Some(section_index) = index {
+
+                    // Determine the style based on selection and current chapter
+                    let section_style = if is_selected_toc_item {
+                        Style::default().fg(palette.base_0f).bg(palette.base_01)
+                    // Highlight selected TOC item
+                    } else if let Some(section_index) = index {
                         if *section_index == current_book.current_chapter {
                             Style::default().fg(palette.base_08) // Highlight if current chapter
                         } else {
@@ -326,12 +525,25 @@ impl BookList {
                     )]);
                     items.push(ListItem::new(section_content));
 
+                    *toc_item_index += 1; // Increment for the section itself
+
                     // Render children if expanded
                     if *is_expanded {
-                        self.render_toc_items(current_book, items, palette, children, indent_level + 1);
+                        self.render_toc_items(
+                            current_book,
+                            items,
+                            palette,
+                            children,
+                            indent_level + 1,
+                            toc_item_index,
+                        );
                     }
+
+                    continue; // Skip the increment at the end of the loop since we already did it
                 }
             }
+
+            *toc_item_index += 1;
         }
     }
 
@@ -492,8 +704,12 @@ impl BookList {
                     });
                 } else {
                     // This is a section with children - recursively convert children
-                    let children = Self::convert_toc_to_items(text_generator, &toc_entry.children, chapter_map);
-                    
+                    let children = Self::convert_toc_to_items(
+                        text_generator,
+                        &toc_entry.children,
+                        chapter_map,
+                    );
+
                     items.push(TocItem::Section {
                         title: toc_entry.title.clone(),
                         href: Some(toc_entry.href.clone()),
@@ -507,11 +723,15 @@ impl BookList {
                     "No matching chapter found for TOC entry '{}' with normalized href '{}'",
                     toc_entry.title, normalized_href
                 );
-                
+
                 // Even if we don't find a matching chapter, we should still include
                 // sections that might contain valid children
                 if !toc_entry.children.is_empty() {
-                    let children = Self::convert_toc_to_items(text_generator, &toc_entry.children, chapter_map);
+                    let children = Self::convert_toc_to_items(
+                        text_generator,
+                        &toc_entry.children,
+                        chapter_map,
+                    );
                     if !children.is_empty() {
                         items.push(TocItem::Section {
                             title: toc_entry.title.clone(),
@@ -717,8 +937,11 @@ mod tests {
         );
 
         // Test flat structure conversion
-        let flat_sections =
-            BookList::convert_toc_to_sections(&text_generator, &flat_toc_entries, &flat_chapter_map);
+        let flat_sections = BookList::convert_toc_to_sections(
+            &text_generator,
+            &flat_toc_entries,
+            &flat_chapter_map,
+        );
 
         // Verify flat structure creates single "Chapters" section
         assert_eq!(
@@ -937,104 +1160,260 @@ mod tests {
 
         // Create chapter map that matches yasno.epub structure
         let mut yasno_chapter_map = HashMap::new();
-        
+
         // Add standalone chapters
         yasno_chapter_map.insert(
             "Text/content2.html".to_string(),
-            (0, ChapterInfo { title: "Главное за пять минут".to_string(), index: 0, is_section_header: false }),
+            (
+                0,
+                ChapterInfo {
+                    title: "Главное за пять минут".to_string(),
+                    index: 0,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content4.html".to_string(),
-            (1, ChapterInfo { title: "Проклятие умных людей".to_string(), index: 1, is_section_header: false }),
+            (
+                1,
+                ChapterInfo {
+                    title: "Проклятие умных людей".to_string(),
+                    index: 1,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content5.html".to_string(),
-            (2, ChapterInfo { title: "Коротко — не значит ясно".to_string(), index: 2, is_section_header: false }),
+            (
+                2,
+                ChapterInfo {
+                    title: "Коротко — не значит ясно".to_string(),
+                    index: 2,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content6.html".to_string(),
-            (3, ChapterInfo { title: "Когда люди не читают текст".to_string(), index: 3, is_section_header: false }),
+            (
+                3,
+                ChapterInfo {
+                    title: "Когда люди не читают текст".to_string(),
+                    index: 3,
+                    is_section_header: false,
+                },
+            ),
         );
-        
+
         // Add Контекст section and its children
         yasno_chapter_map.insert(
             "Text/Section0002.html".to_string(),
-            (4, ChapterInfo { title: "Контекст".to_string(), index: 4, is_section_header: true }),
+            (
+                4,
+                ChapterInfo {
+                    title: "Контекст".to_string(),
+                    index: 4,
+                    is_section_header: true,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content9.html".to_string(),
-            (5, ChapterInfo { title: "Как еще влияет контекст".to_string(), index: 5, is_section_header: false }),
+            (
+                5,
+                ChapterInfo {
+                    title: "Как еще влияет контекст".to_string(),
+                    index: 5,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content11.html".to_string(),
-            (6, ChapterInfo { title: "Как это выглядит".to_string(), index: 6, is_section_header: false }),
+            (
+                6,
+                ChapterInfo {
+                    title: "Как это выглядит".to_string(),
+                    index: 6,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content13.html".to_string(),
-            (7, ChapterInfo { title: "Почему читатель пришел".to_string(), index: 7, is_section_header: false }),
+            (
+                7,
+                ChapterInfo {
+                    title: "Почему читатель пришел".to_string(),
+                    index: 7,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content15.html".to_string(),
-            (8, ChapterInfo { title: "Шаблоны".to_string(), index: 8, is_section_header: false }),
+            (
+                8,
+                ChapterInfo {
+                    title: "Шаблоны".to_string(),
+                    index: 8,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content17.html".to_string(),
-            (9, ChapterInfo { title: "Исправление контекста".to_string(), index: 9, is_section_header: false }),
+            (
+                9,
+                ChapterInfo {
+                    title: "Исправление контекста".to_string(),
+                    index: 9,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content20.html".to_string(),
-            (10, ChapterInfo { title: "Последнее слово о контексте".to_string(), index: 10, is_section_header: false }),
+            (
+                10,
+                ChapterInfo {
+                    title: "Последнее слово о контексте".to_string(),
+                    index: 10,
+                    is_section_header: false,
+                },
+            ),
         );
-        
+
         // Add Интерес section and its children
         yasno_chapter_map.insert(
             "Text/content21.html".to_string(),
-            (11, ChapterInfo { title: "Интерес".to_string(), index: 11, is_section_header: true }),
+            (
+                11,
+                ChapterInfo {
+                    title: "Интерес".to_string(),
+                    index: 11,
+                    is_section_header: true,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content23.html".to_string(),
-            (12, ChapterInfo { title: "Великое школьное искажение".to_string(), index: 12, is_section_header: false }),
+            (
+                12,
+                ChapterInfo {
+                    title: "Великое школьное искажение".to_string(),
+                    index: 12,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content25.html".to_string(),
-            (13, ChapterInfo { title: "Главный секрет внимания".to_string(), index: 13, is_section_header: false }),
+            (
+                13,
+                ChapterInfo {
+                    title: "Главный секрет внимания".to_string(),
+                    index: 13,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content26.html".to_string(),
-            (14, ChapterInfo { title: "Ответственность".to_string(), index: 14, is_section_header: false }),
+            (
+                14,
+                ChapterInfo {
+                    title: "Ответственность".to_string(),
+                    index: 14,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content28.html".to_string(),
-            (15, ChapterInfo { title: "Полезное действие для читателя".to_string(), index: 15, is_section_header: false }),
+            (
+                15,
+                ChapterInfo {
+                    title: "Полезное действие для читателя".to_string(),
+                    index: 15,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content29.html".to_string(),
-            (16, ChapterInfo { title: "Прагматика".to_string(), index: 16, is_section_header: false }),
+            (
+                16,
+                ChapterInfo {
+                    title: "Прагматика".to_string(),
+                    index: 16,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content30.html".to_string(),
-            (17, ChapterInfo { title: "Социальное".to_string(), index: 17, is_section_header: false }),
+            (
+                17,
+                ChapterInfo {
+                    title: "Социальное".to_string(),
+                    index: 17,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content31.html".to_string(),
-            (18, ChapterInfo { title: "Эмоциональное".to_string(), index: 18, is_section_header: false }),
+            (
+                18,
+                ChapterInfo {
+                    title: "Эмоциональное".to_string(),
+                    index: 18,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content32.html".to_string(),
-            (19, ChapterInfo { title: "Всё о себе да о себе".to_string(), index: 19, is_section_header: false }),
+            (
+                19,
+                ChapterInfo {
+                    title: "Всё о себе да о себе".to_string(),
+                    index: 19,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content33.html".to_string(),
-            (20, ChapterInfo { title: "Работа с темой статьи".to_string(), index: 20, is_section_header: false }),
+            (
+                20,
+                ChapterInfo {
+                    title: "Работа с темой статьи".to_string(),
+                    index: 20,
+                    is_section_header: false,
+                },
+            ),
         );
 
         // Test the conversion
-        let sections = BookList::convert_toc_to_sections(&text_generator, &yasno_toc_entries, &yasno_chapter_map);
+        let sections = BookList::convert_toc_to_sections(
+            &text_generator,
+            &yasno_toc_entries,
+            &yasno_chapter_map,
+        );
 
         // Print debug info to see what we're getting
         println!("Yasno.epub test - Generated {} sections:", sections.len());
         for (i, section) in sections.iter().enumerate() {
-            println!("  Section {}: '{}' with {} chapters", i, section.title, section.chapters.len());
+            println!(
+                "  Section {}: '{}' with {} chapters",
+                i,
+                section.title,
+                section.chapters.len()
+            );
             for (j, chapter) in section.chapters.iter().enumerate() {
                 println!("    Chapter {}.{}: '{}'", i, j, chapter.title);
             }
@@ -1043,40 +1422,48 @@ mod tests {
         // Expected structure based on ClearView screenshot:
         // 1. Standalone chapters should each get their own section
         // 2. Hierarchical sections should be preserved with children
-        
+
         // Should have 6 sections total:
         // 1. "Главное за пять минут" (standalone)
-        // 2. "Проклятие умных людей" (standalone) 
+        // 2. "Проклятие умных людей" (standalone)
         // 3. "Коротко — не значит ясно" (standalone)
         // 4. "Когда люди не читают текст" (standalone)
         // 5. "Контекст" (with 7 chapters: section header + 6 children)
         // 6. "Интерес" (with 10 chapters: section header + 9 children)
-        
+
         assert_eq!(sections.len(), 6, "Should have 6 sections total");
-        
+
         // Check standalone chapters
         assert_eq!(sections[0].title, "Главное за пять минут");
         assert_eq!(sections[0].chapters.len(), 1);
-        
+
         assert_eq!(sections[1].title, "Проклятие умных людей");
         assert_eq!(sections[1].chapters.len(), 1);
-        
+
         assert_eq!(sections[2].title, "Коротко — не значит ясно");
         assert_eq!(sections[2].chapters.len(), 1);
-        
+
         assert_eq!(sections[3].title, "Когда люди не читают текст");
         assert_eq!(sections[3].chapters.len(), 1);
-        
+
         // Check Контекст section (should have section header + 6 children = 7 total)
         assert_eq!(sections[4].title, "Контекст");
-        assert_eq!(sections[4].chapters.len(), 7, "Контекст should have 7 chapters (header + 6 children)");
+        assert_eq!(
+            sections[4].chapters.len(),
+            7,
+            "Контекст should have 7 chapters (header + 6 children)"
+        );
         assert_eq!(sections[4].chapters[0].title, "Контекст"); // Section header
         assert_eq!(sections[4].chapters[1].title, "Как еще влияет контекст"); // First child
         assert_eq!(sections[4].chapters[6].title, "Последнее слово о контексте"); // Last child
-        
+
         // Check Интерес section (should have section header + 9 children = 10 total)
         assert_eq!(sections[5].title, "Интерес");
-        assert_eq!(sections[5].chapters.len(), 10, "Интерес should have 10 chapters (header + 9 children)");
+        assert_eq!(
+            sections[5].chapters.len(),
+            10,
+            "Интерес should have 10 chapters (header + 9 children)"
+        );
         assert_eq!(sections[5].chapters[0].title, "Интерес"); // Section header
         assert_eq!(sections[5].chapters[1].title, "Великое школьное искажение"); // First child
         assert_eq!(sections[5].chapters[9].title, "Работа с темой статьи"); // Last child
@@ -1122,27 +1509,63 @@ mod tests {
         let mut yasno_chapter_map = HashMap::new();
         yasno_chapter_map.insert(
             "Text/content2.html".to_string(),
-            (0, ChapterInfo { title: "Главное за пять минут".to_string(), index: 0, is_section_header: false }),
+            (
+                0,
+                ChapterInfo {
+                    title: "Главное за пять минут".to_string(),
+                    index: 0,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content4.html".to_string(),
-            (1, ChapterInfo { title: "Проклятие умных людей".to_string(), index: 1, is_section_header: false }),
+            (
+                1,
+                ChapterInfo {
+                    title: "Проклятие умных людей".to_string(),
+                    index: 1,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/Section0002.html".to_string(),
-            (2, ChapterInfo { title: "Контекст".to_string(), index: 2, is_section_header: true }),
+            (
+                2,
+                ChapterInfo {
+                    title: "Контекст".to_string(),
+                    index: 2,
+                    is_section_header: true,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content9.html".to_string(),
-            (3, ChapterInfo { title: "Как еще влияет контекст".to_string(), index: 3, is_section_header: false }),
+            (
+                3,
+                ChapterInfo {
+                    title: "Как еще влияет контекст".to_string(),
+                    index: 3,
+                    is_section_header: false,
+                },
+            ),
         );
         yasno_chapter_map.insert(
             "Text/content11.html".to_string(),
-            (4, ChapterInfo { title: "Как это выглядит".to_string(), index: 4, is_section_header: false }),
+            (
+                4,
+                ChapterInfo {
+                    title: "Как это выглядит".to_string(),
+                    index: 4,
+                    is_section_header: false,
+                },
+            ),
         );
 
         // Test the ADT conversion
-        let toc_items = BookList::convert_toc_to_items(&text_generator, &yasno_toc_entries, &yasno_chapter_map);
+        let toc_items =
+            BookList::convert_toc_to_items(&text_generator, &yasno_toc_entries, &yasno_chapter_map);
 
         // Should have 3 items: 2 chapters + 1 section
         assert_eq!(toc_items.len(), 3);
@@ -1167,7 +1590,12 @@ mod tests {
 
         // Third item: section with children (should NOT duplicate the section as a child)
         match &toc_items[2] {
-            TocItem::Section { title, index, children, .. } => {
+            TocItem::Section {
+                title,
+                index,
+                children,
+                ..
+            } => {
                 assert_eq!(title, "Контекст");
                 assert_eq!(*index, Some(2)); // Section is readable
                 assert_eq!(children.len(), 2); // Should have 2 children, NOT 3 (no duplication)
@@ -1199,25 +1627,48 @@ mod tests {
                 TocItem::Chapter { title, index, .. } => {
                     println!("  {}: Chapter '{}' (index: {})", i, title, index);
                 }
-                TocItem::Section { title, index, children, .. } => {
+                TocItem::Section {
+                    title,
+                    index,
+                    children,
+                    ..
+                } => {
                     let index_str = if let Some(idx) = index {
                         format!("index: {}", idx)
                     } else {
                         "not readable".to_string()
                     };
-                    println!("  {}: Section '{}' ({}) with {} children", i, title, index_str, children.len());
+                    println!(
+                        "  {}: Section '{}' ({}) with {} children",
+                        i,
+                        title,
+                        index_str,
+                        children.len()
+                    );
                     for (j, child) in children.iter().enumerate() {
                         match child {
                             TocItem::Chapter { title, index, .. } => {
                                 println!("    {}.{}: Chapter '{}' (index: {})", i, j, title, index);
                             }
-                            TocItem::Section { title, index, children, .. } => {
+                            TocItem::Section {
+                                title,
+                                index,
+                                children,
+                                ..
+                            } => {
                                 let index_str = if let Some(idx) = index {
                                     format!("index: {}", idx)
                                 } else {
                                     "not readable".to_string()
                                 };
-                                println!("    {}.{}: Section '{}' ({}) with {} children", i, j, title, index_str, children.len());
+                                println!(
+                                    "    {}.{}: Section '{}' ({}) with {} children",
+                                    i,
+                                    j,
+                                    title,
+                                    index_str,
+                                    children.len()
+                                );
                             }
                         }
                     }
