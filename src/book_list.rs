@@ -180,22 +180,45 @@ impl BookList {
     }
 
     /// Get the current unified selection index (books + TOC items)
-    fn get_current_list_selection(
+    pub fn get_current_list_selection(
         &self,
         book_manager: &BookManager,
         current_book_info: Option<&CurrentBookInfo>,
     ) -> usize {
-        // If we're selecting a TOC item, return book count + toc selection
+        // If we're selecting a TOC item, calculate based on the unified list structure
         if let (Some(toc_selected), Some(current_book)) = (self.toc_selected, current_book_info) {
-            let book_index = book_manager
+            let current_book_index = book_manager
                 .books
                 .iter()
                 .position(|book| book.path == current_book.path)
                 .unwrap_or(0);
-            return book_index + 1 + toc_selected;
+            
+            // TOC items start right after the current book
+            let toc_start = current_book_index + 1;
+            return toc_start + toc_selected;
         }
 
-        // Otherwise return book selection
+        // Otherwise, calculate book position in the unified list
+        if let Some(current_book) = current_book_info {
+            let current_book_index = book_manager
+                .books
+                .iter()
+                .position(|book| book.path == current_book.path)
+                .unwrap_or(0);
+            let total_toc_items = self.count_toc_items(&current_book.toc_items);
+            
+            if self.selected <= current_book_index {
+                // Selecting the current book or a book before it
+                return self.selected;
+            } else {
+                // Selecting a book after the current book - it comes after all TOC items
+                let toc_end = current_book_index + 1 + total_toc_items;
+                let books_after_current = self.selected - current_book_index - 1;
+                return toc_end + books_after_current;
+            }
+        }
+        
+        // No current book - simple book selection
         self.selected
     }
 
@@ -208,25 +231,47 @@ impl BookList {
     ) {
         let book_count = book_manager.book_count();
 
-        if index < book_count {
-            // Selecting a book
-            self.selected = index;
-            self.toc_selected = None;
-            self.list_state.select(Some(index));
-        } else if let Some(current_book) = current_book_info {
-            // Selecting a TOC item
-            let book_index = book_manager
+        // Handle navigation through the unified list structure:
+        // Books and TOC items are interleaved based on which book is currently opened
+        if let Some(current_book) = current_book_info {
+            let current_book_index = book_manager
                 .books
                 .iter()
                 .position(|book| book.path == current_book.path)
                 .unwrap_or(0);
-            let toc_start = book_index + 1;
-            let toc_index = index - toc_start;
             let total_toc_items = self.count_toc_items(&current_book.toc_items);
-
-            if toc_index < total_toc_items {
-                self.selected = book_index;
+            
+            // Calculate boundaries in the unified list
+            let current_book_start = current_book_index;
+            let toc_start = current_book_start + 1;
+            let toc_end = toc_start + total_toc_items;
+            
+            if index < toc_start {
+                // Selecting a book before the current book (or the current book itself)
+                self.selected = index;
+                self.toc_selected = None;
+                self.list_state.select(Some(index));
+            } else if index < toc_end {
+                // Selecting a TOC item within the current book
+                let toc_index = index - toc_start;
+                self.selected = current_book_index;
                 self.toc_selected = Some(toc_index);
+                self.list_state.select(Some(index));
+            } else {
+                // Selecting a book after the current book's TOC
+                let books_after_toc = index - toc_end;
+                let target_book_index = current_book_index + 1 + books_after_toc;
+                if target_book_index < book_count {
+                    self.selected = target_book_index;
+                    self.toc_selected = None;
+                    self.list_state.select(Some(index));
+                }
+            }
+        } else {
+            // No current book - simple book selection
+            if index < book_count {
+                self.selected = index;
+                self.toc_selected = None;
                 self.list_state.select(Some(index));
             }
         }
@@ -278,6 +323,7 @@ impl BookList {
         }
         None
     }
+
 
     /// Get TOC item by flat index
     fn get_toc_item_by_index<'a>(

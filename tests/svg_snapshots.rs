@@ -222,7 +222,18 @@ fn test_fake_books_file_list_svg() {
     app.press_key(crossterm::event::KeyCode::Enter); // Select first book (Digital Frontier)
     app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
 
-    app.press_char_times('j', DIGITAL_FRONTIER_CHAPTERS + 2);
+    app.press_char_times('j', DIGITAL_FRONTIER_CHAPTERS + 1);
+
+    app.press_key(crossterm::event::KeyCode::Enter); // Select first book (Digital Frontier)
+
+    // Quick debug to check final navigation state
+    let final_selection = app
+        .book_list
+        .get_current_list_selection(&app.book_manager, app.get_current_book_info());
+    println!(
+        "Final selection: {}, selected book: {}",
+        final_selection, app.book_list.selected
+    );
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);
