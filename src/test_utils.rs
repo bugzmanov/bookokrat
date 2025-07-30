@@ -1,5 +1,6 @@
 pub mod test_helpers {
     use crate::event_source::{Event, KeyCode, KeyEvent, KeyModifiers, SimulatedEventSource};
+    use crate::simple_fake_books::create_test_books_in_dir;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -149,6 +150,56 @@ pub mod test_helpers {
             Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
             false,                  // Don't auto-load recent books
         )
+    }
+
+    /// Creates temporary fake EPUB files for testing
+    pub struct TempBookManager {
+        temp_dir: tempfile::TempDir,
+        book_paths: Vec<String>,
+    }
+
+    impl TempBookManager {
+        pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+            let temp_dir = tempfile::TempDir::new()?;
+            let book_paths = create_test_books_in_dir(temp_dir.path())?;
+
+            Ok(Self {
+                temp_dir,
+                book_paths,
+            })
+        }
+
+        /// Get the temporary directory path
+        pub fn get_directory(&self) -> String {
+            self.temp_dir.path().to_string_lossy().to_string()
+        }
+
+        /// Get book paths that were created
+        pub fn get_book_paths(&self) -> &[String] {
+            &self.book_paths
+        }
+    }
+
+    impl Default for TempBookManager {
+        fn default() -> Self {
+            Self::new().expect("Failed to create temporary directory")
+        }
+    }
+
+    /// Create a test App instance with fake books for consistent testing
+    /// - Uses temporary directory with fake EPUB files
+    /// - No bookmark file (starts with empty bookmarks)
+    /// - No auto-loading of recent books
+    pub fn create_test_app_with_fake_books() -> (crate::App, TempBookManager) {
+        let temp_manager = TempBookManager::new().expect("Failed to create temp books");
+
+        let app = crate::App::new_with_config(
+            Some(&temp_manager.get_directory()), // Use temporary directory with fake books
+            Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
+            false,                               // Don't auto-load recent books
+        );
+
+        (app, temp_manager)
     }
 }
 

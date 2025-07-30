@@ -5,6 +5,8 @@ pub mod bookmark;
 pub mod event_source;
 pub mod main_app;
 pub mod panic_handler;
+pub mod simple_fake_books;
+pub mod system_command;
 pub mod text_generator;
 pub mod text_reader;
 pub mod text_selection;

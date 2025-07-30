@@ -1,4 +1,4 @@
-use bookrat::test_utils::test_helpers::create_test_terminal;
+use bookrat::test_utils::test_helpers::{create_test_app_with_fake_books, create_test_terminal};
 // SVG snapshot tests using snapbox
 use bookrat::App;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -17,6 +17,85 @@ fn ensure_test_report_initialized() {
     INIT.call_once(|| {
         test_report::init_test_report();
     });
+}
+
+/// Helper trait for simpler key event handling in tests
+trait TestKeyEventHandler {
+    fn press_key(&mut self, key: crossterm::event::KeyCode);
+    fn press_keys(&mut self, keys: &[crossterm::event::KeyCode]);
+    fn press_char_times(&mut self, ch: char, times: usize);
+    fn press_sequence(&mut self, sequence: &[KeyAction]);
+}
+
+/// Represents different types of key press actions for test sequences
+#[derive(Clone)]
+enum KeyAction {
+    /// Single key press
+    Key(crossterm::event::KeyCode),
+    /// Character repeated multiple times
+    CharTimes(char, usize),
+    /// Multiple key presses
+    Keys(Vec<crossterm::event::KeyCode>),
+}
+
+impl TestKeyEventHandler for App {
+    fn press_key(&mut self, key: crossterm::event::KeyCode) {
+        self.handle_key_event(crossterm::event::KeyEvent {
+            code: key,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
+    }
+
+    fn press_keys(&mut self, keys: &[crossterm::event::KeyCode]) {
+        for key in keys {
+            self.press_key(*key);
+        }
+    }
+
+    fn press_char_times(&mut self, ch: char, times: usize) {
+        for _ in 0..times {
+            self.press_key(crossterm::event::KeyCode::Char(ch));
+        }
+    }
+
+    /// Execute a sequence of different key actions
+    fn press_sequence(&mut self, sequence: &[KeyAction]) {
+        for action in sequence {
+            match action {
+                KeyAction::Key(key) => self.press_key(*key),
+                KeyAction::CharTimes(ch, times) => self.press_char_times(*ch, *times),
+                KeyAction::Keys(keys) => self.press_keys(keys),
+            }
+        }
+    }
+}
+
+/// Helper function to create standard test failure handler
+fn create_test_failure_handler(
+    test_name: &str,
+) -> impl FnOnce(String, String, String, usize, usize, usize, Option<usize>) + '_ {
+    move |expected,
+          actual,
+          snapshot_path,
+          expected_lines,
+          actual_lines,
+          diff_count,
+          first_diff_line| {
+        test_report::TestReport::add_failure(test_report::TestFailure {
+            test_name: test_name.to_string(),
+            expected,
+            actual,
+            line_stats: test_report::LineStats {
+                expected_lines,
+                actual_lines,
+                diff_count,
+                first_diff_line,
+            },
+            snapshot_path,
+        });
+    }
 }
 
 // Convert terminal to SVG (directly in test file to access anstyle_svg)
@@ -114,6 +193,35 @@ fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
 }
 
 #[test]
+fn test_fake_books_file_list_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let (mut app, _temp_manager) = create_test_app_with_fake_books();
+
+    app.press_key(crossterm::event::KeyCode::Enter);
+    app.press_key(crossterm::event::KeyCode::Tab);
+    app.press_char_times('j', 35);
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_fake_books_file_list.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/fake_books_file_list.svg"),
+        "test_fake_books_file_list_svg",
+        create_test_failure_handler("test_fake_books_file_list_svg"),
+    );
+}
+
+#[test]
 fn test_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
@@ -126,32 +234,11 @@ fn test_file_list_svg() {
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write("tests/snapshots/debug_file_list.svg", &svg_output).unwrap();
 
-    // Use our custom assertion with visual diff
     assert_svg_snapshot(
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/file_list.svg"),
         "test_file_list_svg",
-        |expected,
-         actual,
-         snapshot_path,
-         expected_lines,
-         actual_lines,
-         diff_count,
-         first_diff_line| {
-            // Add to test report
-            test_report::TestReport::add_failure(test_report::TestFailure {
-                test_name: "test_file_list_svg".to_string(),
-                expected,
-                actual,
-                line_stats: test_report::LineStats {
-                    expected_lines,
-                    actual_lines,
-                    diff_count,
-                    first_diff_line,
-                },
-                snapshot_path,
-            });
-        },
+        create_test_failure_handler("test_file_list_svg"),
     );
 }
 
@@ -174,27 +261,7 @@ fn test_content_view_svg() {
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/content_view.svg"),
         "test_content_view_svg",
-        |expected,
-         actual,
-         snapshot_path,
-         expected_lines,
-         actual_lines,
-         diff_count,
-         first_diff_line| {
-            // Add to test report
-            test_report::TestReport::add_failure(test_report::TestFailure {
-                test_name: "test_content_view_svg".to_string(),
-                expected,
-                actual,
-                line_stats: test_report::LineStats {
-                    expected_lines,
-                    actual_lines,
-                    diff_count,
-                    first_diff_line,
-                },
-                snapshot_path,
-            });
-        },
+        create_test_failure_handler("test_content_view_svg"),
     );
 }
 
@@ -1733,14 +1800,7 @@ fn test_toc_navigation_bug_svg() {
     terminal.draw(|f| app.draw(f)).unwrap();
 
     // Simulate pressing 'j' key 4 times to navigate down through TOC items
-    for _ in 0..4 {
-        app.handle_key_event(crossterm::event::KeyEvent {
-            code: crossterm::event::KeyCode::Char('j'),
-            modifiers: crossterm::event::KeyModifiers::empty(),
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        });
-    }
+    app.press_char_times('j', 4);
 
     // Draw the state after navigation
     terminal.draw(|f| app.draw(f)).unwrap();

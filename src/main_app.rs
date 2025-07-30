@@ -2,13 +2,15 @@ use crate::book_list::{BookList, ChapterInfo, CurrentBookInfo, SectionInfo};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
+use crate::system_command::{
+    MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
+};
 use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 
 use std::{
     io::BufReader,
-    process::Command,
     time::{Duration, Instant},
 };
 
@@ -22,257 +24,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
-
-/// Trait for executing system commands (mockable for testing)
-pub trait SystemCommandExecutor {
-    fn open_file(&self, path: &str) -> Result<(), String>;
-    fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String>;
-
-    fn as_any(&self) -> &dyn std::any::Any;
-}
-
-/// Real system command executor
-pub struct RealSystemCommandExecutor;
-
-impl SystemCommandExecutor for RealSystemCommandExecutor {
-    fn open_file(&self, path: &str) -> Result<(), String> {
-        self.open_file_at_chapter(path, 0) // Default to opening without specific chapter
-    }
-
-    fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String> {
-        use std::path::PathBuf;
-
-        // Convert to absolute path
-        let absolute_path = if std::path::Path::new(path).is_absolute() {
-            PathBuf::from(path)
-        } else {
-            std::env::current_dir()
-                .map_err(|e| format!("Failed to get current directory: {}", e))?
-                .join(path)
-        };
-
-        // Check if file exists
-        if !absolute_path.exists() {
-            return Err(format!("File does not exist: {}", absolute_path.display()));
-        }
-
-        let absolute_path_str = absolute_path.to_string_lossy();
-
-        // Try to open with chapter-aware EPUB readers first, then fall back to default
-        let result = if cfg!(target_os = "macos") {
-            self.open_with_macos_epub_reader(absolute_path_str.as_ref(), chapter)
-                .or_else(|_| Command::new("open").arg(absolute_path_str.as_ref()).spawn())
-        } else if cfg!(target_os = "windows") {
-            self.open_with_windows_epub_reader(absolute_path_str.as_ref(), chapter)
-                .or_else(|_| {
-                    Command::new("cmd")
-                        .args(["/C", "start", "", absolute_path_str.as_ref()])
-                        .spawn()
-                })
-        } else {
-            // Linux and other Unix-like systems
-            self.open_with_linux_epub_reader(absolute_path_str.as_ref(), chapter)
-                .or_else(|_| {
-                    Command::new("xdg-open")
-                        .arg(absolute_path_str.as_ref())
-                        .spawn()
-                })
-        };
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!(
-                "Failed to open file '{}': {}",
-                absolute_path.display(),
-                e
-            )),
-        }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
-impl RealSystemCommandExecutor {
-    /// Try to open EPUB with macOS-specific readers at the given chapter
-    fn open_with_macos_epub_reader(
-        &self,
-        path: &str,
-        chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // Try ClearView first
-        if let Ok(child) = self.try_clearview(path, chapter) {
-            return Ok(child);
-        }
-
-        // Try Calibre ebook-viewer
-        if let Ok(child) = self.try_calibre_viewer(path, chapter) {
-            return Ok(child);
-        }
-
-        // Try Skim (PDF/EPUB viewer)
-        if let Ok(child) = self.try_skim(path, chapter) {
-            return Ok(child);
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No compatible EPUB reader found",
-        ))
-    }
-
-    /// Try to open EPUB with Windows-specific readers at the given chapter
-    fn open_with_windows_epub_reader(
-        &self,
-        path: &str,
-        chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // Try Calibre ebook-viewer first
-        if let Ok(child) = self.try_calibre_viewer(path, chapter) {
-            return Ok(child);
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No compatible EPUB reader found",
-        ))
-    }
-
-    /// Try to open EPUB with Linux-specific readers at the given chapter
-    fn open_with_linux_epub_reader(
-        &self,
-        path: &str,
-        chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // Try Calibre ebook-viewer first
-        if let Ok(child) = self.try_calibre_viewer(path, chapter) {
-            return Ok(child);
-        }
-
-        // Try FBReader
-        if let Ok(child) = self.try_fbreader(path, chapter) {
-            return Ok(child);
-        }
-
-        Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "No compatible EPUB reader found",
-        ))
-    }
-
-    /// Try to open with ClearView (macOS)
-    fn try_clearview(
-        &self,
-        path: &str,
-        _chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // ClearView is a GUI-only application without CLI chapter navigation support
-        // Just open the file normally - user will need to navigate manually
-        Command::new("open").args(["-a", "ClearView", path]).spawn()
-    }
-
-    /// Try to open with Calibre ebook-viewer (cross-platform)
-    fn try_calibre_viewer(
-        &self,
-        path: &str,
-        chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // Calibre ebook-viewer supports --goto option with TOC navigation
-        // We'll try to navigate to the chapter using TOC pattern matching
-        if chapter > 0 {
-            // Try different chapter naming patterns that are common in EPUBs
-            let chapter_patterns = [
-                format!("toc:Chapter {}", chapter + 1), // Chapter 1, Chapter 2, etc.
-                format!("toc:Ch {}", chapter + 1),      // Ch 1, Ch 2, etc.
-                format!("toc:{}", chapter + 1),         // Just the number
-                format!("toc:Chapter{}", chapter + 1),  // Chapter1, Chapter2, etc.
-            ];
-
-            // Try each pattern
-            for pattern in &chapter_patterns {
-                if let Ok(child) = Command::new("ebook-viewer")
-                    .arg(format!("--goto={}", pattern))
-                    .arg(path)
-                    .spawn()
-                {
-                    return Ok(child);
-                }
-            }
-        }
-
-        // Fallback: just open the file normally
-        Command::new("ebook-viewer").arg(path).spawn()
-    }
-
-    /// Try to open with Skim (macOS)
-    fn try_skim(&self, path: &str, _chapter: usize) -> Result<std::process::Child, std::io::Error> {
-        // Skim doesn't support command-line chapter navigation
-        Command::new("open").args(["-a", "Skim", path]).spawn()
-    }
-
-    /// Try to open with FBReader (Linux)
-    fn try_fbreader(
-        &self,
-        path: &str,
-        _chapter: usize,
-    ) -> Result<std::process::Child, std::io::Error> {
-        // FBReader doesn't support command-line chapter navigation
-        Command::new("fbreader").arg(path).spawn()
-    }
-}
-
-/// Mock system command executor for testing
-pub struct MockSystemCommandExecutor {
-    pub executed_commands: std::cell::RefCell<Vec<String>>,
-    pub should_fail: bool,
-}
-
-impl MockSystemCommandExecutor {
-    pub fn new() -> Self {
-        Self {
-            executed_commands: std::cell::RefCell::new(Vec::new()),
-            should_fail: false,
-        }
-    }
-
-    pub fn new_with_failure() -> Self {
-        Self {
-            executed_commands: std::cell::RefCell::new(Vec::new()),
-            should_fail: true,
-        }
-    }
-
-    pub fn get_executed_commands(&self) -> Vec<String> {
-        self.executed_commands.borrow().clone()
-    }
-}
-
-impl SystemCommandExecutor for MockSystemCommandExecutor {
-    fn open_file(&self, path: &str) -> Result<(), String> {
-        self.executed_commands.borrow_mut().push(path.to_string());
-        if self.should_fail {
-            Err("Mock failure".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String> {
-        self.executed_commands
-            .borrow_mut()
-            .push(format!("{}@chapter{}", path, chapter));
-        if self.should_fail {
-            Err("Mock failure".to_string())
-        } else {
-            Ok(())
-        }
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
 
 pub struct App {
     pub book_manager: BookManager,
@@ -1267,9 +1018,13 @@ impl App {
     }
 
     /// Handle a single key event with optional screen height for half-screen scrolling
-    pub fn handle_key_event_with_screen_height(&mut self, key: crossterm::event::KeyEvent, screen_height: Option<usize>) {
+    pub fn handle_key_event_with_screen_height(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        screen_height: Option<usize>,
+    ) {
         use crossterm::event::{KeyCode, KeyModifiers};
-        
+
         match key.code {
             KeyCode::Char('j') => {
                 // Navigate based on focused panel
@@ -1287,10 +1042,8 @@ impl App {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
-                    self.book_list.move_selection_up_with_toc(
-                        &self.book_manager,
-                        current_book_info.as_ref(),
-                    );
+                    self.book_list
+                        .move_selection_up_with_toc(&self.book_manager, current_book_info.as_ref());
                 } else {
                     self.scroll_up();
                 }
@@ -1314,8 +1067,9 @@ impl App {
                 let current_book_info = self.get_current_book_info().cloned();
 
                 // Check if we're selecting a TOC item
-                if let Some(selected_toc_item) =
-                    self.book_list.get_selected_toc_item(current_book_info.as_ref())
+                if let Some(selected_toc_item) = self
+                    .book_list
+                    .get_selected_toc_item(current_book_info.as_ref())
                 {
                     // Navigate to the selected chapter from TOC
                     if let Some(chapter_index) = selected_toc_item.chapter_index() {
@@ -1434,8 +1188,9 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                         }
                         _ => {
                             // Calculate screen height for half-screen scrolling commands
-                            let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                            // Handle all keys through the common handler
+                            let visible_height =
+                                terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                                                                                            // Handle all keys through the common handler
                             app.handle_key_event_with_screen_height(key, Some(visible_height));
                         }
                     }

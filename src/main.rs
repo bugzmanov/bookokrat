@@ -16,6 +16,8 @@ mod bookmark;
 mod event_source;
 mod main_app;
 mod panic_handler;
+mod simple_fake_books;
+mod system_command;
 mod text_generator;
 mod text_reader;
 mod text_selection;

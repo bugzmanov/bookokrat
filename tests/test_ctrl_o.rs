@@ -1,5 +1,5 @@
-use bookrat::main_app::run_app_with_event_source;
-use bookrat::main_app::{App, MockSystemCommandExecutor};
+use bookrat::main_app::{run_app_with_event_source, App};
+use bookrat::system_command::MockSystemCommandExecutor;
 use bookrat::test_utils::test_helpers::TestScenarioBuilder;
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
