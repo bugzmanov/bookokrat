@@ -1,4 +1,7 @@
-use bookrat::test_utils::test_helpers::{create_test_app_with_fake_books, create_test_terminal};
+use bookrat::simple_fake_books::FakeBookConfig;
+use bookrat::test_utils::test_helpers::{
+    create_test_app_with_custom_fake_books, create_test_terminal,
+};
 // SVG snapshot tests using snapbox
 use bookrat::App;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
@@ -196,11 +199,30 @@ fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
 fn test_fake_books_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
-    let (mut app, _temp_manager) = create_test_app_with_fake_books();
 
-    app.press_key(crossterm::event::KeyCode::Enter);
-    app.press_key(crossterm::event::KeyCode::Tab);
-    app.press_char_times('j', 35);
+    // Test setup constants - make the test parameters visible
+    const DIGITAL_FRONTIER_CHAPTERS: usize = 33;
+
+    // Create test books with explicit configuration
+    let book_configs = vec![
+        FakeBookConfig {
+            title: "Digital Frontier".to_string(),
+            chapter_count: DIGITAL_FRONTIER_CHAPTERS,
+            words_per_chapter: 150,
+        },
+        FakeBookConfig {
+            title: "Seven Chapter Book".to_string(),
+            chapter_count: 7,
+            words_per_chapter: 200,
+        },
+    ];
+
+    let (mut app, _temp_manager) = create_test_app_with_custom_fake_books(&book_configs);
+
+    app.press_key(crossterm::event::KeyCode::Enter); // Select first book (Digital Frontier)
+    app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
+
+    app.press_char_times('j', DIGITAL_FRONTIER_CHAPTERS + 2);
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);

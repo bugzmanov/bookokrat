@@ -229,13 +229,30 @@ fn generate_chapter_content(chapter_num: usize, word_count: usize) -> String {
     content
 }
 
-/// Create standard test books in a directory
-pub fn create_test_books_in_dir<P: AsRef<Path>>(
+/// Create custom test books in a directory with specified configurations
+pub fn create_custom_test_books_in_dir<P: AsRef<Path>>(
     dir: P,
+    configs: &[FakeBookConfig],
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let dir = dir.as_ref();
     fs::create_dir_all(dir)?;
 
+    let mut paths = Vec::new();
+
+    for (i, config) in configs.iter().enumerate() {
+        let filename = format!("fake_book_{}.epub", i + 1);
+        let path = dir.join(&filename);
+        create_fake_epub_file(&path, config)?;
+        paths.push(filename);
+    }
+
+    Ok(paths)
+}
+
+/// Create standard test books in a directory (for backward compatibility)
+pub fn create_test_books_in_dir<P: AsRef<Path>>(
+    dir: P,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let configs = vec![
         FakeBookConfig {
             title: "Digital Frontier".to_string(),
@@ -249,14 +266,5 @@ pub fn create_test_books_in_dir<P: AsRef<Path>>(
         },
     ];
 
-    let mut paths = Vec::new();
-
-    for (i, config) in configs.iter().enumerate() {
-        let filename = format!("fake_book_{}.epub", i + 1);
-        let path = dir.join(&filename);
-        create_fake_epub_file(&path, config)?;
-        paths.push(filename);
-    }
-
-    Ok(paths)
+    create_custom_test_books_in_dir(dir, &configs)
 }

@@ -169,6 +169,21 @@ pub mod test_helpers {
             })
         }
 
+        pub fn new_with_configs(
+            configs: &[crate::simple_fake_books::FakeBookConfig],
+        ) -> Result<Self, Box<dyn std::error::Error>> {
+            let temp_dir = tempfile::TempDir::new()?;
+            let book_paths = crate::simple_fake_books::create_custom_test_books_in_dir(
+                temp_dir.path(),
+                configs,
+            )?;
+
+            Ok(Self {
+                temp_dir,
+                book_paths,
+            })
+        }
+
         /// Get the temporary directory path
         pub fn get_directory(&self) -> String {
             self.temp_dir.path().to_string_lossy().to_string()
@@ -186,7 +201,26 @@ pub mod test_helpers {
         }
     }
 
-    /// Create a test App instance with fake books for consistent testing
+    /// Create a test App instance with custom fake books
+    /// - Uses temporary directory with specified fake EPUB files
+    /// - No bookmark file (starts with empty bookmarks)
+    /// - No auto-loading of recent books
+    pub fn create_test_app_with_custom_fake_books(
+        configs: &[crate::simple_fake_books::FakeBookConfig],
+    ) -> (crate::App, TempBookManager) {
+        let temp_manager =
+            TempBookManager::new_with_configs(configs).expect("Failed to create temp books");
+
+        let app = crate::App::new_with_config(
+            Some(&temp_manager.get_directory()), // Use temporary directory with fake books
+            Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
+            false,                               // Don't auto-load recent books
+        );
+
+        (app, temp_manager)
+    }
+
+    /// Create a test App instance with standard fake books for consistent testing (backward compatibility)
     /// - Uses temporary directory with fake EPUB files
     /// - No bookmark file (starts with empty bookmarks)
     /// - No auto-loading of recent books
