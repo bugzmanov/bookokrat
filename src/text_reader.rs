@@ -621,7 +621,7 @@ impl TextReader {
         // Simply highlight the middle line of the current window
         let middle_line = screen_height / 2;
 
-        debug!("Half-screen down to offset: {}/{}, highlighting middle line at screen position: {}, max: {}", 
+        debug!("Half-screen down to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
                self.scroll_offset, self.total_wrapped_lines, middle_line, max_offset);
 
         // Set up highlighting for 1 second
@@ -636,7 +636,7 @@ impl TextReader {
         // Simply highlight the middle line of the current window
         let middle_line = screen_height / 2;
 
-        debug!("Half-screen up to offset: {}/{}, highlighting middle line at screen position: {}, max: {}", 
+        debug!("Half-screen up to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
                self.scroll_offset, self.total_wrapped_lines, middle_line, self.get_max_scroll_offset());
 
         // Set up highlighting for 1 second

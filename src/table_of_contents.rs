@@ -1,4 +1,4 @@
-use crate::book_list::{ChapterInfo, CurrentBookInfo, TocItem};
+use crate::book_list::{CurrentBookInfo, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{
     layout::Rect,
@@ -132,16 +132,13 @@ impl TableOfContents {
         book_display_name: &str,
     ) {
         // Get focus-aware colors
-        let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
+        let (_text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
 
         let mut items: Vec<ListItem> = Vec::new();
-
-        // First item: back to books list
-        let back_style = Style::default().fg(palette.base_0b); // Green for navigation
         items.push(ListItem::new(Line::from(vec![Span::styled(
-            "<< Books List",
-            back_style,
+            "← Books List",
+            Style::default().fg(palette.base_0b),
         )])));
 
         // Render TOC items
@@ -154,14 +151,14 @@ impl TableOfContents {
                 &current_book_info.toc_items,
                 0,
                 &mut toc_item_index,
+                is_focused,
             );
         } else if !current_book_info.sections.is_empty() {
             self.render_hierarchical_chapters(current_book_info, &mut items, palette);
         } else {
             self.render_flat_chapters(current_book_info, &mut items, palette);
         }
-
-        let title = format!("Table of Contents - {}", book_display_name);
+        let title = format!("{} - Book", book_display_name);
         let toc_list = List::new(items)
             .block(
                 Block::default()
@@ -244,7 +241,9 @@ impl TableOfContents {
         toc_items: &[TocItem],
         indent_level: usize,
         toc_item_index: &mut usize,
+        is_focused: bool,
     ) {
+        let (text_color, _border_color, _bg_color) = palette.get_panel_colors(is_focused);
         for item in toc_items {
             let is_selected_toc_item =
                 self.selected_index > 0 && self.selected_index - 1 == *toc_item_index;
@@ -253,12 +252,12 @@ impl TableOfContents {
                 TocItem::Chapter { title, index, .. } => {
                     // Render a simple chapter
                     let chapter_style = if is_selected_toc_item {
-                        Style::default().fg(palette.base_0f).bg(palette.base_01)
+                        Style::default().fg(palette.base_08).bg(palette.base_01)
                     // Highlight selected TOC item
                     } else if *index == current_book.current_chapter {
                         Style::default().fg(palette.base_08) // Highlight current chapter
                     } else {
-                        Style::default().fg(palette.base_03) // Dimmer for other chapters
+                        Style::default().fg(text_color) // Dimmer for other chapters
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
@@ -310,6 +309,7 @@ impl TableOfContents {
                             children,
                             indent_level + 1,
                             toc_item_index,
+                            is_focused,
                         );
                     }
 

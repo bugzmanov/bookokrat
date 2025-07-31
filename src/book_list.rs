@@ -1,6 +1,6 @@
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
-use crate::table_of_contents::{SelectedTocItem, TableOfContents};
+use crate::table_of_contents::TableOfContents;
 use crate::text_generator::TextGenerator;
 use crate::theme::Base16Palette;
 use log::debug;
@@ -164,7 +164,7 @@ impl BookList {
         }
     }
 
-    pub fn move_selection_up(&mut self, current_book_info: Option<&CurrentBookInfo>) {
+    pub fn move_selection_up(&mut self, _current_book_info: Option<&CurrentBookInfo>) {
         match self.mode {
             BookListMode::BookSelection => {
                 if self.selected > 0 {
@@ -436,7 +436,7 @@ impl BookList {
                 toc_entry.title, toc_entry.href, normalized_href
             );
 
-            if let Some((chapter_index, chapter_info)) = chapter_map.get(&normalized_href) {
+            if let Some((chapter_index, _chapter_info)) = chapter_map.get(&normalized_href) {
                 debug!(
                     "Found matching chapter {} for TOC entry '{}'",
                     chapter_index, toc_entry.title

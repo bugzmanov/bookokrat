@@ -12,21 +12,21 @@ use std::panic;
 /// - Debug: Uses better-panic for detailed backtraces
 /// - Release: Uses human-panic for user-friendly crash reports
 pub fn initialize_panic_handler() {
-    #[cfg(debug_assertions)]
-    {
-        // Install better-panic for debug builds
-        better_panic::install();
-    }
+    // #[cfg(debug_assertions)]
+    // {
+    // Install better-panic for debug builds
+    better_panic::install();
+    // }
 
-    #[cfg(not(debug_assertions))]
-    {
-        human_panic::setup_panic!(Metadata {
-            name: env!("CARGO_PKG_NAME").into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            authors: env!("CARGO_PKG_AUTHORS").replace(':', ", ").into(),
-            homepage: Some("https://github.com/user/bookrat".into()),
-        });
-    }
+    // #[cfg(not(debug_assertions))]
+    // {
+    //     human_panic::setup_panic!(Metadata {
+    //         name: env!("CARGO_PKG_NAME").into(),
+    //         version: env!("CARGO_PKG_VERSION").into(),
+    //         authors: env!("CARGO_PKG_AUTHORS").replace(':', ", ").into(),
+    //         homepage: Some("https://github.com/user/bookrat".into()),
+    //     });
+    // }
 
     // Set custom panic hook that restores terminal state
     let default_hook = panic::take_hook();

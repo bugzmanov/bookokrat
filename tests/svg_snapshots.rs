@@ -155,6 +155,14 @@ fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
     term.render_svg(&ansi_output)
 }
 
+fn escape_xml(input: &str) -> String {
+    input
+        // .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    // .replace("\"", "&quot;")
+    // .replace("'", "&apos;")
+}
 fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
     use ratatui::style::Color;
 
@@ -411,8 +419,11 @@ fn test_chapter_title_narrow_terminal_svg() {
     if let Some(book_info) = app.book_manager.get_book_info(1) {
         let path = book_info.path.clone();
         app.load_epub(&path);
-        // Force animation to complete for testing
     }
+
+    app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
+
+    app.press_char_times('j', 1);
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);

@@ -114,7 +114,10 @@ pub mod test_helpers {
     /// Create a test terminal for snapshot testing
     pub fn create_test_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
         let backend = TestBackend::new(width, height);
-        Terminal::new(backend).unwrap()
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Hide cursor for test terminals to prevent it from appearing in SVG snapshots
+        terminal.hide_cursor().unwrap();
+        terminal
     }
 
     /// Capture the current terminal buffer as a string
