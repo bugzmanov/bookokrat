@@ -18,6 +18,7 @@ mod main_app;
 mod panic_handler;
 mod simple_fake_books;
 mod system_command;
+mod table_of_contents;
 mod text_generator;
 mod text_reader;
 mod text_selection;

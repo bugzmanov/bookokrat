@@ -1,5 +1,6 @@
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
+use crate::table_of_contents::{SelectedTocItem, TableOfContents};
 use crate::text_generator::TextGenerator;
 use crate::theme::Base16Palette;
 use log::debug;
@@ -111,10 +112,18 @@ pub struct CurrentBookInfo {
     pub current_chapter: usize,
 }
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum BookListMode {
+    BookSelection,
+    TableOfContents,
+}
+
 pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
-    pub toc_selected: Option<usize>, // Index of selected TOC item when book is open
+    pub mode: BookListMode,
+    pub table_of_contents: TableOfContents,
+    pub current_book_index: Option<usize>, // Index of currently open book
 }
 
 impl BookList {
@@ -129,21 +138,43 @@ impl BookList {
         Self {
             selected: 0,
             list_state,
-            toc_selected: None,
+            mode: BookListMode::BookSelection,
+            table_of_contents: TableOfContents::new(),
+            current_book_index: None,
         }
     }
 
-    pub fn move_selection_down(&mut self, book_manager: &BookManager) {
-        if self.selected < book_manager.book_count().saturating_sub(1) {
-            self.selected += 1;
-            self.list_state.select(Some(self.selected));
+    pub fn move_selection_down(
+        &mut self,
+        book_manager: &BookManager,
+        current_book_info: Option<&CurrentBookInfo>,
+    ) {
+        match self.mode {
+            BookListMode::BookSelection => {
+                if self.selected < book_manager.book_count().saturating_sub(1) {
+                    self.selected += 1;
+                    self.list_state.select(Some(self.selected));
+                }
+            }
+            BookListMode::TableOfContents => {
+                if let Some(book_info) = current_book_info {
+                    self.table_of_contents.move_selection_down(book_info);
+                }
+            }
         }
     }
 
-    pub fn move_selection_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-            self.list_state.select(Some(self.selected));
+    pub fn move_selection_up(&mut self, current_book_info: Option<&CurrentBookInfo>) {
+        match self.mode {
+            BookListMode::BookSelection => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                    self.list_state.select(Some(self.selected));
+                }
+            }
+            BookListMode::TableOfContents => {
+                self.table_of_contents.move_selection_up();
+            }
         }
     }
 
@@ -152,224 +183,15 @@ impl BookList {
         self.list_state.select(Some(index));
     }
 
-    /// Move selection down considering both books and TOC items
-    pub fn move_selection_down_with_toc(
-        &mut self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
-        let total_items = self.count_total_visible_items(book_manager, current_book_info);
-        let current_selection = self.get_current_list_selection(book_manager, current_book_info);
-
-        if current_selection + 1 < total_items {
-            self.set_list_selection(current_selection + 1, book_manager, current_book_info);
-        }
+    pub fn switch_to_toc_mode(&mut self, book_index: usize) {
+        self.mode = BookListMode::TableOfContents;
+        self.current_book_index = Some(book_index);
+        self.table_of_contents = TableOfContents::new();
     }
 
-    /// Move selection up considering both books and TOC items
-    pub fn move_selection_up_with_toc(
-        &mut self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
-        let current_selection = self.get_current_list_selection(book_manager, current_book_info);
-
-        if current_selection > 0 {
-            self.set_list_selection(current_selection - 1, book_manager, current_book_info);
-        }
-    }
-
-    /// Get the current unified selection index (books + TOC items)
-    pub fn get_current_list_selection(
-        &self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) -> usize {
-        // If we're selecting a TOC item, calculate based on the unified list structure
-        if let (Some(toc_selected), Some(current_book)) = (self.toc_selected, current_book_info) {
-            let current_book_index = book_manager
-                .books
-                .iter()
-                .position(|book| book.path == current_book.path)
-                .unwrap_or(0);
-            
-            // TOC items start right after the current book
-            let toc_start = current_book_index + 1;
-            return toc_start + toc_selected;
-        }
-
-        // Otherwise, calculate book position in the unified list
-        if let Some(current_book) = current_book_info {
-            let current_book_index = book_manager
-                .books
-                .iter()
-                .position(|book| book.path == current_book.path)
-                .unwrap_or(0);
-            let total_toc_items = self.count_toc_items(&current_book.toc_items);
-            
-            if self.selected <= current_book_index {
-                // Selecting the current book or a book before it
-                return self.selected;
-            } else {
-                // Selecting a book after the current book - it comes after all TOC items
-                let toc_end = current_book_index + 1 + total_toc_items;
-                let books_after_current = self.selected - current_book_index - 1;
-                return toc_end + books_after_current;
-            }
-        }
-        
-        // No current book - simple book selection
-        self.selected
-    }
-
-    /// Set the unified selection index, updating either book or TOC selection
-    fn set_list_selection(
-        &mut self,
-        index: usize,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
-        let book_count = book_manager.book_count();
-
-        // Handle navigation through the unified list structure:
-        // Books and TOC items are interleaved based on which book is currently opened
-        if let Some(current_book) = current_book_info {
-            let current_book_index = book_manager
-                .books
-                .iter()
-                .position(|book| book.path == current_book.path)
-                .unwrap_or(0);
-            let total_toc_items = self.count_toc_items(&current_book.toc_items);
-            
-            // Calculate boundaries in the unified list
-            let current_book_start = current_book_index;
-            let toc_start = current_book_start + 1;
-            let toc_end = toc_start + total_toc_items;
-            
-            if index < toc_start {
-                // Selecting a book before the current book (or the current book itself)
-                self.selected = index;
-                self.toc_selected = None;
-                self.list_state.select(Some(index));
-            } else if index < toc_end {
-                // Selecting a TOC item within the current book
-                let toc_index = index - toc_start;
-                self.selected = current_book_index;
-                self.toc_selected = Some(toc_index);
-                self.list_state.select(Some(index));
-            } else {
-                // Selecting a book after the current book's TOC
-                let books_after_toc = index - toc_end;
-                let target_book_index = current_book_index + 1 + books_after_toc;
-                if target_book_index < book_count {
-                    self.selected = target_book_index;
-                    self.toc_selected = None;
-                    self.list_state.select(Some(index));
-                }
-            }
-        } else {
-            // No current book - simple book selection
-            if index < book_count {
-                self.selected = index;
-                self.toc_selected = None;
-                self.list_state.select(Some(index));
-            }
-        }
-    }
-
-    /// Count total visible items (books + expanded TOC items)
-    fn count_total_visible_items(
-        &self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) -> usize {
-        let mut total = book_manager.book_count();
-
-        if let Some(current_book) = current_book_info {
-            total += self.count_toc_items(&current_book.toc_items);
-        }
-
-        total
-    }
-
-    /// Count visible TOC items (considering expansion state)
-    fn count_toc_items(&self, toc_items: &[TocItem]) -> usize {
-        let mut count = 0;
-        for item in toc_items {
-            count += 1; // Count the item itself
-            match item {
-                TocItem::Section {
-                    children,
-                    is_expanded,
-                    ..
-                } => {
-                    if *is_expanded {
-                        count += self.count_toc_items(children);
-                    }
-                }
-                TocItem::Chapter { .. } => {}
-            }
-        }
-        count
-    }
-
-    /// Get the selected TOC item if any
-    pub fn get_selected_toc_item<'a>(
-        &self,
-        current_book_info: Option<&'a CurrentBookInfo>,
-    ) -> Option<&'a TocItem> {
-        if let (Some(toc_index), Some(current_book)) = (self.toc_selected, current_book_info) {
-            return self.get_toc_item_by_index(&current_book.toc_items, toc_index);
-        }
-        None
-    }
-
-
-    /// Get TOC item by flat index
-    fn get_toc_item_by_index<'a>(
-        &self,
-        toc_items: &'a [TocItem],
-        target_index: usize,
-    ) -> Option<&'a TocItem> {
-        self.get_toc_item_by_index_helper(toc_items, target_index, &mut 0)
-    }
-
-    fn get_toc_item_by_index_helper<'a>(
-        &self,
-        toc_items: &'a [TocItem],
-        target_index: usize,
-        current_index: &mut usize,
-    ) -> Option<&'a TocItem> {
-        for item in toc_items {
-            if *current_index == target_index {
-                return Some(item);
-            }
-            *current_index += 1;
-
-            match item {
-                TocItem::Section {
-                    children,
-                    is_expanded,
-                    ..
-                } => {
-                    if *is_expanded {
-                        if let Some(child_item) =
-                            self.get_toc_item_by_index_helper(children, target_index, current_index)
-                        {
-                            return Some(child_item);
-                        }
-                    }
-                }
-                TocItem::Chapter { .. } => {}
-            }
-        }
-
-        None
-    }
-
-    /// Reset TOC selection when switching books
-    pub fn reset_toc_selection(&mut self) {
-        self.toc_selected = None;
+    pub fn switch_to_book_mode(&mut self) {
+        self.mode = BookListMode::BookSelection;
+        // Keep current_book_index so we can highlight the open book
     }
 
     pub fn render(
@@ -382,6 +204,38 @@ impl BookList {
         book_manager: &BookManager,
         current_book_info: Option<&CurrentBookInfo>,
     ) {
+        match self.mode {
+            BookListMode::BookSelection => {
+                self.render_book_list(f, area, is_focused, palette, bookmarks, book_manager);
+            }
+            BookListMode::TableOfContents => {
+                if let Some(book_info) = current_book_info {
+                    if let Some(current_idx) = self.current_book_index {
+                        if let Some(book) = book_manager.get_book_info(current_idx) {
+                            self.table_of_contents.render(
+                                f,
+                                area,
+                                is_focused,
+                                palette,
+                                book_info,
+                                &book.display_name,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn render_book_list(
+        &mut self,
+        f: &mut Frame,
+        area: Rect,
+        is_focused: bool,
+        palette: &Base16Palette,
+        bookmarks: &Bookmarks,
+        book_manager: &BookManager,
+    ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
@@ -391,49 +245,40 @@ impl BookList {
             palette.base_01 // Much dimmer timestamp for unfocused
         };
 
-        // Create list items with last read timestamps and chapter info
+        // Create list items with last read timestamps
         let mut items: Vec<ListItem> = Vec::new();
 
-        for book_info in &book_manager.books {
+        for (idx, book_info) in book_manager.books.iter().enumerate() {
             let bookmark = bookmarks.get_bookmark(&book_info.path);
             let last_read = bookmark
                 .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
                 .unwrap_or_else(|| "Never".to_string());
 
+            // Highlight the currently open book in red
+            let book_style = if Some(idx) == self.current_book_index {
+                Style::default().fg(palette.base_08) // Red for currently open book
+            } else {
+                Style::default().fg(text_color)
+            };
+
             let content = Line::from(vec![
-                Span::styled(
-                    book_info.display_name.clone(),
-                    Style::default().fg(text_color),
-                ),
+                Span::styled(book_info.display_name.clone(), book_style),
                 Span::styled(
                     format!(" ({})", last_read),
                     Style::default().fg(timestamp_color),
                 ),
             ]);
             items.push(ListItem::new(content));
-
-            // If this is the currently opened book, show its hierarchical structure
-            if let Some(current_book) = current_book_info {
-                if current_book.path == book_info.path {
-                    // Prefer new ADT-based structure, fall back to old structure, then flat chapters
-                    if !current_book.toc_items.is_empty() {
-                        let mut toc_item_index = 0;
-                        self.render_toc_items(
-                            current_book,
-                            &mut items,
-                            palette,
-                            &current_book.toc_items,
-                            0,
-                            &mut toc_item_index,
-                        );
-                    } else if !current_book.sections.is_empty() {
-                        self.render_hierarchical_chapters(current_book, &mut items, palette);
-                    } else {
-                        self.render_flat_chapters(current_book, &mut items, palette);
-                    }
-                }
-            }
         }
+
+        // For the currently open book, we want to keep the red color even when selected
+        let highlight_style = if Some(self.selected) == self.current_book_index {
+            // Currently open book is selected - keep red foreground, add selection background
+            Style::default().bg(selection_bg).fg(palette.base_08) // Keep red text
+        } else {
+            // Normal selection highlighting
+            Style::default().bg(selection_bg).fg(selection_fg)
+        };
 
         let files = List::new(items)
             .block(
@@ -443,154 +288,10 @@ impl BookList {
                     .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(palette.base_00)),
             )
-            .highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
+            .highlight_style(highlight_style)
             .style(Style::default().bg(palette.base_00));
 
         f.render_stateful_widget(files, area, &mut self.list_state);
-    }
-
-    /// Render chapters in hierarchical format with collapsible sections
-    fn render_hierarchical_chapters(
-        &self,
-        current_book: &CurrentBookInfo,
-        items: &mut Vec<ListItem>,
-        palette: &Base16Palette,
-    ) {
-        for section in &current_book.sections {
-            // Render section header
-            let section_icon = if section.is_expanded { "▼" } else { "▶" };
-            let section_style = Style::default().fg(palette.base_0d); // Blue for sections
-
-            let section_content = Line::from(vec![Span::styled(
-                format!("  {} {}", section_icon, section.title),
-                section_style,
-            )]);
-            items.push(ListItem::new(section_content));
-
-            // Render chapters in section if expanded
-            if section.is_expanded {
-                for chapter in &section.chapters {
-                    let chapter_style = if chapter.index == current_book.current_chapter {
-                        Style::default().fg(palette.base_08) // Highlight current chapter
-                    } else {
-                        Style::default().fg(palette.base_03) // Dimmer for other chapters
-                    };
-
-                    let chapter_content = Line::from(vec![Span::styled(
-                        format!("    {}", chapter.title),
-                        chapter_style,
-                    )]);
-                    items.push(ListItem::new(chapter_content));
-                }
-            }
-        }
-    }
-
-    /// Render chapters in flat format (fallback for books without sections)
-    fn render_flat_chapters(
-        &self,
-        current_book: &CurrentBookInfo,
-        items: &mut Vec<ListItem>,
-        palette: &Base16Palette,
-    ) {
-        for chapter in &current_book.chapters {
-            let chapter_style = if chapter.index == current_book.current_chapter {
-                Style::default().fg(palette.base_08) // Highlight current chapter
-            } else {
-                Style::default().fg(palette.base_03) // Dimmer for other chapters
-            };
-
-            let chapter_content = Line::from(vec![Span::styled(
-                format!("  {}", chapter.title),
-                chapter_style,
-            )]);
-            items.push(ListItem::new(chapter_content));
-        }
-    }
-
-    /// Render TOC items using the new ADT structure without duplication
-    fn render_toc_items(
-        &self,
-        current_book: &CurrentBookInfo,
-        items: &mut Vec<ListItem>,
-        palette: &Base16Palette,
-        toc_items: &[TocItem],
-        indent_level: usize,
-        toc_item_index: &mut usize,
-    ) {
-        for item in toc_items {
-            let is_selected_toc_item = self.toc_selected == Some(*toc_item_index);
-
-            match item {
-                TocItem::Chapter { title, index, .. } => {
-                    // Render a simple chapter
-                    let chapter_style = if is_selected_toc_item {
-                        Style::default().fg(palette.base_0f).bg(palette.base_01)
-                    // Highlight selected TOC item
-                    } else if *index == current_book.current_chapter {
-                        Style::default().fg(palette.base_08) // Highlight current chapter
-                    } else {
-                        Style::default().fg(palette.base_03) // Dimmer for other chapters
-                    };
-
-                    let indent = "  ".repeat(indent_level + 1);
-                    let chapter_content = Line::from(vec![Span::styled(
-                        format!("{}{}", indent, title),
-                        chapter_style,
-                    )]);
-                    items.push(ListItem::new(chapter_content));
-                }
-                TocItem::Section {
-                    title,
-                    index,
-                    children,
-                    is_expanded,
-                    ..
-                } => {
-                    // Render section header with expand/collapse indicator
-                    let section_icon = if *is_expanded { "▼" } else { "▶" };
-
-                    // Determine the style based on selection and current chapter
-                    let section_style = if is_selected_toc_item {
-                        Style::default().fg(palette.base_0f).bg(palette.base_01)
-                    // Highlight selected TOC item
-                    } else if let Some(section_index) = index {
-                        if *section_index == current_book.current_chapter {
-                            Style::default().fg(palette.base_08) // Highlight if current chapter
-                        } else {
-                            Style::default().fg(palette.base_0d) // Blue for readable sections
-                        }
-                    } else {
-                        Style::default().fg(palette.base_0d) // Blue for non-readable sections
-                    };
-
-                    let indent = "  ".repeat(indent_level + 1);
-                    let section_content = Line::from(vec![Span::styled(
-                        format!("{}{} {}", indent, section_icon, title),
-                        section_style,
-                    )]);
-                    items.push(ListItem::new(section_content));
-
-                    *toc_item_index += 1; // Increment for the section itself
-
-                    // Render children if expanded
-                    if *is_expanded {
-                        self.render_toc_items(
-                            current_book,
-                            items,
-                            palette,
-                            children,
-                            indent_level + 1,
-                            toc_item_index,
-                        );
-                    }
-
-                    continue; // Skip the increment at the end of the loop since we already did it
-                }
-            }
-
-            *toc_item_index += 1;
-        }
     }
 
     /// Convert TOC entries to hierarchical sections with proper flat/hierarchical handling

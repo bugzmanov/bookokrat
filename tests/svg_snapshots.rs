@@ -226,15 +226,6 @@ fn test_fake_books_file_list_svg() {
 
     app.press_key(crossterm::event::KeyCode::Enter); // Select first book (Digital Frontier)
 
-    // Quick debug to check final navigation state
-    let final_selection = app
-        .book_list
-        .get_current_list_selection(&app.book_manager, app.get_current_book_info());
-    println!(
-        "Final selection: {}, selected book: {}",
-        final_selection, app.book_list.selected
-    );
-
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
@@ -1871,5 +1862,103 @@ fn test_toc_navigation_bug_svg() {
                 snapshot_path,
             });
         },
+    );
+}
+
+#[test]
+fn test_book_list_to_toc_transition_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Start with book list
+    app.focused_panel = bookrat::main_app::FocusedPanel::FileList;
+    terminal.draw(|f| app.draw(f)).unwrap();
+
+    // Select a book and open it - this should transition to TOC mode
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw the state after transition - should show TOC
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_book_list_to_toc_transition.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/book_list_to_toc_transition.svg"),
+        "test_book_list_to_toc_transition_svg",
+        create_test_failure_handler("test_book_list_to_toc_transition_svg"),
+    );
+}
+
+#[test]
+fn test_toc_back_to_books_list_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load a book to enter TOC mode
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Navigate to "<< Books List" (first item)
+    // Since we're already at the top, just press Enter
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw the state - should be back to book list with the open book highlighted in red
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_toc_back_to_books_list.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/toc_back_to_books_list.svg"),
+        "test_toc_back_to_books_list_svg",
+        create_test_failure_handler("test_toc_back_to_books_list_svg"),
+    );
+}
+
+#[test]
+fn test_toc_chapter_navigation_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load a book to enter TOC mode
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Navigate down to a chapter (skip "<< Books List")
+    app.press_char_times('j', 3); // Move to 3rd chapter
+
+    // Select the chapter
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw the state - should show content view with the selected chapter
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_toc_chapter_navigation.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/toc_chapter_navigation.svg"),
+        "test_toc_chapter_navigation_svg",
+        create_test_failure_handler("test_toc_chapter_navigation_svg"),
     );
 }

@@ -1,10 +1,11 @@
-use crate::book_list::{BookList, ChapterInfo, CurrentBookInfo, SectionInfo};
+use crate::book_list::{BookList, BookListMode, ChapterInfo, CurrentBookInfo, SectionInfo};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
+use crate::table_of_contents::SelectedTocItem;
 use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
@@ -15,7 +16,7 @@ use std::{
 };
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -523,7 +524,7 @@ impl App {
             MouseEventKind::ScrollDown => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.book_list.move_selection_down(&self.book_manager);
+                    self.book_list.move_selection_down(&self.book_manager, None);
                 } else {
                     self.scroll_down();
                 }
@@ -531,7 +532,7 @@ impl App {
             MouseEventKind::ScrollUp => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.book_list.move_selection_up();
+                    self.book_list.move_selection_up(None);
                 } else {
                     self.scroll_up();
                 }
@@ -1030,10 +1031,8 @@ impl App {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
-                    self.book_list.move_selection_down_with_toc(
-                        &self.book_manager,
-                        current_book_info.as_ref(),
-                    );
+                    self.book_list
+                        .move_selection_down(&self.book_manager, current_book_info.as_ref());
                 } else {
                     self.scroll_down();
                 }
@@ -1042,8 +1041,7 @@ impl App {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
-                    self.book_list
-                        .move_selection_up_with_toc(&self.book_manager, current_book_info.as_ref());
+                    self.book_list.move_selection_up(current_book_info.as_ref());
                 } else {
                     self.scroll_up();
                 }
@@ -1066,32 +1064,48 @@ impl App {
                 // Handle selection based on what's currently selected
                 let current_book_info = self.get_current_book_info().cloned();
 
-                // Check if we're selecting a TOC item
-                if let Some(selected_toc_item) = self
-                    .book_list
-                    .get_selected_toc_item(current_book_info.as_ref())
-                {
-                    // Navigate to the selected chapter from TOC
-                    if let Some(chapter_index) = selected_toc_item.chapter_index() {
-                        self.goto_chapter(chapter_index);
-                        self.focused_panel = FocusedPanel::Content;
-                    } else {
-                        // This is a section without content, just toggle expansion
-                        // TODO: Implement section expansion toggle
+                match self.book_list.mode {
+                    BookListMode::TableOfContents => {
+                        // Handle TOC selection
+                        if let Some(book_info) = &current_book_info {
+                            match self
+                                .book_list
+                                .table_of_contents
+                                .get_selected_item(book_info)
+                            {
+                                SelectedTocItem::BackToBooks => {
+                                    // Switch back to book list mode
+                                    self.book_list.switch_to_book_mode();
+                                }
+                                SelectedTocItem::TocItem(toc_item) => {
+                                    // Navigate to the selected chapter from TOC
+                                    if let Some(chapter_index) = toc_item.chapter_index() {
+                                        self.goto_chapter(chapter_index);
+                                        self.focused_panel = FocusedPanel::Content;
+                                    } else {
+                                        // This is a section without content, just toggle expansion
+                                        // TODO: Implement section expansion toggle
+                                    }
+                                }
+                            }
+                        }
                     }
-                } else {
-                    // Select book from file list
-                    if let Some(book_info) =
-                        self.book_manager.get_book_info(self.book_list.selected)
-                    {
-                        let path = book_info.path.clone();
-                        // Save bookmark for current file before switching
-                        self.save_bookmark_with_throttle(true);
-                        self.load_epub(&path);
-                        // Reset TOC selection when loading new book
-                        self.book_list.reset_toc_selection();
-                        // Switch focus to content after loading
-                        self.focused_panel = FocusedPanel::Content;
+                    BookListMode::BookSelection => {
+                        // Select book from file list
+                        if let Some(book_info) =
+                            self.book_manager.get_book_info(self.book_list.selected)
+                        {
+                            let path = book_info.path.clone();
+                            // Save bookmark for current file before switching
+                            self.save_bookmark_with_throttle(true);
+                            let book_index = self.book_list.selected;
+                            self.load_epub(&path);
+                            // Update current book index and switch to TOC mode
+                            self.book_list.current_book_index = Some(book_index);
+                            self.book_list.switch_to_toc_mode(book_index);
+                            // Switch focus to content after loading
+                            self.focused_panel = FocusedPanel::Content;
+                        }
                     }
                 }
             }

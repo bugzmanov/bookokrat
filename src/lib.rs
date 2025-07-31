@@ -7,6 +7,7 @@ pub mod main_app;
 pub mod panic_handler;
 pub mod simple_fake_books;
 pub mod system_command;
+pub mod table_of_contents;
 pub mod text_generator;
 pub mod text_reader;
 pub mod text_selection;
