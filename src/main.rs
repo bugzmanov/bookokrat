@@ -15,6 +15,7 @@ mod book_manager;
 mod bookmark;
 mod event_source;
 mod main_app;
+mod navigation_panel;
 mod panic_handler;
 mod simple_fake_books;
 mod system_command;

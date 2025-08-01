@@ -1,6 +1,5 @@
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
-use crate::table_of_contents::{TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{
     layout::Rect,
@@ -10,25 +9,9 @@ use ratatui::{
     Frame,
 };
 
-#[derive(Clone)]
-pub struct CurrentBookInfo {
-    pub path: String,
-    pub toc_items: Vec<TocItem>, // ADT-based hierarchical structure
-    pub current_chapter: usize,
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum BookListMode {
-    BookSelection,
-    TableOfContents,
-}
-
 pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
-    pub mode: BookListMode,
-    pub table_of_contents: TableOfContents,
-    pub current_book_index: Option<usize>, // Index of currently open book
 }
 
 impl BookList {
@@ -43,60 +26,26 @@ impl BookList {
         Self {
             selected: 0,
             list_state,
-            mode: BookListMode::BookSelection,
-            table_of_contents: TableOfContents::new(),
-            current_book_index: None,
         }
     }
 
-    pub fn move_selection_down(
-        &mut self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
-        match self.mode {
-            BookListMode::BookSelection => {
-                if self.selected < book_manager.book_count().saturating_sub(1) {
-                    self.selected += 1;
-                    self.list_state.select(Some(self.selected));
-                }
-            }
-            BookListMode::TableOfContents => {
-                if let Some(book_info) = current_book_info {
-                    self.table_of_contents.move_selection_down(book_info);
-                }
-            }
+    pub fn move_selection_down(&mut self, book_manager: &BookManager) {
+        if self.selected < book_manager.book_count().saturating_sub(1) {
+            self.selected += 1;
+            self.list_state.select(Some(self.selected));
         }
     }
 
-    pub fn move_selection_up(&mut self, _current_book_info: Option<&CurrentBookInfo>) {
-        match self.mode {
-            BookListMode::BookSelection => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                    self.list_state.select(Some(self.selected));
-                }
-            }
-            BookListMode::TableOfContents => {
-                self.table_of_contents.move_selection_up();
-            }
+    pub fn move_selection_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.list_state.select(Some(self.selected));
         }
     }
 
     pub fn set_selection_to_index(&mut self, index: usize) {
         self.selected = index;
         self.list_state.select(Some(index));
-    }
-
-    pub fn switch_to_toc_mode(&mut self, book_index: usize) {
-        self.mode = BookListMode::TableOfContents;
-        self.current_book_index = Some(book_index);
-        self.table_of_contents = TableOfContents::new();
-    }
-
-    pub fn switch_to_book_mode(&mut self) {
-        self.mode = BookListMode::BookSelection;
-        // Keep current_book_index so we can highlight the open book
     }
 
     pub fn render(
@@ -107,39 +56,7 @@ impl BookList {
         palette: &Base16Palette,
         bookmarks: &Bookmarks,
         book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
-        match self.mode {
-            BookListMode::BookSelection => {
-                self.render_book_list(f, area, is_focused, palette, bookmarks, book_manager);
-            }
-            BookListMode::TableOfContents => {
-                if let Some(book_info) = current_book_info {
-                    if let Some(current_idx) = self.current_book_index {
-                        if let Some(book) = book_manager.get_book_info(current_idx) {
-                            self.table_of_contents.render(
-                                f,
-                                area,
-                                is_focused,
-                                palette,
-                                book_info,
-                                &book.display_name,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn render_book_list(
-        &mut self,
-        f: &mut Frame,
-        area: Rect,
-        is_focused: bool,
-        palette: &Base16Palette,
-        bookmarks: &Bookmarks,
-        book_manager: &BookManager,
+        current_book_index: Option<usize>,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
@@ -160,7 +77,7 @@ impl BookList {
                 .unwrap_or_else(|| "Never".to_string());
 
             // Highlight the currently open book in red
-            let book_style = if Some(idx) == self.current_book_index {
+            let book_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
             } else {
                 Style::default().fg(text_color)
@@ -177,7 +94,7 @@ impl BookList {
         }
 
         // For the currently open book, we want to keep the red color even when selected
-        let highlight_style = if Some(self.selected) == self.current_book_index {
+        let highlight_style = if Some(self.selected) == current_book_index {
             // Currently open book is selected - keep red foreground, add selection background
             Style::default().bg(selection_bg).fg(palette.base_08) // Keep red text
         } else {

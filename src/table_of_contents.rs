@@ -1,4 +1,4 @@
-use crate::book_list::CurrentBookInfo;
+use crate::navigation_panel::CurrentBookInfo;
 use crate::theme::Base16Palette;
 use ratatui::{
     layout::Rect,

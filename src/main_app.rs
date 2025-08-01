@@ -1,7 +1,7 @@
-use crate::book_list::{BookList, BookListMode, CurrentBookInfo};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
+use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
@@ -34,7 +34,7 @@ use ratatui::{
 
 pub struct App {
     pub book_manager: BookManager,
-    pub book_list: BookList,
+    pub navigation_panel: NavigationPanel,
     text_generator: TextGenerator,
     text_reader: TextReader,
     bookmarks: Bookmarks,
@@ -122,7 +122,7 @@ impl App {
             None => BookManager::new(),
         };
 
-        let book_list = BookList::new(&book_manager);
+        let navigation_panel = NavigationPanel::new(&book_manager);
         let text_generator = TextGenerator::new();
         let text_reader = TextReader::new();
 
@@ -136,7 +136,7 @@ impl App {
 
         let mut app = Self {
             book_manager,
-            book_list,
+            navigation_panel,
             text_generator,
             text_reader,
             bookmarks,
@@ -200,8 +200,8 @@ impl App {
             self.load_epub_internal(&path)?;
 
             // Update UI state to reflect the opened book
-            self.book_list.current_book_index = Some(book_index);
-            self.book_list.switch_to_toc_mode(book_index);
+            self.navigation_panel.current_book_index = Some(book_index);
+            self.navigation_panel.switch_to_toc_mode(book_index);
 
             // Switch focus to content after loading
             self.focused_panel = FocusedPanel::Content;
@@ -288,7 +288,7 @@ impl App {
 
     /// Switch back to book list mode - ensures clean state transition
     pub fn switch_to_book_list_mode(&mut self) {
-        self.book_list.switch_to_book_mode();
+        self.navigation_panel.switch_to_book_mode();
         self.focused_panel = FocusedPanel::FileList;
         info!("Switched to book list mode");
     }
@@ -634,7 +634,8 @@ impl App {
             MouseEventKind::ScrollDown => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.book_list.move_selection_down(&self.book_manager, None);
+                    self.navigation_panel
+                        .move_selection_down(&self.book_manager, None);
                 } else {
                     self.scroll_down();
                 }
@@ -642,7 +643,8 @@ impl App {
             MouseEventKind::ScrollUp => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.book_list.move_selection_up(None);
+                    self.navigation_panel
+                        .move_selection_up(&self.book_manager, None);
                 } else {
                     self.scroll_up();
                 }
@@ -1038,7 +1040,7 @@ impl App {
         let current_book_info = self.get_current_book_info().cloned();
 
         // Delegate rendering to components
-        self.book_list.render(
+        self.navigation_panel.render(
             f,
             main_chunks[0],
             self.focused_panel == FocusedPanel::FileList,
@@ -1141,7 +1143,7 @@ impl App {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
-                    self.book_list
+                    self.navigation_panel
                         .move_selection_down(&self.book_manager, current_book_info.as_ref());
                 } else {
                     self.scroll_down();
@@ -1151,7 +1153,8 @@ impl App {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
-                    self.book_list.move_selection_up(current_book_info.as_ref());
+                    self.navigation_panel
+                        .move_selection_up(&self.book_manager, current_book_info.as_ref());
                 } else {
                     self.scroll_up();
                 }
@@ -1174,12 +1177,12 @@ impl App {
                 // Handle selection based on what's currently selected
                 let current_book_info = self.get_current_book_info().cloned();
 
-                match self.book_list.mode {
-                    BookListMode::TableOfContents => {
+                match self.navigation_panel.mode {
+                    NavigationMode::TableOfContents => {
                         // Handle TOC selection
                         if let Some(book_info) = &current_book_info {
                             match self
-                                .book_list
+                                .navigation_panel
                                 .table_of_contents
                                 .get_selected_item(book_info)
                             {
@@ -1200,9 +1203,9 @@ impl App {
                             }
                         }
                     }
-                    BookListMode::BookSelection => {
+                    NavigationMode::BookSelection => {
                         // Select book from file list using high-level action
-                        let book_index = self.book_list.selected;
+                        let book_index = self.navigation_panel.get_selected_book_index();
                         let _ = self.open_book_for_reading(book_index);
                     }
                 }
@@ -1210,12 +1213,12 @@ impl App {
             KeyCode::Char(' ') => {
                 // Toggle section expansion when focused on file list and in TOC mode
                 if self.focused_panel == FocusedPanel::FileList
-                    && self.book_list.mode == BookListMode::TableOfContents
+                    && self.navigation_panel.mode == NavigationMode::TableOfContents
                 {
                     // Get the currently selected TOC item and toggle its expansion if it's a section
                     if let Some(ref cached_info) = self.cached_current_book_info {
                         if let SelectedTocItem::TocItem(toc_item) = self
-                            .book_list
+                            .navigation_panel
                             .table_of_contents
                             .get_selected_item(cached_info)
                         {
