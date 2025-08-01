@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn test_selection_creation() {
-        let mut selection = TextSelection::new();
+        let selection = TextSelection::new();
         assert!(!selection.has_selection());
         assert!(!selection.is_selecting);
     }

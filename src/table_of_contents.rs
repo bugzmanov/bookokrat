@@ -142,22 +142,16 @@ impl TableOfContents {
         )])));
 
         // Render TOC items
-        if !current_book_info.toc_items.is_empty() {
-            let mut toc_item_index = 0;
-            self.render_toc_items(
-                current_book_info,
-                &mut items,
-                palette,
-                &current_book_info.toc_items,
-                0,
-                &mut toc_item_index,
-                is_focused,
-            );
-        } else if !current_book_info.sections.is_empty() {
-            self.render_hierarchical_chapters(current_book_info, &mut items, palette);
-        } else {
-            self.render_flat_chapters(current_book_info, &mut items, palette);
-        }
+        let mut toc_item_index = 0;
+        self.render_toc_items(
+            current_book_info,
+            &mut items,
+            palette,
+            &current_book_info.toc_items,
+            0,
+            &mut toc_item_index,
+            is_focused,
+        );
         let title = format!("{} - Book", book_display_name);
         let toc_list = List::new(items)
             .block(
@@ -171,65 +165,6 @@ impl TableOfContents {
             .style(Style::default().bg(palette.base_00));
 
         f.render_stateful_widget(toc_list, area, &mut self.list_state);
-    }
-
-    /// Render chapters in hierarchical format with collapsible sections
-    fn render_hierarchical_chapters(
-        &self,
-        current_book: &CurrentBookInfo,
-        items: &mut Vec<ListItem>,
-        palette: &Base16Palette,
-    ) {
-        for section in &current_book.sections {
-            // Render section header
-            let section_icon = if section.is_expanded { "▼" } else { "▶" };
-            let section_style = Style::default().fg(palette.base_0d); // Blue for sections
-
-            let section_content = Line::from(vec![Span::styled(
-                format!("  {} {}", section_icon, section.title),
-                section_style,
-            )]);
-            items.push(ListItem::new(section_content));
-
-            // Render chapters in section if expanded
-            if section.is_expanded {
-                for chapter in &section.chapters {
-                    let chapter_style = if chapter.index == current_book.current_chapter {
-                        Style::default().fg(palette.base_08) // Highlight current chapter
-                    } else {
-                        Style::default().fg(palette.base_03) // Dimmer for other chapters
-                    };
-
-                    let chapter_content = Line::from(vec![Span::styled(
-                        format!("    {}", chapter.title),
-                        chapter_style,
-                    )]);
-                    items.push(ListItem::new(chapter_content));
-                }
-            }
-        }
-    }
-
-    /// Render chapters in flat format (fallback for books without sections)
-    fn render_flat_chapters(
-        &self,
-        current_book: &CurrentBookInfo,
-        items: &mut Vec<ListItem>,
-        palette: &Base16Palette,
-    ) {
-        for chapter in &current_book.chapters {
-            let chapter_style = if chapter.index == current_book.current_chapter {
-                Style::default().fg(palette.base_08) // Highlight current chapter
-            } else {
-                Style::default().fg(palette.base_03) // Dimmer for other chapters
-            };
-
-            let chapter_content = Line::from(vec![Span::styled(
-                format!("  {}", chapter.title),
-                chapter_style,
-            )]);
-            items.push(ListItem::new(chapter_content));
-        }
     }
 
     /// Render TOC items using the new ADT structure

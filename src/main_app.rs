@@ -1,4 +1,4 @@
-use crate::book_list::{BookList, BookListMode, ChapterInfo, CurrentBookInfo, SectionInfo};
+use crate::book_list::{BookList, BookListMode, CurrentBookInfo, TocItem};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
@@ -378,7 +378,6 @@ impl App {
             (&self.current_file, &mut self.current_epub)
         {
             debug!("refresh_chapter_cache: processing book '{}'", current_file);
-            let mut chapters = Vec::new();
 
             // Parse TOC structure to create hierarchical sections
             let toc_entries = self.text_generator.parse_toc_structure(epub);
@@ -406,67 +405,21 @@ impl App {
             debug!("Building chapter map for {} chapters", self.total_chapters);
             for i in 0..self.total_chapters {
                 if epub.set_current_page(i).is_ok() {
-                    if let Ok(content) = epub.get_current_str() {
+                    if let Ok(_content) = epub.get_current_str() {
                         if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
-                            let title = self
-                                .text_generator
-                                .extract_chapter_title(&content)
-                                .unwrap_or_else(|| format!("Chapter {}", i + 1));
-
-                            let is_section_header = self
-                                .text_generator
-                                .is_section_header(&chapter_href, &toc_entries);
-
-                            let chapter_info = ChapterInfo {
-                                title,
-                                index: i,
-                                is_section_header,
-                            };
-
-                            chapters.push(chapter_info.clone());
-
                             // Normalize href for matching
                             let normalized_href = self.text_generator.normalize_href(&chapter_href);
                             debug!(
                                 "Chapter {}: '{}' -> normalized: '{}'",
                                 i, chapter_href, normalized_href
                             );
-                            chapter_map.insert(normalized_href, (i, chapter_info));
+                            chapter_map.insert(normalized_href, i);
                         }
                     }
                 }
             }
 
             debug!("Chapter map contains {} entries", chapter_map.keys().len());
-
-            // Convert TOC structure to sections
-            let mut sections =
-                BookList::convert_toc_to_sections(&self.text_generator, &toc_entries, &chapter_map);
-
-            // Debug: Log the created sections
-            debug!("Created {} sections", sections.len());
-            for (i, section) in sections.iter().enumerate() {
-                debug!(
-                    "Section {}: '{}' (chapters: {})",
-                    i,
-                    section.title,
-                    section.chapters.len()
-                );
-                for (j, chapter) in section.chapters.iter().enumerate() {
-                    debug!("  Chapter {}: '{}'", j, chapter.title);
-                }
-            }
-
-            // If no sections were created from TOC, fall back to flat structure
-            if sections.is_empty() && !chapters.is_empty() {
-                let intro_section = SectionInfo {
-                    title: "Chapters".to_string(),
-                    start_chapter: 0,
-                    chapters: chapters.clone(),
-                    is_expanded: true,
-                };
-                sections.push(intro_section);
-            }
 
             // Restore original position
             let _ = epub.set_current_page(original_chapter);
@@ -477,8 +430,6 @@ impl App {
 
             self.cached_current_book_info = Some(CurrentBookInfo {
                 path: current_file.clone(),
-                chapters,
-                sections,
                 toc_items,
                 current_chapter: self.current_chapter,
             });
@@ -558,15 +509,19 @@ impl App {
     }
 
     /// Toggle expansion of a section by its title
-    pub fn toggle_section_expansion(&mut self, section_title: &str) {
-        if let Some(ref mut cached_info) = self.cached_current_book_info {
-            for section in &mut cached_info.sections {
-                if section.title == section_title {
-                    section.is_expanded = !section.is_expanded;
-                    break;
+    /// Find a TOC item by title and return a mutable reference
+    fn find_toc_item_mut<'a>(toc_items: &'a mut [TocItem], title: &str) -> Option<&'a mut TocItem> {
+        for item in toc_items {
+            if item.title() == title {
+                return Some(item);
+            }
+            if let TocItem::Section { children, .. } = item {
+                if let Some(found) = Self::find_toc_item_mut(children, title) {
+                    return Some(found);
                 }
             }
         }
+        None
     }
 
     pub fn scroll_down(&mut self) {
@@ -1190,15 +1145,28 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                // Toggle section expansion when focused on file list
-                if self.focused_panel == FocusedPanel::FileList {
-                    // This is a simplified approach - in a real implementation,
-                    // we'd need to track which section is selected
-                    // For now, just toggle the first section as a demo
+                // Toggle section expansion when focused on file list and in TOC mode
+                if self.focused_panel == FocusedPanel::FileList
+                    && self.book_list.mode == BookListMode::TableOfContents
+                {
+                    // Get the currently selected TOC item and toggle its expansion if it's a section
                     if let Some(ref cached_info) = self.cached_current_book_info {
-                        if !cached_info.sections.is_empty() {
-                            let section_title = cached_info.sections[0].title.clone();
-                            self.toggle_section_expansion(&section_title);
+                        if let SelectedTocItem::TocItem(toc_item) = self
+                            .book_list
+                            .table_of_contents
+                            .get_selected_item(cached_info)
+                        {
+                            // Clone the toc_items to avoid borrow issues
+                            let mut updated_toc_items = cached_info.toc_items.clone();
+                            if let Some(item) =
+                                Self::find_toc_item_mut(&mut updated_toc_items, toc_item.title())
+                            {
+                                item.toggle_expansion();
+                                // Update the cached info with the modified toc_items
+                                if let Some(ref mut cached_info) = self.cached_current_book_info {
+                                    cached_info.toc_items = updated_toc_items;
+                                }
+                            }
                         }
                     }
                 }
