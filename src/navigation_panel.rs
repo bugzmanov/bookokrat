@@ -35,15 +35,13 @@ impl NavigationPanel {
         }
     }
 
-    pub fn move_selection_down(&mut self, current_book_info: Option<&CurrentBookInfo>) {
+    pub fn move_selection_down(&mut self) {
         match self.mode {
             NavigationMode::BookSelection => {
                 self.book_list.move_selection_down();
             }
             NavigationMode::TableOfContents => {
-                if let Some(book_info) = current_book_info {
-                    self.table_of_contents.move_selection_down(book_info);
-                }
+                self.table_of_contents.move_selection_down();
             }
         }
     }
@@ -59,10 +57,11 @@ impl NavigationPanel {
         }
     }
 
-    pub fn switch_to_toc_mode(&mut self, book_index: usize) {
+    pub fn switch_to_toc_mode(&mut self, book_index: usize, book_info: CurrentBookInfo) {
         self.mode = NavigationMode::TableOfContents;
         self.current_book_index = Some(book_index);
         self.table_of_contents = TableOfContents::new();
+        self.table_of_contents.set_current_book_info(book_info);
     }
 
     pub fn switch_to_book_mode(&mut self) {
@@ -82,7 +81,6 @@ impl NavigationPanel {
         palette: &Base16Palette,
         bookmarks: &Bookmarks,
         book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
     ) {
         match self.mode {
             NavigationMode::BookSelection => {
@@ -96,18 +94,15 @@ impl NavigationPanel {
                 );
             }
             NavigationMode::TableOfContents => {
-                if let Some(book_info) = current_book_info {
-                    if let Some(current_idx) = self.current_book_index {
-                        if let Some(book) = book_manager.get_book_info(current_idx) {
-                            self.table_of_contents.render(
-                                f,
-                                area,
-                                is_focused,
-                                palette,
-                                book_info,
-                                &book.display_name,
-                            );
-                        }
+                if let Some(current_idx) = self.current_book_index {
+                    if let Some(book) = book_manager.get_book_info(current_idx) {
+                        self.table_of_contents.render(
+                            f,
+                            area,
+                            is_focused,
+                            palette,
+                            &book.display_name,
+                        );
                     }
                 }
             }

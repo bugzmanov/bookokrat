@@ -201,7 +201,10 @@ impl App {
 
             // Update UI state to reflect the opened book
             self.navigation_panel.current_book_index = Some(book_index);
-            self.navigation_panel.switch_to_toc_mode(book_index);
+            if let Some(book_info) = self.cached_current_book_info.clone() {
+                self.navigation_panel
+                    .switch_to_toc_mode(book_index, book_info);
+            }
 
             // Switch focus to content after loading
             self.focused_panel = FocusedPanel::Content;
@@ -491,11 +494,19 @@ impl App {
             // Map chapter indices to the TOC items
             Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
 
-            self.cached_current_book_info = Some(CurrentBookInfo {
+            let book_info = CurrentBookInfo {
                 path: current_file.clone(),
                 toc_items,
                 current_chapter: self.current_chapter,
-            });
+            };
+            self.cached_current_book_info = Some(book_info.clone());
+
+            // Update the table of contents with the new book info
+            if self.navigation_panel.mode == NavigationMode::TableOfContents {
+                self.navigation_panel
+                    .table_of_contents
+                    .set_current_book_info(book_info);
+            }
         } else {
             self.cached_current_book_info = None;
         }
@@ -508,6 +519,13 @@ impl App {
     fn update_current_chapter_in_cache(&mut self) {
         if let Some(ref mut cached_info) = self.cached_current_book_info {
             cached_info.current_chapter = self.current_chapter;
+
+            // Update the table of contents with the updated book info
+            if self.navigation_panel.mode == NavigationMode::TableOfContents {
+                self.navigation_panel
+                    .table_of_contents
+                    .set_current_book_info(cached_info.clone());
+            }
         }
     }
 
@@ -634,7 +652,7 @@ impl App {
             MouseEventKind::ScrollDown => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.navigation_panel.move_selection_down(None);
+                    self.navigation_panel.move_selection_down();
                 } else {
                     self.scroll_down();
                 }
@@ -1034,9 +1052,6 @@ impl App {
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(chunks[0]);
 
-        // Get current book info for TOC display (clone to avoid borrowing issues)
-        let current_book_info = self.get_current_book_info().cloned();
-
         // Delegate rendering to components
         self.navigation_panel.render(
             f,
@@ -1045,7 +1060,6 @@ impl App {
             &OCEANIC_NEXT,
             &self.bookmarks,
             &self.book_manager,
-            current_book_info.as_ref(),
         );
 
         // Render text content or default message
@@ -1140,9 +1154,7 @@ impl App {
             KeyCode::Char('j') => {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
-                    let current_book_info = self.get_current_book_info().cloned();
-                    self.navigation_panel
-                        .move_selection_down(current_book_info.as_ref());
+                    self.navigation_panel.move_selection_down();
                 } else {
                     self.scroll_down();
                 }
@@ -1171,32 +1183,25 @@ impl App {
             }
             KeyCode::Enter => {
                 // Handle selection based on what's currently selected
-                let current_book_info = self.get_current_book_info().cloned();
-
                 match self.navigation_panel.mode {
                     NavigationMode::TableOfContents => {
                         // Handle TOC selection
-                        if let Some(book_info) = &current_book_info {
-                            match self
-                                .navigation_panel
-                                .table_of_contents
-                                .get_selected_item(book_info)
-                            {
-                                SelectedTocItem::BackToBooks => {
-                                    // Switch back to book list mode
-                                    self.switch_to_book_list_mode();
-                                }
-                                SelectedTocItem::TocItem(toc_item) => {
-                                    // Navigate to the selected chapter from TOC
-                                    if let Some(chapter_index) = toc_item.chapter_index() {
-                                        let _ = self.navigate_to_chapter(chapter_index);
-                                        self.focused_panel = FocusedPanel::Content;
-                                    } else {
-                                        // This is a section without content, just toggle expansion
-                                        // TODO: Implement section expansion toggle
-                                    }
+                        match self.navigation_panel.table_of_contents.get_selected_item() {
+                            Some(SelectedTocItem::BackToBooks) => {
+                                // Switch back to book list mode
+                                self.switch_to_book_list_mode();
+                            }
+                            Some(SelectedTocItem::TocItem(toc_item)) => {
+                                // Navigate to the selected chapter from TOC
+                                if let Some(chapter_index) = toc_item.chapter_index() {
+                                    let _ = self.navigate_to_chapter(chapter_index);
+                                    self.focused_panel = FocusedPanel::Content;
+                                } else {
+                                    // This is a section without content, just toggle expansion
+                                    // TODO: Implement section expansion toggle
                                 }
                             }
+                            None => {}
                         }
                     }
                     NavigationMode::BookSelection => {
@@ -1213,10 +1218,8 @@ impl App {
                 {
                     // Get the currently selected TOC item and toggle its expansion if it's a section
                     if let Some(ref cached_info) = self.cached_current_book_info {
-                        if let SelectedTocItem::TocItem(toc_item) = self
-                            .navigation_panel
-                            .table_of_contents
-                            .get_selected_item(cached_info)
+                        if let Some(SelectedTocItem::TocItem(toc_item)) =
+                            self.navigation_panel.table_of_contents.get_selected_item()
                         {
                             // Clone the toc_items to avoid borrow issues
                             let mut updated_toc_items = cached_info.toc_items.clone();

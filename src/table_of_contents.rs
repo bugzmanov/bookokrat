@@ -79,6 +79,7 @@ impl TocItem {
 pub struct TableOfContents {
     pub selected_index: usize,
     pub list_state: ListState,
+    current_book_info: Option<CurrentBookInfo>,
 }
 
 impl TableOfContents {
@@ -89,15 +90,22 @@ impl TableOfContents {
         Self {
             selected_index: 0,
             list_state,
+            current_book_info: None,
         }
     }
 
-    pub fn move_selection_down(&mut self, current_book_info: &CurrentBookInfo) {
-        let total_items = self.count_visible_toc_items(&current_book_info.toc_items);
-        // Add 1 for the "<< books list" item
-        if self.selected_index < total_items {
-            self.selected_index += 1;
-            self.list_state.select(Some(self.selected_index));
+    pub fn set_current_book_info(&mut self, book_info: CurrentBookInfo) {
+        self.current_book_info = Some(book_info);
+    }
+
+    pub fn move_selection_down(&mut self) {
+        if let Some(ref current_book_info) = self.current_book_info {
+            let total_items = self.count_visible_toc_items(&current_book_info.toc_items);
+            // Add 1 for the "<< books list" item
+            if self.selected_index < total_items {
+                self.selected_index += 1;
+                self.list_state.select(Some(self.selected_index));
+            }
         }
     }
 
@@ -109,21 +117,22 @@ impl TableOfContents {
     }
 
     /// Get the selected item (either back button or TOC item)
-    pub fn get_selected_item<'a>(
-        &self,
-        current_book_info: &'a CurrentBookInfo,
-    ) -> SelectedTocItem<'a> {
-        if self.selected_index == 0 {
-            SelectedTocItem::BackToBooks
-        } else {
-            // Subtract 1 to account for the back button
-            if let Some(toc_item) =
-                self.get_toc_item_by_index(&current_book_info.toc_items, self.selected_index - 1)
-            {
-                SelectedTocItem::TocItem(toc_item)
+    pub fn get_selected_item(&self) -> Option<SelectedTocItem> {
+        if let Some(ref current_book_info) = self.current_book_info {
+            if self.selected_index == 0 {
+                Some(SelectedTocItem::BackToBooks)
             } else {
-                SelectedTocItem::BackToBooks
+                // Subtract 1 to account for the back button
+                if let Some(toc_item) = self
+                    .get_toc_item_by_index(&current_book_info.toc_items, self.selected_index - 1)
+                {
+                    Some(SelectedTocItem::TocItem(toc_item))
+                } else {
+                    Some(SelectedTocItem::BackToBooks)
+                }
             }
+        } else {
+            None
         }
     }
 
@@ -196,9 +205,11 @@ impl TableOfContents {
         area: Rect,
         is_focused: bool,
         palette: &Base16Palette,
-        current_book_info: &CurrentBookInfo,
         book_display_name: &str,
     ) {
+        let Some(ref current_book_info) = self.current_book_info else {
+            return;
+        };
         // Get focus-aware colors
         let (_text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
