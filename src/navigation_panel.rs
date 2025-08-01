@@ -35,14 +35,10 @@ impl NavigationPanel {
         }
     }
 
-    pub fn move_selection_down(
-        &mut self,
-        book_manager: &BookManager,
-        current_book_info: Option<&CurrentBookInfo>,
-    ) {
+    pub fn move_selection_down(&mut self, current_book_info: Option<&CurrentBookInfo>) {
         match self.mode {
             NavigationMode::BookSelection => {
-                self.book_list.move_selection_down(book_manager);
+                self.book_list.move_selection_down();
             }
             NavigationMode::TableOfContents => {
                 if let Some(book_info) = current_book_info {
@@ -52,11 +48,7 @@ impl NavigationPanel {
         }
     }
 
-    pub fn move_selection_up(
-        &mut self,
-        _book_manager: &BookManager,
-        _current_book_info: Option<&CurrentBookInfo>,
-    ) {
+    pub fn move_selection_up(&mut self) {
         match self.mode {
             NavigationMode::BookSelection => {
                 self.book_list.move_selection_up();
@@ -100,7 +92,6 @@ impl NavigationPanel {
                     is_focused,
                     palette,
                     bookmarks,
-                    book_manager,
                     self.current_book_index,
                 );
             }

@@ -634,8 +634,7 @@ impl App {
             MouseEventKind::ScrollDown => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.navigation_panel
-                        .move_selection_down(&self.book_manager, None);
+                    self.navigation_panel.move_selection_down(None);
                 } else {
                     self.scroll_down();
                 }
@@ -643,8 +642,7 @@ impl App {
             MouseEventKind::ScrollUp => {
                 // Allow scrolling in both file list and content
                 if mouse_event.column < 30 {
-                    self.navigation_panel
-                        .move_selection_up(&self.book_manager, None);
+                    self.navigation_panel.move_selection_up();
                 } else {
                     self.scroll_up();
                 }
@@ -1144,7 +1142,7 @@ impl App {
                 if self.focused_panel == FocusedPanel::FileList {
                     let current_book_info = self.get_current_book_info().cloned();
                     self.navigation_panel
-                        .move_selection_down(&self.book_manager, current_book_info.as_ref());
+                        .move_selection_down(current_book_info.as_ref());
                 } else {
                     self.scroll_down();
                 }
@@ -1152,9 +1150,7 @@ impl App {
             KeyCode::Char('k') => {
                 // Navigate based on focused panel
                 if self.focused_panel == FocusedPanel::FileList {
-                    let current_book_info = self.get_current_book_info().cloned();
-                    self.navigation_panel
-                        .move_selection_up(&self.book_manager, current_book_info.as_ref());
+                    self.navigation_panel.move_selection_up();
                 } else {
                     self.scroll_up();
                 }

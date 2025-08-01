@@ -1,4 +1,4 @@
-use crate::book_manager::BookManager;
+use crate::book_manager::{BookInfo, BookManager};
 use crate::bookmark::Bookmarks;
 use crate::theme::Base16Palette;
 use ratatui::{
@@ -12,11 +12,13 @@ use ratatui::{
 pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
+    books: Vec<BookInfo>,
 }
 
 impl BookList {
     pub fn new(book_manager: &BookManager) -> Self {
-        let has_files = !book_manager.is_empty();
+        let books = book_manager.books.clone();
+        let has_files = !books.is_empty();
 
         let mut list_state = ListState::default();
         if has_files {
@@ -26,11 +28,12 @@ impl BookList {
         Self {
             selected: 0,
             list_state,
+            books,
         }
     }
 
-    pub fn move_selection_down(&mut self, book_manager: &BookManager) {
-        if self.selected < book_manager.book_count().saturating_sub(1) {
+    pub fn move_selection_down(&mut self) {
+        if self.selected < self.books.len().saturating_sub(1) {
             self.selected += 1;
             self.list_state.select(Some(self.selected));
         }
@@ -48,6 +51,18 @@ impl BookList {
         self.list_state.select(Some(index));
     }
 
+    pub fn get_selected_book(&self) -> Option<&BookInfo> {
+        self.books.get(self.selected)
+    }
+
+    pub fn book_count(&self) -> usize {
+        self.books.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.books.is_empty()
+    }
+
     pub fn render(
         &mut self,
         f: &mut Frame,
@@ -55,7 +70,6 @@ impl BookList {
         is_focused: bool,
         palette: &Base16Palette,
         bookmarks: &Bookmarks,
-        book_manager: &BookManager,
         current_book_index: Option<usize>,
     ) {
         // Get focus-aware colors
@@ -70,7 +84,7 @@ impl BookList {
         // Create list items with last read timestamps
         let mut items: Vec<ListItem> = Vec::new();
 
-        for (idx, book_info) in book_manager.books.iter().enumerate() {
+        for (idx, book_info) in self.books.iter().enumerate() {
             let bookmark = bookmarks.get_bookmark(&book_info.path);
             let last_read = bookmark
                 .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
