@@ -53,6 +53,9 @@ pub struct App {
     click_count: u32,
     // Cached chapter information to avoid re-parsing on every render
     cached_current_book_info: Option<CurrentBookInfo>,
+    // Key sequence tracking for multi-key commands
+    key_sequence: Vec<char>,
+    last_key_time: Option<Instant>,
 }
 
 pub trait VimNavMotions {
@@ -154,6 +157,8 @@ impl App {
             last_click_position: None,
             click_count: 0,
             cached_current_book_info: None,
+            key_sequence: Vec::new(),
+            last_key_time: None,
         };
 
         // Auto-load the most recently read book if available
@@ -1137,6 +1142,56 @@ impl App {
         f.render_widget(help, area);
     }
 
+    /// Check if the key sequence has timed out
+    fn should_reset_key_sequence(&self) -> bool {
+        const KEY_SEQUENCE_TIMEOUT_MS: u64 = 1000; // 1 second timeout
+
+        if let Some(last_time) = self.last_key_time {
+            Instant::now().duration_since(last_time).as_millis() > KEY_SEQUENCE_TIMEOUT_MS as u128
+        } else {
+            false
+        }
+    }
+
+    /// Handle a key sequence and return true if it was handled
+    fn handle_key_sequence(&mut self, key_char: char) -> bool {
+        // Reset sequence if timed out
+        if self.should_reset_key_sequence() {
+            self.key_sequence.clear();
+        }
+
+        // Add the new key to the sequence
+        self.key_sequence.push(key_char);
+        self.last_key_time = Some(Instant::now());
+
+        // Check for known sequences
+        let sequence: String = self.key_sequence.iter().collect();
+
+        match sequence.as_str() {
+            "gg" => {
+                // Handle 'gg' motion - go to top
+                if self.focused_panel == FocusedPanel::FileList {
+                    self.navigation_panel.handle_gg();
+                } else {
+                    // For content, reset scroll to top
+                    self.text_reader.scroll_offset = 0;
+                    self.save_bookmark();
+                }
+                self.key_sequence.clear();
+                true
+            }
+            _ if sequence.len() >= 2 => {
+                // Unknown sequence of 2+ chars, reset
+                self.key_sequence.clear();
+                false
+            }
+            _ => {
+                // Still building the sequence
+                false
+            }
+        }
+    }
+
     /// Handle a single key event - useful for testing
     pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
         self.handle_key_event_with_screen_height(key, None);
@@ -1149,6 +1204,20 @@ impl App {
         screen_height: Option<usize>,
     ) {
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // For non-character keys or keys with modifiers (except shift), clear any pending sequence
+        match &key.code {
+            KeyCode::Char(_)
+                if !key.modifiers.contains(KeyModifiers::CONTROL)
+                    && !key.modifiers.contains(KeyModifiers::ALT) =>
+            {
+                // Character keys without Ctrl/Alt can be part of sequences
+            }
+            _ => {
+                // Any other key clears the sequence
+                self.key_sequence.clear();
+            }
+        }
 
         match key.code {
             KeyCode::Char('j') => {
@@ -1168,12 +1237,22 @@ impl App {
                 }
             }
             KeyCode::Char('h') => {
-                // Always allow chapter navigation
-                let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+                if self.focused_panel == FocusedPanel::FileList {
+                    // Use VimNavMotions for navigation panel
+                    self.navigation_panel.handle_h();
+                } else {
+                    // Allow chapter navigation in content view
+                    let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+                }
             }
             KeyCode::Char('l') => {
-                // Always allow chapter navigation
-                let _ = self.navigate_chapter_relative(ChapterDirection::Next);
+                if self.focused_panel == FocusedPanel::FileList {
+                    // Use VimNavMotions for navigation panel (future: could expand/enter)
+                    self.navigation_panel.handle_l();
+                } else {
+                    // Allow chapter navigation in content view
+                    let _ = self.navigate_chapter_relative(ChapterDirection::Next);
+                }
             }
             KeyCode::Char('o') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -1245,15 +1324,41 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if let Some(visible_height) = screen_height {
+                    if self.focused_panel == FocusedPanel::FileList {
+                        // Use VimNavMotions for navigation panel
+                        self.navigation_panel.handle_ctrl_d();
+                    } else if let Some(visible_height) = screen_height {
                         self.scroll_half_screen_down(visible_height);
                     }
                 }
             }
             KeyCode::Char('u') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if let Some(visible_height) = screen_height {
+                    if self.focused_panel == FocusedPanel::FileList {
+                        // Use VimNavMotions for navigation panel
+                        self.navigation_panel.handle_ctrl_u();
+                    } else if let Some(visible_height) = screen_height {
                         self.scroll_half_screen_up(visible_height);
+                    }
+                }
+            }
+            KeyCode::Char('g') => {
+                // Check if this completes a key sequence
+                if !self.handle_key_sequence('g') {
+                    // 'g' by itself doesn't do anything, it's waiting for the next key
+                }
+            }
+            KeyCode::Char('G') => {
+                // Handle 'G' motion - go to bottom
+                if self.focused_panel == FocusedPanel::FileList {
+                    self.navigation_panel.handle_G();
+                } else if let Some(_content) = &self.current_content {
+                    // For content, scroll to bottom
+                    // Calculate the maximum scroll offset
+                    if self.text_reader.total_wrapped_lines > self.text_reader.visible_height {
+                        self.text_reader.scroll_offset =
+                            self.text_reader.total_wrapped_lines - self.text_reader.visible_height;
+                        self.save_bookmark();
                     }
                 }
             }
