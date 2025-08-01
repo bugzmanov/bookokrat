@@ -1,4 +1,4 @@
-use crate::book_list::{CurrentBookInfo, TocItem};
+use crate::book_list::CurrentBookInfo;
 use crate::theme::Base16Palette;
 use ratatui::{
     layout::Rect,
@@ -7,6 +7,74 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
     Frame,
 };
+
+/// New ADT-based model for TOC items
+#[derive(Clone, Debug)]
+pub enum TocItem {
+    /// A leaf chapter that can be read
+    Chapter {
+        title: String,
+        href: String,
+        index: usize,
+    },
+    /// A section that may have its own content and contains child items
+    Section {
+        title: String,
+        href: Option<String>, // Some sections are readable, others are just containers
+        index: Option<usize>, // Chapter index if this section is also readable
+        children: Vec<TocItem>,
+        is_expanded: bool,
+    },
+}
+
+impl TocItem {
+    /// Get the title of this TOC item
+    pub fn title(&self) -> &str {
+        match self {
+            TocItem::Chapter { title, .. } => title,
+            TocItem::Section { title, .. } => title,
+        }
+    }
+
+    /// Get the chapter index if this item is readable
+    pub fn chapter_index(&self) -> Option<usize> {
+        match self {
+            TocItem::Chapter { index, .. } => Some(*index),
+            TocItem::Section { index, .. } => *index,
+        }
+    }
+
+    /// Check if this item has children
+    pub fn has_children(&self) -> bool {
+        match self {
+            TocItem::Chapter { .. } => false,
+            TocItem::Section { children, .. } => !children.is_empty(),
+        }
+    }
+
+    /// Get children if this is a section
+    pub fn children(&self) -> &[TocItem] {
+        match self {
+            TocItem::Chapter { .. } => &[],
+            TocItem::Section { children, .. } => children,
+        }
+    }
+
+    /// Check if this section is expanded (only applies to sections)
+    pub fn is_expanded(&self) -> bool {
+        match self {
+            TocItem::Chapter { .. } => false, // Chapters don't expand
+            TocItem::Section { is_expanded, .. } => *is_expanded,
+        }
+    }
+
+    /// Toggle expansion state (only applies to sections)
+    pub fn toggle_expansion(&mut self) {
+        if let TocItem::Section { is_expanded, .. } = self {
+            *is_expanded = !*is_expanded;
+        }
+    }
+}
 
 pub struct TableOfContents {
     pub selected_index: usize,

@@ -1,4 +1,4 @@
-use crate::book_list::TocEntry;
+use crate::table_of_contents::TocItem;
 use epub::doc::EpubDoc;
 use log::debug;
 use regex::Regex;
@@ -12,10 +12,7 @@ impl TocParser {
     }
 
     /// Parse EPUB table of contents to get hierarchical structure
-    pub fn parse_toc_structure(
-        &self,
-        doc: &mut EpubDoc<BufReader<std::fs::File>>,
-    ) -> Vec<TocEntry> {
+    pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
         // Try NCX document first (EPUB2 style) - more reliable parsing
         if let Some(ncx_id) = self.find_ncx_document(doc) {
             debug!("Found NCX document: {}", ncx_id);
@@ -66,7 +63,7 @@ impl TocParser {
     }
 
     /// Parse NCX document (EPUB2)
-    fn parse_ncx_document(&self, content: &str) -> Vec<TocEntry> {
+    fn parse_ncx_document(&self, content: &str) -> Vec<TocItem> {
         let mut entries = Vec::new();
 
         // Parse navMap structure with multiline support
@@ -93,14 +90,14 @@ impl TocParser {
     }
 
     /// Parse navigation document using DOM structure without hardcoded element names or classes
-    fn parse_nav_document(&self, content: &str) -> Vec<TocEntry> {
+    fn parse_nav_document(&self, content: &str) -> Vec<TocItem> {
         // Parse based on DOM structure: any element containing <a> with potential nested elements
         self.parse_hierarchical_links(content)
     }
 
     /// Parse hierarchical link structure using DOM nesting patterns
     /// Pattern: <element><a href="...">title</a><nested-elements>...</nested-elements></element>
-    fn parse_hierarchical_links(&self, content: &str) -> Vec<TocEntry> {
+    fn parse_hierarchical_links(&self, content: &str) -> Vec<TocItem> {
         let mut entries = Vec::new();
 
         // Extract content from body if present
@@ -191,19 +188,32 @@ impl TocParser {
                 {
                     if i != j && child_start > start && child_end < end {
                         // This is a child of the current entry
-                        children.push(TocEntry {
+                        // For nav documents, we'll create chapters without index (will be assigned later)
+                        children.push(TocItem::Chapter {
                             title: child_title.clone(),
                             href: child_href.clone(),
-                            children: Vec::new(), // For now, only support one level of nesting
+                            index: 0, // Will be mapped later when converting
                         });
                     }
                 }
 
-                entries.push(TocEntry {
-                    title: title.clone(),
-                    href: href.clone(),
-                    children,
-                });
+                if children.is_empty() {
+                    // No children, create a Chapter
+                    entries.push(TocItem::Chapter {
+                        title: title.clone(),
+                        href: href.clone(),
+                        index: 0, // Will be mapped later
+                    });
+                } else {
+                    // Has children, create a Section
+                    entries.push(TocItem::Section {
+                        title: title.clone(),
+                        href: Some(href.clone()),
+                        index: None, // Will be mapped later
+                        children,
+                        is_expanded: true,
+                    });
+                }
             }
         }
 
@@ -211,7 +221,7 @@ impl TocParser {
     }
 
     /// Parse NCX navigation points
-    fn parse_ncx_nav_points(&self, content: &str) -> Vec<TocEntry> {
+    fn parse_ncx_nav_points(&self, content: &str) -> Vec<TocItem> {
         let mut entries = Vec::new();
 
         // Find top-level navPoint elements (not nested within other navPoints)
@@ -281,7 +291,7 @@ impl TocParser {
     }
 
     /// Parse single NCX navigation point with proper nesting
-    fn parse_single_ncx_navpoint(&self, content: &str) -> Option<TocEntry> {
+    fn parse_single_ncx_navpoint(&self, content: &str) -> Option<TocItem> {
         debug!(
             "Parsing navPoint content ({}chars): {}...",
             content.len(),
@@ -338,11 +348,23 @@ impl TocParser {
             }
         }
 
-        Some(TocEntry {
-            title,
-            href,
-            children,
-        })
+        if children.is_empty() {
+            // No children, create a Chapter
+            Some(TocItem::Chapter {
+                title,
+                href,
+                index: 0, // Will be mapped later
+            })
+        } else {
+            // Has children, create a Section
+            Some(TocItem::Section {
+                title,
+                href: Some(href),
+                index: None, // Will be mapped later
+                children,
+                is_expanded: true,
+            })
+        }
     }
 }
 
@@ -404,25 +426,67 @@ mod tests {
         assert_eq!(entries.len(), 3);
 
         // First entry: standalone chapter
-        assert_eq!(entries[0].title, "Главное за пять минут");
-        assert_eq!(entries[0].href, "Text/content2.html");
-        assert_eq!(entries[0].children.len(), 0);
+        match &entries[0] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "Главное за пять минут");
+                assert_eq!(href, "Text/content2.html");
+            }
+            _ => panic!("Expected first entry to be a Chapter"),
+        }
 
         // Second entry: section with children
-        assert_eq!(entries[1].title, "Контекст");
-        assert_eq!(entries[1].href, "Text/Section0002.html");
-        assert_eq!(entries[1].children.len(), 2);
-        assert_eq!(entries[1].children[0].title, "Как влияет контекст");
-        assert_eq!(entries[1].children[0].href, "Text/content9.html");
-        assert_eq!(entries[1].children[1].title, "Как это выглядит");
-        assert_eq!(entries[1].children[1].href, "Text/content11.html");
+        match &entries[1] {
+            TocItem::Section {
+                title,
+                href,
+                children,
+                ..
+            } => {
+                assert_eq!(title, "Контекст");
+                assert_eq!(href, &Some("Text/Section0002.html".to_string()));
+                assert_eq!(children.len(), 2);
+
+                match &children[0] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Как влияет контекст");
+                        assert_eq!(href, "Text/content9.html");
+                    }
+                    _ => panic!("Expected first child to be a Chapter"),
+                }
+
+                match &children[1] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Как это выглядит");
+                        assert_eq!(href, "Text/content11.html");
+                    }
+                    _ => panic!("Expected second child to be a Chapter"),
+                }
+            }
+            _ => panic!("Expected second entry to be a Section"),
+        }
 
         // Third entry: another section with children
-        assert_eq!(entries[2].title, "Интерес");
-        assert_eq!(entries[2].href, "Text/content21.html");
-        assert_eq!(entries[2].children.len(), 1);
-        assert_eq!(entries[2].children[0].title, "Великое школьное искажение");
-        assert_eq!(entries[2].children[0].href, "Text/content23.html");
+        match &entries[2] {
+            TocItem::Section {
+                title,
+                href,
+                children,
+                ..
+            } => {
+                assert_eq!(title, "Интерес");
+                assert_eq!(href, &Some("Text/content21.html".to_string()));
+                assert_eq!(children.len(), 1);
+
+                match &children[0] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Великое школьное искажение");
+                        assert_eq!(href, "Text/content23.html");
+                    }
+                    _ => panic!("Expected child to be a Chapter"),
+                }
+            }
+            _ => panic!("Expected third entry to be a Section"),
+        }
     }
 
     #[test]
@@ -459,15 +523,35 @@ mod tests {
         // Debug output to see what was parsed
         println!("Parsed {} entries:", entries.len());
         for (i, entry) in entries.iter().enumerate() {
-            println!(
-                "  {}: {} -> {} (children: {})",
-                i,
-                entry.title,
-                entry.href,
-                entry.children.len()
-            );
-            for (j, child) in entry.children.iter().enumerate() {
-                println!("    {}.{}: {} -> {}", i, j, child.title, child.href);
+            match entry {
+                TocItem::Chapter { title, href, .. } => {
+                    println!("  {}: Chapter '{}' -> {}", i, title, href);
+                }
+                TocItem::Section {
+                    title,
+                    href,
+                    children,
+                    ..
+                } => {
+                    let href_str = href.as_ref().map(|h| h.as_str()).unwrap_or("None");
+                    println!(
+                        "  {}: Section '{}' -> {} (children: {})",
+                        i,
+                        title,
+                        href_str,
+                        children.len()
+                    );
+                    for (j, child) in children.iter().enumerate() {
+                        match child {
+                            TocItem::Chapter { title, href, .. } => {
+                                println!("    {}.{}: Chapter '{}' -> {}", i, j, title, href);
+                            }
+                            TocItem::Section { title, .. } => {
+                                println!("    {}.{}: Section '{}'", i, j, title);
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -480,41 +564,68 @@ mod tests {
         );
 
         // First entry: standalone chapter (no children)
-        assert_eq!(entries[0].title, "Главное за пять минут");
-        assert_eq!(entries[0].href, "../Text/content2.html");
-        assert_eq!(
-            entries[0].children.len(),
-            0,
-            "First entry should have no children"
-        );
+        match &entries[0] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "Главное за пять минут");
+                assert_eq!(href, "../Text/content2.html");
+            }
+            _ => panic!("Expected first entry to be a Chapter"),
+        }
 
         // Second entry: section with nested chapters
-        assert_eq!(entries[1].title, "Контекст");
-        assert_eq!(entries[1].href, "../Text/Section0002.html");
-        assert_eq!(
-            entries[1].children.len(),
-            2,
-            "Контекст section should have 2 children"
-        );
+        match &entries[1] {
+            TocItem::Section {
+                title,
+                href,
+                children,
+                ..
+            } => {
+                assert_eq!(title, "Контекст");
+                assert_eq!(href, &Some("../Text/Section0002.html".to_string()));
+                assert_eq!(children.len(), 2, "Контекст section should have 2 children");
 
-        // Validate nested chapters under Контекст
-        assert_eq!(entries[1].children[0].title, "Как влияет контекст");
-        assert_eq!(entries[1].children[0].href, "../Text/content9.html");
-        assert_eq!(entries[1].children[1].title, "Как это выглядит");
-        assert_eq!(entries[1].children[1].href, "../Text/content11.html");
+                // Validate nested chapters under Контекст
+                match &children[0] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Как влияет контекст");
+                        assert_eq!(href, "../Text/content9.html");
+                    }
+                    _ => panic!("Expected first child to be a Chapter"),
+                }
+                match &children[1] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Как это выглядит");
+                        assert_eq!(href, "../Text/content11.html");
+                    }
+                    _ => panic!("Expected second child to be a Chapter"),
+                }
+            }
+            _ => panic!("Expected second entry to be a Section"),
+        }
 
         // Third entry: another section with nested chapter
-        assert_eq!(entries[2].title, "Интерес");
-        assert_eq!(entries[2].href, "../Text/content21.html");
-        assert_eq!(
-            entries[2].children.len(),
-            1,
-            "Интерес section should have 1 child"
-        );
+        match &entries[2] {
+            TocItem::Section {
+                title,
+                href,
+                children,
+                ..
+            } => {
+                assert_eq!(title, "Интерес");
+                assert_eq!(href, &Some("../Text/content21.html".to_string()));
+                assert_eq!(children.len(), 1, "Интерес section should have 1 child");
 
-        // Validate nested chapter under Интерес
-        assert_eq!(entries[2].children[0].title, "Великое школьное искажение");
-        assert_eq!(entries[2].children[0].href, "../Text/content23.html");
+                // Validate nested chapter under Интерес
+                match &children[0] {
+                    TocItem::Chapter { title, href, .. } => {
+                        assert_eq!(title, "Великое школьное искажение");
+                        assert_eq!(href, "../Text/content23.html");
+                    }
+                    _ => panic!("Expected child to be a Chapter"),
+                }
+            }
+            _ => panic!("Expected third entry to be a Section"),
+        }
     }
 
     #[test]
@@ -551,34 +662,69 @@ mod tests {
         // Should have 11 flat entries (no hierarchy)
         assert_eq!(entries.len(), 11);
 
-        // All entries should have no children (flat structure)
+        // All entries should be chapters (flat structure)
         for entry in &entries {
-            assert_eq!(
-                entry.children.len(),
-                0,
-                "Entry '{}' should have no children in flat structure",
-                entry.title
-            );
+            match entry {
+                TocItem::Chapter { title, .. } => {
+                    // Good, it's a chapter
+                }
+                TocItem::Section { title, .. } => {
+                    panic!(
+                        "Entry '{}' should be a Chapter in flat structure, not a Section",
+                        title
+                    );
+                }
+            }
         }
 
         // Verify specific entries
-        assert_eq!(entries[0].title, "Cover");
-        assert_eq!(entries[0].href, "xhtml/cover.xhtml");
+        match &entries[0] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "Cover");
+                assert_eq!(href, "xhtml/cover.xhtml");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
 
-        assert_eq!(entries[1].title, "Title Page");
-        assert_eq!(entries[1].href, "xhtml/title.xhtml#tit");
+        match &entries[1] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "Title Page");
+                assert_eq!(href, "xhtml/title.xhtml#tit");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
 
-        assert_eq!(entries[2].title, "Copyright Notice");
-        assert_eq!(entries[2].href, "xhtml/copyrightnotice.xhtml");
+        match &entries[2] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "Copyright Notice");
+                assert_eq!(href, "xhtml/copyrightnotice.xhtml");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
 
-        assert_eq!(entries[6].title, "1. Simpleminded Hope");
-        assert_eq!(entries[6].href, "xhtml/chapter1.xhtml#ch1");
+        match &entries[6] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "1. Simpleminded Hope");
+                assert_eq!(href, "xhtml/chapter1.xhtml#ch1");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
 
-        assert_eq!(entries[7].title, "2. Pitching the Revolution");
-        assert_eq!(entries[7].href, "xhtml/chapter2.xhtml#ch2");
+        match &entries[7] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "2. Pitching the Revolution");
+                assert_eq!(href, "xhtml/chapter2.xhtml#ch2");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
 
-        assert_eq!(entries[10].title, "5. The Little Red Book");
-        assert_eq!(entries[10].href, "xhtml/chapter5.xhtml#ch5");
+        match &entries[10] {
+            TocItem::Chapter { title, href, .. } => {
+                assert_eq!(title, "5. The Little Red Book");
+                assert_eq!(href, "xhtml/chapter5.xhtml#ch5");
+            }
+            _ => panic!("Entry should be a Chapter"),
+        }
     }
 
     #[test]

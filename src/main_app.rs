@@ -1,11 +1,11 @@
-use crate::book_list::{BookList, BookListMode, CurrentBookInfo, TocItem};
+use crate::book_list::{BookList, BookListMode, CurrentBookInfo};
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
-use crate::table_of_contents::SelectedTocItem;
+use crate::table_of_contents::{SelectedTocItem, TocItem};
 use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
@@ -53,6 +53,17 @@ pub struct App {
     click_count: u32,
     // Cached chapter information to avoid re-parsing on every render
     cached_current_book_info: Option<CurrentBookInfo>,
+}
+
+pub trait VimNavMotions {
+    fn handle_h();
+    fn handle_j();
+    fn handle_k();
+    fn handle_l();
+    fn handle_ctrl_d();
+    fn handle_ctrl_u();
+    fn handle_gg();
+    fn handle_G();
 }
 
 #[derive(PartialEq, Debug)]
@@ -370,6 +381,39 @@ impl App {
         None
     }
 
+    /// Map chapter indices from the chapter_map to TocItem entries
+    fn map_chapter_indices(
+        toc_items: &mut Vec<TocItem>,
+        chapter_map: &std::collections::HashMap<String, usize>,
+        text_generator: &TextGenerator,
+    ) {
+        for item in toc_items.iter_mut() {
+            match item {
+                TocItem::Chapter { href, index, .. } => {
+                    let normalized_href = text_generator.normalize_href(href);
+                    if let Some(&chapter_index) = chapter_map.get(&normalized_href) {
+                        *index = chapter_index;
+                    }
+                }
+                TocItem::Section {
+                    href,
+                    index,
+                    children,
+                    ..
+                } => {
+                    if let Some(href_str) = href {
+                        let normalized_href = text_generator.normalize_href(href_str);
+                        if let Some(&chapter_index) = chapter_map.get(&normalized_href) {
+                            *index = Some(chapter_index);
+                        }
+                    }
+                    // Recursively map children
+                    Self::map_chapter_indices(children, chapter_map, text_generator);
+                }
+            }
+        }
+    }
+
     /// Convert TOC entries to section structure
 
     fn refresh_chapter_cache(&mut self) {
@@ -380,20 +424,40 @@ impl App {
             debug!("refresh_chapter_cache: processing book '{}'", current_file);
 
             // Parse TOC structure to create hierarchical sections
-            let toc_entries = self.text_generator.parse_toc_structure(epub);
+            let mut toc_items = self.text_generator.parse_toc_structure(epub);
 
             // Debug: Log the parsed TOC structure
-            debug!("Parsed {} TOC entries", toc_entries.len());
-            for (i, entry) in toc_entries.iter().enumerate() {
-                debug!(
-                    "TOC Entry {}: '{}' -> '{}' (children: {})",
-                    i,
-                    entry.title,
-                    entry.href,
-                    entry.children.len()
-                );
-                for (j, child) in entry.children.iter().enumerate() {
-                    debug!("  Child {}: '{}' -> '{}'", j, child.title, child.href);
+            debug!("Parsed {} TOC items", toc_items.len());
+            for (i, item) in toc_items.iter().enumerate() {
+                match item {
+                    TocItem::Chapter { title, href, .. } => {
+                        debug!("TOC Item {}: Chapter '{}' -> '{}'", i, title, href);
+                    }
+                    TocItem::Section {
+                        title,
+                        href,
+                        children,
+                        ..
+                    } => {
+                        let href_str = href.as_ref().map(|h| h.as_str()).unwrap_or("None");
+                        debug!(
+                            "TOC Item {}: Section '{}' -> '{}' (children: {})",
+                            i,
+                            title,
+                            href_str,
+                            children.len()
+                        );
+                        for (j, child) in children.iter().enumerate() {
+                            match child {
+                                TocItem::Chapter { title, href, .. } => {
+                                    debug!("  Child {}: Chapter '{}' -> '{}'", j, title, href);
+                                }
+                                TocItem::Section { title, .. } => {
+                                    debug!("  Child {}: Section '{}'", j, title);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -424,9 +488,8 @@ impl App {
             // Restore original position
             let _ = epub.set_current_page(original_chapter);
 
-            // Convert to new ADT-based structure
-            let toc_items =
-                BookList::convert_toc_to_items(&self.text_generator, &toc_entries, &chapter_map);
+            // Map chapter indices to the TOC items
+            Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
 
             self.cached_current_book_info = Some(CurrentBookInfo {
                 path: current_file.clone(),

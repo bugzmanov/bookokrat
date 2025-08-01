@@ -1,4 +1,4 @@
-use crate::book_list::TocEntry;
+use crate::table_of_contents::TocItem;
 use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
 use log::{debug, warn};
@@ -56,24 +56,40 @@ impl TextGenerator {
 
     /// Check if this chapter is a section header by comparing its href with the TOC structure
     /// A chapter is a section header if it appears in the TOC and has children
-    pub fn is_section_header(&self, chapter_href: &str, toc_entries: &[TocEntry]) -> bool {
+    pub fn is_section_header(&self, chapter_href: &str, toc_entries: &[TocItem]) -> bool {
         self.find_entry_with_children(chapter_href, toc_entries)
     }
 
     /// Recursively search for an entry with the given href that has children
-    fn find_entry_with_children(&self, href: &str, entries: &[TocEntry]) -> bool {
+    fn find_entry_with_children(&self, href: &str, entries: &[TocItem]) -> bool {
         for entry in entries {
-            // Normalize hrefs for comparison (remove leading ../ and ./)
-            let normalized_entry_href = self.normalize_href(&entry.href);
-            let normalized_target_href = self.normalize_href(href);
+            match entry {
+                TocItem::Chapter {
+                    href: entry_href, ..
+                } => {
+                    // Chapters don't have children
+                    let _ = entry_href; // Unused, just for clarity
+                }
+                TocItem::Section {
+                    href: entry_href,
+                    children,
+                    ..
+                } => {
+                    if let Some(entry_href) = entry_href {
+                        // Normalize hrefs for comparison (remove leading ../ and ./)
+                        let normalized_entry_href = self.normalize_href(entry_href);
+                        let normalized_target_href = self.normalize_href(href);
 
-            if normalized_entry_href == normalized_target_href && !entry.children.is_empty() {
-                return true;
-            }
+                        if normalized_entry_href == normalized_target_href && !children.is_empty() {
+                            return true;
+                        }
+                    }
 
-            // Also check children recursively
-            if self.find_entry_with_children(href, &entry.children) {
-                return true;
+                    // Also check children recursively
+                    if self.find_entry_with_children(href, children) {
+                        return true;
+                    }
+                }
             }
         }
         false
@@ -101,10 +117,7 @@ impl TextGenerator {
     }
 
     /// Parse EPUB table of contents to get hierarchical structure
-    pub fn parse_toc_structure(
-        &self,
-        doc: &mut EpubDoc<BufReader<std::fs::File>>,
-    ) -> Vec<TocEntry> {
+    pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
         debug!("TextGenerator::parse_toc_structure called");
         let result = self.toc_parser.parse_toc_structure(doc);
         debug!(
@@ -257,27 +270,29 @@ mod tests {
 
         // Create a sample TOC structure with sections and chapters
         let toc_entries = vec![
-            TocEntry {
+            TocItem::Chapter {
                 title: "Introduction".to_string(),
                 href: "Text/intro.html".to_string(),
-                children: vec![], // No children - not a section header
+                index: 0, // No children - not a section header
             },
-            TocEntry {
+            TocItem::Section {
                 title: "Chapter 1: Getting Started".to_string(),
-                href: "Text/chapter1.html".to_string(),
+                href: Some("Text/chapter1.html".to_string()),
+                index: Some(1),
                 children: vec![
                     // Has children - is a section header
-                    TocEntry {
+                    TocItem::Chapter {
                         title: "1.1 Setup".to_string(),
                         href: "Text/chapter1_1.html".to_string(),
-                        children: vec![],
+                        index: 2,
                     },
-                    TocEntry {
+                    TocItem::Chapter {
                         title: "1.2 Configuration".to_string(),
                         href: "Text/chapter1_2.html".to_string(),
-                        children: vec![],
+                        index: 3,
                     },
                 ],
+                is_expanded: true,
             },
         ];
 
