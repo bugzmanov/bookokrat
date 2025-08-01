@@ -56,14 +56,14 @@ pub struct App {
 }
 
 pub trait VimNavMotions {
-    fn handle_h();
-    fn handle_j();
-    fn handle_k();
-    fn handle_l();
-    fn handle_ctrl_d();
-    fn handle_ctrl_u();
-    fn handle_gg();
-    fn handle_G();
+    fn handle_h(&mut self);
+    fn handle_j(&mut self);
+    fn handle_k(&mut self);
+    fn handle_l(&mut self);
+    fn handle_ctrl_d(&mut self);
+    fn handle_ctrl_u(&mut self);
+    fn handle_gg(&mut self);
+    fn handle_G(&mut self);
 }
 
 #[derive(PartialEq, Debug)]

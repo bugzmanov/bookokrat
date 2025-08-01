@@ -1,6 +1,7 @@
 use crate::book_list::BookList;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
+use crate::main_app::VimNavMotions;
 use crate::table_of_contents::{TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{layout::Rect, Frame};
@@ -105,6 +106,110 @@ impl NavigationPanel {
                         );
                     }
                 }
+            }
+        }
+    }
+}
+
+impl VimNavMotions for NavigationPanel {
+    fn handle_h(&mut self) {
+        // Left movement - switch back to book selection mode
+        if self.mode == NavigationMode::TableOfContents {
+            self.switch_to_book_mode();
+        }
+    }
+
+    fn handle_j(&mut self) {
+        // Down movement - move selection down
+        self.move_selection_down();
+    }
+
+    fn handle_k(&mut self) {
+        // Up movement - move selection up
+        self.move_selection_up();
+    }
+
+    fn handle_l(&mut self) {
+        // Right movement - could be used to enter/select or expand sections
+        // This could be implemented to expand/collapse sections in TOC mode
+        // or to enter a book in book selection mode
+    }
+
+    fn handle_ctrl_d(&mut self) {
+        // Page down - move selection down by half page
+        match self.mode {
+            NavigationMode::BookSelection => {
+                // Move down by multiple items (e.g., 10 items or half visible page)
+                for _ in 0..10 {
+                    self.book_list.move_selection_down();
+                }
+            }
+            NavigationMode::TableOfContents => {
+                // Move down by multiple items in TOC
+                for _ in 0..10 {
+                    self.table_of_contents.move_selection_down();
+                }
+            }
+        }
+    }
+
+    fn handle_ctrl_u(&mut self) {
+        // Page up - move selection up by half page
+        match self.mode {
+            NavigationMode::BookSelection => {
+                // Move up by multiple items (e.g., 10 items or half visible page)
+                for _ in 0..10 {
+                    self.book_list.move_selection_up();
+                }
+            }
+            NavigationMode::TableOfContents => {
+                // Move up by multiple items in TOC
+                for _ in 0..10 {
+                    self.table_of_contents.move_selection_up();
+                }
+            }
+        }
+    }
+
+    fn handle_gg(&mut self) {
+        // Go to top - move selection to first item
+        match self.mode {
+            NavigationMode::BookSelection => {
+                self.book_list.selected = 0;
+            }
+            NavigationMode::TableOfContents => {
+                self.table_of_contents.selected_index = 0;
+                self.table_of_contents.list_state.select(Some(0));
+            }
+        }
+    }
+
+    fn handle_G(&mut self) {
+        // Go to bottom - move selection to last item
+        match self.mode {
+            NavigationMode::BookSelection => {
+                if !self.book_list.is_empty() {
+                    self.book_list.selected = self.book_list.book_count() - 1;
+                }
+            }
+            NavigationMode::TableOfContents => {
+                // For TOC, we can't easily get the total count due to private fields,
+                // so we'll move down until we can't move anymore
+                let mut last_valid_index = self.table_of_contents.selected_index;
+                loop {
+                    let current_index = self.table_of_contents.selected_index;
+                    self.table_of_contents.move_selection_down();
+                    // If the index didn't change, we've reached the bottom
+                    if self.table_of_contents.selected_index == current_index {
+                        break;
+                    }
+                    last_valid_index = self.table_of_contents.selected_index;
+                }
+                // Ensure we're at the last valid position
+                self.table_of_contents.selected_index = last_valid_index;
+                self.table_of_contents
+                    .list_state
+                    .select(Some(last_valid_index));
             }
         }
     }
