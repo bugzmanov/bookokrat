@@ -1,6 +1,7 @@
 use crate::bookmark::Bookmarks;
 use crate::theme::OCEANIC_NEXT;
 use chrono::{DateTime, Local, TimeZone};
+use log::debug;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -13,6 +14,7 @@ use std::collections::HashMap;
 pub struct ReadingHistory {
     items: Vec<HistoryItem>,
     state: ListState,
+    last_popup_area: Option<Rect>,
 }
 
 #[derive(Clone)]
@@ -61,12 +63,17 @@ impl ReadingHistory {
             state.select(Some(0));
         }
 
-        ReadingHistory { items, state }
+        ReadingHistory {
+            items,
+            state,
+            last_popup_area: None,
+        }
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
         // Create centered popup area first
         let popup_area = centered_rect(60, 80, area);
+        self.last_popup_area = Some(popup_area);
 
         // Clear the background for the popup area
         f.render_widget(Clear, popup_area);
@@ -76,7 +83,7 @@ impl ReadingHistory {
             .items
             .iter()
             .map(|item| {
-                let date_str = item.date.format("%Y-%m-%d %H:%M").to_string();
+                let date_str = item.date.format("%Y-%m-%d").to_string();
                 ListItem::new(Line::from(vec![
                     Span::styled(date_str, Style::default().fg(OCEANIC_NEXT.base_03)),
                     Span::raw(" : "),
@@ -136,6 +143,55 @@ impl ReadingHistory {
             .selected()
             .and_then(|i| self.items.get(i))
             .map(|item| item.path.as_str())
+    }
+
+    /// Handle mouse click at the given position
+    /// Returns true if an item was clicked (for double-click detection)
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
+        debug!("ReadingHistory: Mouse click at ({}, {})", x, y);
+
+        if let Some(popup_area) = self.last_popup_area {
+            debug!(
+                "ReadingHistory: Popup area: x={}, y={}, w={}, h={}",
+                popup_area.x, popup_area.y, popup_area.width, popup_area.height
+            );
+
+            // Check if click is within the popup area
+            if x >= popup_area.x
+                && x < popup_area.x + popup_area.width
+                && y > popup_area.y
+                && y < popup_area.y + popup_area.height - 1
+            {
+                // Calculate which item was clicked
+                // Account for the border (1 line at top)
+                let relative_y = y.saturating_sub(popup_area.y).saturating_sub(1);
+
+                // Get the current scroll offset from the list state
+                let offset = self.state.offset();
+
+                // Calculate the actual index in the list
+                let new_index = offset + relative_y as usize;
+
+                debug!(
+                    "ReadingHistory: relative_y={}, offset={}, new_index={}, items_len={}",
+                    relative_y,
+                    offset,
+                    new_index,
+                    self.items.len()
+                );
+
+                if new_index < self.items.len() {
+                    self.state.select(Some(new_index));
+                    debug!("ReadingHistory: Selected item at index {}", new_index);
+                    return true;
+                }
+            } else {
+                debug!("ReadingHistory: Click outside popup area");
+            }
+        } else {
+            debug!("ReadingHistory: No popup area set");
+        }
+        false
     }
 }
 

@@ -802,6 +802,38 @@ impl App {
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                // Check if reading history is shown first
+                if self.show_reading_history {
+                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+
+                    if let Some(ref mut history) = self.reading_history {
+                        match click_type {
+                            ClickType::Single => {
+                                history.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                            ClickType::Double => {
+                                if history.handle_mouse_click(mouse_event.column, mouse_event.row) {
+                                    // Double-click acts as Enter - open the selected book
+                                    if let Some(path) = history.selected_path() {
+                                        if let Some(book_index) =
+                                            self.book_manager.find_book_index_by_path(path)
+                                        {
+                                            // Close history and open the book
+                                            self.show_reading_history = false;
+                                            self.reading_history = None;
+                                            let _ = self.open_book_for_reading(book_index);
+                                        }
+                                    }
+                                }
+                            }
+                            ClickType::Triple => {
+                                history.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                        }
+                    }
+                    return; // Don't process other clicks when history is shown
+                }
+
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::FileList;

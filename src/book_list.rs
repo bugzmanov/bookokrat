@@ -91,27 +91,17 @@ impl BookList {
         area: Rect,
         is_focused: bool,
         palette: &Base16Palette,
-        bookmarks: &Bookmarks,
+        _bookmarks: &Bookmarks,
         current_book_index: Option<usize>,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
-        let timestamp_color = if is_focused {
-            palette.base_04 // Brighter timestamp for focused
-        } else {
-            palette.base_01 // Much dimmer timestamp for unfocused
-        };
 
-        // Create list items with last read timestamps
+        // Create list items
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
-            let bookmark = bookmarks.get_bookmark(&book_info.path);
-            let last_read = bookmark
-                .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
-                .unwrap_or_else(|| "Never".to_string());
-
             // Highlight the currently open book in red
             let book_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
@@ -119,13 +109,10 @@ impl BookList {
                 Style::default().fg(text_color)
             };
 
-            let content = Line::from(vec![
-                Span::styled(book_info.display_name.clone(), book_style),
-                Span::styled(
-                    format!(" ({})", last_read),
-                    Style::default().fg(timestamp_color),
-                ),
-            ]);
+            let content = Line::from(vec![Span::styled(
+                book_info.display_name.clone(),
+                book_style,
+            )]);
             items.push(ListItem::new(content));
         }
 
