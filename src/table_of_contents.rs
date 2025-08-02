@@ -136,6 +136,52 @@ impl TableOfContents {
         }
     }
 
+    /// Toggle expansion state of the currently selected item if it's a section
+    pub fn toggle_selected_expansion(&mut self) {
+        if let Some(ref mut current_book_info) = self.current_book_info {
+            if self.selected_index > 0 {
+                // Subtract 1 to account for the back button
+                let target_index = self.selected_index - 1;
+                Self::toggle_expansion_at_index(
+                    &mut current_book_info.toc_items,
+                    target_index,
+                    &mut 0,
+                );
+            }
+        }
+    }
+
+    /// Helper to find and toggle expansion at a specific index
+    fn toggle_expansion_at_index(
+        toc_items: &mut [TocItem],
+        target_index: usize,
+        current_index: &mut usize,
+    ) -> bool {
+        for item in toc_items {
+            if *current_index == target_index {
+                item.toggle_expansion();
+                return true;
+            }
+            *current_index += 1;
+
+            match item {
+                TocItem::Section {
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    if *is_expanded {
+                        if Self::toggle_expansion_at_index(children, target_index, current_index) {
+                            return true;
+                        }
+                    }
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+        false
+    }
+
     /// Get the total number of visible items in the table of contents (including the back button)
     pub fn get_total_items(&self) -> usize {
         if let Some(ref current_book_info) = self.current_book_info {
@@ -144,6 +190,30 @@ impl TableOfContents {
         } else {
             1 // Just the back button
         }
+    }
+
+    /// Handle mouse click at the given position
+    /// Returns true if an item was clicked
+    pub fn handle_mouse_click(&mut self, _x: u16, y: u16, area: Rect) -> bool {
+        // Account for the border (1 line at top and bottom)
+        if y > area.y && y < area.y + area.height - 1 {
+            let relative_y = y - area.y - 1; // Subtract 1 for the top border
+
+            // Get the current scroll offset from the list_state
+            let offset = self.list_state.offset();
+
+            // Calculate the actual index in the list
+            let new_index = offset + relative_y as usize;
+
+            // Check if the click is within the valid range
+            let total_items = self.get_total_items();
+            if new_index < total_items {
+                self.selected_index = new_index;
+                self.list_state.select(Some(new_index));
+                return true;
+            }
+        }
+        false
     }
 
     /// Count visible TOC items (considering expansion state)

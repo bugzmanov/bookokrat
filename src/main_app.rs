@@ -56,6 +56,9 @@ pub struct App {
     // Key sequence tracking for multi-key commands
     key_sequence: Vec<char>,
     last_key_time: Option<Instant>,
+    // Store terminal dimensions for calculating panel boundaries
+    terminal_width: u16,
+    terminal_height: u16,
 }
 
 pub trait VimNavMotions {
@@ -159,7 +162,16 @@ impl App {
             cached_current_book_info: None,
             key_sequence: Vec::new(),
             last_key_time: None,
+            terminal_width: 80,  // Default width, will be updated on render
+            terminal_height: 24, // Default height, will be updated on render
         };
+
+        // Get actual terminal size on startup
+        if let Ok((width, height)) = crossterm::terminal::size() {
+            app.terminal_width = width;
+            app.terminal_height = height;
+            debug!("Initial terminal size: {}x{}", width, height);
+        }
 
         // Auto-load the most recently read book if available
         if auto_load_recent {
@@ -656,17 +668,33 @@ impl App {
         match mouse_event.kind {
             MouseEventKind::ScrollDown => {
                 // Allow scrolling in both file list and content
-                if mouse_event.column < 30 {
+                // Calculate navigation panel boundary (30% of terminal width)
+                let nav_panel_width = self.calculate_navigation_panel_width();
+                debug!(
+                    "ScrollDown at column {}, nav_panel_width: {}, terminal_width: {}",
+                    mouse_event.column, nav_panel_width, self.terminal_width
+                );
+                if mouse_event.column < nav_panel_width {
+                    debug!("Scrolling navigation panel down");
                     self.navigation_panel.move_selection_down();
                 } else {
+                    debug!("Scrolling content down");
                     self.scroll_down();
                 }
             }
             MouseEventKind::ScrollUp => {
                 // Allow scrolling in both file list and content
-                if mouse_event.column < 30 {
+                // Calculate navigation panel boundary (30% of terminal width)
+                let nav_panel_width = self.calculate_navigation_panel_width();
+                debug!(
+                    "ScrollUp at column {}, nav_panel_width: {}, terminal_width: {}",
+                    mouse_event.column, nav_panel_width, self.terminal_width
+                );
+                if mouse_event.column < nav_panel_width {
+                    debug!("Scrolling navigation panel up");
                     self.navigation_panel.move_selection_up();
                 } else {
+                    debug!("Scrolling content up");
                     self.scroll_up();
                 }
             }
@@ -682,13 +710,50 @@ impl App {
             }
             MouseEventKind::Down(MouseButton::Left) => {
                 // Handle panel switching based on click location
-                if mouse_event.column < 30 {
-                    // Click in book list area (left 30% of screen)
-                    if self.focused_panel != FocusedPanel::FileList {
-                        self.focused_panel = FocusedPanel::FileList;
-                    }
+                // Calculate navigation panel boundary (30% of terminal width)
+                let nav_panel_width = self.calculate_navigation_panel_width();
+                if mouse_event.column < nav_panel_width {
+                    // Click in navigation panel area (left 30% of screen)
+                    // Always switch focus to navigation panel, even on empty area
+                    self.focused_panel = FocusedPanel::FileList;
                     // Clear any text selection when clicking outside the content area
                     self.text_reader.clear_selection();
+
+                    // Get navigation panel area from last render
+                    let nav_area = self.get_navigation_panel_area();
+
+                    // Check click type for navigation panel
+                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+
+                    match click_type {
+                        ClickType::Single => {
+                            // Handle single click - move cursor to clicked position
+                            self.navigation_panel.handle_mouse_click(
+                                mouse_event.column,
+                                mouse_event.row,
+                                nav_area,
+                            );
+                        }
+                        ClickType::Double => {
+                            // Handle double click - act as Enter key
+                            if self.navigation_panel.handle_mouse_click(
+                                mouse_event.column,
+                                mouse_event.row,
+                                nav_area,
+                            ) {
+                                // Simulate Enter key press for the selected item
+                                self.handle_navigation_panel_enter();
+                            }
+                        }
+                        ClickType::Triple => {
+                            // Triple click doesn't have special behavior in navigation panel
+                            self.navigation_panel.handle_mouse_click(
+                                mouse_event.column,
+                                mouse_event.row,
+                                nav_area,
+                            );
+                        }
+                    }
                 } else {
                     // Click in content area (right 70% of screen)
                     if self.focused_panel != FocusedPanel::Content {
@@ -728,7 +793,8 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 // Handle mouse up in content area only (right side)
-                if mouse_event.column >= 30 {
+                let nav_panel_width = self.calculate_navigation_panel_width();
+                if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
                     self.text_reader.handle_mouse_up(
                         mouse_event.column,
@@ -739,7 +805,8 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 // Handle mouse drag in content area only (right side)
-                if mouse_event.column >= 30 {
+                let nav_panel_width = self.calculate_navigation_panel_width();
+                if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
                     let old_scroll_offset = self.text_reader.scroll_offset;
                     self.text_reader.handle_mouse_drag(
@@ -781,15 +848,25 @@ impl App {
         let mut scroll_down_count = 0;
         let mut scroll_up_count = 0;
 
+        // Store the initial mouse position to determine which area to scroll
+        let initial_column = initial_mouse_event.column;
+        let initial_row = initial_mouse_event.row;
+
         // Count the initial event
         match initial_mouse_event.kind {
             MouseEventKind::ScrollDown => {
                 scroll_down_count += 1;
-                debug!("Starting vertical scroll batching with ScrollDown");
+                debug!(
+                    "Starting vertical scroll batching with ScrollDown at ({}, {})",
+                    initial_column, initial_row
+                );
             }
             MouseEventKind::ScrollUp => {
                 scroll_up_count += 1;
-                debug!("Starting vertical scroll batching with ScrollUp");
+                debug!(
+                    "Starting vertical scroll batching with ScrollUp at ({}, {})",
+                    initial_column, initial_row
+                );
             }
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
                 // Horizontal scroll events are not batched, handle individually and return
@@ -897,19 +974,42 @@ impl App {
         let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
 
         debug!(
-            "Batched mouse events: {} down, {} up, net: {}, drained: {} events",
-            scroll_down_count, scroll_up_count, net_scroll, drain_count
+            "Batched mouse events: {} down, {} up, net: {}, drained: {} events at position ({}, {})",
+            scroll_down_count, scroll_up_count, net_scroll, drain_count, initial_column, initial_row
         );
 
-        if net_scroll > 0 {
-            // Net scroll down - content area only
-            for _ in 0..net_scroll.min(10) {
-                self.scroll_down();
+        // Determine which area to scroll based on the initial mouse position
+        let nav_panel_width = self.calculate_navigation_panel_width();
+
+        if self.focused_panel == FocusedPanel::FileList
+            || (self.focused_panel == FocusedPanel::Content && initial_column < nav_panel_width)
+        {
+            // Mouse is in navigation panel
+            debug!("Applying scroll to navigation panel");
+            if net_scroll > 0 {
+                // Net scroll down
+                for _ in 0..net_scroll.min(10) {
+                    self.navigation_panel.move_selection_down();
+                }
+            } else if net_scroll < 0 {
+                // Net scroll up
+                for _ in 0..(-net_scroll).min(10) {
+                    self.navigation_panel.move_selection_up();
+                }
             }
-        } else if net_scroll < 0 {
-            // Net scroll up - content area only
-            for _ in 0..(-net_scroll).min(10) {
-                self.scroll_up();
+        } else {
+            // Mouse is in content area
+            debug!("Applying scroll to content area");
+            if net_scroll > 0 {
+                // Net scroll down
+                for _ in 0..net_scroll.min(10) {
+                    self.scroll_down();
+                }
+            } else if net_scroll < 0 {
+                // Net scroll up
+                for _ in 0..(-net_scroll).min(10) {
+                    self.scroll_up();
+                }
             }
         }
     }
@@ -981,6 +1081,67 @@ impl App {
         self.text_reader.scroll_offset
     }
 
+    /// Calculate the navigation panel width based on stored terminal width
+    fn calculate_navigation_panel_width(&self) -> u16 {
+        // 30% of terminal width, minimum 20 columns
+        ((self.terminal_width * 30) / 100).max(20)
+    }
+
+    /// Get the navigation panel area based on current terminal size
+    fn get_navigation_panel_area(&self) -> Rect {
+        use ratatui::layout::{Constraint, Direction, Layout};
+        // Calculate the same layout as in render
+        let full_area = Rect::new(0, 0, self.terminal_width, self.terminal_height);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(3)])
+            .split(full_area);
+        let main_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(chunks[0]);
+        main_chunks[0]
+    }
+
+    /// Handle Enter key press in navigation panel
+    fn handle_navigation_panel_enter(&mut self) {
+        use crate::navigation_panel::SelectedActionOwned;
+        match self.navigation_panel.get_selected_action() {
+            SelectedActionOwned::BookIndex(index) => {
+                // Open the selected book
+                if let Err(e) = self.open_book_for_reading(index) {
+                    error!("Failed to open book at index {}: {}", index, e);
+                }
+            }
+            SelectedActionOwned::BackToBooks => {
+                // Switch back to book selection mode
+                self.navigation_panel.switch_to_book_mode();
+            }
+            SelectedActionOwned::TocItem(toc_item) => {
+                // Check if this is a section or a chapter
+                match toc_item {
+                    TocItem::Chapter { index, .. } => {
+                        let _ = self.navigate_to_chapter(index);
+                        self.focused_panel = FocusedPanel::Content;
+                    }
+                    TocItem::Section { index, .. } => {
+                        if let Some(chapter_index) = index {
+                            let _ = self.navigate_to_chapter(chapter_index);
+                            self.focused_panel = FocusedPanel::Content;
+                        } else {
+                            self.navigation_panel
+                                .table_of_contents
+                                .toggle_selected_expansion();
+                        }
+                    }
+                }
+            }
+            SelectedActionOwned::None => {
+                // Nothing selected
+            }
+        }
+    }
+
     fn detect_click_type(&mut self, column: u16, row: u16) -> ClickType {
         const DOUBLE_CLICK_TIME_MS: u64 = 500; // Maximum time between clicks for double-click
         const CLICK_DISTANCE_THRESHOLD: u16 = 3; // Maximum distance between clicks
@@ -1041,6 +1202,10 @@ impl App {
             // Save bookmark when auto-scrolling changes position
             self.save_bookmark();
         }
+
+        // Update terminal dimensions for mouse event calculations
+        self.terminal_width = f.size().width;
+        self.terminal_height = f.size().height;
 
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
@@ -1271,13 +1436,25 @@ impl App {
                                 self.switch_to_book_list_mode();
                             }
                             Some(SelectedTocItem::TocItem(toc_item)) => {
-                                // Navigate to the selected chapter from TOC
-                                if let Some(chapter_index) = toc_item.chapter_index() {
-                                    let _ = self.navigate_to_chapter(chapter_index);
-                                    self.focused_panel = FocusedPanel::Content;
-                                } else {
-                                    // This is a section without content, just toggle expansion
-                                    // TODO: Implement section expansion toggle
+                                // Check if this is a section or a chapter
+                                match toc_item {
+                                    TocItem::Chapter { index, .. } => {
+                                        // Navigate to the chapter
+                                        let _ = self.navigate_to_chapter(*index);
+                                        self.focused_panel = FocusedPanel::Content;
+                                    }
+                                    TocItem::Section { index, .. } => {
+                                        if let Some(chapter_index) = index {
+                                            // This section has content - navigate to it
+                                            let _ = self.navigate_to_chapter(*chapter_index);
+                                            self.focused_panel = FocusedPanel::Content;
+                                        } else {
+                                            // This section has no content - just toggle expansion
+                                            self.navigation_panel
+                                                .table_of_contents
+                                                .toggle_selected_expansion();
+                                        }
+                                    }
                                 }
                             }
                             None => {}

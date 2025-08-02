@@ -665,7 +665,7 @@ mod tests {
         // All entries should be chapters (flat structure)
         for entry in &entries {
             match entry {
-                TocItem::Chapter { title, .. } => {
+                TocItem::Chapter { .. } => {
                     // Good, it's a chapter
                 }
                 TocItem::Section { title, .. } => {

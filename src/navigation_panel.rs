@@ -2,9 +2,16 @@ use crate::book_list::BookList;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::main_app::VimNavMotions;
-use crate::table_of_contents::{TableOfContents, TocItem};
+use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{layout::Rect, Frame};
+
+pub enum SelectedActionOwned {
+    None,
+    BookIndex(usize),
+    BackToBooks,
+    TocItem(TocItem),
+}
 
 #[derive(Clone)]
 pub struct CurrentBookInfo {
@@ -72,6 +79,39 @@ impl NavigationPanel {
 
     pub fn get_selected_book_index(&self) -> usize {
         self.book_list.selected
+    }
+
+    /// Handle mouse click at the given position
+    /// Returns true if an item was selected (for double-click handling)
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> bool {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.handle_mouse_click(x, y, area),
+            NavigationMode::TableOfContents => {
+                self.table_of_contents.handle_mouse_click(x, y, area)
+            }
+        }
+    }
+
+    /// Get the currently selected index based on the mode
+    pub fn get_selected_action(&self) -> SelectedActionOwned {
+        match self.mode {
+            NavigationMode::BookSelection => {
+                SelectedActionOwned::BookIndex(self.book_list.selected)
+            }
+            NavigationMode::TableOfContents => {
+                if let Some(item) = self.table_of_contents.get_selected_item() {
+                    match item {
+                        SelectedTocItem::BackToBooks => SelectedActionOwned::BackToBooks,
+                        SelectedTocItem::TocItem(toc_item) => {
+                            // Clone the TocItem to avoid lifetime issues
+                            SelectedActionOwned::TocItem(toc_item.clone())
+                        }
+                    }
+                } else {
+                    SelectedActionOwned::None
+                }
+            }
+        }
     }
 
     pub fn render(

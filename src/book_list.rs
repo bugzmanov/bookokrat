@@ -12,7 +12,7 @@ use ratatui::{
 pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
-    books: Vec<BookInfo>,
+    book_infos: Vec<BookInfo>,
 }
 
 impl BookList {
@@ -28,12 +28,12 @@ impl BookList {
         Self {
             selected: 0,
             list_state,
-            books,
+            book_infos: books,
         }
     }
 
     pub fn move_selection_down(&mut self) {
-        if self.selected < self.books.len().saturating_sub(1) {
+        if self.selected < self.book_infos.len().saturating_sub(1) {
             self.selected += 1;
             self.list_state.select(Some(self.selected));
         }
@@ -52,15 +52,38 @@ impl BookList {
     }
 
     pub fn get_selected_book(&self) -> Option<&BookInfo> {
-        self.books.get(self.selected)
+        self.book_infos.get(self.selected)
     }
 
     pub fn book_count(&self) -> usize {
-        self.books.len()
+        self.book_infos.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.books.is_empty()
+        self.book_infos.is_empty()
+    }
+
+    /// Handle mouse click at the given position
+    /// Returns true if an item was clicked
+    pub fn handle_mouse_click(&mut self, _x: u16, y: u16, area: Rect) -> bool {
+        // Account for the border (1 line at top and bottom)
+        if y > area.y && y < area.y + area.height - 1 {
+            let relative_y = y - area.y - 1; // Subtract 1 for the top border
+
+            // Get the current scroll offset from the list_state
+            let offset = self.list_state.offset();
+
+            // Calculate the actual index in the list
+            let new_index = offset + relative_y as usize;
+
+            // Check if the click is within the valid range
+            if new_index < self.book_infos.len() {
+                self.selected = new_index;
+                self.list_state.select(Some(new_index));
+                return true;
+            }
+        }
+        false
     }
 
     pub fn render(
@@ -84,7 +107,7 @@ impl BookList {
         // Create list items with last read timestamps
         let mut items: Vec<ListItem> = Vec::new();
 
-        for (idx, book_info) in self.books.iter().enumerate() {
+        for (idx, book_info) in self.book_infos.iter().enumerate() {
             let bookmark = bookmarks.get_bookmark(&book_info.path);
             let last_read = bookmark
                 .map(|b| b.last_read.format("%Y-%m-%d %H:%M").to_string())
@@ -132,6 +155,4 @@ impl BookList {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-}
+mod tests {}
