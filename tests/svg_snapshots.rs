@@ -306,7 +306,7 @@ fn test_content_scrolling_svg() {
     // Load the first book
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
         // Force animation to complete for testing
     }
 
@@ -364,7 +364,7 @@ fn test_chapter_title_normal_length_svg() {
     // Load the 7-chapter test book to get chapter with title
     if let Some(book_info) = app.book_manager.get_book_info(1) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
         // Switch to content focus like runtime behavior after loading
         app.focused_panel = bookrat::main_app::FocusedPanel::Content;
         // Force animation to complete for testing
@@ -418,7 +418,7 @@ fn test_chapter_title_narrow_terminal_svg() {
     // Load the 7-chapter test book to get chapter with title
     if let Some(book_info) = app.book_manager.get_book_info(1) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
@@ -473,7 +473,7 @@ fn test_chapter_title_no_title_svg() {
     // Load the digital frontier book (which may not have chapter titles)
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
         // Force animation to complete for testing
     }
 
@@ -533,7 +533,7 @@ fn test_mouse_scroll_file_list_svg() {
     };
 
     // Apply mouse scroll event in file list
-    app.handle_mouse_event(mouse_event);
+    app.handle_mouse_event(mouse_event, None);
 
     terminal.draw(|f| app.draw(f)).unwrap();
     let svg_output = terminal_to_svg(&terminal);
@@ -581,7 +581,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Scroll to the bottom first using keyboard
@@ -599,7 +599,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
 
     // Apply many scroll down events to test bounds checking
     for _ in 0..20 {
-        app.handle_mouse_event(mouse_event);
+        app.handle_mouse_event(mouse_event, None);
     }
 
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -646,7 +646,7 @@ fn test_mouse_event_batching_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Create a simulated event source with many rapid scroll events
@@ -686,7 +686,7 @@ fn test_mouse_event_batching_svg() {
     {
         let first_event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = first_event {
-            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+            app.handle_mouse_event(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -734,7 +734,7 @@ fn test_horizontal_scroll_handling_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Create a simulated event source with many rapid horizontal scroll events
@@ -811,7 +811,7 @@ fn test_horizontal_scroll_handling_svg() {
     {
         let event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = event {
-            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+            app.handle_mouse_event(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -859,7 +859,7 @@ fn test_edge_case_mouse_coordinates_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Create a simulated event source with edge case coordinates that would trigger crossterm overflow bug
@@ -901,7 +901,7 @@ fn test_edge_case_mouse_coordinates_svg() {
     {
         let event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = event {
-            app.handle_mouse_event_with_batching(mouse_event, &mut event_source);
+            app.handle_mouse_event(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -951,7 +951,7 @@ fn test_text_selection_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -981,9 +981,9 @@ fn test_text_selection_svg() {
     };
 
     // Apply the mouse events
-    app.handle_mouse_event(mouse_down);
-    app.handle_mouse_event(mouse_drag);
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_down, None);
+    app.handle_mouse_event(mouse_drag, None);
+    app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show the selection
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1028,7 +1028,7 @@ fn test_text_selection_with_auto_scroll_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1058,9 +1058,9 @@ fn test_text_selection_with_auto_scroll_svg() {
     };
 
     // Apply the mouse events to test auto-scroll
-    app.handle_mouse_event(mouse_down);
-    app.handle_mouse_event(mouse_drag_beyond_bottom);
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_down, None);
+    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
+    app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show the selection and scroll state
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1109,7 +1109,7 @@ fn test_continuous_auto_scroll_down_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1123,7 +1123,7 @@ fn test_continuous_auto_scroll_down_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_down, None);
 
     // Simulate continuous dragging beyond bottom - should keep scrolling
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1136,7 +1136,7 @@ fn test_continuous_auto_scroll_down_svg() {
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
-        app.handle_mouse_event(mouse_drag_beyond_bottom);
+        app.handle_mouse_event(mouse_drag_beyond_bottom, None);
         scroll_offsets.push(app.get_scroll_offset());
         // Each drag should continue scrolling until we hit the bottom
         if i > 0 {
@@ -1166,7 +1166,7 @@ fn test_continuous_auto_scroll_down_svg() {
         row: 35,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1215,7 +1215,7 @@ fn test_continuous_auto_scroll_up_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1235,7 +1235,7 @@ fn test_continuous_auto_scroll_up_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_down, None);
 
     // Simulate continuous dragging above top - should keep scrolling up
     let mouse_drag_above_top = MouseEvent {
@@ -1248,7 +1248,7 @@ fn test_continuous_auto_scroll_up_svg() {
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
-        app.handle_mouse_event(mouse_drag_above_top);
+        app.handle_mouse_event(mouse_drag_above_top, None);
         scroll_offsets.push(app.get_scroll_offset());
         // Each drag should continue scrolling until we hit the top
         if i > 0 {
@@ -1278,7 +1278,7 @@ fn test_continuous_auto_scroll_up_svg() {
         row: 2,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1327,7 +1327,7 @@ fn test_timer_based_auto_scroll_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1341,7 +1341,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_down, None);
 
     // Drag beyond bottom ONCE (simulating user holding mouse in position)
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1350,7 +1350,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_beyond_bottom);
+    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
 
     // Now simulate multiple draw calls (which trigger auto-scroll updates)
     // This simulates the real-world scenario where the user holds the mouse
@@ -1392,7 +1392,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 35,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_up, None);
 
     // Final redraw
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1441,7 +1441,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1454,7 +1454,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down);
+    app.handle_mouse_event(mouse_down, None);
 
     // Drag beyond bottom to trigger auto-scroll
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1463,7 +1463,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_beyond_bottom);
+    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
     let scroll_after_auto = app.get_scroll_offset();
 
     // Move cursor back to within content area - auto-scroll should stop
@@ -1473,7 +1473,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 20, // Back within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_back_in_area);
+    app.handle_mouse_event(mouse_drag_back_in_area, None);
     let scroll_after_return = app.get_scroll_offset();
 
     // Scroll should stop when cursor returns to content area
@@ -1489,7 +1489,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 25, // Still within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_within_area);
+    app.handle_mouse_event(mouse_drag_within_area, None);
     let final_scroll = app.get_scroll_offset();
 
     assert_eq!(
@@ -1504,7 +1504,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 25,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1553,7 +1553,7 @@ fn test_double_click_word_selection_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1590,10 +1590,10 @@ fn test_double_click_word_selection_svg() {
     };
 
     // Apply the double-click sequence
-    app.handle_mouse_event(mouse_click1);
-    app.handle_mouse_event(mouse_up1);
-    app.handle_mouse_event(mouse_click2);
-    app.handle_mouse_event(mouse_up2);
+    app.handle_mouse_event(mouse_click1, None);
+    app.handle_mouse_event(mouse_up1, None);
+    app.handle_mouse_event(mouse_click2, None);
+    app.handle_mouse_event(mouse_up2, None);
 
     // Redraw to show the word selection
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1642,7 +1642,7 @@ fn test_triple_click_paragraph_selection_svg() {
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // First draw to initialize the content area
@@ -1693,12 +1693,12 @@ fn test_triple_click_paragraph_selection_svg() {
     };
 
     // Apply the triple-click sequence
-    app.handle_mouse_event(mouse_click1);
-    app.handle_mouse_event(mouse_up1);
-    app.handle_mouse_event(mouse_click2);
-    app.handle_mouse_event(mouse_up2);
-    app.handle_mouse_event(mouse_click3);
-    app.handle_mouse_event(mouse_up3);
+    app.handle_mouse_event(mouse_click1, None);
+    app.handle_mouse_event(mouse_up1, None);
+    app.handle_mouse_event(mouse_click2, None);
+    app.handle_mouse_event(mouse_up2, None);
+    app.handle_mouse_event(mouse_click3, None);
+    app.handle_mouse_event(mouse_up3, None);
 
     // Redraw to show the paragraph selection
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1747,7 +1747,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     // Load the first book and ensure we're in content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Ensure content panel has focus
@@ -1765,7 +1765,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         row: 12,    // Where book text should be displayed
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_click_on_text);
+    app.handle_mouse_event(mouse_click_on_text, None);
 
     // Complete the click with mouse up
     let mouse_up = MouseEvent {
@@ -1774,7 +1774,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         row: 12,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up);
+    app.handle_mouse_event(mouse_up, None);
 
     // Draw to see the current state
     terminal.draw(|f| app.draw(f)).unwrap();
@@ -1825,7 +1825,7 @@ fn test_toc_navigation_bug_svg() {
     // Load a book that has hierarchical TOC structure
     if let Some(book_info) = app.book_manager.get_book_info(1) {
         let path = book_info.path.clone();
-        app.load_epub(&path);
+        let _ = app.open_book_for_reading_by_path(&path);
     }
 
     // Start with file list panel focused to show the TOC

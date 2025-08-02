@@ -644,90 +644,168 @@ impl App {
         }
     }
 
-    pub fn handle_mouse_event(&mut self, mouse_event: MouseEvent) {
+    /// Handle a mouse event with optional batching for scroll events
+    /// When event_source is provided, scroll events will be batched for smoother scrolling
+    pub fn handle_mouse_event(
+        &mut self,
+        initial_mouse_event: MouseEvent,
+        event_source: Option<&mut dyn crate::event_source::EventSource>,
+    ) {
+        use std::time::Duration;
+
         let start_time = std::time::Instant::now();
         debug!(
             "handle_mouse_event called with: {:?} at ({}, {})",
-            mouse_event.kind, mouse_event.column, mouse_event.row
+            initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
         );
 
         // Extra validation for horizontal scrolls to prevent crossterm overflow bug
         if matches!(
-            mouse_event.kind,
+            initial_mouse_event.kind,
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
         ) {
-            if !self.is_valid_mouse_coordinates(mouse_event.column, mouse_event.row) {
+            if !self.is_valid_mouse_coordinates(initial_mouse_event.column, initial_mouse_event.row)
+            {
                 debug!(
                     "Dropping horizontal scroll event with invalid coordinates: ({}, {})",
-                    mouse_event.column, mouse_event.row
+                    initial_mouse_event.column, initial_mouse_event.row
                 );
                 return;
             }
         }
 
-        match mouse_event.kind {
+        let is_scroll_event = matches!(
+            initial_mouse_event.kind,
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp
+        );
+
+        if !is_scroll_event {
+            self.handle_non_scroll_mouse_event(initial_mouse_event);
+            return;
+        }
+
+        // Handle scroll events - with or without batching
+        if event_source.is_none() {
+            match initial_mouse_event.kind {
+                MouseEventKind::ScrollDown => self.apply_scroll(1, initial_mouse_event.column),
+                MouseEventKind::ScrollUp => self.apply_scroll(-1, initial_mouse_event.column),
+                _ => unreachable!(),
+            }
+            return;
+        }
+
+        // Batching logic for scroll events
+        let event_source = event_source.unwrap();
+        let mut scroll_down_count = 0;
+        let mut scroll_up_count = 0;
+
+        // Store the initial mouse position to determine which area to scroll
+        let initial_column = initial_mouse_event.column;
+        let initial_row = initial_mouse_event.row;
+
+        // Count the initial event
+        match initial_mouse_event.kind {
             MouseEventKind::ScrollDown => {
-                // Allow scrolling in both file list and content
-                // Calculate navigation panel boundary (30% of terminal width)
-                let nav_panel_width = self.calculate_navigation_panel_width();
+                scroll_down_count += 1;
                 debug!(
-                    "ScrollDown at column {}, nav_panel_width: {}, terminal_width: {}",
-                    mouse_event.column, nav_panel_width, self.terminal_width
+                    "Starting vertical scroll batching with ScrollDown at ({}, {})",
+                    initial_column, initial_row
                 );
-                if mouse_event.column < nav_panel_width {
-                    debug!("Scrolling navigation panel down");
-                    self.navigation_panel.move_selection_down();
-                } else {
-                    debug!("Scrolling content down");
-                    self.scroll_down();
-                }
             }
             MouseEventKind::ScrollUp => {
-                // Allow scrolling in both file list and content
-                // Calculate navigation panel boundary (30% of terminal width)
-                let nav_panel_width = self.calculate_navigation_panel_width();
+                scroll_up_count += 1;
                 debug!(
-                    "ScrollUp at column {}, nav_panel_width: {}, terminal_width: {}",
-                    mouse_event.column, nav_panel_width, self.terminal_width
+                    "Starting vertical scroll batching with ScrollUp at ({}, {})",
+                    initial_column, initial_row
                 );
-                if mouse_event.column < nav_panel_width {
-                    debug!("Scrolling navigation panel up");
-                    self.navigation_panel.move_selection_up();
-                } else {
-                    debug!("Scrolling content up");
-                    self.scroll_up();
+            }
+            _ => unreachable!(), // We already checked this is a scroll event
+        }
+
+        // Drain additional mouse scroll events that are queued up
+        let drain_timeout = Duration::from_millis(0); // Non-blocking poll
+        let max_drain_iterations = 50; // Safety limit to prevent infinite loops
+        let mut drain_count = 0;
+        let batch_start_time = std::time::Instant::now();
+
+        while drain_count < max_drain_iterations
+            && event_source.poll(drain_timeout).unwrap_or(false)
+        {
+            drain_count += 1;
+
+            // Timeout circuit breaker - prevent infinite loops or excessive processing
+            if batch_start_time.elapsed() > std::time::Duration::from_millis(100) {
+                debug!(
+                    "Batching timeout reached ({}ms), breaking out of event drain loop",
+                    batch_start_time.elapsed().as_millis()
+                );
+                break;
+            }
+
+            // Safety check - if we're draining too many events, something might be wrong
+            if drain_count > 20 {
+                debug!(
+                    "Warning: draining many events ({}), may indicate event accumulation issue",
+                    drain_count
+                );
+            }
+
+            match event_source.read() {
+                Ok(Event::Mouse(mouse_event)) => match mouse_event.kind {
+                    MouseEventKind::ScrollDown => scroll_down_count += 1,
+                    MouseEventKind::ScrollUp => scroll_up_count += 1,
+                    MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                        //ignore
+                        break;
+                    }
+                    _ => {
+                        self.handle_non_scroll_mouse_event(mouse_event);
+                        break;
+                    }
+                },
+                Ok(_) => {
+                    // Non-mouse event, stop draining
+                    break;
+                }
+                Err(e) => {
+                    debug!("Error reading event during batching: {:?}", e);
+                    break;
                 }
             }
-            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
-                // Horizontal scrolling is not supported in this app, but we handle it
-                // explicitly to avoid issues with event processing
-                debug!(
-                    "Horizontal scroll event ignored: {:?} at ({}, {})",
-                    mouse_event.kind, mouse_event.column, mouse_event.row
-                );
-                // Explicitly return after handling to ensure no further processing
-                return;
-            }
+        }
+
+        let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
+
+        debug!(
+            "Batched mouse events: {} down, {} up, net: {}, drained: {} events at position ({}, {})",
+            scroll_down_count, scroll_up_count, net_scroll, drain_count, initial_column, initial_row
+        );
+
+        self.apply_scroll(net_scroll, initial_column);
+
+        let elapsed = start_time.elapsed();
+        if elapsed > std::time::Duration::from_millis(10) {
+            debug!(
+                "handle_mouse_event took {}ms for batched scroll",
+                elapsed.as_millis()
+            );
+        }
+    }
+
+    /// Handle non-scroll mouse events (clicks, drags, etc.)
+    fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
+        match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Handle panel switching based on click location
-                // Calculate navigation panel boundary (30% of terminal width)
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column < nav_panel_width {
-                    // Click in navigation panel area (left 30% of screen)
-                    // Always switch focus to navigation panel, even on empty area
                     self.focused_panel = FocusedPanel::FileList;
-                    // Clear any text selection when clicking outside the content area
                     self.text_reader.clear_selection();
 
-                    // Get navigation panel area from last render
                     let nav_area = self.get_navigation_panel_area();
-
-                    // Check click type for navigation panel
                     let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
 
                     match click_type {
                         ClickType::Single => {
-                            // Handle single click - move cursor to clicked position
                             self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
@@ -735,18 +813,15 @@ impl App {
                             );
                         }
                         ClickType::Double => {
-                            // Handle double click - act as Enter key
                             if self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 nav_area,
                             ) {
-                                // Simulate Enter key press for the selected item
                                 self.handle_navigation_panel_enter();
                             }
                         }
                         ClickType::Triple => {
-                            // Triple click doesn't have special behavior in navigation panel
                             self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
@@ -760,10 +835,7 @@ impl App {
                         self.focused_panel = FocusedPanel::Content;
                     }
 
-                    // Get the content area for coordinate conversion
                     let content_area = self.get_content_area_rect();
-
-                    // Handle click detection (double-click, triple-click)
                     let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
 
                     match click_type {
@@ -792,7 +864,6 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                // Handle mouse up in content area only (right side)
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
@@ -804,7 +875,6 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                // Handle mouse drag in content area only (right side)
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
@@ -814,200 +884,45 @@ impl App {
                         mouse_event.row,
                         content_area,
                     );
-                    // Save bookmark if auto-scroll occurred
                     if self.text_reader.scroll_offset != old_scroll_offset {
                         self.save_bookmark();
                     }
                 }
             }
             _ => {
-                // Handle other mouse events like clicks, moves, etc.
                 debug!("Unhandled mouse event: {:?}", mouse_event.kind);
             }
         }
-
-        let elapsed = start_time.elapsed();
-        if elapsed > std::time::Duration::from_millis(10) {
-            debug!(
-                "handle_mouse_event took {}ms for event {:?}",
-                elapsed.as_millis(),
-                mouse_event.kind
-            );
-        }
     }
 
-    pub fn handle_mouse_event_with_batching(
-        &mut self,
-        initial_mouse_event: MouseEvent,
-        event_source: &mut dyn crate::event_source::EventSource,
-    ) {
-        use std::time::Duration;
-
-        debug!("Processing mouse event: {:?}", initial_mouse_event.kind);
-
-        let mut scroll_down_count = 0;
-        let mut scroll_up_count = 0;
-
-        // Store the initial mouse position to determine which area to scroll
-        let initial_column = initial_mouse_event.column;
-        let initial_row = initial_mouse_event.row;
-
-        // Count the initial event
-        match initial_mouse_event.kind {
-            MouseEventKind::ScrollDown => {
-                scroll_down_count += 1;
-                debug!(
-                    "Starting vertical scroll batching with ScrollDown at ({}, {})",
-                    initial_column, initial_row
-                );
-            }
-            MouseEventKind::ScrollUp => {
-                scroll_up_count += 1;
-                debug!(
-                    "Starting vertical scroll batching with ScrollUp at ({}, {})",
-                    initial_column, initial_row
-                );
-            }
-            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
-                // Horizontal scroll events are not batched, handle individually and return
-                debug!(
-                    "Handling horizontal scroll event individually: {:?} at ({}, {})",
-                    initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
-                );
-
-                // Validate coordinates to prevent crossterm overflow bug
-                if self
-                    .is_valid_mouse_coordinates(initial_mouse_event.column, initial_mouse_event.row)
-                {
-                    self.handle_mouse_event(initial_mouse_event);
-                } else {
-                    debug!(
-                        "Skipping horizontal scroll event with invalid coordinates: ({}, {})",
-                        initial_mouse_event.column, initial_mouse_event.row
-                    );
-                }
-                return;
-            }
-            _ => {
-                // Other mouse events are handled normally
-                debug!(
-                    "Handling non-scroll mouse event: {:?}",
-                    initial_mouse_event.kind
-                );
-                self.handle_mouse_event(initial_mouse_event);
-                return;
-            }
+    /// Apply scroll events (positive for down, negative for up)
+    fn apply_scroll(&mut self, scroll_amount: i32, column: u16) {
+        if scroll_amount == 0 {
+            return;
         }
 
-        // Drain additional mouse scroll events that are queued up
-        // Use a very short timeout to avoid blocking but catch rapid events
-        let drain_timeout = Duration::from_millis(0); // Non-blocking poll
-        let max_drain_iterations = 50; // Safety limit to prevent infinite loops
-        let mut drain_count = 0;
-        let start_time = std::time::Instant::now();
-
-        while drain_count < max_drain_iterations
-            && event_source.poll(drain_timeout).unwrap_or(false)
-        {
-            drain_count += 1;
-
-            // Timeout circuit breaker - prevent infinite loops or excessive processing
-            if start_time.elapsed() > std::time::Duration::from_millis(100) {
-                debug!(
-                    "Batching timeout reached ({}ms), breaking out of event drain loop",
-                    start_time.elapsed().as_millis()
-                );
-                break;
-            }
-
-            // Safety check - if we're draining too many events, something might be wrong
-            if drain_count > 20 {
-                debug!(
-                    "Warning: draining many events ({}), may indicate event accumulation issue",
-                    drain_count
-                );
-            }
-
-            match event_source.read() {
-                Ok(Event::Mouse(mouse_event)) => {
-                    match mouse_event.kind {
-                        MouseEventKind::ScrollDown => scroll_down_count += 1,
-                        MouseEventKind::ScrollUp => scroll_up_count += 1,
-                        MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
-                            // Horizontal scroll events during batching - handle individually and stop batching
-                            debug!("Horizontal scroll during vertical batch, handling individually: {:?} at ({}, {})",
-                                   mouse_event.kind, mouse_event.column, mouse_event.row);
-
-                            // Validate coordinates to prevent crossterm overflow bug
-                            if self.is_valid_mouse_coordinates(mouse_event.column, mouse_event.row)
-                            {
-                                self.handle_mouse_event(mouse_event);
-                                debug!(
-                                    "Completed horizontal scroll handling, breaking out of batch"
-                                );
-                            } else {
-                                debug!("Skipping horizontal scroll event with invalid coordinates during batching: ({}, {})",
-                                       mouse_event.column, mouse_event.row);
-                            }
-                            break;
-                        }
-                        _ => {
-                            // Other mouse events, handle normally and stop batching
-                            self.handle_mouse_event(mouse_event);
-                            break;
-                        }
-                    }
-                }
-                Ok(_) => {
-                    // Non-mouse event, stop draining (we'll process it in the next iteration)
-                    break;
-                }
-                Err(e) => {
-                    // Error reading event, log and stop draining
-                    debug!("Error reading event during batching: {:?}", e);
-                    break;
-                }
-            }
-        }
-
-        // Process the net scroll effect
-        let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
-
-        debug!(
-            "Batched mouse events: {} down, {} up, net: {}, drained: {} events at position ({}, {})",
-            scroll_down_count, scroll_up_count, net_scroll, drain_count, initial_column, initial_row
-        );
-
-        // Determine which area to scroll based on the initial mouse position
         let nav_panel_width = self.calculate_navigation_panel_width();
+        let is_nav_panel = column < nav_panel_width;
 
-        if self.focused_panel == FocusedPanel::FileList
-            || (self.focused_panel == FocusedPanel::Content && initial_column < nav_panel_width)
-        {
-            // Mouse is in navigation panel
+        if is_nav_panel {
             debug!("Applying scroll to navigation panel");
-            if net_scroll > 0 {
-                // Net scroll down
-                for _ in 0..net_scroll.min(10) {
+            if scroll_amount > 0 {
+                for _ in 0..scroll_amount.min(10) {
                     self.navigation_panel.move_selection_down();
                 }
-            } else if net_scroll < 0 {
-                // Net scroll up
-                for _ in 0..(-net_scroll).min(10) {
+            } else {
+                for _ in 0..(-scroll_amount).min(10) {
                     self.navigation_panel.move_selection_up();
                 }
             }
         } else {
-            // Mouse is in content area
             debug!("Applying scroll to content area");
-            if net_scroll > 0 {
-                // Net scroll down
-                for _ in 0..net_scroll.min(10) {
+            if scroll_amount > 0 {
+                for _ in 0..scroll_amount.min(10) {
                     self.scroll_down();
                 }
-            } else if net_scroll < 0 {
-                // Net scroll up
-                for _ in 0..(-net_scroll).min(10) {
+            } else {
+                for _ in 0..(-scroll_amount).min(10) {
                     self.scroll_up();
                 }
             }
@@ -1584,7 +1499,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                         }
                         _ => {
                             // Handle other mouse events with potential batching for rapid scrolling
-                            app.handle_mouse_event_with_batching(mouse_event, event_source);
+                            app.handle_mouse_event(mouse_event, Some(event_source));
                         }
                     }
                 }
