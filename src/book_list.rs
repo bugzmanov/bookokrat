@@ -19,7 +19,6 @@ impl BookList {
     pub fn new(book_manager: &BookManager) -> Self {
         let books = book_manager.books.clone();
         let has_files = !books.is_empty();
-
         let mut list_state = ListState::default();
         if has_files {
             list_state.select(Some(0));

@@ -69,4 +69,8 @@ impl Bookmarks {
             }
         }
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &Bookmark)> {
+        self.books.iter()
+    }
 }

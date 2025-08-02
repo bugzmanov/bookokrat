@@ -21,7 +21,8 @@ impl BookManager {
 
     pub fn new_with_directory(directory: &str) -> Self {
         let scan_directory = directory.to_string();
-        let books = Self::discover_books_in_dir(&scan_directory);
+        let mut books = Self::discover_books_in_dir(&scan_directory);
+        books.sort_by(|a, b| a.display_name.cmp(&b.display_name));
         Self {
             books,
             scan_directory,
@@ -98,6 +99,10 @@ impl BookManager {
 
     pub fn book_count(&self) -> usize {
         self.books.len()
+    }
+
+    pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
+        self.books.iter().position(|book| book.path == path)
     }
 
     pub fn is_empty(&self) -> bool {

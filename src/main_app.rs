@@ -2,6 +2,7 @@ use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
+use crate::reading_history::ReadingHistory;
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
@@ -27,7 +28,7 @@ use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
     Terminal,
 };
@@ -59,6 +60,9 @@ pub struct App {
     // Store terminal dimensions for calculating panel boundaries
     terminal_width: u16,
     terminal_height: u16,
+    // Reading history
+    reading_history: Option<ReadingHistory>,
+    show_reading_history: bool,
 }
 
 pub trait VimNavMotions {
@@ -164,6 +168,8 @@ impl App {
             last_key_time: None,
             terminal_width: 80,  // Default width, will be updated on render
             terminal_height: 24, // Default height, will be updated on render
+            reading_history: None,
+            show_reading_history: false,
         };
 
         // Get actual terminal size on startup
@@ -1174,6 +1180,21 @@ impl App {
 
         // Draw help bar
         self.render_help_bar(f, chunks[1]);
+
+        // Render reading history popup if active
+        if self.show_reading_history {
+            // First render a dimming overlay
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10)) // Very dark but not black
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.size());
+
+            if let Some(ref mut history) = self.reading_history {
+                history.render(f, f.size());
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -1201,8 +1222,8 @@ impl App {
             "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
         } else {
             match self.focused_panel {
-                FocusedPanel::FileList => "j/k: Navigate files | Enter: Select | Tab: Switch to content | q: Quit",
-                FocusedPanel::Content => "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch to files | Ctrl+O: Open | q: Quit",
+                FocusedPanel::FileList => "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit",
+                FocusedPanel::Content => "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Ctrl+O: Open | q: Quit",
             }
         };
 
@@ -1301,16 +1322,24 @@ impl App {
 
         match key.code {
             KeyCode::Char('j') => {
-                // Navigate based on focused panel
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Navigate in reading history
+                    if let Some(ref mut history) = self.reading_history {
+                        history.next();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.move_selection_down();
                 } else {
                     self.scroll_down();
                 }
             }
             KeyCode::Char('k') => {
-                // Navigate based on focused panel
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Navigate in reading history
+                    if let Some(ref mut history) = self.reading_history {
+                        history.previous();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.move_selection_up();
                 } else {
                     self.scroll_up();
@@ -1323,6 +1352,18 @@ impl App {
                 } else {
                     // Allow chapter navigation in content view
                     let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+                }
+            }
+            KeyCode::Char('H') => {
+                // Toggle reading history
+                if self.show_reading_history {
+                    // Close history
+                    self.show_reading_history = false;
+                    self.reading_history = None;
+                } else {
+                    // Open history
+                    self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
+                    self.show_reading_history = true;
                 }
             }
             KeyCode::Char('l') => {
@@ -1341,44 +1382,61 @@ impl App {
                 }
             }
             KeyCode::Enter => {
-                // Handle selection based on what's currently selected
-                match self.navigation_panel.mode {
-                    NavigationMode::TableOfContents => {
-                        // Handle TOC selection
-                        match self.navigation_panel.table_of_contents.get_selected_item() {
-                            Some(SelectedTocItem::BackToBooks) => {
-                                // Switch back to book list mode
-                                self.switch_to_book_list_mode();
+                if self.show_reading_history {
+                    // Handle selection from reading history
+                    if let Some(ref history) = self.reading_history {
+                        if let Some(path) = history.selected_path() {
+                            // Find the book index by path
+                            if let Some(book_index) =
+                                self.book_manager.find_book_index_by_path(path)
+                            {
+                                // Close history and open the book
+                                self.show_reading_history = false;
+                                self.reading_history = None;
+                                let _ = self.open_book_for_reading(book_index);
                             }
-                            Some(SelectedTocItem::TocItem(toc_item)) => {
-                                // Check if this is a section or a chapter
-                                match toc_item {
-                                    TocItem::Chapter { index, .. } => {
-                                        // Navigate to the chapter
-                                        let _ = self.navigate_to_chapter(*index);
-                                        self.focused_panel = FocusedPanel::Content;
-                                    }
-                                    TocItem::Section { index, .. } => {
-                                        if let Some(chapter_index) = index {
-                                            // This section has content - navigate to it
-                                            let _ = self.navigate_to_chapter(*chapter_index);
+                        }
+                    }
+                } else {
+                    // Handle selection based on what's currently selected
+                    match self.navigation_panel.mode {
+                        NavigationMode::TableOfContents => {
+                            // Handle TOC selection
+                            match self.navigation_panel.table_of_contents.get_selected_item() {
+                                Some(SelectedTocItem::BackToBooks) => {
+                                    // Switch back to book list mode
+                                    self.switch_to_book_list_mode();
+                                }
+                                Some(SelectedTocItem::TocItem(toc_item)) => {
+                                    // Check if this is a section or a chapter
+                                    match toc_item {
+                                        TocItem::Chapter { index, .. } => {
+                                            // Navigate to the chapter
+                                            let _ = self.navigate_to_chapter(*index);
                                             self.focused_panel = FocusedPanel::Content;
-                                        } else {
-                                            // This section has no content - just toggle expansion
-                                            self.navigation_panel
-                                                .table_of_contents
-                                                .toggle_selected_expansion();
+                                        }
+                                        TocItem::Section { index, .. } => {
+                                            if let Some(chapter_index) = index {
+                                                // This section has content - navigate to it
+                                                let _ = self.navigate_to_chapter(*chapter_index);
+                                                self.focused_panel = FocusedPanel::Content;
+                                            } else {
+                                                // This section has no content - just toggle expansion
+                                                self.navigation_panel
+                                                    .table_of_contents
+                                                    .toggle_selected_expansion();
+                                            }
                                         }
                                     }
                                 }
+                                None => {}
                             }
-                            None => {}
                         }
-                    }
-                    NavigationMode::BookSelection => {
-                        // Select book from file list using high-level action
-                        let book_index = self.navigation_panel.get_selected_book_index();
-                        let _ = self.open_book_for_reading(book_index);
+                        NavigationMode::BookSelection => {
+                            // Select book from file list using high-level action
+                            let book_index = self.navigation_panel.get_selected_book_index();
+                            let _ = self.open_book_for_reading(book_index);
+                        }
                     }
                 }
             }
@@ -1461,7 +1519,11 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if self.text_reader.has_text_selection() {
+                if self.show_reading_history {
+                    // Close reading history
+                    self.show_reading_history = false;
+                    self.reading_history = None;
+                } else if self.text_reader.has_text_selection() {
                     // Clear text selection when ESC is pressed
                     self.text_reader.clear_selection();
                     debug!("Text selection cleared via ESC key");

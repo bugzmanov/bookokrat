@@ -1,5 +1,4 @@
 ideas to implement:
- - make margins configurable + text color 
  - images in ghosty terminal
  - Recent books
      - drop dates from book reads. and instead make a separate list of most recent read books
@@ -7,11 +6,11 @@ ideas to implement:
  - logs/debug window
  - NOTES & comments
  - settings window
- - integration with GUI book reader 
+     - make margins configurable + text color 
  - integration with GOODREADS
  - Code formatting & coloring. Goal: Manning books should be nice to read
- - ASCII art animation
  - reading history
+ - ASCII art animation
 
 
 bugz: 
@@ -23,4 +22,5 @@ Done:
  - Mouse support: 
    - scroll
    - select text
+ - integration with GUI book reader 
 

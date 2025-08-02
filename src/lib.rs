@@ -6,6 +6,7 @@ pub mod event_source;
 pub mod main_app;
 pub mod navigation_panel;
 pub mod panic_handler;
+pub mod reading_history;
 pub mod simple_fake_books;
 pub mod system_command;
 pub mod table_of_contents;
