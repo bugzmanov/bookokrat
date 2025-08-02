@@ -1,3 +1,4 @@
+use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use log::debug;
@@ -549,7 +550,7 @@ impl TextReader {
         self.scroll_offset = offset;
     }
 
-    pub fn scroll_down(&mut self, _content: &str) {
+    pub fn scroll_down_no_content(&mut self) {
         let max_offset = self.get_max_scroll_offset();
 
         // Early return if we're already at the bottom
@@ -582,7 +583,7 @@ impl TextReader {
         );
     }
 
-    pub fn scroll_up(&mut self, _content: &str) {
+    pub fn scroll_up_no_content(&mut self) {
         // Early return if we're already at the top
         if self.scroll_offset == 0 {
             debug!("Already at top, scroll_offset: 0");
@@ -610,6 +611,14 @@ impl TextReader {
             self.scroll_speed,
             self.get_max_scroll_offset()
         );
+    }
+
+    pub fn scroll_down(&mut self, _content: &str) {
+        self.scroll_down_no_content();
+    }
+
+    pub fn scroll_up(&mut self, _content: &str) {
+        self.scroll_up_no_content();
     }
 
     pub fn scroll_half_screen_down(&mut self, _content: &str, screen_height: usize) {
@@ -1017,5 +1026,56 @@ impl TextReader {
                 }
             }
         }
+    }
+}
+
+impl VimNavMotions for TextReader {
+    fn handle_h(&mut self) {
+        // Left movement - in text reader context, this could go to previous chapter
+        // but that's handled at the App level, so we do nothing here
+    }
+
+    fn handle_j(&mut self) {
+        // Down movement - scroll down one line
+        self.scroll_down_no_content();
+    }
+
+    fn handle_k(&mut self) {
+        // Up movement - scroll up one line
+        self.scroll_up_no_content();
+    }
+
+    fn handle_l(&mut self) {
+        // Right movement - in text reader context, this could go to next chapter
+        // but that's handled at the App level, so we do nothing here
+    }
+
+    fn handle_ctrl_d(&mut self) {
+        // Page down - scroll down half screen
+        if self.visible_height > 0 {
+            let screen_height = self.visible_height;
+            self.scroll_half_screen_down("", screen_height);
+        }
+    }
+
+    fn handle_ctrl_u(&mut self) {
+        // Page up - scroll up half screen
+        if self.visible_height > 0 {
+            let screen_height = self.visible_height;
+            self.scroll_half_screen_up("", screen_height);
+        }
+    }
+
+    fn handle_gg(&mut self) {
+        // Go to top - scroll to beginning of document
+        self.scroll_offset = 0;
+        debug!("Scrolled to top of document");
+    }
+
+    fn handle_G(&mut self) {
+        // Go to bottom - scroll to end of document
+        let max_offset = self.get_max_scroll_offset();
+        self.scroll_offset = max_offset;
+        debug!("Scrolled to bottom of document: offset {}", max_offset);
     }
 }

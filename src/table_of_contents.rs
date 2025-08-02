@@ -136,6 +136,16 @@ impl TableOfContents {
         }
     }
 
+    /// Get the total number of visible items in the table of contents (including the back button)
+    pub fn get_total_items(&self) -> usize {
+        if let Some(ref current_book_info) = self.current_book_info {
+            // Add 1 for the "<< books list" item
+            self.count_visible_toc_items(&current_book_info.toc_items) + 1
+        } else {
+            1 // Just the back button
+        }
+    }
+
     /// Count visible TOC items (considering expansion state)
     fn count_visible_toc_items(&self, toc_items: &[TocItem]) -> usize {
         let mut count = 0;

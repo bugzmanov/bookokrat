@@ -176,6 +176,7 @@ impl VimNavMotions for NavigationPanel {
         match self.mode {
             NavigationMode::BookSelection => {
                 self.book_list.selected = 0;
+                self.book_list.list_state.select(Some(0));
             }
             NavigationMode::TableOfContents => {
                 self.table_of_contents.selected_index = 0;
@@ -190,26 +191,19 @@ impl VimNavMotions for NavigationPanel {
             NavigationMode::BookSelection => {
                 if !self.book_list.is_empty() {
                     self.book_list.selected = self.book_list.book_count() - 1;
+                    self.book_list
+                        .list_state
+                        .select(Some(self.book_list.book_count() - 1));
                 }
             }
             NavigationMode::TableOfContents => {
-                // For TOC, we can't easily get the total count due to private fields,
-                // so we'll move down until we can't move anymore
-                let mut last_valid_index = self.table_of_contents.selected_index;
-                loop {
-                    let current_index = self.table_of_contents.selected_index;
-                    self.table_of_contents.move_selection_down();
-                    // If the index didn't change, we've reached the bottom
-                    if self.table_of_contents.selected_index == current_index {
-                        break;
-                    }
-                    last_valid_index = self.table_of_contents.selected_index;
+                // Get the total count and go to the last item
+                let total_items = self.table_of_contents.get_total_items();
+                if total_items > 0 {
+                    let last_index = total_items - 1;
+                    self.table_of_contents.selected_index = last_index;
+                    self.table_of_contents.list_state.select(Some(last_index));
                 }
-                // Ensure we're at the last valid position
-                self.table_of_contents.selected_index = last_valid_index;
-                self.table_of_contents
-                    .list_state
-                    .select(Some(last_valid_index));
             }
         }
     }
