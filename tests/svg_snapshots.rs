@@ -5,14 +5,14 @@ use bookrat::test_utils::test_helpers::{
 // SVG snapshot tests using snapbox
 use bookrat::App;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
 
 mod snapshot_assertions;
+mod svg_generation;
 mod test_report;
 mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
 use std::sync::Once;
+use svg_generation::terminal_to_svg;
 
 static INIT: Once = Once::new();
 
@@ -98,108 +98,6 @@ fn create_test_failure_handler(
             },
             snapshot_path,
         });
-    }
-}
-
-// Convert terminal to SVG (directly in test file to access anstyle_svg)
-fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
-    let buffer = terminal.backend().buffer();
-    let mut ansi_output = String::new();
-
-    for y in 0..buffer.area.height {
-        for x in 0..buffer.area.width {
-            let cell = buffer.get(x, y);
-
-            // Add ANSI escape codes for styling
-            let mut styled_char = String::new();
-
-            // Reset first
-            styled_char.push_str("\u{1b}[0m");
-
-            // Add colors
-            if cell.fg != ratatui::style::Color::Reset {
-                styled_char.push_str(&format_color(cell.fg, true));
-            }
-            if cell.bg != ratatui::style::Color::Reset {
-                styled_char.push_str(&format_color(cell.bg, false));
-            }
-
-            // Add modifiers
-            if cell.modifier.contains(ratatui::style::Modifier::BOLD) {
-                styled_char.push_str("\u{1b}[1m");
-            }
-            if cell.modifier.contains(ratatui::style::Modifier::ITALIC) {
-                styled_char.push_str("\u{1b}[3m");
-            }
-            if cell.modifier.contains(ratatui::style::Modifier::UNDERLINED) {
-                styled_char.push_str("\u{1b}[4m");
-            }
-
-            // Add the character
-            styled_char.push_str(&cell.symbol());
-
-            ansi_output.push_str(&styled_char);
-        }
-
-        // Add newline and reset at end of line
-        if y < buffer.area.height - 1 {
-            ansi_output.push_str("\u{1b}[0m\n");
-        }
-    }
-
-    // Final reset
-    ansi_output.push_str("\u{1b}[0m");
-
-    // Convert ANSI to SVG
-    let term = anstyle_svg::Term::new();
-    term.render_svg(&ansi_output)
-}
-
-fn escape_xml(input: &str) -> String {
-    input
-        // .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    // .replace("\"", "&quot;")
-    // .replace("'", "&apos;")
-}
-fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
-    use ratatui::style::Color;
-
-    let base = if is_foreground { 30 } else { 40 };
-
-    match color {
-        Color::Reset => "\u{1b}[0m".to_string(),
-        Color::Black => format!("\u{1b}[{}m", base),
-        Color::Red => format!("\u{1b}[{}m", base + 1),
-        Color::Green => format!("\u{1b}[{}m", base + 2),
-        Color::Yellow => format!("\u{1b}[{}m", base + 3),
-        Color::Blue => format!("\u{1b}[{}m", base + 4),
-        Color::Magenta => format!("\u{1b}[{}m", base + 5),
-        Color::Cyan => format!("\u{1b}[{}m", base + 6),
-        Color::Gray => format!("\u{1b}[{}m", base + 7),
-        Color::DarkGray => format!("\u{1b}[{}m", base + 60),
-        Color::LightRed => format!("\u{1b}[{}m", base + 61),
-        Color::LightGreen => format!("\u{1b}[{}m", base + 62),
-        Color::LightYellow => format!("\u{1b}[{}m", base + 63),
-        Color::LightBlue => format!("\u{1b}[{}m", base + 64),
-        Color::LightMagenta => format!("\u{1b}[{}m", base + 65),
-        Color::LightCyan => format!("\u{1b}[{}m", base + 66),
-        Color::White => format!("\u{1b}[{}m", base + 67),
-        Color::Rgb(r, g, b) => {
-            if is_foreground {
-                format!("\u{1b}[38;2;{};{};{}m", r, g, b)
-            } else {
-                format!("\u{1b}[48;2;{};{};{}m", r, g, b)
-            }
-        }
-        Color::Indexed(idx) => {
-            if is_foreground {
-                format!("\u{1b}[38;5;{}m", idx)
-            } else {
-                format!("\u{1b}[48;5;{}m", idx)
-            }
-        }
     }
 }
 

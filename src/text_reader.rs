@@ -121,7 +121,10 @@ impl TextReader {
     /// Get the maximum allowed scroll offset
     pub fn get_max_scroll_offset(&self) -> usize {
         if self.total_wrapped_lines > self.visible_height {
-            self.total_wrapped_lines - self.visible_height
+            // Ensure we can see all lines including the last one
+            // Account for 0-based indexing: if we have 204 lines (0-203) and height 18,
+            // max offset should be 186 to show lines 186-203 (18 lines)
+            self.total_wrapped_lines.saturating_sub(self.visible_height)
         } else {
             0
         }
