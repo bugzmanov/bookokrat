@@ -1,4 +1,5 @@
 use crate::bookmark::Bookmarks;
+use crate::main_app::VimNavMotions;
 use crate::theme::OCEANIC_NEXT;
 use chrono::{DateTime, Local, TimeZone};
 use log::debug;
@@ -213,4 +214,67 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+impl VimNavMotions for ReadingHistory {
+    fn handle_h(&mut self) {
+        // Left movement - could be used to close history or go back
+        // For now, we'll leave it empty as closing is handled by Esc/H
+    }
+
+    fn handle_j(&mut self) {
+        // Down movement - move to next item
+        self.next();
+    }
+
+    fn handle_k(&mut self) {
+        // Up movement - move to previous item
+        self.previous();
+    }
+
+    fn handle_l(&mut self) {
+        // Right movement - could be used to select/enter
+        // For now, Enter key handles selection
+    }
+
+    fn handle_ctrl_d(&mut self) {
+        // Page down - move selection down by half page
+        let page_size = 10; // Approximate half-page
+        for _ in 0..page_size {
+            let current = self.state.selected().unwrap_or(0);
+            if current < self.items.len() - 1 {
+                self.next();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn handle_ctrl_u(&mut self) {
+        // Page up - move selection up by half page
+        let page_size = 10; // Approximate half-page
+        for _ in 0..page_size {
+            let current = self.state.selected().unwrap_or(0);
+            if current > 0 {
+                self.previous();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn handle_gg(&mut self) {
+        // Go to top - select first item
+        if !self.items.is_empty() {
+            self.state.select(Some(0));
+        }
+    }
+
+    fn handle_G(&mut self) {
+        // Go to bottom - select last item
+        if !self.items.is_empty() {
+            let last_index = self.items.len() - 1;
+            self.state.select(Some(last_index));
+        }
+    }
 }

@@ -1303,7 +1303,12 @@ impl App {
         match sequence.as_str() {
             "gg" => {
                 // Handle 'gg' motion - go to top
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Use VimNavMotions for reading history
+                    if let Some(ref mut history) = self.reading_history {
+                        history.handle_gg();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.handle_gg();
                 } else {
                     // For content, reset scroll to top
@@ -1355,9 +1360,9 @@ impl App {
         match key.code {
             KeyCode::Char('j') => {
                 if self.show_reading_history {
-                    // Navigate in reading history
+                    // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
-                        history.next();
+                        history.handle_j();
                     }
                 } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.move_selection_down();
@@ -1367,9 +1372,9 @@ impl App {
             }
             KeyCode::Char('k') => {
                 if self.show_reading_history {
-                    // Navigate in reading history
+                    // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
-                        history.previous();
+                        history.handle_k();
                     }
                 } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.move_selection_up();
@@ -1378,7 +1383,12 @@ impl App {
                 }
             }
             KeyCode::Char('h') => {
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Use VimNavMotions for reading history (could close history)
+                    if let Some(ref mut history) = self.reading_history {
+                        history.handle_h();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     // Use VimNavMotions for navigation panel
                     self.navigation_panel.handle_h();
                 } else {
@@ -1399,7 +1409,12 @@ impl App {
                 }
             }
             KeyCode::Char('l') => {
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Use VimNavMotions for reading history (could select/enter)
+                    if let Some(ref mut history) = self.reading_history {
+                        history.handle_l();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     // Use VimNavMotions for navigation panel (future: could expand/enter)
                     self.navigation_panel.handle_l();
                 } else {
@@ -1506,7 +1521,12 @@ impl App {
             }
             KeyCode::Char('d') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.focused_panel == FocusedPanel::FileList {
+                    if self.show_reading_history {
+                        // Use VimNavMotions for reading history
+                        if let Some(ref mut history) = self.reading_history {
+                            history.handle_ctrl_d();
+                        }
+                    } else if self.focused_panel == FocusedPanel::FileList {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_ctrl_d();
                     } else if let Some(visible_height) = screen_height {
@@ -1516,7 +1536,12 @@ impl App {
             }
             KeyCode::Char('u') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.focused_panel == FocusedPanel::FileList {
+                    if self.show_reading_history {
+                        // Use VimNavMotions for reading history
+                        if let Some(ref mut history) = self.reading_history {
+                            history.handle_ctrl_u();
+                        }
+                    } else if self.focused_panel == FocusedPanel::FileList {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_ctrl_u();
                     } else if let Some(visible_height) = screen_height {
@@ -1532,7 +1557,12 @@ impl App {
             }
             KeyCode::Char('G') => {
                 // Handle 'G' motion - go to bottom
-                if self.focused_panel == FocusedPanel::FileList {
+                if self.show_reading_history {
+                    // Use VimNavMotions for reading history
+                    if let Some(ref mut history) = self.reading_history {
+                        history.handle_G();
+                    }
+                } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.handle_G();
                 } else if let Some(_content) = &self.current_content {
                     // For content, scroll to bottom
