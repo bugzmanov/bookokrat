@@ -1,15 +1,12 @@
 ideas to implement:
+ - Code formatting & coloring. Goal: Manning books should be nice to read
  - images in ghosty terminal
- - Recent books
-     - drop dates from book reads. and instead make a separate list of most recent read books
  - AI integreration
  - logs/debug window
  - NOTES & comments
  - settings window
      - make margins configurable + text color 
  - integration with GOODREADS
- - Code formatting & coloring. Goal: Manning books should be nice to read
- - reading history
  - ASCII art animation
 
 
@@ -23,4 +20,7 @@ Done:
    - scroll
    - select text
  - integration with GUI book reader 
+ - Recent books
+     - reading history
+     - drop dates from book reads. and instead make a separate list of most recent read books
 
