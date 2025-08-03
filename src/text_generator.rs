@@ -14,6 +14,7 @@ pub struct TextGenerator {
     multi_newline_re: Regex,
     leading_space_re: Regex,
     line_leading_space_re: Regex,
+    img_tag_re: Regex,
     toc_parser: TocParser,
 }
 
@@ -31,6 +32,8 @@ impl TextGenerator {
             leading_space_re: Regex::new(r"^ +").expect("Failed to compile leading space regex"),
             line_leading_space_re: Regex::new(r"\n +")
                 .expect("Failed to compile line leading space regex"),
+            img_tag_re: Regex::new(r#"<img[^>]*\ssrc\s*=\s*["']([^"']+)["'][^>]*>"#)
+                .expect("Failed to compile image tag regex"),
             toc_parser: TocParser::new(),
         }
     }
@@ -177,6 +180,12 @@ impl TextGenerator {
             let title_tag_re = Regex::new(r"(?s)<title[^>]*>.*?</title>").unwrap();
             content = title_tag_re.replace_all(&content, "").into_owned();
         }
+
+        // Process img tags into text placeholders
+        content = self
+            .img_tag_re
+            .replace_all(&content, "\n\n[image src=\"$1\"]\n\n")
+            .into_owned();
 
         let text = content
             .replace("&nbsp;", " ")

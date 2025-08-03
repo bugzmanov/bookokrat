@@ -1948,10 +1948,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: i * 2,  // Varying progress
+                chapter: i * 2, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::hours(i as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -1962,10 +1962,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: (i - 10) * 3,  // Varying progress
+                chapter: (i - 10) * 3, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -1976,10 +1976,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: (i - 20) + 5,  // Varying progress
+                chapter: (i - 20) + 5, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(7) - Duration::hours((i - 20) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -1990,10 +1990,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: i % 15,  // Varying progress
+                chapter: i % 15, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(30) - Duration::hours((i - 30) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -2004,10 +2004,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: (i - 40) * 2,  // Varying progress
+                chapter: (i - 40) * 2, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(180) - Duration::hours((i - 40) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -2018,10 +2018,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: i % 20,  // Varying progress
+                chapter: i % 20, // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(365) - Duration::hours((i - 50) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -2032,10 +2032,10 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: (i - 60),  // Varying progress
+                chapter: (i - 60), // Varying progress
                 scroll_offset: 0,
                 last_read: now - Duration::days(730) - Duration::hours((i - 60) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
@@ -2047,10 +2047,12 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookmarks.books.insert(
             book_path,
             TestBookmark {
-                chapter: i % 25,  // Varying progress
+                chapter: i % 25, // Varying progress
                 scroll_offset: 0,
-                last_read: now - Duration::days(365 * years_ago as i64) - Duration::hours((i - 70) as i64),
-                total_chapters: 10 + (i % 20),  // Match the book_configs chapter counts
+                last_read: now
+                    - Duration::days(365 * years_ago as i64)
+                    - Duration::hours((i - 70) as i64),
+                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
             },
         );
     }
