@@ -106,7 +106,7 @@ impl ReadingHistory {
                     .bg(OCEANIC_NEXT.base_02)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol("» ");
 
         f.render_stateful_widget(list, popup_area, &mut self.state);
     }

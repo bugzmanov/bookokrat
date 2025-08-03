@@ -1871,3 +1871,213 @@ fn test_toc_chapter_navigation_svg() {
         create_test_failure_handler("test_toc_chapter_navigation_svg"),
     );
 }
+
+#[test]
+fn test_book_reading_history_with_many_entries_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40); // Larger terminal for better visibility
+
+    // Create app with custom fake books - 120 books for reading history
+    let mut book_configs = Vec::new();
+    for i in 0..120 {
+        book_configs.push(FakeBookConfig {
+            title: format!(
+                "Book {} - {}",
+                i + 1,
+                match i % 10 {
+                    0 => "Science Fiction Classic",
+                    1 => "Mystery Thriller",
+                    2 => "Fantasy Epic",
+                    3 => "Historical Fiction",
+                    4 => "Biography",
+                    5 => "Technical Manual",
+                    6 => "Romance Novel",
+                    7 => "Horror Story",
+                    8 => "Philosophy Text",
+                    _ => "Adventure Tale",
+                }
+            ),
+            chapter_count: 10 + (i % 20), // Varying chapter counts
+            words_per_chapter: 1000,
+        });
+    }
+
+    // Create a temporary bookmark file for this test
+    let temp_dir = tempfile::tempdir().unwrap();
+    let bookmark_path = temp_dir.path().join("test_bookmarks.json");
+
+    // Create app with real bookmark file
+    let temp_manager =
+        bookrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
+            .expect("Failed to create temp books");
+
+    let mut app = bookrat::App::new_with_config(
+        Some(&temp_manager.get_directory()),
+        Some(&bookmark_path.to_string_lossy()),
+        false,
+    );
+
+    // Create bookmarks with interesting dates to show sorting
+    // We'll manually create a bookmarks file with specific timestamps
+    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use std::collections::HashMap;
+
+    #[derive(serde::Serialize)]
+    struct TestBookmark {
+        chapter: usize,
+        scroll_offset: usize,
+        last_read: DateTime<Utc>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct TestBookmarks {
+        books: HashMap<String, TestBookmark>,
+    }
+
+    let mut bookmarks = TestBookmarks {
+        books: HashMap::new(),
+    };
+
+    // Use a fixed date for deterministic test output
+    let now = Utc.with_ymd_and_hms(2024, 3, 15, 10, 0, 0).unwrap();
+
+    // Add books read today (most recent - should appear at top)
+    for i in 0..10 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::hours(i as i64),
+            },
+        );
+    }
+
+    // Add books read yesterday
+    for i in 10..20 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
+            },
+        );
+    }
+
+    // Add books read last week
+    for i in 20..30 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(7) - Duration::hours((i - 20) as i64),
+            },
+        );
+    }
+
+    // Add books read last month
+    for i in 30..40 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(30) - Duration::hours((i - 30) as i64),
+            },
+        );
+    }
+
+    // Add books read 6 months ago
+    for i in 40..50 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(180) - Duration::hours((i - 40) as i64),
+            },
+        );
+    }
+
+    // Add books read 1 year ago
+    for i in 50..60 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(365) - Duration::hours((i - 50) as i64),
+            },
+        );
+    }
+
+    // Add books read 2 years ago
+    for i in 60..70 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(730) - Duration::hours((i - 60) as i64),
+            },
+        );
+    }
+
+    // Add some very old books (5+ years)
+    for i in 70..100 {
+        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
+        let years_ago = 5 + ((i - 70) / 10); // 5, 6, 7 years
+        bookmarks.books.insert(
+            book_path,
+            TestBookmark {
+                chapter: 0,
+                scroll_offset: 0,
+                last_read: now - Duration::days(365 * years_ago) - Duration::hours((i - 70) as i64),
+            },
+        );
+    }
+
+    // Write the bookmarks to the file
+    let bookmarks_json = serde_json::to_string_pretty(&bookmarks).unwrap();
+    std::fs::write(&bookmark_path, bookmarks_json).unwrap();
+
+    // Debug: print number of bookmarks created
+    println!("Created {} bookmarks", bookmarks.books.len());
+
+    // Now reload the app to pick up the bookmarks
+    app = bookrat::App::new_with_config(
+        Some(&temp_manager.get_directory()),
+        Some(&bookmark_path.to_string_lossy()),
+        false,
+    );
+
+    // Now show the reading history popup with capital H
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+
+    // Draw the state with the reading history popup visible
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_book_reading_history_many_entries.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/book_reading_history_many_entries.svg"),
+        "test_book_reading_history_with_many_entries_svg",
+        create_test_failure_handler("test_book_reading_history_with_many_entries_svg"),
+    );
+}
