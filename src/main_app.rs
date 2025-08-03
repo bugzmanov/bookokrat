@@ -1152,12 +1152,12 @@ impl App {
         }
 
         // Update terminal dimensions for mouse event calculations
-        self.terminal_width = f.size().width;
-        self.terminal_height = f.size().height;
+        self.terminal_width = f.area().width;
+        self.terminal_height = f.area().height;
 
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
-        f.render_widget(background_block, f.size());
+        f.render_widget(background_block, f.area());
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1216,10 +1216,10 @@ impl App {
                     .bg(Color::Rgb(10, 10, 10)) // Very dark but not black
                     .add_modifier(Modifier::DIM),
             );
-            f.render_widget(dim_block, f.size());
+            f.render_widget(dim_block, f.area());
 
             if let Some(ref mut history) = self.reading_history {
-                history.render(f, f.size());
+                history.render(f, f.area());
             }
         }
     }

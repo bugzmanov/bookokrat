@@ -128,7 +128,7 @@ pub mod test_helpers {
         for y in 0..buffer.area.height {
             let mut line = String::new();
             for x in 0..buffer.area.width {
-                let cell = buffer.get(x, y);
+                let cell = buffer.cell((x, y)).unwrap();
                 line.push_str(cell.symbol());
             }
             // Trim trailing whitespace from each line

@@ -1,6 +1,7 @@
 use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
+use image::DynamicImage;
 use log::debug;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -9,6 +10,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
+use ratatui_image::{picker::Picker, Image, Resize};
+use std::cell::RefCell;
 use std::time::Instant;
 use textwrap;
 
@@ -54,10 +57,39 @@ pub struct TextReader {
     pub last_content_area: Option<Rect>,
     // Auto-scroll state for continuous scrolling during text selection
     auto_scroll_state: Option<AutoScrollState>,
+    // Image display
+    ada_image: Option<DynamicImage>,
+    image_picker: RefCell<Option<Picker>>,
 }
 
 impl TextReader {
     pub fn new() -> Self {
+        // Try to load Ada.png from root folder
+        let ada_image = match image::open("Ada.png") {
+            Ok(img) => {
+                debug!("Successfully loaded Ada.png");
+                Some(img)
+            }
+            Err(e) => {
+                debug!("Failed to load Ada.png: {}", e);
+                None
+            }
+        };
+
+        // Create image picker
+        let image_picker = match Picker::from_query_stdio() {
+            Ok(mut picker) => {
+                // Set transparent background like in the demo
+                picker.set_background_color([0, 0, 0, 0]);
+                debug!("Successfully created image picker");
+                Some(picker)
+            }
+            Err(e) => {
+                debug!("Failed to create image picker: {}", e);
+                None
+            }
+        };
+
         Self {
             scroll_offset: 0,
             content_length: 0,
@@ -77,6 +109,8 @@ impl TextReader {
             raw_text_lines: Vec::new(),
             last_content_area: None,
             auto_scroll_state: None,
+            ada_image,
+            image_picker: RefCell::new(image_picker),
         }
     }
 
@@ -997,9 +1031,56 @@ impl TextReader {
             ])
             .split(vertical_margined_area[1]);
 
+        // Split the content area to add image at the top
+        let content_with_image = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(20), // Fixed image area
+                Constraint::Min(0),     // Text content area
+            ])
+            .split(margined_content_area[1]);
+
+        // Render Ada.png image if available and scroll_offset is 0 (top of chapter)
+        if self.scroll_offset == 0 {
+            if let Some(ref ada_image) = self.ada_image {
+                if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
+                    match picker.new_protocol(
+                        ada_image.clone(),
+                        content_with_image[0],
+                        Resize::Fit(None),
+                    ) {
+                        Ok(image_protocol) => {
+                            debug!(
+                                "Image protocol created, area: {:?}, size: {}x{}",
+                                content_with_image[0],
+                                content_with_image[0].width,
+                                content_with_image[0].height
+                            );
+                            let image_widget = Image::new(&image_protocol);
+                            f.render_widget(image_widget, content_with_image[0]);
+                        }
+                        Err(e) => {
+                            debug!("Failed to create image protocol: {}", e);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Use the text area (below image) for content
+        let text_area = if self.scroll_offset == 0 {
+            content_with_image[1]
+        } else {
+            margined_content_area[1]
+        };
+
         // Render the actual content with manual wrapping and selection highlighting
-        let text_width = margined_content_area[1].width as usize;
-        let scroll_offset = self.scroll_offset;
+        let text_width = text_area.width as usize;
+        let scroll_offset = if self.scroll_offset == 0 {
+            0 // Don't apply scroll offset when image is shown
+        } else {
+            self.scroll_offset.saturating_sub(20) // Adjust for hidden image
+        };
         let styled_content =
             self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
 
@@ -1007,10 +1088,10 @@ impl TextReader {
             .scroll((scroll_offset as u16, 0))
             .style(Style::default().fg(text_color).bg(palette.base_00));
 
-        f.render_widget(content_paragraph, margined_content_area[1]);
+        f.render_widget(content_paragraph, text_area);
 
         // Store the content area for mouse coordinate conversion
-        self.last_content_area = Some(margined_content_area[1]);
+        self.last_content_area = Some(text_area);
 
         // Draw highlight overlay if active
         if let Some(highlight_line) = self.highlight_visual_line {

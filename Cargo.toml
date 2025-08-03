@@ -14,7 +14,7 @@ name = "bookrat"
 path = "src/main.rs"
 
 [dependencies]
-ratatui = "0.26.1"
+ratatui = "0.29.0"
 crossterm = "0.27.0"
 epub = "1.1.0"
 anyhow = "1.0.79"
@@ -33,6 +33,8 @@ pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
 arboard = "3.4"
 zip = "0.6"
 tempfile = "3.8"
+ratatui-image = { version = "8.0.1", features = ["crossterm"] }
+image = "0.25"
 
 [dev-dependencies]
 snapbox = { version = "0.6", features = ["term-svg"] }
