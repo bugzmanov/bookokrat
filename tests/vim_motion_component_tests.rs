@@ -84,7 +84,7 @@ fn test_book_list_vim_motion_g() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::new();
+            let bookmarks = Bookmarks::ephemeral();
             nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
         })
         .unwrap();
@@ -125,7 +125,7 @@ fn test_book_list_vim_motion_gg() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::new();
+            let bookmarks = Bookmarks::ephemeral();
             nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
         })
         .unwrap();
@@ -187,7 +187,7 @@ fn test_navigation_panel_vim_motion_g() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::new();
+            let bookmarks = Bookmarks::ephemeral();
             nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
         })
         .unwrap();
@@ -234,7 +234,7 @@ fn test_navigation_panel_vim_motion_gg() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::new();
+            let bookmarks = Bookmarks::ephemeral();
             nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
         })
         .unwrap();

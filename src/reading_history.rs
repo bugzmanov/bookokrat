@@ -23,12 +23,15 @@ struct HistoryItem {
     date: DateTime<Local>,
     title: String,
     path: String,
+    chapter: usize,
+    total_chapters: usize,
 }
 
 impl ReadingHistory {
     pub fn new(bookmarks: &Bookmarks) -> Self {
         // Extract unique books with their most recent access time
-        let mut latest_access: HashMap<String, (DateTime<Local>, String)> = HashMap::new();
+        let mut latest_access: HashMap<String, (DateTime<Local>, String, usize, usize)> =
+            HashMap::new();
 
         for (path, bookmark) in bookmarks.iter() {
             let title = path
@@ -44,16 +47,29 @@ impl ReadingHistory {
                 .entry(path.clone())
                 .and_modify(|e| {
                     if local_time > e.0 {
-                        *e = (local_time, title.clone());
+                        *e = (
+                            local_time,
+                            title.clone(),
+                            bookmark.chapter,
+                            bookmark.total_chapters,
+                        );
                     }
                 })
-                .or_insert((local_time, title));
+                .or_insert((local_time, title, bookmark.chapter, bookmark.total_chapters));
         }
 
         // Convert to sorted list
         let mut items: Vec<HistoryItem> = latest_access
             .into_iter()
-            .map(|(path, (date, title))| HistoryItem { date, title, path })
+            .map(
+                |(path, (date, title, chapter, total_chapters))| HistoryItem {
+                    date,
+                    title,
+                    path,
+                    chapter,
+                    total_chapters,
+                },
+            )
             .collect();
 
         // Sort by date descending (most recent first)
@@ -85,10 +101,17 @@ impl ReadingHistory {
             .iter()
             .map(|item| {
                 let date_str = item.date.format("%Y-%m-%d").to_string();
+                let progress_str = if item.total_chapters > 0 {
+                    format!(" [ {} / {} ]", item.chapter + 1, item.total_chapters)
+                } else {
+                    String::new()
+                };
+
                 ListItem::new(Line::from(vec![
                     Span::styled(date_str, Style::default().fg(OCEANIC_NEXT.base_03)),
                     Span::raw(" : "),
                     Span::styled(&item.title, Style::default().fg(OCEANIC_NEXT.base_05)),
+                    Span::styled(progress_str, Style::default().fg(OCEANIC_NEXT.base_03)),
                 ]))
             })
             .collect();

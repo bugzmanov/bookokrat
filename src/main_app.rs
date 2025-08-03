@@ -91,7 +91,7 @@ enum ClickType {
 
 impl App {
     pub fn new() -> Self {
-        Self::new_with_config(None, None, true)
+        Self::new_with_config(None, Some("bookmarks.json"), true)
     }
 
     pub fn new_with_mock_system_executor(
@@ -136,13 +136,7 @@ impl App {
         let text_generator = TextGenerator::new();
         let text_reader = TextReader::new();
 
-        let bookmarks = match bookmark_file {
-            Some(file) => Bookmarks::load_from_file(file).unwrap_or_else(|e| {
-                error!("Failed to load bookmarks from {}: {}", file, e);
-                Bookmarks::new()
-            }),
-            None => Bookmarks::new(),
-        };
+        let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
         let mut app = Self {
             book_manager,
@@ -562,6 +556,7 @@ impl App {
                 path,
                 self.current_chapter,
                 self.text_reader.scroll_offset,
+                self.total_chapters,
             );
 
             // Only save to disk if enough time has passed or if forced
