@@ -2092,3 +2092,91 @@ fn test_book_reading_history_with_many_entries_svg() {
         create_test_failure_handler("test_book_reading_history_with_many_entries_svg"),
     );
 }
+
+#[test]
+fn test_image_scrolling_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 40);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Load the first book and switch to content view
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    // Navigate to a chapter with content
+    app.press_key(crossterm::event::KeyCode::Tab); // Focus text reader
+
+    // Initial state - image should be fully visible at scroll_offset = 0
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output_initial = terminal_to_svg(&terminal);
+    std::fs::write(
+        "tests/snapshots/debug_image_scrolling_initial.svg",
+        &svg_output_initial,
+    )
+    .unwrap();
+
+    // Scroll down a few lines with 'j' - image should start to be cropped from top
+    app.press_char_times('j', 5);
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output_partial = terminal_to_svg(&terminal);
+    std::fs::write(
+        "tests/snapshots/debug_image_scrolling_partial.svg",
+        &svg_output_partial,
+    )
+    .unwrap();
+
+    // Scroll down more - image should be almost hidden
+    app.press_char_times('j', 10);
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output_hidden = terminal_to_svg(&terminal);
+    std::fs::write(
+        "tests/snapshots/debug_image_scrolling_hidden.svg",
+        &svg_output_hidden,
+    )
+    .unwrap();
+
+    // Scroll back up - image should reappear gradually
+    app.press_char_times('k', 10);
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output_reappear = terminal_to_svg(&terminal);
+    std::fs::write(
+        "tests/snapshots/debug_image_scrolling_reappear.svg",
+        &svg_output_reappear,
+    )
+    .unwrap();
+
+    // Test mouse scroll as well
+    app.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 50,
+            row: 20,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+    app.handle_mouse_event(
+        MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 50,
+            row: 20,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+
+    terminal.draw(|f| app.draw(f)).unwrap();
+    let svg_output_mouse_scroll = terminal_to_svg(&terminal);
+
+    assert_svg_snapshot(
+        svg_output_mouse_scroll.clone(),
+        &std::path::Path::new("tests/snapshots/image_scrolling_test.svg"),
+        "test_image_scrolling_svg",
+        create_test_failure_handler("test_image_scrolling_svg"),
+    );
+}

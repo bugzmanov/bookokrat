@@ -1,7 +1,7 @@
 use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
-use image::DynamicImage;
+use image::{DynamicImage, GenericImageView};
 use log::debug;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use ratatui_image::{picker::Picker, Image, Resize};
+use ratatui_image::{picker::Picker, CropOptions, Image, Resize};
 use std::cell::RefCell;
 use std::time::Instant;
 use textwrap;
@@ -121,6 +121,66 @@ impl TextReader {
         let mut hasher = DefaultHasher::new();
         content.hash(&mut hasher);
         hasher.finish()
+    }
+
+    fn calculate_lines_before_image(
+        &self,
+        content: &str,
+        _chapter_title: &Option<String>,
+        width: usize,
+    ) -> usize {
+        let mut line_count = 0;
+        let mut found_content = false;
+        let mut paragraph_count = 0;
+
+        // Process each line
+        for line in content.lines() {
+            if line.trim().is_empty() {
+                // Empty line
+                if found_content {
+                    // This is a paragraph break
+                    paragraph_count += 1;
+                    if paragraph_count >= 1 {
+                        // Found the end of first paragraph
+                        return line_count;
+                    }
+                }
+                line_count += 1;
+            } else {
+                // Non-empty line
+                found_content = true;
+                // Account for line wrapping
+                let wrapped_lines = textwrap::wrap(line, width);
+                line_count += wrapped_lines.len();
+            }
+        }
+
+        // If we didn't find a paragraph break, place image after all content
+        line_count
+    }
+
+    fn calculate_image_height_in_cells(&self, image: &DynamicImage, area_width: u16) -> u16 {
+        // Get image dimensions
+        let (img_width, img_height) = image.dimensions();
+
+        // Terminal cells typically have an aspect ratio of about 2:1 (height:width)
+        // This means each cell is roughly twice as tall as it is wide
+        let cell_aspect_ratio = 2.0;
+
+        // Calculate the aspect ratio of the image
+        let image_aspect_ratio = img_height as f64 / img_width as f64;
+
+        // Limit the image to use at most 50% of the content width or 40 cells, whichever is smaller
+        let max_width = (area_width as f64 * 0.5).min(40.0);
+        let width_in_cells = max_width;
+        let height_in_cells = width_in_cells * image_aspect_ratio / cell_aspect_ratio;
+
+        // Also cap the maximum height to something reasonable
+        let max_height = 15.0;
+        let final_height = height_in_cells.min(max_height);
+
+        // Round up to ensure the full image is visible
+        final_height.ceil() as u16
     }
 
     /// Calculate total wrapped lines for the given content and width
@@ -1025,39 +1085,119 @@ impl TextReader {
         let margined_content_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Length(5), // Left margin
+                Constraint::Length(1), // Left margin
                 Constraint::Min(0),    // Content area
-                Constraint::Length(5), // Right margin
+                Constraint::Length(1), // Right margin
             ])
             .split(vertical_margined_area[1]);
 
-        // Split the content area to add image at the top
-        let content_with_image = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(20), // Fixed image area
-                Constraint::Min(0),     // Text content area
-            ])
-            .split(margined_content_area[1]);
+        // Calculate where to place the image (after first paragraph)
+        let text_width = margined_content_area[1].width as usize;
+        let lines_before_image =
+            self.calculate_lines_before_image(content, chapter_title, text_width);
+        let total_lines_before_image =
+            lines_before_image + (if chapter_title.is_some() { 2 } else { 0 });
 
-        // Render Ada.png image if available and scroll_offset is 0 (top of chapter)
-        if self.scroll_offset == 0 {
+        // Calculate image height based on actual image dimensions
+        let image_height = if let Some(ref ada_image) = self.ada_image {
+            let calculated_height =
+                self.calculate_image_height_in_cells(ada_image, margined_content_area[1].width);
+            let (img_w, img_h) = ada_image.dimensions();
+            debug!(
+                "Image dimensions: {}x{}, calculated height: {} cells for area width: {}",
+                img_w, img_h, calculated_height, margined_content_area[1].width
+            );
+            calculated_height as usize
+        } else {
+            0
+        };
+
+        // Calculate image position and visibility
+        let image_start_line = total_lines_before_image;
+        let image_end_line = image_start_line + image_height;
+
+        // Check if image should be visible
+        let has_image = self.ada_image.is_some();
+        let scroll_offset = self.scroll_offset;
+        let area_height = margined_content_area[1].height as usize;
+        let should_show_image = has_image
+            && scroll_offset < image_end_line
+            && scroll_offset + area_height > image_start_line;
+
+        // Calculate visible portion of the image before getting styled content
+        let image_visible_from_line = scroll_offset.max(image_start_line);
+        let image_visible_to_line = (scroll_offset + area_height).min(image_end_line);
+        let image_visible_lines = image_visible_to_line.saturating_sub(image_visible_from_line);
+
+        // Calculate where on screen to place the image
+        let image_screen_start = if scroll_offset > image_start_line {
+            0
+        } else {
+            image_start_line - scroll_offset
+        };
+
+        // Render the styled content
+        let styled_content =
+            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
+
+        if should_show_image {
+            // Render content before image
+            if image_screen_start > 0 {
+                let pre_image_area = Rect {
+                    x: margined_content_area[1].x,
+                    y: margined_content_area[1].y,
+                    width: margined_content_area[1].width,
+                    height: image_screen_start.min(margined_content_area[1].height as usize) as u16,
+                };
+
+                let pre_content_paragraph = Paragraph::new(styled_content.clone())
+                    .scroll((scroll_offset as u16, 0))
+                    .style(Style::default().fg(text_color).bg(palette.base_00));
+                f.render_widget(pre_content_paragraph, pre_image_area);
+            }
+
+            // Render content after image
+            let post_image_screen_start = (image_screen_start + image_visible_lines)
+                .min(margined_content_area[1].height as usize);
+            if post_image_screen_start < margined_content_area[1].height as usize {
+                let post_image_area = Rect {
+                    x: margined_content_area[1].x,
+                    y: margined_content_area[1].y + post_image_screen_start as u16,
+                    width: margined_content_area[1].width,
+                    height: (margined_content_area[1].height as usize - post_image_screen_start)
+                        as u16,
+                };
+
+                // Adjust scroll to account for the image height when rendering post-image content
+                let adjusted_scroll = scroll_offset;
+                let post_content_paragraph = Paragraph::new(styled_content.clone())
+                    .scroll((adjusted_scroll as u16, 0))
+                    .style(Style::default().fg(text_color).bg(palette.base_00));
+                f.render_widget(post_content_paragraph, post_image_area);
+            }
+
+            // Render the image last to avoid borrowing issues
             if let Some(ref ada_image) = self.ada_image {
                 if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
-                    match picker.new_protocol(
-                        ada_image.clone(),
-                        content_with_image[0],
-                        Resize::Fit(None),
-                    ) {
+                    let image_area = Rect {
+                        x: margined_content_area[1].x,
+                        y: margined_content_area[1].y + image_screen_start as u16,
+                        width: margined_content_area[1].width,
+                        height: image_visible_lines
+                            .min(margined_content_area[1].height as usize - image_screen_start)
+                            as u16,
+                    };
+
+                    let clip_from_top = image_visible_from_line > image_start_line;
+                    let resize = Resize::Crop(Some(CropOptions {
+                        clip_top: clip_from_top,
+                        clip_left: false,
+                    }));
+
+                    match picker.new_protocol(ada_image.clone(), image_area, resize) {
                         Ok(image_protocol) => {
-                            debug!(
-                                "Image protocol created, area: {:?}, size: {}x{}",
-                                content_with_image[0],
-                                content_with_image[0].width,
-                                content_with_image[0].height
-                            );
                             let image_widget = Image::new(&image_protocol);
-                            f.render_widget(image_widget, content_with_image[0]);
+                            f.render_widget(image_widget, image_area);
                         }
                         Err(e) => {
                             debug!("Failed to create image protocol: {}", e);
@@ -1065,33 +1205,16 @@ impl TextReader {
                     }
                 }
             }
+        } else {
+            // No image visible, render content normally
+            let content_paragraph = Paragraph::new(styled_content)
+                .scroll((scroll_offset as u16, 0))
+                .style(Style::default().fg(text_color).bg(palette.base_00));
+            f.render_widget(content_paragraph, margined_content_area[1]);
         }
 
-        // Use the text area (below image) for content
-        let text_area = if self.scroll_offset == 0 {
-            content_with_image[1]
-        } else {
-            margined_content_area[1]
-        };
-
-        // Render the actual content with manual wrapping and selection highlighting
-        let text_width = text_area.width as usize;
-        let scroll_offset = if self.scroll_offset == 0 {
-            0 // Don't apply scroll offset when image is shown
-        } else {
-            self.scroll_offset.saturating_sub(20) // Adjust for hidden image
-        };
-        let styled_content =
-            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
-
-        let content_paragraph = Paragraph::new(styled_content)
-            .scroll((scroll_offset as u16, 0))
-            .style(Style::default().fg(text_color).bg(palette.base_00));
-
-        f.render_widget(content_paragraph, text_area);
-
         // Store the content area for mouse coordinate conversion
-        self.last_content_area = Some(text_area);
+        self.last_content_area = Some(margined_content_area[1]);
 
         // Draw highlight overlay if active
         if let Some(highlight_line) = self.highlight_visual_line {
