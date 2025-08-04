@@ -335,43 +335,59 @@ impl TextReader {
         let lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
         let mut line_count = 0;
         let mut inserted_image_placeholder = false;
+        let mut found_first_paragraph = false;
+        let mut in_first_paragraph = false;
 
         // Process each line with manual wrapping
-        for line in text.lines() {
-            // Check if we should insert image placeholder here
-            if !inserted_image_placeholder
-                && line_count >= lines_before_image
-                && self.ada_image.is_some()
-            {
-                // Insert empty lines for the image
-                let image_height = if let Some(ref ada_image) = self.ada_image {
-                    self.calculate_image_height_in_cells(ada_image, width as u16) as usize
-                } else {
-                    0
-                };
+        for (i, line) in text.lines().enumerate() {
+            let is_empty = line.trim().is_empty();
 
-                for _ in 0..image_height {
+            // Track paragraph state
+            if !is_empty && !found_first_paragraph {
+                in_first_paragraph = true;
+            } else if is_empty && in_first_paragraph {
+                found_first_paragraph = true;
+                in_first_paragraph = false;
+            }
+
+            // Check if we should insert image placeholder on this empty line
+            let should_insert_image = !inserted_image_placeholder
+                && found_first_paragraph
+                && is_empty
+                && self.ada_image.is_some();
+
+            // Process the line
+            if is_empty {
+                if should_insert_image {
+                    // Replace the empty line with image placeholder lines
+                    let image_height = if let Some(ref ada_image) = self.ada_image {
+                        self.calculate_image_height_in_cells(ada_image, width as u16) as usize
+                    } else {
+                        0
+                    };
+
+                    for j in 0..image_height {
+                        raw_lines.push(String::new());
+                        lines.push(Line::from(String::new()));
+                        line_count += 1;
+                    }
+                    inserted_image_placeholder = true;
+                } else {
+                    // Normal empty line processing
                     raw_lines.push(String::new());
                     lines.push(Line::from(String::new()));
+                    line_count += 1;
                 }
-                inserted_image_placeholder = true;
-            }
-
-            if line.trim().is_empty() {
-                raw_lines.push(String::new());
-                lines.push(Line::from(String::new()));
-                line_count += 1;
-                continue;
-            }
-
-            // Wrap the line using textwrap
-            let wrapped_lines = textwrap::wrap(line, width);
-            for wrapped_line in wrapped_lines {
-                let line_str = wrapped_line.to_string();
-                raw_lines.push(line_str.clone());
-                let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
-                lines.push(styled_line);
-                line_count += 1;
+            } else {
+                // Wrap the line using textwrap
+                let wrapped_lines = textwrap::wrap(line, width);
+                for wrapped_line in wrapped_lines {
+                    let line_str = wrapped_line.to_string();
+                    raw_lines.push(line_str.clone());
+                    let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
+                    lines.push(styled_line);
+                    line_count += 1;
+                }
             }
         }
 
@@ -1132,8 +1148,10 @@ impl TextReader {
         if let Some(ref ada_image) = self.ada_image {
             let lines_before_image =
                 self.calculate_lines_before_image(content, chapter_title, text_width);
-            let total_lines_before_image =
-                lines_before_image + (if chapter_title.is_some() { 2 } else { 0 });
+            // Account for title lines
+            let title_lines = if chapter_title.is_some() { 2 } else { 0 };
+            // The image starts right where the empty line would have been
+            let total_lines_before_image = lines_before_image + title_lines;
 
             let calculated_image_height = self
                 .calculate_image_height_in_cells(ada_image, margined_content_area[1].width)
