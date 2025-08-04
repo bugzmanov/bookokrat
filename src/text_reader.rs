@@ -331,11 +331,36 @@ impl TextReader {
             lines.push(Line::from(String::new()));
         }
 
+        // Calculate where to insert image placeholder
+        let lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
+        let mut line_count = 0;
+        let mut inserted_image_placeholder = false;
+
         // Process each line with manual wrapping
         for line in text.lines() {
+            // Check if we should insert image placeholder here
+            if !inserted_image_placeholder
+                && line_count >= lines_before_image
+                && self.ada_image.is_some()
+            {
+                // Insert empty lines for the image
+                let image_height = if let Some(ref ada_image) = self.ada_image {
+                    self.calculate_image_height_in_cells(ada_image, width as u16) as usize
+                } else {
+                    0
+                };
+
+                for _ in 0..image_height {
+                    raw_lines.push(String::new());
+                    lines.push(Line::from(String::new()));
+                }
+                inserted_image_placeholder = true;
+            }
+
             if line.trim().is_empty() {
                 raw_lines.push(String::new());
                 lines.push(Line::from(String::new()));
+                line_count += 1;
                 continue;
             }
 
@@ -346,6 +371,7 @@ impl TextReader {
                 raw_lines.push(line_str.clone());
                 let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
                 lines.push(styled_line);
+                line_count += 1;
             }
         }
 
@@ -1091,126 +1117,83 @@ impl TextReader {
             ])
             .split(vertical_margined_area[1]);
 
-        // Calculate where to place the image (after first paragraph)
+        // Render the styled content (which now includes placeholder space for the image)
         let text_width = margined_content_area[1].width as usize;
-        let lines_before_image =
-            self.calculate_lines_before_image(content, chapter_title, text_width);
-        let total_lines_before_image =
-            lines_before_image + (if chapter_title.is_some() { 2 } else { 0 });
-
-        // Calculate image height based on actual image dimensions
-        let image_height = if let Some(ref ada_image) = self.ada_image {
-            let calculated_height =
-                self.calculate_image_height_in_cells(ada_image, margined_content_area[1].width);
-            let (img_w, img_h) = ada_image.dimensions();
-            debug!(
-                "Image dimensions: {}x{}, calculated height: {} cells for area width: {}",
-                img_w, img_h, calculated_height, margined_content_area[1].width
-            );
-            calculated_height as usize
-        } else {
-            0
-        };
-
-        // Calculate image position and visibility
-        let image_start_line = total_lines_before_image;
-        let image_end_line = image_start_line + image_height;
-
-        // Check if image should be visible
-        let has_image = self.ada_image.is_some();
         let scroll_offset = self.scroll_offset;
-        let area_height = margined_content_area[1].height as usize;
-        let should_show_image = has_image
-            && scroll_offset < image_end_line
-            && scroll_offset + area_height > image_start_line;
-
-        // Calculate visible portion of the image before getting styled content
-        let image_visible_from_line = scroll_offset.max(image_start_line);
-        let image_visible_to_line = (scroll_offset + area_height).min(image_end_line);
-        let image_visible_lines = image_visible_to_line.saturating_sub(image_visible_from_line);
-
-        // Calculate where on screen to place the image
-        let image_screen_start = if scroll_offset > image_start_line {
-            0
-        } else {
-            image_start_line - scroll_offset
-        };
-
-        // Render the styled content
         let styled_content =
             self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
 
-        if should_show_image {
-            // Render content before image
-            if image_screen_start > 0 {
-                let pre_image_area = Rect {
-                    x: margined_content_area[1].x,
-                    y: margined_content_area[1].y,
-                    width: margined_content_area[1].width,
-                    height: image_screen_start.min(margined_content_area[1].height as usize) as u16,
-                };
+        let content_paragraph = Paragraph::new(styled_content)
+            .scroll((scroll_offset as u16, 0))
+            .style(Style::default().fg(text_color).bg(palette.base_00));
+        f.render_widget(content_paragraph, margined_content_area[1]);
 
-                let pre_content_paragraph = Paragraph::new(styled_content.clone())
-                    .scroll((scroll_offset as u16, 0))
-                    .style(Style::default().fg(text_color).bg(palette.base_00));
-                f.render_widget(pre_content_paragraph, pre_image_area);
-            }
+        // Calculate where the image should be displayed
+        if let Some(ref ada_image) = self.ada_image {
+            let lines_before_image =
+                self.calculate_lines_before_image(content, chapter_title, text_width);
+            let total_lines_before_image =
+                lines_before_image + (if chapter_title.is_some() { 2 } else { 0 });
 
-            // Render content after image
-            let post_image_screen_start = (image_screen_start + image_visible_lines)
-                .min(margined_content_area[1].height as usize);
-            if post_image_screen_start < margined_content_area[1].height as usize {
-                let post_image_area = Rect {
-                    x: margined_content_area[1].x,
-                    y: margined_content_area[1].y + post_image_screen_start as u16,
-                    width: margined_content_area[1].width,
-                    height: (margined_content_area[1].height as usize - post_image_screen_start)
-                        as u16,
-                };
+            let calculated_image_height = self
+                .calculate_image_height_in_cells(ada_image, margined_content_area[1].width)
+                as usize;
 
-                // Adjust scroll to account for the image height when rendering post-image content
-                let adjusted_scroll = scroll_offset;
-                let post_content_paragraph = Paragraph::new(styled_content.clone())
-                    .scroll((adjusted_scroll as u16, 0))
-                    .style(Style::default().fg(text_color).bg(palette.base_00));
-                f.render_widget(post_content_paragraph, post_image_area);
-            }
+            let image_start_line = total_lines_before_image;
+            let image_end_line = image_start_line + calculated_image_height;
 
-            // Render the image last to avoid borrowing issues
-            if let Some(ref ada_image) = self.ada_image {
+            // Check if image is in viewport
+            let area_height = margined_content_area[1].height as usize;
+
+            if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line {
+                // Image is at least partially visible
                 if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
-                    let image_area = Rect {
-                        x: margined_content_area[1].x,
-                        y: margined_content_area[1].y + image_screen_start as u16,
-                        width: margined_content_area[1].width,
-                        height: image_visible_lines
-                            .min(margined_content_area[1].height as usize - image_screen_start)
-                            as u16,
+                    // Calculate screen position
+                    let image_screen_start = if scroll_offset > image_start_line {
+                        0
+                    } else {
+                        image_start_line - scroll_offset
                     };
 
-                    let clip_from_top = image_visible_from_line > image_start_line;
-                    let resize = Resize::Crop(Some(CropOptions {
-                        clip_top: clip_from_top,
-                        clip_left: false,
-                    }));
+                    // Calculate visible portion
+                    let image_top_clipped = if scroll_offset > image_start_line {
+                        scroll_offset - image_start_line
+                    } else {
+                        0
+                    };
 
-                    match picker.new_protocol(ada_image.clone(), image_area, resize) {
-                        Ok(image_protocol) => {
-                            let image_widget = Image::new(&image_protocol);
-                            f.render_widget(image_widget, image_area);
-                        }
-                        Err(e) => {
-                            debug!("Failed to create image protocol: {}", e);
+                    let visible_image_height = (calculated_image_height - image_top_clipped)
+                        .min(area_height - image_screen_start);
+
+                    if visible_image_height > 0 {
+                        let image_area = Rect {
+                            x: margined_content_area[1].x,
+                            y: margined_content_area[1].y + image_screen_start as u16,
+                            width: margined_content_area[1].width,
+                            height: visible_image_height as u16,
+                        };
+
+                        let resize = if image_top_clipped > 0 {
+                            Resize::Crop(Some(CropOptions {
+                                clip_top: true,
+                                clip_left: false,
+                            }))
+                        } else {
+                            Resize::Fit(None)
+                        };
+
+                        match picker.new_protocol(ada_image.clone(), image_area, resize) {
+                            Ok(image_protocol) => {
+                                let image_widget = Image::new(&image_protocol);
+                                f.render_widget(image_widget, image_area);
+                            }
+                            Err(e) => {
+                                debug!("Failed to create image protocol: {}", e);
+                            }
                         }
                     }
                 }
             }
-        } else {
-            // No image visible, render content normally
-            let content_paragraph = Paragraph::new(styled_content)
-                .scroll((scroll_offset as u16, 0))
-                .style(Style::default().fg(text_color).bg(palette.base_00));
-            f.render_widget(content_paragraph, margined_content_area[1]);
         }
 
         // Store the content area for mouse coordinate conversion
