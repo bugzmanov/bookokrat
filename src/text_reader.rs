@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use ratatui_image::{picker::Picker, CropOptions, Image, Resize};
+use ratatui_image::{picker::Picker, protocol::Protocol, CropOptions, Image, Resize};
 use std::cell::RefCell;
 use std::time::Instant;
 use textwrap;
@@ -60,6 +60,11 @@ pub struct TextReader {
     // Image display
     ada_image: Option<DynamicImage>,
     image_picker: RefCell<Option<Picker>>,
+    // Cached image protocol to avoid re-processing
+    cached_image_protocol: RefCell<Option<Protocol>>,
+    cached_image_area: RefCell<Option<Rect>>,
+    // Downscaled image for performance
+    cached_downscaled_image: RefCell<Option<DynamicImage>>,
 }
 
 impl TextReader {
@@ -111,6 +116,9 @@ impl TextReader {
             auto_scroll_state: None,
             ada_image,
             image_picker: RefCell::new(image_picker),
+            cached_image_protocol: RefCell::new(None),
+            cached_image_area: RefCell::new(None),
+            cached_downscaled_image: RefCell::new(None),
         }
     }
 
@@ -683,6 +691,10 @@ impl TextReader {
         self.raw_text_lines.clear();
         // Clear auto-scroll state
         self.auto_scroll_state = None;
+        // Clear image cache
+        *self.cached_image_protocol.borrow_mut() = None;
+        *self.cached_image_area.borrow_mut() = None;
+        *self.cached_downscaled_image.borrow_mut() = None;
     }
 
     pub fn restore_scroll_position(&mut self, offset: usize) {
@@ -1200,13 +1212,45 @@ impl TextReader {
                             Resize::Fit(None)
                         };
 
-                        match picker.new_protocol(ada_image.clone(), image_area, resize) {
-                            Ok(image_protocol) => {
-                                let image_widget = Image::new(&image_protocol);
-                                f.render_widget(image_widget, image_area);
+                        // Check if we need to update the cached protocol
+                        let need_update = {
+                            let cached_area = self.cached_image_area.borrow();
+                            cached_area.as_ref() != Some(&image_area) || image_top_clipped > 0
+                        };
+
+                        if need_update || self.cached_image_protocol.borrow().is_none() {
+                            // Update cache
+                            match picker.new_protocol(ada_image.clone(), image_area, resize.clone())
+                            {
+                                Ok(image_protocol) => {
+                                    *self.cached_image_protocol.borrow_mut() = Some(image_protocol);
+                                    *self.cached_image_area.borrow_mut() = Some(image_area);
+                                }
+                                Err(e) => {
+                                    debug!("Failed to create image protocol: {}", e);
+                                    return;
+                                }
                             }
-                            Err(e) => {
-                                debug!("Failed to create image protocol: {}", e);
+                        }
+
+                        // Use cached protocol
+                        if let Some(ref protocol) = *self.cached_image_protocol.borrow() {
+                            // Skip rendering the image during rapid scrolling to improve performance
+                            let now = Instant::now();
+                            let time_since_last_scroll = now.duration_since(self.last_scroll_time);
+
+                            // Only render image if we're not actively scrolling (100ms threshold)
+                            if time_since_last_scroll > std::time::Duration::from_millis(100) {
+                                let image_widget = Image::new(protocol);
+                                f.render_widget(image_widget, image_area);
+                            } else {
+                                // Draw a placeholder rectangle during scrolling
+                                let placeholder = Block::default()
+                                    .borders(Borders::ALL)
+                                    .border_style(Style::default().fg(Color::DarkGray))
+                                    .title("Image")
+                                    .style(Style::default().bg(Color::Black));
+                                f.render_widget(placeholder, image_area);
                             }
                         }
                     }
