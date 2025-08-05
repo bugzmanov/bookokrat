@@ -99,9 +99,9 @@ impl TextReader {
                 let (width, height) = img.dimensions();
                 debug!("Successfully loaded Ada.png: {}x{}", width, height);
 
-                // Pre-scale the image to fit exactly 10 terminal cells height
+                // Pre-scale the image to fit exactly 15 terminal cells height
                 // Use the detected cell height from the picker
-                let target_height_in_pixels = 10 * detected_cell_height as u32;
+                let target_height_in_pixels = 15 * detected_cell_height as u32;
 
                 debug!(
                     "Using detected cell height: {} pixels, target image height: {} pixels",
@@ -114,7 +114,7 @@ impl TextReader {
                 let new_height = target_height_in_pixels;
 
                 debug!(
-                    "Pre-scaling Ada.png from {}x{} to {}x{} for exactly 10 cells",
+                    "Pre-scaling Ada.png from {}x{} to {}x{} for exactly 15 cells",
                     width, height, new_width, new_height
                 );
 
@@ -201,8 +201,8 @@ impl TextReader {
     }
 
     fn calculate_image_height_in_cells(&self, _image: &DynamicImage, _area_width: u16) -> u16 {
-        // Always return exactly 10 cells for consistent layout
-        10
+        // Always return exactly 15 cells for consistent layout
+        15
     }
 
     /// Calculate total wrapped lines for the given content and width
@@ -1337,9 +1337,9 @@ mod tests {
     use crate::theme::OCEANIC_NEXT;
     use image::{DynamicImage, ImageBuffer};
 
-    /// Test that calculate_image_height_in_cells always returns exactly 10
+    /// Test that calculate_image_height_in_cells always returns exactly 15
     #[test]
-    fn test_image_height_always_10_cells() {
+    fn test_image_height_always_15_cells() {
         let reader = TextReader::new();
 
         // Test with various image sizes
@@ -1355,14 +1355,14 @@ mod tests {
             let img = DynamicImage::ImageRgba8(ImageBuffer::new(width, height));
             let result = reader.calculate_image_height_in_cells(&img, 100);
             assert_eq!(
-                result, 10,
-                "Image {}x{} should always result in 10 cells height",
+                result, 15,
+                "Image {}x{} should always result in 15 cells height",
                 width, height
             );
         }
     }
 
-    /// Test that placeholder lines inserted are exactly 10
+    /// Test that placeholder lines inserted are exactly 15
     #[test]
     fn test_placeholder_lines_count() {
         let mut reader = TextReader::new();
@@ -1405,8 +1405,8 @@ mod tests {
             }
 
             assert_eq!(
-                placeholder_count, 10,
-                "Should have exactly 10 placeholder lines for the image"
+                placeholder_count, 15,
+                "Should have exactly 15 placeholder lines for the image"
             );
         }
     }
@@ -1424,16 +1424,16 @@ mod tests {
 
         for (src_width, src_height, cell_height) in test_cases {
             // Simulate the prescaling logic from new()
-            let target_height_in_pixels = 10 * cell_height; // 10 cells * detected cell height
+            let target_height_in_pixels = 15 * cell_height; // 15 cells * detected cell height
             let scale = target_height_in_pixels as f32 / src_height as f32;
             let new_width = (src_width as f32 * scale) as u32;
             let new_height = target_height_in_pixels;
 
             assert_eq!(
                 new_height,
-                10 * cell_height,
-                "Prescaled height should be exactly 10 * cell_height ({} pixels)",
-                10 * cell_height
+                15 * cell_height,
+                "Prescaled height should be exactly 15 * cell_height ({} pixels)",
+                15 * cell_height
             );
 
             // Verify aspect ratio is maintained
@@ -1533,14 +1533,14 @@ mod tests {
                 "Image should be centered with correct offset"
             );
 
-            // Height should always be 10 cells
+            // Height should always be 15 cells
             let image_height = reader.calculate_image_height_in_cells(ada_image, area_width as u16);
-            assert_eq!(image_height, 10, "Image height should be exactly 10 cells");
+            assert_eq!(image_height, 15, "Image height should be exactly 15 cells");
         } else {
             // If no image loaded, create a test image
             let test_img = DynamicImage::ImageRgba8(ImageBuffer::new(40, 20));
             let image_height = reader.calculate_image_height_in_cells(&test_img, 100);
-            assert_eq!(image_height, 10, "Image height should be exactly 10 cells");
+            assert_eq!(image_height, 15, "Image height should be exactly 15 cells");
         }
     }
 }
