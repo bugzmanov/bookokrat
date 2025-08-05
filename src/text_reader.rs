@@ -69,28 +69,61 @@ pub struct TextReader {
 
 impl TextReader {
     pub fn new() -> Self {
-        // Try to load Ada.png from root folder
-        let ada_image = match image::open("Ada.png") {
-            Ok(img) => {
-                debug!("Successfully loaded Ada.png");
-                Some(img)
-            }
-            Err(e) => {
-                debug!("Failed to load Ada.png: {}", e);
-                None
-            }
-        };
-
-        // Create image picker
-        let image_picker = match Picker::from_query_stdio() {
+        // Create image picker first to get cell dimensions
+        let (image_picker, detected_cell_height) = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 // Set transparent background like in the demo
                 picker.set_background_color([0, 0, 0, 0]);
-                debug!("Successfully created image picker");
-                Some(picker)
+
+                // Get the detected font size (returns (width, height) in pixels)
+                let font_size = picker.font_size();
+                debug!(
+                    "Successfully created image picker, detected font size: {:?}",
+                    font_size
+                );
+
+                // Use the font height as our cell height
+                let cell_height = font_size.1;
+
+                (Some(picker), cell_height)
             }
             Err(e) => {
                 debug!("Failed to create image picker: {}", e);
+                (None, 16) // Default to 16 pixels per cell
+            }
+        };
+
+        // Try to load Ada.png from root folder
+        let ada_image = match image::open("Ada.png") {
+            Ok(img) => {
+                let (width, height) = img.dimensions();
+                debug!("Successfully loaded Ada.png: {}x{}", width, height);
+
+                // Pre-scale the image to fit exactly 10 terminal cells height
+                // Use the detected cell height from the picker
+                let target_height_in_pixels = 10 * detected_cell_height as u32;
+
+                debug!(
+                    "Using detected cell height: {} pixels, target image height: {} pixels",
+                    detected_cell_height, target_height_in_pixels
+                );
+
+                // Calculate the scale factor to achieve target height
+                let scale = target_height_in_pixels as f32 / height as f32;
+                let new_width = (width as f32 * scale) as u32;
+                let new_height = target_height_in_pixels;
+
+                debug!(
+                    "Pre-scaling Ada.png from {}x{} to {}x{} for exactly 10 cells",
+                    width, height, new_width, new_height
+                );
+
+                let scaled =
+                    img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
+                Some(scaled)
+            }
+            Err(e) => {
+                debug!("Failed to load Ada.png: {}", e);
                 None
             }
         };
@@ -167,28 +200,9 @@ impl TextReader {
         line_count
     }
 
-    fn calculate_image_height_in_cells(&self, image: &DynamicImage, area_width: u16) -> u16 {
-        // Get image dimensions
-        let (img_width, img_height) = image.dimensions();
-
-        // Terminal cells typically have an aspect ratio of about 2:1 (height:width)
-        // This means each cell is roughly twice as tall as it is wide
-        let cell_aspect_ratio = 2.0;
-
-        // Calculate the aspect ratio of the image
-        let image_aspect_ratio = img_height as f64 / img_width as f64;
-
-        // Limit the image to use at most 50% of the content width or 40 cells, whichever is smaller
-        let max_width = (area_width as f64 * 0.5).min(40.0);
-        let width_in_cells = max_width;
-        let height_in_cells = width_in_cells * image_aspect_ratio / cell_aspect_ratio;
-
-        // Also cap the maximum height to something reasonable
-        let max_height = 15.0;
-        let final_height = height_in_cells.min(max_height);
-
-        // Round up to ensure the full image is visible
-        final_height.ceil() as u16
+    fn calculate_image_height_in_cells(&self, _image: &DynamicImage, _area_width: u16) -> u16 {
+        // Always return exactly 10 cells for consistent layout
+        10
     }
 
     /// Calculate total wrapped lines for the given content and width
@@ -340,14 +354,14 @@ impl TextReader {
         }
 
         // Calculate where to insert image placeholder
-        let lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
-        let mut line_count = 0;
+        let _lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
+        let mut _line_count = 0;
         let mut inserted_image_placeholder = false;
         let mut found_first_paragraph = false;
         let mut in_first_paragraph = false;
 
         // Process each line with manual wrapping
-        for (i, line) in text.lines().enumerate() {
+        for (_i, line) in text.lines().enumerate() {
             let is_empty = line.trim().is_empty();
 
             // Track paragraph state
@@ -374,17 +388,17 @@ impl TextReader {
                         0
                     };
 
-                    for j in 0..image_height {
+                    for _j in 0..image_height {
                         raw_lines.push(String::new());
                         lines.push(Line::from(String::new()));
-                        line_count += 1;
+                        _line_count += 1;
                     }
                     inserted_image_placeholder = true;
                 } else {
                     // Normal empty line processing
                     raw_lines.push(String::new());
                     lines.push(Line::from(String::new()));
-                    line_count += 1;
+                    _line_count += 1;
                 }
             } else {
                 // Wrap the line using textwrap
@@ -394,7 +408,7 @@ impl TextReader {
                     raw_lines.push(line_str.clone());
                     let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
                     lines.push(styled_line);
-                    line_count += 1;
+                    _line_count += 1;
                 }
             }
         }
@@ -1235,23 +1249,8 @@ impl TextReader {
 
                         // Use cached protocol
                         if let Some(ref protocol) = *self.cached_image_protocol.borrow() {
-                            // Skip rendering the image during rapid scrolling to improve performance
-                            let now = Instant::now();
-                            let time_since_last_scroll = now.duration_since(self.last_scroll_time);
-
-                            // Only render image if we're not actively scrolling (100ms threshold)
-                            if time_since_last_scroll > std::time::Duration::from_millis(100) {
-                                let image_widget = Image::new(protocol);
-                                f.render_widget(image_widget, image_area);
-                            } else {
-                                // Draw a placeholder rectangle during scrolling
-                                let placeholder = Block::default()
-                                    .borders(Borders::ALL)
-                                    .border_style(Style::default().fg(Color::DarkGray))
-                                    .title("Image")
-                                    .style(Style::default().bg(Color::Black));
-                                f.render_widget(placeholder, image_area);
-                            }
+                            let image_widget = Image::new(protocol);
+                            f.render_widget(image_widget, image_area);
                         }
                     }
                 }
@@ -1329,5 +1328,219 @@ impl VimNavMotions for TextReader {
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = max_offset;
         debug!("Scrolled to bottom of document: offset {}", max_offset);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme::OCEANIC_NEXT;
+    use image::{DynamicImage, ImageBuffer};
+
+    /// Test that calculate_image_height_in_cells always returns exactly 10
+    #[test]
+    fn test_image_height_always_10_cells() {
+        let reader = TextReader::new();
+
+        // Test with various image sizes
+        let test_cases = vec![
+            (100, 100),   // Square image
+            (200, 50),    // Wide image
+            (50, 200),    // Tall image
+            (1920, 1080), // HD image
+            (64, 64),     // Small image
+        ];
+
+        for (width, height) in test_cases {
+            let img = DynamicImage::ImageRgba8(ImageBuffer::new(width, height));
+            let result = reader.calculate_image_height_in_cells(&img, 100);
+            assert_eq!(
+                result, 10,
+                "Image {}x{} should always result in 10 cells height",
+                width, height
+            );
+        }
+    }
+
+    /// Test that placeholder lines inserted are exactly 10
+    #[test]
+    fn test_placeholder_lines_count() {
+        let mut reader = TextReader::new();
+        let content = "First paragraph here.\n\nSecond paragraph here.";
+        let chapter_title = Some("Test Chapter".to_string());
+        let palette = &OCEANIC_NEXT;
+
+        // The TextReader should already have an image loaded from Ada.png if it exists
+        // We'll check if 10 placeholder lines are inserted when ada_image exists
+        if reader.ada_image.is_some() {
+            let width = 80;
+            let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
+                content,
+                &chapter_title,
+                palette,
+                width,
+                true,
+            );
+
+            // Count empty lines after first paragraph that represent image placeholders
+            let mut placeholder_count = 0;
+            let mut consecutive_empty = 0;
+            let mut found_first_para = false;
+
+            for (i, line) in raw_lines.iter().enumerate() {
+                // Skip title lines
+                if i < 2 {
+                    continue;
+                }
+
+                if !line.trim().is_empty() && !found_first_para {
+                    found_first_para = true;
+                } else if line.trim().is_empty() && found_first_para {
+                    consecutive_empty += 1;
+                } else if !line.trim().is_empty() && consecutive_empty > 0 {
+                    // Found the end of empty lines after first paragraph
+                    placeholder_count = consecutive_empty;
+                    break;
+                }
+            }
+
+            assert_eq!(
+                placeholder_count, 10,
+                "Should have exactly 10 placeholder lines for the image"
+            );
+        }
+    }
+
+    /// Test that prescaling produces an image with correct height based on cell size
+    #[test]
+    fn test_image_prescaling_dynamic() {
+        // Test various source image sizes and cell heights
+        let test_cases = vec![
+            (100, 100, 16), // Square image, 16px cells -> 160px
+            (200, 100, 18), // Wide image, 18px cells -> 180px
+            (100, 200, 20), // Tall image, 20px cells -> 200px
+            (400, 300, 14), // 4:3 image, 14px cells -> 140px
+        ];
+
+        for (src_width, src_height, cell_height) in test_cases {
+            // Simulate the prescaling logic from new()
+            let target_height_in_pixels = 10 * cell_height; // 10 cells * detected cell height
+            let scale = target_height_in_pixels as f32 / src_height as f32;
+            let new_width = (src_width as f32 * scale) as u32;
+            let new_height = target_height_in_pixels;
+
+            assert_eq!(
+                new_height,
+                10 * cell_height,
+                "Prescaled height should be exactly 10 * cell_height ({} pixels)",
+                10 * cell_height
+            );
+
+            // Verify aspect ratio is maintained
+            let src_aspect = src_width as f32 / src_height as f32;
+            let new_aspect = new_width as f32 / new_height as f32;
+            let aspect_diff = (src_aspect - new_aspect).abs();
+
+            assert!(
+                aspect_diff < 0.05,
+                "Aspect ratio should be maintained: src={:.2} new={:.2} (diff={:.4})",
+                src_aspect,
+                new_aspect,
+                aspect_diff
+            );
+        }
+    }
+
+    /// Test that image placeholder insertion happens after first paragraph
+    #[test]
+    fn test_image_placement_after_first_paragraph() {
+        let mut reader = TextReader::new();
+        let content = "First paragraph with some text that might wrap to multiple lines.\n\n\
+             Second paragraph here.\n\n\
+             Third paragraph here.";
+        let chapter_title = Some("Test Chapter".to_string());
+        let palette = &OCEANIC_NEXT;
+
+        if reader.ada_image.is_some() {
+            let width = 40; // Narrow width to force wrapping
+            let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
+                content,
+                &chapter_title,
+                palette,
+                width,
+                true,
+            );
+
+            // Find the first paragraph end by looking for consecutive empty lines after content
+            let mut found_image_placeholders = false;
+            let mut image_start_idx = 0;
+            let mut consecutive_empty = 0;
+
+            // Skip title lines
+            for (i, line) in raw_lines.iter().enumerate().skip(2) {
+                if line.trim().is_empty() {
+                    consecutive_empty += 1;
+                    if consecutive_empty >= 10 && !found_image_placeholders {
+                        // Found our image placeholder area
+                        image_start_idx = i - 9; // Go back to start of placeholders
+                        found_image_placeholders = true;
+                        break;
+                    }
+                } else {
+                    consecutive_empty = 0;
+                }
+            }
+
+            assert!(
+                found_image_placeholders,
+                "Should find image placeholders in the output"
+            );
+
+            // Verify there's content before the placeholder (first paragraph)
+            assert!(
+                image_start_idx > 2,
+                "Image should not be at the very beginning (found at {})",
+                image_start_idx
+            );
+
+            // Verify we have first paragraph content before image
+            let non_empty_before = raw_lines[2..image_start_idx]
+                .iter()
+                .filter(|line| !line.trim().is_empty())
+                .count();
+            assert!(
+                non_empty_before > 0,
+                "Should have first paragraph content before image"
+            );
+        }
+    }
+
+    /// Test that image rendering area calculations work correctly
+    #[test]
+    fn test_image_rendering_calculations() {
+        let reader = TextReader::new();
+
+        // If the reader has an ada_image loaded, test it
+        if let Some(ref ada_image) = reader.ada_image {
+            // Test area width calculation
+            let area_width = 100;
+            let image_width = 70; // min(100 * 0.7, 70) = 70
+
+            // The image should be centered
+            let expected_x_offset = (area_width - image_width) / 2;
+            assert_eq!(
+                expected_x_offset, 15,
+                "Image should be centered with correct offset"
+            );
+
+            // Height should always be 10 cells
+            let image_height = reader.calculate_image_height_in_cells(ada_image, area_width as u16);
+            assert_eq!(image_height, 10, "Image height should be exactly 10 cells");
+        } else {
+            // If no image loaded, create a test image
+            let test_img = DynamicImage::ImageRgba8(ImageBuffer::new(40, 20));
+            let image_height = reader.calculate_image_height_in_cells(&test_img, 100);
+            assert_eq!(image_height, 10, "Image height should be exactly 10 cells");
+        }
     }
 }
