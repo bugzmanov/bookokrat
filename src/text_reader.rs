@@ -10,7 +10,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
-use ratatui_image::{picker::Picker, protocol::Protocol, CropOptions, Image, Resize};
+use ratatui_image::{
+    picker::Picker, protocol::StatefulProtocol, CropOptions, Resize, StatefulImage,
+};
 use std::cell::RefCell;
 use std::time::Instant;
 use textwrap;
@@ -65,9 +67,8 @@ pub struct TextReader {
     // Image display
     ada_image: Option<DynamicImage>,
     image_picker: RefCell<Option<Picker>>,
-    // Cached image protocol to avoid re-processing
-    cached_image_protocol: RefCell<Option<Protocol>>,
-    cached_image_area: RefCell<Option<Rect>>,
+    // Cached stateful image protocol
+    cached_image_protocol: RefCell<Option<StatefulProtocol>>,
     // Downscaled image for performance
     cached_downscaled_image: RefCell<Option<DynamicImage>>,
     // Image width in terminal cells (calculated during loading)
@@ -170,7 +171,6 @@ impl TextReader {
             ada_image,
             image_picker: RefCell::new(image_picker),
             cached_image_protocol: RefCell::new(None),
-            cached_image_area: RefCell::new(None),
             cached_downscaled_image: RefCell::new(None),
             image_width_cells,
         }
@@ -763,7 +763,6 @@ impl TextReader {
         self.auto_scroll_state = None;
         // Clear image cache
         *self.cached_image_protocol.borrow_mut() = None;
-        *self.cached_image_area.borrow_mut() = None;
         *self.cached_downscaled_image.borrow_mut() = None;
     }
 
@@ -1291,37 +1290,18 @@ impl TextReader {
                             Resize::Fit(None)
                         };
 
-                        // Check if we need to update the cached protocol
-                        // Only update if the image area dimensions changed, not just clipping
-                        let need_update = {
-                            let cached_area = self.cached_image_area.borrow();
-                            if let Some(cached) = cached_area.as_ref() {
-                                cached.width != image_area.width
-                                    || cached.height != image_area.height
-                            } else {
-                                true
-                            }
-                        };
+                        // Create or get the stateful protocol
+                        let mut protocol_ref = self.cached_image_protocol.borrow_mut();
 
-                        if need_update || self.cached_image_protocol.borrow().is_none() {
-                            // Update cache
-                            match picker.new_protocol(ada_image.clone(), image_area, resize.clone())
-                            {
-                                Ok(image_protocol) => {
-                                    *self.cached_image_protocol.borrow_mut() = Some(image_protocol);
-                                    *self.cached_image_area.borrow_mut() = Some(image_area);
-                                }
-                                Err(e) => {
-                                    debug!("Failed to create image protocol: {}", e);
-                                    return;
-                                }
-                            }
+                        if protocol_ref.is_none() {
+                            // Create the stateful protocol once
+                            *protocol_ref = Some(picker.new_resize_protocol(ada_image.clone()));
                         }
 
-                        // Use cached protocol
-                        if let Some(ref protocol) = *self.cached_image_protocol.borrow() {
-                            let image_widget = Image::new(protocol);
-                            f.render_widget(image_widget, image_area);
+                        // Render using the stateful widget
+                        if let Some(ref mut protocol) = *protocol_ref {
+                            let image_widget = StatefulImage::new().resize(resize);
+                            f.render_stateful_widget(image_widget, image_area, protocol);
                         }
                     }
                 }
