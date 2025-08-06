@@ -65,6 +65,8 @@ pub struct TextReader {
     cached_image_area: RefCell<Option<Rect>>,
     // Downscaled image for performance
     cached_downscaled_image: RefCell<Option<DynamicImage>>,
+    // Image width in terminal cells (calculated during loading)
+    image_width_cells: u16,
 }
 
 impl TextReader {
@@ -94,7 +96,7 @@ impl TextReader {
         };
 
         // Try to load Ada.png from root folder
-        let ada_image = match image::open("Ada.png") {
+        let (ada_image, image_width_cells) = match image::open("Ada.png") {
             Ok(img) => {
                 let (width, height) = img.dimensions();
                 debug!("Successfully loaded Ada.png: {}x{}", width, height);
@@ -120,11 +122,23 @@ impl TextReader {
 
                 let scaled =
                     img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
-                Some(scaled)
+
+                // Calculate image width in terminal cells
+                // Terminal cells are typically ~2:1 aspect ratio (twice as tall as wide)
+                // So we need to account for this when converting pixel width to cell width
+                let cell_aspect_ratio = 2.0; // cells are ~2x taller than wide
+                let image_width_cells =
+                    ((new_width as f32 / detected_cell_height as f32) * cell_aspect_ratio) as u16;
+                debug!(
+                    "Image width: {} pixels = {} terminal cells (cell height: {} pixels)",
+                    new_width, image_width_cells, detected_cell_height
+                );
+
+                (Some(scaled), image_width_cells)
             }
             Err(e) => {
                 debug!("Failed to load Ada.png: {}", e);
-                None
+                (None, 0)
             }
         };
 
@@ -152,6 +166,7 @@ impl TextReader {
             cached_image_protocol: RefCell::new(None),
             cached_image_area: RefCell::new(None),
             cached_downscaled_image: RefCell::new(None),
+            image_width_cells,
         }
     }
 
@@ -1210,9 +1225,18 @@ impl TextReader {
                         .min(area_height - image_screen_start);
 
                     if visible_image_height > 0 {
+                        // Calculate centered image area based on natural width
+                        let content_width = margined_content_area[1].width;
+                        let x_offset = if self.image_width_cells < content_width {
+                            (content_width - self.image_width_cells) / 2
+                        } else {
+                            0 // Image is wider than content area, don't offset
+                        };
+
                         let image_area = Rect {
-                            x: margined_content_area[1].x,
+                            x: margined_content_area[1].x + x_offset,
                             y: margined_content_area[1].y + image_screen_start as u16,
+                            // width: self.image_width_cells.min(content_width), // Clamp to content width
                             width: margined_content_area[1].width,
                             height: visible_image_height as u16,
                         };

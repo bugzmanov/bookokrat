@@ -1,6 +1,6 @@
 ideas to implement:
- - Code formatting & coloring. Goal: Manning books should be nice to read
  - images in ghosty terminal
+ - Code formatting & coloring. Goal: Manning books should be nice to read
  - AI integreration
  - logs/debug window
  - NOTES & comments
