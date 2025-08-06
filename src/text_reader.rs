@@ -1251,9 +1251,15 @@ impl TextReader {
                         };
 
                         // Check if we need to update the cached protocol
+                        // Only update if the image area dimensions changed, not just clipping
                         let need_update = {
                             let cached_area = self.cached_image_area.borrow();
-                            cached_area.as_ref() != Some(&image_area) || image_top_clipped > 0
+                            if let Some(cached) = cached_area.as_ref() {
+                                cached.width != image_area.width
+                                    || cached.height != image_area.height
+                            } else {
+                                true
+                            }
                         };
 
                         if need_update || self.cached_image_protocol.borrow().is_none() {
