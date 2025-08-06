@@ -17,6 +17,8 @@ use textwrap;
 
 /// Fixed height for images in terminal cells
 const IMAGE_HEIGHT_IN_CELLS: u16 = 15;
+/// Total lines reserved for image including padding (1 line before + 15 image lines + 1 line after)
+const IMAGE_TOTAL_LINES: u16 = IMAGE_HEIGHT_IN_CELLS + 2;
 
 #[derive(Debug, Clone)]
 struct AutoScrollState {
@@ -256,12 +258,11 @@ impl TextReader {
             // Check if we should count image lines
             if !will_insert_image && found_first_paragraph && is_empty && self.ada_image.is_some() {
                 will_insert_image = true;
-                // Add image placeholder lines instead of the empty line
-                let image_height = IMAGE_HEIGHT_IN_CELLS as usize; // Always IMAGE_HEIGHT_IN_CELLS as per calculate_image_height_in_cells
-                total_lines += image_height;
+                // Add total lines for image (empty line before + image + empty line after)
+                total_lines += IMAGE_TOTAL_LINES as usize;
                 debug!(
-                    "Adding {} lines for image placeholder at line {}",
-                    image_height, total_lines
+                    "Adding {} lines for image (1 padding + {} image + 1 padding) at line {}",
+                    IMAGE_TOTAL_LINES, IMAGE_HEIGHT_IN_CELLS, total_lines
                 );
             } else if is_empty {
                 total_lines += 1;
@@ -425,7 +426,12 @@ impl TextReader {
             // Process the line
             if is_empty {
                 if should_insert_image {
-                    // Replace the empty line with image placeholder lines
+                    // Add empty line before image
+                    raw_lines.push(String::new());
+                    lines.push(Line::from(String::new()));
+                    _line_count += 1;
+
+                    // Add image placeholder lines
                     let image_height = if let Some(ref ada_image) = self.ada_image {
                         self.calculate_image_height_in_cells(ada_image, width as u16) as usize
                     } else {
@@ -437,6 +443,12 @@ impl TextReader {
                         lines.push(Line::from(String::new()));
                         _line_count += 1;
                     }
+
+                    // Add empty line after image
+                    raw_lines.push(String::new());
+                    lines.push(Line::from(String::new()));
+                    _line_count += 1;
+
                     inserted_image_placeholder = true;
                 } else {
                     // Normal empty line processing
@@ -1220,8 +1232,8 @@ impl TextReader {
                 self.calculate_lines_before_image(content, chapter_title, text_width);
             // Account for title lines
             let title_lines = if chapter_title.is_some() { 2 } else { 0 };
-            // The image starts right where the empty line would have been
-            let total_lines_before_image = lines_before_image + title_lines;
+            // The image starts after the padding line
+            let total_lines_before_image = lines_before_image + title_lines + 1; // +1 for the empty line before image
 
             let calculated_image_height = self
                 .calculate_image_height_in_cells(ada_image, margined_content_area[1].width)
@@ -1464,9 +1476,9 @@ mod tests {
             }
 
             assert_eq!(
-                placeholder_count, IMAGE_HEIGHT_IN_CELLS as usize,
-                "Should have exactly {} placeholder lines for the image",
-                IMAGE_HEIGHT_IN_CELLS
+                placeholder_count, IMAGE_TOTAL_LINES as usize,
+                "Should have exactly {} placeholder lines for the image (1 padding + {} image + 1 padding)",
+                IMAGE_TOTAL_LINES, IMAGE_HEIGHT_IN_CELLS
             );
         }
     }
