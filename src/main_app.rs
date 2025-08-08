@@ -17,6 +17,8 @@ pub enum ChapterDirection {
     Previous,
 }
 
+use std::num::FpCategory;
+use std::sync::{Arc, Mutex};
 use std::{
     io::BufReader,
     time::{Duration, Instant},
@@ -26,6 +28,7 @@ use anyhow::Result;
 use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
+use pprof::ProfilerGuard;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -63,6 +66,7 @@ pub struct App {
     // Reading history
     reading_history: Option<ReadingHistory>,
     show_reading_history: bool,
+    profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
 }
 
 pub trait VimNavMotions {
@@ -137,7 +141,11 @@ impl App {
         let text_reader = TextReader::new();
 
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
-
+        // let guard = pprof::ProfilerGuardBuilder::default()
+        //     .frequency(1000)
+        //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
+        //     .build()
+        //     .unwrap();
         let mut app = Self {
             book_manager,
             navigation_panel,
@@ -164,6 +172,7 @@ impl App {
             terminal_height: 24, // Default height, will be updated on render
             reading_history: None,
             show_reading_history: false,
+            profiler: Arc::new(Mutex::new(None)),
         };
 
         // Get actual terminal size on startup
@@ -199,7 +208,25 @@ impl App {
 
         app
     }
+    fn toggle_profiling(&self) {
+        let mut profiler_lock = self.profiler.lock().unwrap();
 
+        if profiler_lock.is_none() {
+            debug!("Profiling started");
+            *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
+        } else {
+            debug!("Profiling stopped and saved");
+
+            if let Some(guard) = profiler_lock.take() {
+                if let Ok(report) = guard.report().build() {
+                    let file = std::fs::File::create("flamegraph.svg").unwrap();
+                    report.flamegraph(file).unwrap();
+                } else {
+                    debug!("Could not build profile report");
+                }
+            }
+        }
+    }
     // =============================================================================
     // HIGH-LEVEL APPLICATION ACTIONS
     // =============================================================================
@@ -1143,7 +1170,7 @@ impl App {
         }
     }
 
-    pub fn draw(&mut self, f: &mut ratatui::Frame) {
+    pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
         // Update auto-scroll state for continuous scrolling during text selection
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
@@ -1206,7 +1233,7 @@ impl App {
         }
 
         // Draw help bar
-        self.render_help_bar(f, chunks[1]);
+        self.render_help_bar(f, chunks[1], fps_counter);
 
         // Render reading history popup if active
         if self.show_reading_history {
@@ -1242,7 +1269,7 @@ impl App {
         f.render_widget(paragraph, area);
     }
 
-    fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect) {
+    fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
         let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
 
         let help_text = if self.text_reader.has_text_selection() {
@@ -1254,7 +1281,7 @@ impl App {
             }
         };
 
-        let help = Paragraph::new(help_text)
+        let help = Paragraph::new(format!("{} | FPS: {}", help_text, fps_counter.current_fps))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -1422,6 +1449,9 @@ impl App {
                     // Ctrl+O: Open current EPUB with system viewer
                     self.open_with_system_viewer();
                 }
+            }
+            KeyCode::Char('p') => {
+                self.toggle_profiling();
             }
             KeyCode::Enter => {
                 if self.show_reading_history {
@@ -1591,6 +1621,32 @@ impl App {
     }
 }
 
+struct FPSCounter {
+    last_measure: Instant,
+    ticks: u16,
+    current_fps: u16,
+}
+
+impl FPSCounter {
+    fn new() -> FPSCounter {
+        FPSCounter {
+            last_measure: Instant::now(),
+            ticks: 0,
+            current_fps: 0,
+        }
+    }
+
+    fn tick(&mut self) {
+        self.ticks = self.ticks.saturating_add(1);
+        let elapsed = self.last_measure.elapsed();
+        if (elapsed > Duration::from_secs(1)) {
+            self.current_fps = self.ticks;
+            self.last_measure = Instant::now();
+            self.ticks = 0;
+        }
+    }
+}
+
 pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
@@ -1598,12 +1654,12 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(50); // Faster tick rate for smoother animation
     let mut last_tick = std::time::Instant::now();
-
+    let mut fps_counter = FPSCounter::new();
     loop {
         // Process all available events first before drawing
         let mut events_processed = 0;
         let mut should_quit = false;
-
+        fps_counter.tick();
         // Drain all available events without blocking
         while event_source.poll(Duration::from_millis(0))? && events_processed < 50 {
             let event = event_source.read()?;
@@ -1648,7 +1704,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 
         // Draw if we processed events or on tick
         if events_processed > 0 || last_tick.elapsed() >= tick_rate {
-            terminal.draw(|f| app.draw(f))?;
+            terminal.draw(|f| app.draw(f, &fps_counter))?;
         }
 
         // Handle timing

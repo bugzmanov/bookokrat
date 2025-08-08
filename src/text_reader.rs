@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{
-    picker::Picker, protocol::StatefulProtocol, CropOptions, Resize, StatefulImage,
+    picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage, ViewportOptions,
 };
 use std::cell::RefCell;
 use std::time::Instant;
@@ -202,8 +202,8 @@ impl TextReader {
                 if found_content {
                     // This is a paragraph break
                     paragraph_count += 1;
-                    if paragraph_count >= 1 {
-                        // Found the end of first paragraph
+                    if paragraph_count >= 6 {
+                        // Found the end of sixth paragraph
                         return line_count;
                     }
                 }
@@ -217,7 +217,7 @@ impl TextReader {
             }
         }
 
-        // If we didn't find a paragraph break, place image after all content
+        // If we didn't find 6 paragraph breaks, place image after all content
         line_count
     }
 
@@ -239,8 +239,8 @@ impl TextReader {
         total_lines += 2;
 
         // Track if we'll insert image placeholder
-        let mut found_first_paragraph = false;
-        let mut in_first_paragraph = false;
+        let mut paragraph_count = 0;
+        let mut in_paragraph = false;
         let mut will_insert_image = false;
 
         // Wrap each line of content
@@ -248,15 +248,15 @@ impl TextReader {
             let is_empty = line.trim().is_empty();
 
             // Track paragraph state (same logic as in parse_styled_text_cached)
-            if !is_empty && !found_first_paragraph {
-                in_first_paragraph = true;
-            } else if is_empty && in_first_paragraph {
-                found_first_paragraph = true;
-                in_first_paragraph = false;
+            if !is_empty && !in_paragraph {
+                in_paragraph = true;
+            } else if is_empty && in_paragraph {
+                paragraph_count += 1;
+                in_paragraph = false;
             }
 
             // Check if we should count image lines
-            if !will_insert_image && found_first_paragraph && is_empty && self.ada_image.is_some() {
+            if !will_insert_image && paragraph_count >= 6 && is_empty && self.ada_image.is_some() {
                 will_insert_image = true;
                 // Add total lines for image (empty line before + image + empty line after)
                 total_lines += IMAGE_TOTAL_LINES as usize;
@@ -402,24 +402,24 @@ impl TextReader {
         let _lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
         let mut _line_count = 0;
         let mut inserted_image_placeholder = false;
-        let mut found_first_paragraph = false;
-        let mut in_first_paragraph = false;
+        let mut paragraph_count = 0;
+        let mut in_paragraph = false;
 
         // Process each line with manual wrapping
         for (_i, line) in text.lines().enumerate() {
             let is_empty = line.trim().is_empty();
 
             // Track paragraph state
-            if !is_empty && !found_first_paragraph {
-                in_first_paragraph = true;
-            } else if is_empty && in_first_paragraph {
-                found_first_paragraph = true;
-                in_first_paragraph = false;
+            if !is_empty && !in_paragraph {
+                in_paragraph = true;
+            } else if is_empty && in_paragraph {
+                paragraph_count += 1;
+                in_paragraph = false;
             }
 
             // Check if we should insert image placeholder on this empty line
             let should_insert_image = !inserted_image_placeholder
-                && found_first_paragraph
+                && paragraph_count >= 6
                 && is_empty
                 && self.ada_image.is_some();
 
@@ -1273,23 +1273,6 @@ impl TextReader {
                             0 // Image is wider than content area, don't offset
                         };
 
-                        let image_area = Rect {
-                            x: margined_content_area[1].x + x_offset,
-                            y: margined_content_area[1].y + image_screen_start as u16,
-                            // width: self.image_width_cells.min(content_width), // Clamp to content width
-                            width: margined_content_area[1].width,
-                            height: visible_image_height as u16,
-                        };
-
-                        let resize = if image_top_clipped > 0 {
-                            Resize::Crop(Some(CropOptions {
-                                clip_top: true,
-                                clip_left: false,
-                            }))
-                        } else {
-                            Resize::Fit(None)
-                        };
-
                         // Create or get the stateful protocol
                         let mut protocol_ref = self.cached_image_protocol.borrow_mut();
 
@@ -1298,9 +1281,49 @@ impl TextReader {
                             *protocol_ref = Some(picker.new_resize_protocol(ada_image.clone()));
                         }
 
+                        // Calculate the visible image area
+                        // When image is partially scrolled off top, we need to:
+                        // 1. Keep the render area at the top of the screen (y = 0)
+                        // 2. Reduce height by the amount clipped
+                        // 3. Use viewport offset to show the correct portion
+                        let (render_y, render_height) = if image_top_clipped > 0 {
+                            // Image is partially scrolled off top
+                            (
+                                margined_content_area[1].y,
+                                ((IMAGE_HEIGHT_IN_CELLS as usize).saturating_sub(image_top_clipped))
+                                    .min(area_height) as u16,
+                            )
+                        } else {
+                            // Image is fully visible, position it normally
+                            (
+                                margined_content_area[1].y + image_screen_start as u16,
+                                (IMAGE_HEIGHT_IN_CELLS as usize)
+                                    .min(area_height.saturating_sub(image_screen_start))
+                                    as u16,
+                            )
+                        };
+                        
+                        let image_area = Rect {
+                            x: margined_content_area[1].x + x_offset,
+                            y: render_y,
+                            width: self.image_width_cells.min(margined_content_area[1].width),
+                            height: render_height,
+                        };
+
                         // Render using the stateful widget
                         if let Some(ref mut protocol) = *protocol_ref {
-                            let image_widget = StatefulImage::new().resize(resize);
+                            // Use Viewport mode for efficient scrolling
+                            // Calculate the Y offset in pixels based on how much is clipped from top
+                            let y_offset_pixels =
+                                (image_top_clipped as f32 * picker.font_size().1 as f32) as u32;
+
+                            let viewport_options = ratatui_image::ViewportOptions {
+                                y_offset: y_offset_pixels,
+                                x_offset: 0, // No horizontal scrolling for now
+                            };
+
+                            let image_widget =
+                                StatefulImage::new().resize(Resize::Viewport(viewport_options));
                             f.render_stateful_widget(image_widget, image_area, protocol);
                         }
                     }
@@ -1417,12 +1440,18 @@ mod tests {
     #[test]
     fn test_placeholder_lines_count() {
         let mut reader = TextReader::new();
-        let content = "First paragraph here.\n\nSecond paragraph here.";
+        let content = "First paragraph here.\n\n\
+             Second paragraph here.\n\n\
+             Third paragraph here.\n\n\
+             Fourth paragraph here.\n\n\
+             Fifth paragraph here.\n\n\
+             Sixth paragraph here.\n\n\
+             Seventh paragraph here.";
         let chapter_title = Some("Test Chapter".to_string());
         let palette = &OCEANIC_NEXT;
 
         // The TextReader should already have an image loaded from Ada.png if it exists
-        // We'll check if 10 placeholder lines are inserted when ada_image exists
+        // We'll check if IMAGE_TOTAL_LINES placeholder lines are inserted when ada_image exists
         if reader.ada_image.is_some() {
             let width = 80;
             let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
@@ -1433,10 +1462,11 @@ mod tests {
                 true,
             );
 
-            // Count empty lines after first paragraph that represent image placeholders
+            // Count empty lines after sixth paragraph that represent image placeholders
             let mut placeholder_count = 0;
             let mut consecutive_empty = 0;
-            let mut found_first_para = false;
+            let mut paragraph_count = 0;
+            let mut in_paragraph = false;
 
             for (i, line) in raw_lines.iter().enumerate() {
                 // Skip title lines
@@ -1444,14 +1474,22 @@ mod tests {
                     continue;
                 }
 
-                if !line.trim().is_empty() && !found_first_para {
-                    found_first_para = true;
-                } else if line.trim().is_empty() && found_first_para {
+                if !line.trim().is_empty() {
+                    if !in_paragraph {
+                        in_paragraph = true;
+                    }
+                    consecutive_empty = 0;
+                } else if in_paragraph {
+                    paragraph_count += 1;
+                    in_paragraph = false;
+                    consecutive_empty = 1;
+                } else {
                     consecutive_empty += 1;
-                } else if !line.trim().is_empty() && consecutive_empty > 0 {
-                    // Found the end of empty lines after first paragraph
-                    placeholder_count = consecutive_empty;
-                    break;
+                    // Check if we've found the image placeholder after the 6th paragraph
+                    if paragraph_count >= 6 && consecutive_empty >= IMAGE_TOTAL_LINES as usize {
+                        placeholder_count = IMAGE_TOTAL_LINES as usize;
+                        break;
+                    }
                 }
             }
 
@@ -1504,13 +1542,17 @@ mod tests {
         }
     }
 
-    /// Test that image placeholder insertion happens after first paragraph
+    /// Test that image placeholder insertion happens after sixth paragraph
     #[test]
-    fn test_image_placement_after_first_paragraph() {
+    fn test_image_placement_after_sixth_paragraph() {
         let mut reader = TextReader::new();
         let content = "First paragraph with some text that might wrap to multiple lines.\n\n\
              Second paragraph here.\n\n\
-             Third paragraph here.";
+             Third paragraph here.\n\n\
+             Fourth paragraph here.\n\n\
+             Fifth paragraph here.\n\n\
+             Sixth paragraph here.\n\n\
+             Seventh paragraph here.";
         let chapter_title = Some("Test Chapter".to_string());
         let palette = &OCEANIC_NEXT;
 
@@ -1556,7 +1598,7 @@ mod tests {
                 image_start_idx
             );
 
-            // Verify we have first paragraph content before image
+            // Verify we have six paragraphs of content before image
             let non_empty_before = raw_lines[2..image_start_idx]
                 .iter()
                 .filter(|line| !line.trim().is_empty())

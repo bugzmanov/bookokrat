@@ -29,11 +29,11 @@ textwrap = "0.16"
 better-panic = "0.3"
 human-panic = "2.0"
 libc = "0.2"
-pprof = { version = "0.13", features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 arboard = "3.4"
 zip = "0.6"
 tempfile = "3.8"
-ratatui-image = { version = "8.0.1", features = ["crossterm"] }
+ratatui-image = { path = "../ratatui-image", features = ["crossterm"] }
 image = "0.25"
 
 [dev-dependencies]
