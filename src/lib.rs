@@ -20,4 +20,4 @@ pub mod toc_parser;
 pub mod test_utils;
 
 // Re-export main app components
-pub use main_app::{run_app_with_event_source, App, FocusedPanel};
+pub use main_app::{App, FocusedPanel, run_app_with_event_source};

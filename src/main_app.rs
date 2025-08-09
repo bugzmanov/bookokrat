@@ -30,10 +30,10 @@ use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use pprof::ProfilerGuard;
 use ratatui::{
+    Terminal,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Paragraph},
-    Terminal,
 };
 
 pub struct App {
@@ -465,9 +465,7 @@ impl App {
 
     fn refresh_chapter_cache(&mut self) {
         debug!("refresh_chapter_cache called");
-        if let (Some(ref current_file), Some(ref mut epub)) =
-            (&self.current_file, &mut self.current_epub)
-        {
+        if let (Some(current_file), Some(epub)) = (&self.current_file, &mut self.current_epub) {
             debug!("refresh_chapter_cache: processing book '{}'", current_file);
 
             // Parse TOC structure to create hierarchical sections
@@ -806,7 +804,12 @@ impl App {
 
         debug!(
             "Batched mouse events: {} down, {} up, net: {}, drained: {} events at position ({}, {})",
-            scroll_down_count, scroll_up_count, net_scroll, drain_count, initial_column, initial_row
+            scroll_down_count,
+            scroll_up_count,
+            net_scroll,
+            drain_count,
+            initial_column,
+            initial_row
         );
 
         self.apply_scroll(net_scroll, initial_column);
@@ -1276,8 +1279,12 @@ impl App {
             "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
         } else {
             match self.focused_panel {
-                FocusedPanel::FileList => "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit",
-                FocusedPanel::Content => "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Ctrl+O: Open | q: Quit",
+                FocusedPanel::FileList => {
+                    "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit"
+                }
+                FocusedPanel::Content => {
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Ctrl+O: Open | q: Quit"
+                }
             }
         };
 
@@ -1689,7 +1696,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             // Calculate screen height for half-screen scrolling commands
                             let visible_height =
                                 terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                                                                                            // Handle all keys through the common handler
+                            // Handle all keys through the common handler
                             app.handle_key_event_with_screen_height(key, Some(visible_height));
                         }
                     }

@@ -1,5 +1,5 @@
-use snapbox::{assert_data_eq, Data};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use snapbox::{Data, assert_data_eq};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 
 pub fn assert_svg_snapshot(

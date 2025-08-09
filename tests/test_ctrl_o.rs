@@ -1,8 +1,8 @@
-use bookrat::main_app::{run_app_with_event_source, App};
+use bookrat::main_app::{App, run_app_with_event_source};
 use bookrat::system_command::MockSystemCommandExecutor;
 use bookrat::test_utils::test_helpers::TestScenarioBuilder;
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 #[test]
 fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {

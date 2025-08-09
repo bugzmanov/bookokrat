@@ -4,7 +4,7 @@ use crate::bookmark::Bookmarks;
 use crate::main_app::VimNavMotions;
 use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
-use ratatui::{layout::Rect, Frame};
+use ratatui::{Frame, layout::Rect};
 
 pub enum SelectedActionOwned {
     None,

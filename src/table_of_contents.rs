@@ -1,11 +1,11 @@
 use crate::navigation_panel::CurrentBookInfo;
 use crate::theme::Base16Palette;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 
 /// New ADT-based model for TOC items

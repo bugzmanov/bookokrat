@@ -2,11 +2,11 @@ use crate::book_manager::{BookInfo, BookManager};
 use crate::bookmark::Bookmarks;
 use crate::theme::Base16Palette;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 
 pub struct BookList {

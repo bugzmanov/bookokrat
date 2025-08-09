@@ -4,11 +4,11 @@ use crate::theme::OCEANIC_NEXT;
 use chrono::{DateTime, Local, TimeZone};
 use log::debug;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
-    Frame,
 };
 use std::collections::HashMap;
 

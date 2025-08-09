@@ -1,7 +1,7 @@
 use crossterm::{
     event::DisableMouseCapture,
     execute,
-    terminal::{disable_raw_mode, LeaveAlternateScreen},
+    terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
 use std::io::{self, Write};
 use std::panic;

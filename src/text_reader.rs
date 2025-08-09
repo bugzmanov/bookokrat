@@ -5,15 +5,16 @@ use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
 use log::debug;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
-    Frame,
 };
 use ratatui_image::{
-    picker::Picker, protocol::StatefulProtocol, Resize, StatefulImage, ViewportOptions,
+    Resize, StatefulImage, ViewportOptions, picker::Picker, protocol::StatefulProtocol,
 };
+use regex::Regex;
 use std::cell::RefCell;
 use std::time::Instant;
 use textwrap;
@@ -36,6 +37,11 @@ struct AutoScrollState {
 enum AutoScrollDirection {
     Up,
     Down,
+}
+
+pub struct EmbeddedImage {
+    pub src: String,
+    pub lines_before_image: usize,
 }
 
 pub struct TextReader {
@@ -70,10 +76,9 @@ pub struct TextReader {
     image_picker: RefCell<Option<Picker>>,
     // Cached stateful image protocol
     cached_image_protocol: RefCell<Option<StatefulProtocol>>,
-    // Downscaled image for performance
-    cached_downscaled_image: RefCell<Option<DynamicImage>>,
     // Image width in terminal cells (calculated during loading)
     image_width_cells: u16,
+    embedded_images: Vec<EmbeddedImage>,
 }
 
 impl TextReader {
@@ -150,6 +155,8 @@ impl TextReader {
             }
         };
 
+        let embedded_images = Vec::new();
+
         Self {
             scroll_offset: 0,
             content_length: 0,
@@ -172,8 +179,8 @@ impl TextReader {
             ada_image,
             image_picker: RefCell::new(image_picker),
             cached_image_protocol: RefCell::new(None),
-            cached_downscaled_image: RefCell::new(None),
             image_width_cells,
+            embedded_images,
         }
     }
 
@@ -324,10 +331,13 @@ impl TextReader {
             || self.cached_focus_state != is_focused;
 
         if needs_update {
-            debug!("Regenerating styled content cache: width {} -> {}, content changed: {}, title changed: {}",
-                   self.cached_styled_width, width,
-                   self.cached_content_hash != content_hash,
-                   self.cached_chapter_title_hash != chapter_title_hash);
+            debug!(
+                "Regenerating styled content cache: width {} -> {}, content changed: {}, title changed: {}",
+                self.cached_styled_width,
+                width,
+                self.cached_content_hash != content_hash,
+                self.cached_chapter_title_hash != chapter_title_hash
+            );
 
             let (styled_content, raw_lines) = self.parse_styled_text_internal_with_raw(
                 text,
@@ -380,7 +390,7 @@ impl TextReader {
         let mut raw_lines = Vec::new();
 
         // Add chapter title lines to raw text
-        if let Some(ref title) = chapter_title {
+        if let Some(title) = chapter_title {
             raw_lines.push(title.clone());
             raw_lines.push(String::new());
 
@@ -400,8 +410,7 @@ impl TextReader {
         }
 
         // Calculate where to insert image placeholder
-        let _lines_before_image = self.calculate_lines_before_image(text, chapter_title, width);
-        let mut _line_count = 0;
+        let mut line_count = 0;
         let mut inserted_image_placeholder = false;
         let mut paragraph_count = 0;
         let mut in_paragraph = false;
@@ -419,17 +428,20 @@ impl TextReader {
             }
 
             // Check if we should insert image placeholder on this empty line
-            let should_insert_image = !inserted_image_placeholder
-                && paragraph_count >= 6
-                && is_empty
-                && self.ada_image.is_some();
+            let should_insert_image = false; // Disable automatic image insertion
 
             // Check if this line contains an image placeholder
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
             // Process the line
             if is_image_placeholder {
-                // Extract the image source for future use
+                let img_src = extract_src(line.trim()).unwrap_or("no-src".to_string());
+                debug!("Image {} - {} ", img_src, line_count);
+                self.embedded_images.push(EmbeddedImage {
+                    src: img_src,
+                    lines_before_image: line_count,
+                });
+
                 let image_src = line.trim().to_string();
 
                 // Create image placeholder using the new component
@@ -451,13 +463,13 @@ impl TextReader {
                     lines.push(styled_line);
                 }
 
-                _line_count += 15; // Total lines for image placeholder
+                line_count += 15; // Height of placeholder
             } else if is_empty {
                 if should_insert_image {
                     // Add empty line before image
                     raw_lines.push(String::new());
                     lines.push(Line::from(String::new()));
-                    _line_count += 1;
+                    line_count += 1;
 
                     // Add image placeholder lines
                     let image_height = if let Some(ref ada_image) = self.ada_image {
@@ -469,20 +481,20 @@ impl TextReader {
                     for _j in 0..image_height {
                         raw_lines.push(String::new());
                         lines.push(Line::from(String::new()));
-                        _line_count += 1;
+                        line_count += 1;
                     }
 
                     // Add empty line after image
                     raw_lines.push(String::new());
                     lines.push(Line::from(String::new()));
-                    _line_count += 1;
+                    line_count += 1;
 
                     inserted_image_placeholder = true;
                 } else {
                     // Normal empty line processing
                     raw_lines.push(String::new());
                     lines.push(Line::from(String::new()));
-                    _line_count += 1;
+                    line_count += 1;
                 }
             } else {
                 // Wrap the line using textwrap
@@ -492,7 +504,7 @@ impl TextReader {
                     raw_lines.push(line_str.clone());
                     let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
                     lines.push(styled_line);
-                    _line_count += 1;
+                    line_count += 1;
                 }
             }
         }
@@ -791,7 +803,8 @@ impl TextReader {
         self.auto_scroll_state = None;
         // Clear image cache
         *self.cached_image_protocol.borrow_mut() = None;
-        *self.cached_downscaled_image.borrow_mut() = None;
+        // Clear embedded images when changing chapters
+        self.embedded_images.clear();
     }
 
     pub fn restore_scroll_position(&mut self, offset: usize) {
@@ -878,8 +891,10 @@ impl TextReader {
         // Simply highlight the middle line of the current window
         let middle_line = screen_height / 2;
 
-        debug!("Half-screen down to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
-               self.scroll_offset, self.total_wrapped_lines, middle_line, max_offset);
+        debug!(
+            "Half-screen down to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
+            self.scroll_offset, self.total_wrapped_lines, middle_line, max_offset
+        );
 
         // Set up highlighting for 1 second
         self.highlight_visual_line = Some(middle_line);
@@ -893,8 +908,13 @@ impl TextReader {
         // Simply highlight the middle line of the current window
         let middle_line = screen_height / 2;
 
-        debug!("Half-screen up to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
-               self.scroll_offset, self.total_wrapped_lines, middle_line, self.get_max_scroll_offset());
+        debug!(
+            "Half-screen up to offset: {}/{}, highlighting middle line at screen position: {}, max: {}",
+            self.scroll_offset,
+            self.total_wrapped_lines,
+            middle_line,
+            self.get_max_scroll_offset()
+        );
 
         // Set up highlighting for 1 second
         self.highlight_visual_line = Some(middle_line);
@@ -1144,9 +1164,14 @@ impl TextReader {
             || self.cached_text_width != text_width
             || self.cached_content_hash != content_hash
         {
-            debug!("Triggering wrapped lines update: height {} -> {}, width {} -> {}, content changed: {}",
-                   self.visible_height, visible_height, self.cached_text_width, text_width,
-                   self.cached_content_hash != content_hash);
+            debug!(
+                "Triggering wrapped lines update: height {} -> {}, width {} -> {}, content changed: {}",
+                self.visible_height,
+                visible_height,
+                self.cached_text_width,
+                text_width,
+                self.cached_content_hash != content_hash
+            );
             self.update_wrapped_lines(content, text_width, visible_height);
         }
     }
@@ -1182,7 +1207,7 @@ impl TextReader {
         );
 
         // Add chapter title if available, with truncation if necessary
-        if let Some(ref chapter_title_str) = chapter_title {
+        if let Some(chapter_title_str) = chapter_title {
             let separator = " : ";
             let title_with_separator = format!("{}{}{}", title, separator, chapter_title_str);
 
@@ -1254,19 +1279,17 @@ impl TextReader {
         f.render_widget(content_paragraph, margined_content_area[1]);
 
         // Calculate where the image should be displayed
-        if let Some(ref ada_image) = self.ada_image {
-            let lines_before_image =
-                self.calculate_lines_before_image(content, chapter_title, text_width);
-            // Account for title lines
-            let title_lines = if chapter_title.is_some() { 2 } else { 0 };
-            // The image starts after the padding line
-            let total_lines_before_image = lines_before_image + title_lines + 1; // +1 for the empty line before image
+        if let Some(ref ada_image) = self.ada_image
+            && !self.embedded_images.is_empty()
+        {
+            let lines_before_image = self.embedded_images.get(0).unwrap().lines_before_image;
+
+            let image_start_line = lines_before_image + 2; // taking vertical margins into considerations
 
             let calculated_image_height = self
                 .calculate_image_height_in_cells(ada_image, margined_content_area[1].width)
                 as usize;
 
-            let image_start_line = total_lines_before_image;
             let image_end_line = image_start_line + calculated_image_height;
 
             // Check if image is in viewport
@@ -1309,20 +1332,13 @@ impl TextReader {
                             *protocol_ref = Some(picker.new_resize_protocol(ada_image.clone()));
                         }
 
-                        // Calculate the visible image area
-                        // When image is partially scrolled off top, we need to:
-                        // 1. Keep the render area at the top of the screen (y = 0)
-                        // 2. Reduce height by the amount clipped
-                        // 3. Use viewport offset to show the correct portion
                         let (render_y, render_height) = if image_top_clipped > 0 {
-                            // Image is partially scrolled off top
                             (
                                 margined_content_area[1].y,
                                 ((IMAGE_HEIGHT_IN_CELLS as usize).saturating_sub(image_top_clipped))
                                     .min(area_height) as u16,
                             )
                         } else {
-                            // Image is fully visible, position it normally
                             (
                                 margined_content_area[1].y + image_screen_start as u16,
                                 (IMAGE_HEIGHT_IN_CELLS as usize)
@@ -1380,6 +1396,16 @@ impl TextReader {
             }
         }
     }
+}
+
+fn extract_src(text: &str) -> Option<String> {
+    let re = Regex::new(r#"(?i)\[\s*image\s+src\s*=\s*"([^"]+)"\s*\]"#).unwrap();
+
+    for cap in re.captures_iter(text) {
+        return Some(format!("{}", &cap[1]));
+    }
+
+    None
 }
 
 impl VimNavMotions for TextReader {

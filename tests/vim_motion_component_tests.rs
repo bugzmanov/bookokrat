@@ -319,7 +319,9 @@ fn test_text_reader_vim_motion_g() {
 
     // Debug: print what we expect to see
     println!("\nExpected to see at bottom (accounting for wrapping):");
-    println!("Line 100 wraps to: 'This is line 100. Lorem ipsum dolor sit amet,' + 'consectetur adipiscing elit.'");
+    println!(
+        "Line 100 wraps to: 'This is line 100. Lorem ipsum dolor sit amet,' + 'consectetur adipiscing elit.'"
+    );
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write(

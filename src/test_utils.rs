@@ -1,8 +1,8 @@
 pub mod test_helpers {
     use crate::event_source::{Event, KeyCode, KeyEvent, KeyModifiers, SimulatedEventSource};
     use crate::simple_fake_books::create_test_books_in_dir;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     /// Builder for creating test scenarios with simulated user input
     pub struct TestScenarioBuilder {

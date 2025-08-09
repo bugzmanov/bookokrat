@@ -170,7 +170,7 @@ impl TextGenerator {
         let mut content = style_re.replace_all(content, "").into_owned();
         content = script_re.replace_all(&content, "").into_owned();
 
-        if let Some(ref _title) = chapter_title {
+        if let Some(_title) = chapter_title {
             // Remove h1/h2 tags that contain the chapter title
             // This handles complex nested structures by removing the entire h1/h2 tag
             let title_removal_re = Regex::new(r"(?s)<h[12][^>]*>.*?</h[12]>").unwrap();

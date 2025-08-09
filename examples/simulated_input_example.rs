@@ -1,9 +1,9 @@
 /// Example demonstrating how to run the app with simulated keyboard input
 /// Run with: cargo run --example simulated_input_example
 use bookrat::test_utils::test_helpers::*;
-use bookrat::{run_app_with_event_source, App};
-use ratatui::backend::TestBackend;
+use bookrat::{App, run_app_with_event_source};
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 fn main() -> anyhow::Result<()> {
     // Create a test terminal

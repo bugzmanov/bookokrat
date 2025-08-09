@@ -1,5 +1,5 @@
-use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 
 /// Convert terminal to SVG
 pub fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
