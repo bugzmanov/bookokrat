@@ -609,26 +609,19 @@ impl App {
                 Ok((content, title)) => {
                     self.current_chapter_title = title;
                     self.current_content = Some(content);
-                    self.text_reader
-                        .set_content_length(self.current_content.as_ref().unwrap().len());
-                    // Reset wrapped lines count - it will be calculated on next render
-                    self.text_reader.total_wrapped_lines = 0;
-                    self.text_reader.visible_height = 0;
+                    let content_length = self.current_content.as_ref().unwrap().len();
+                    self.text_reader.content_updated(content_length);
                 }
                 Err(e) => {
                     error!("Failed to process chapter: {}", e);
                     self.current_content = Some("Error reading chapter content.".to_string());
-                    self.text_reader.set_content_length(0);
-                    self.text_reader.total_wrapped_lines = 0;
-                    self.text_reader.visible_height = 0;
+                    self.text_reader.content_updated(0);
                 }
             }
         } else {
             error!("No EPUB document loaded");
             self.current_content = Some("No EPUB document loaded.".to_string());
-            self.text_reader.set_content_length(0);
-            self.text_reader.total_wrapped_lines = 0;
-            self.text_reader.visible_height = 0;
+            self.text_reader.content_updated(0);
         }
     }
 

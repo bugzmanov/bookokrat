@@ -784,18 +784,9 @@ impl TextReader {
         }
     }
 
-    pub fn set_content_length(&mut self, length: usize) {
-        self.content_length = length;
-    }
-
     pub fn reset_scroll(&mut self) {
         self.scroll_offset = 0;
         self.scroll_speed = 1;
-        // Clear caches when resetting (typically when changing chapters)
-        self.cached_styled_content = None;
-        self.cached_content_hash = 0;
-        self.cached_chapter_title_hash = 0;
-        self.cached_focus_state = false;
         // Clear text selection when changing chapters
         self.text_selection.clear_selection();
         self.raw_text_lines.clear();
@@ -803,12 +794,28 @@ impl TextReader {
         self.auto_scroll_state = None;
         // Clear image cache
         *self.cached_image_protocol.borrow_mut() = None;
-        // Clear embedded images when changing chapters
-        self.embedded_images.clear();
+        // Also clear content-related caches (reuse content_updated logic)
+        self.content_updated(self.content_length);
     }
 
     pub fn restore_scroll_position(&mut self, offset: usize) {
         self.scroll_offset = offset;
+    }
+
+    /// Called when content has been updated (e.g., when changing chapters)
+    /// This properly resets all internal state that depends on content
+    pub fn content_updated(&mut self, content_length: usize) {
+        self.content_length = content_length;
+        // Reset wrapped lines count - it will be calculated on next render
+        self.total_wrapped_lines = 0;
+        self.visible_height = 0;
+        // Clear any cached content since it's now invalid
+        self.cached_styled_content = None;
+        self.cached_content_hash = 0;
+        self.cached_chapter_title_hash = 0;
+        self.cached_focus_state = false;
+        // Clear embedded images since they're parsed from content
+        self.embedded_images.clear();
     }
 
     pub fn scroll_down_no_content(&mut self) {
