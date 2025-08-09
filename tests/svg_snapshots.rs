@@ -3,7 +3,7 @@ use bookrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
 };
 // SVG snapshot tests using snapbox
-use bookrat::App;
+use bookrat::{App, main_app::FPSCounter};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 mod snapshot_assertions;
@@ -20,6 +20,11 @@ fn ensure_test_report_initialized() {
     INIT.call_once(|| {
         test_report::init_test_report();
     });
+}
+
+// Helper function to create FPSCounter for tests
+fn create_test_fps_counter() -> FPSCounter {
+    FPSCounter::new()
 }
 
 /// Helper trait for simpler key event handling in tests
@@ -132,7 +137,7 @@ fn test_fake_books_file_list_svg() {
 
     app.press_key(crossterm::event::KeyCode::Enter); // Select first book (Digital Frontier)
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -157,7 +162,7 @@ fn test_file_list_svg() {
     let mut terminal = create_test_terminal(80, 24);
     let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -180,7 +185,7 @@ fn test_content_view_svg() {
 
     // Switch to content view
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -218,7 +223,7 @@ fn test_content_scrolling_svg() {
     app.scroll_half_screen_down(visible_height);
 
     // Draw the final state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -268,7 +273,7 @@ fn test_chapter_title_normal_length_svg() {
         // Force animation to complete for testing
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -323,7 +328,7 @@ fn test_chapter_title_narrow_terminal_svg() {
 
     app.press_char_times('j', 1);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -375,7 +380,7 @@ fn test_chapter_title_no_title_svg() {
         // Force animation to complete for testing
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     // Write to debug file
@@ -433,7 +438,7 @@ fn test_mouse_scroll_file_list_svg() {
     // Apply mouse scroll event in file list
     app.handle_mouse_event(mouse_event, None);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -500,7 +505,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
         app.handle_mouse_event(mouse_event, None);
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -588,7 +593,7 @@ fn test_mouse_event_batching_svg() {
         }
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -713,7 +718,7 @@ fn test_horizontal_scroll_handling_svg() {
         }
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -803,7 +808,7 @@ fn test_edge_case_mouse_coordinates_svg() {
         }
     }
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -853,7 +858,7 @@ fn test_text_selection_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Simulate text selection: mouse down, drag, mouse up
     // Use coordinates starting from the left margin to test margin selection
@@ -884,7 +889,7 @@ fn test_text_selection_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show the selection
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -930,7 +935,7 @@ fn test_text_selection_with_auto_scroll_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Start selection in the middle of the screen
     let mouse_down = MouseEvent {
@@ -961,7 +966,7 @@ fn test_text_selection_with_auto_scroll_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show the selection and scroll state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1011,7 +1016,7 @@ fn test_continuous_auto_scroll_down_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let initial_scroll_offset = app.get_scroll_offset();
 
     // Start selection in the middle of the screen
@@ -1067,7 +1072,7 @@ fn test_continuous_auto_scroll_down_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1117,7 +1122,7 @@ fn test_continuous_auto_scroll_up_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Scroll down first to create room for upward auto-scroll
     // Only scroll a small amount to ensure we don't hit max
@@ -1179,7 +1184,7 @@ fn test_continuous_auto_scroll_up_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1229,7 +1234,7 @@ fn test_timer_based_auto_scroll_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let initial_scroll_offset = app.get_scroll_offset();
 
     // Start selection in the middle of the screen
@@ -1256,7 +1261,7 @@ fn test_timer_based_auto_scroll_svg() {
     let mut scroll_offsets = Vec::new();
     for _i in 0..10 {
         // Simulate a redraw happening (which calls update_auto_scroll)
-        terminal.draw(|f| app.draw(f)).unwrap();
+        terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
         scroll_offsets.push(app.get_scroll_offset());
 
         // Add a small delay to ensure the timer can trigger
@@ -1293,7 +1298,7 @@ fn test_timer_based_auto_scroll_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Final redraw
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1343,7 +1348,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Start selection in the middle of the screen
     let mouse_down = MouseEvent {
@@ -1405,7 +1410,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Redraw to show final state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1455,7 +1460,7 @@ fn test_double_click_word_selection_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Simulate double-click to select a word
     // Click on a word in the middle of the content
@@ -1494,7 +1499,7 @@ fn test_double_click_word_selection_svg() {
     app.handle_mouse_event(mouse_up2, None);
 
     // Redraw to show the word selection
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1544,7 +1549,7 @@ fn test_triple_click_paragraph_selection_svg() {
     }
 
     // First draw to initialize the content area
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Simulate triple-click to select a paragraph
     // Click on a paragraph in the middle of the content
@@ -1599,7 +1604,7 @@ fn test_triple_click_paragraph_selection_svg() {
     app.handle_mouse_event(mouse_up3, None);
 
     // Redraw to show the paragraph selection
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1652,7 +1657,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     app.focused_panel = bookrat::main_app::FocusedPanel::Content;
 
     // Draw initial state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Now simulate clicking on book text in the content area
     // According to the bug report: "when i click on a book text: nothing got selected,
@@ -1675,7 +1680,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     app.handle_mouse_event(mouse_up, None);
 
     // Draw to see the current state
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1730,13 +1735,13 @@ fn test_toc_navigation_bug_svg() {
     app.focused_panel = bookrat::main_app::FocusedPanel::FileList;
 
     // Draw initial state - should show book with expanded TOC
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Simulate pressing 'j' key 4 times to navigate down through TOC items
     app.press_char_times('j', 4);
 
     // Draw the state after navigation
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1782,13 +1787,13 @@ fn test_book_list_to_toc_transition_svg() {
 
     // Start with book list
     app.focused_panel = bookrat::main_app::FocusedPanel::FileList;
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
 
     // Select a book and open it - this should transition to TOC mode
     app.press_key(crossterm::event::KeyCode::Enter);
 
     // Draw the state after transition - should show TOC
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1820,7 +1825,7 @@ fn test_toc_back_to_books_list_svg() {
     app.press_key(crossterm::event::KeyCode::Enter);
 
     // Draw the state - should be back to book list with the open book highlighted in red
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -1854,7 +1859,7 @@ fn test_toc_chapter_navigation_svg() {
     app.press_key(crossterm::event::KeyCode::Enter);
 
     // Draw the state - should show content view with the selected chapter
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -2075,7 +2080,7 @@ fn test_book_reading_history_with_many_entries_svg() {
     app.press_key(crossterm::event::KeyCode::Char('H'));
 
     // Draw the state with the reading history popup visible
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
@@ -2109,7 +2114,7 @@ fn test_image_scrolling_svg() {
     app.press_key(crossterm::event::KeyCode::Tab); // Focus text reader
 
     // Initial state - image should be fully visible at scroll_offset = 0
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output_initial = terminal_to_svg(&terminal);
     std::fs::write(
         "tests/snapshots/debug_image_scrolling_initial.svg",
@@ -2120,7 +2125,7 @@ fn test_image_scrolling_svg() {
     // Scroll down a few lines with 'j' - image should start to be cropped from top
     app.press_char_times('j', 5);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output_partial = terminal_to_svg(&terminal);
     std::fs::write(
         "tests/snapshots/debug_image_scrolling_partial.svg",
@@ -2131,7 +2136,7 @@ fn test_image_scrolling_svg() {
     // Scroll down more - image should be almost hidden
     app.press_char_times('j', 10);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output_hidden = terminal_to_svg(&terminal);
     std::fs::write(
         "tests/snapshots/debug_image_scrolling_hidden.svg",
@@ -2142,7 +2147,7 @@ fn test_image_scrolling_svg() {
     // Scroll back up - image should reappear gradually
     app.press_char_times('k', 10);
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output_reappear = terminal_to_svg(&terminal);
     std::fs::write(
         "tests/snapshots/debug_image_scrolling_reappear.svg",
@@ -2170,7 +2175,7 @@ fn test_image_scrolling_svg() {
         None,
     );
 
-    terminal.draw(|f| app.draw(f)).unwrap();
+    terminal.draw(|f| { let fps = create_test_fps_counter(); app.draw(f, &fps) }).unwrap();
     let svg_output_mouse_scroll = terminal_to_svg(&terminal);
 
     assert_svg_snapshot(

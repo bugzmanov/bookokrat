@@ -14,6 +14,7 @@ mod book_list;
 mod book_manager;
 mod bookmark;
 mod event_source;
+mod image_placeholder;
 mod main_app;
 mod navigation_panel;
 mod panic_handler;

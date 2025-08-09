@@ -1,3 +1,4 @@
+use crate::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig};
 use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
@@ -423,8 +424,35 @@ impl TextReader {
                 && is_empty
                 && self.ada_image.is_some();
 
+            // Check if this line contains an image placeholder
+            let is_image_placeholder = line.trim().starts_with("[image src=");
+
             // Process the line
-            if is_empty {
+            if is_image_placeholder {
+                // Extract the image source for future use
+                let image_src = line.trim().to_string();
+
+                // Create image placeholder using the new component
+                let config = ImagePlaceholderConfig {
+                    internal_padding: 4,
+                    total_height: 15,
+                    border_color: palette.base_03,
+                };
+
+                let placeholder = ImagePlaceholder::new(&image_src, width, &config);
+
+                // Add all the placeholder lines
+                for (raw_line, styled_line) in placeholder
+                    .raw_lines
+                    .into_iter()
+                    .zip(placeholder.styled_lines.into_iter())
+                {
+                    raw_lines.push(raw_line);
+                    lines.push(styled_line);
+                }
+
+                _line_count += 15; // Total lines for image placeholder
+            } else if is_empty {
                 if should_insert_image {
                     // Add empty line before image
                     raw_lines.push(String::new());
@@ -1302,7 +1330,7 @@ impl TextReader {
                                     as u16,
                             )
                         };
-                        
+
                         let image_area = Rect {
                             x: margined_content_area[1].x + x_offset,
                             y: render_y,
@@ -1645,5 +1673,64 @@ mod tests {
                 IMAGE_HEIGHT_IN_CELLS
             );
         }
+    }
+
+    #[test]
+    fn test_image_placeholder_rendering() {
+        let mut reader = TextReader::new();
+        let palette = &OCEANIC_NEXT;
+
+        // Test text with image placeholders
+        let test_text = r#"This is some text before the image.
+
+[image src="../images/diagram1.png"]
+
+This is text after the first image.
+
+[image src="../images/photo.jpg"]
+
+This is text after the second image."#;
+
+        let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
+            test_text, &None, palette, 80,   // width
+            true, // is_focused
+        );
+
+        // Count lines - should have original text lines minus image placeholder lines plus 15 lines for each frame
+        let total_lines = raw_lines.len();
+        println!("Total lines: {}", total_lines);
+
+        // Find image frames and check that [image src=...] is inside them
+        let mut found_frames = 0;
+        let mut found_image_src_inside = 0;
+
+        for (i, line) in raw_lines.iter().enumerate() {
+            println!("Line {}: '{}'", i, line);
+
+            // Check for frame top border
+            if line.contains("┌") && line.contains("┐") && line.contains("─") {
+                found_frames += 1;
+
+                // Check that [image src=...] appears inside the frame (should be in the middle - line 7)
+                if i + 7 < raw_lines.len() && raw_lines[i + 7].contains("[image src=") {
+                    found_image_src_inside += 1;
+                }
+            }
+        }
+
+        assert_eq!(found_frames, 2, "Should find 2 image frames");
+        assert_eq!(
+            found_image_src_inside, 2,
+            "Should find 2 [image src=...] texts inside frames"
+        );
+
+        // Verify total lines: original text lines (9) - image lines (2) + frame lines (2 * 15)
+        let text_lines_without_images = test_text.lines().count() - 2; // subtract the [image src=...] lines
+        let expected_total = text_lines_without_images + (2 * 15); // add frame lines
+        assert_eq!(
+            total_lines, expected_total,
+            "Should have exactly {} lines (7 text + 30 frame), but got {}",
+            expected_total, total_lines
+        );
     }
 }

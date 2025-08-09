@@ -1621,14 +1621,14 @@ impl App {
     }
 }
 
-struct FPSCounter {
+pub struct FPSCounter {
     last_measure: Instant,
     ticks: u16,
     current_fps: u16,
 }
 
 impl FPSCounter {
-    fn new() -> FPSCounter {
+    pub fn new() -> FPSCounter {
         FPSCounter {
             last_measure: Instant::now(),
             ticks: 0,
