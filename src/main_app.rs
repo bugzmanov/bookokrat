@@ -1,6 +1,7 @@
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
+use crate::image_storage::ImageStorage;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::reading_history::ReadingHistory;
 use crate::system_command::{
@@ -17,7 +18,6 @@ pub enum ChapterDirection {
     Previous,
 }
 
-use std::num::FpCategory;
 use std::sync::{Arc, Mutex};
 use std::{
     io::BufReader,
@@ -28,7 +28,6 @@ use anyhow::Result;
 use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
-use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
     layout::{Constraint, Direction, Layout, Rect},
@@ -42,6 +41,7 @@ pub struct App {
     text_generator: TextGenerator,
     text_reader: TextReader,
     bookmarks: Bookmarks,
+    image_storage: ImageStorage,
     current_content: Option<String>,
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
     current_chapter: usize,
@@ -141,6 +141,15 @@ impl App {
         let text_reader = TextReader::new();
 
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
+
+        // Initialize image storage in project temp directory
+        let image_storage = ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
+            error!("Failed to initialize image storage: {}. Using fallback.", e);
+            // Create a fallback image storage in system temp directory
+            ImageStorage::new(std::env::temp_dir().join("bookrat_images"))
+                .expect("Failed to create fallback image storage")
+        });
+
         // let guard = pprof::ProfilerGuardBuilder::default()
         //     .frequency(1000)
         //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
@@ -152,6 +161,7 @@ impl App {
             text_generator,
             text_reader,
             bookmarks,
+            image_storage,
             current_content: None,
             current_epub: None,
             current_chapter: 0,
@@ -377,6 +387,15 @@ impl App {
         self.total_chapters = doc.get_num_pages();
         info!("Total chapters: {}", self.total_chapters);
 
+        // Extract images from the EPUB to the temp directory
+        let path_buf = std::path::PathBuf::from(path);
+        if let Err(e) = self.image_storage.extract_images(&path_buf) {
+            error!("Failed to extract images from EPUB: {}", e);
+            // Continue loading even if image extraction fails
+        } else {
+            info!("Successfully extracted images from EPUB");
+        }
+
         // Try to load bookmark
         if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
             info!(
@@ -556,6 +575,14 @@ impl App {
 
     pub fn get_current_book_info(&self) -> Option<&CurrentBookInfo> {
         self.cached_current_book_info.as_ref()
+    }
+
+    pub fn get_image_storage(&self) -> &ImageStorage {
+        &self.image_storage
+    }
+
+    pub fn get_current_file_path(&self) -> Option<&str> {
+        self.current_file.as_deref()
     }
 
     fn update_current_chapter_in_cache(&mut self) {

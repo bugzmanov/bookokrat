@@ -4,6 +4,7 @@ pub mod book_manager;
 pub mod bookmark;
 pub mod event_source;
 pub mod image_placeholder;
+pub mod image_storage;
 pub mod main_app;
 pub mod navigation_panel;
 pub mod panic_handler;

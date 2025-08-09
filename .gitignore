@@ -10,3 +10,4 @@ bookmarks.json
 !tests/testdata/*.epub
 experiments/
 tests/snapshots/debug_*
+temp_images/
