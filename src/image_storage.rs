@@ -128,26 +128,46 @@ impl ImageStorage {
 
         let book_dir = self.book_dirs.get(&epub_path_str)?;
 
+        // Try multiple strategies to resolve the image path
+        let mut paths_to_try = Vec::new();
+
+        // Clean the href
         let clean_href = image_href.trim_start_matches('/');
 
-        let image_path = book_dir.join(clean_href);
+        // Strategy 1: Direct path from book root
+        paths_to_try.push(book_dir.join(clean_href));
 
-        if image_path.exists() {
-            Some(image_path)
-        } else {
-            let without_oebps = clean_href.strip_prefix("OEBPS/").unwrap_or(clean_href);
-            let alt_path = book_dir.join(without_oebps);
+        // Strategy 2: Remove OEBPS prefix if present
+        let without_oebps = clean_href.strip_prefix("OEBPS/").unwrap_or(clean_href);
+        paths_to_try.push(book_dir.join(without_oebps));
 
-            if alt_path.exists() {
-                Some(alt_path)
-            } else {
-                warn!(
-                    "Image not found: {:?} (tried {:?} and {:?})",
-                    image_href, image_path, alt_path
-                );
-                None
+        // Strategy 3: If it's a relative path with ../, resolve it from OEBPS/text or similar
+        if clean_href.starts_with("../") {
+            // Remove the ../ prefix
+            let without_parent = clean_href.strip_prefix("../").unwrap_or(clean_href);
+            // Try from OEBPS directory
+            paths_to_try.push(book_dir.join("OEBPS").join(without_parent));
+        }
+
+        // Strategy 4: Try adding OEBPS prefix if not present
+        if !clean_href.starts_with("OEBPS/") && !clean_href.starts_with("../") {
+            paths_to_try.push(book_dir.join("OEBPS").join(clean_href));
+        }
+
+        // Try each path in order
+        for path in &paths_to_try {
+            if path.exists() {
+                debug!("Resolved image '{}' to '{:?}'", image_href, path);
+                return Some(path.clone());
             }
         }
+
+        // If none found, log all attempts
+        warn!(
+            "Image not found: '{}' (tried: {:?})",
+            image_href, paths_to_try
+        );
+        None
     }
 
     pub fn get_book_images(&self, epub_path: &Path) -> Option<Vec<PathBuf>> {

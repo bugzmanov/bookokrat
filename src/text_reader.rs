@@ -11,9 +11,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph},
 };
-use ratatui_image::{
-    Resize, StatefulImage, ViewportOptions, picker::Picker, protocol::StatefulProtocol,
-};
+use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
 use regex::Regex;
 use std::cell::RefCell;
 use std::time::Instant;
@@ -72,19 +70,18 @@ pub struct TextReader {
     // Auto-scroll state for continuous scrolling during text selection
     auto_scroll_state: Option<AutoScrollState>,
     // Image display
-    ada_image: Option<DynamicImage>,
     image_picker: RefCell<Option<Picker>>,
     // Cached stateful image protocol
     cached_image_protocol: RefCell<Option<StatefulProtocol>>,
-    // Image width in terminal cells (calculated during loading)
-    image_width_cells: u16,
     embedded_images: Vec<EmbeddedImage>,
+    // Cache for loaded images to avoid reloading on every frame
+    cached_image: RefCell<Option<(String, DynamicImage, u16)>>, // (image_src, loaded_image, image_width_cells)
 }
 
 impl TextReader {
     pub fn new() -> Self {
         // Create image picker first to get cell dimensions
-        let (image_picker, detected_cell_height) = match Picker::from_query_stdio() {
+        let (image_picker, _detected_cell_height) = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 // Set transparent background like in the demo
                 picker.set_background_color([0, 0, 0, 0]);
@@ -104,54 +101,6 @@ impl TextReader {
             Err(e) => {
                 debug!("Failed to create image picker: {}", e);
                 (None, 16) // Default to 16 pixels per cell
-            }
-        };
-
-        // Try to load Ada.png from root folder
-        let (ada_image, image_width_cells) = match image::open("Ada.png") {
-            Ok(img) => {
-                let (width, height) = img.dimensions();
-                debug!("Successfully loaded Ada.png: {}x{}", width, height);
-
-                // Pre-scale the image to fit exactly IMAGE_HEIGHT_IN_CELLS terminal cells height
-                // Use the detected cell height from the picker
-                let target_height_in_pixels =
-                    IMAGE_HEIGHT_IN_CELLS as u32 * detected_cell_height as u32;
-
-                debug!(
-                    "Using detected cell height: {} pixels, target image height: {} pixels",
-                    detected_cell_height, target_height_in_pixels
-                );
-
-                // Calculate the scale factor to achieve target height
-                let scale = target_height_in_pixels as f32 / height as f32;
-                let new_width = (width as f32 * scale) as u32;
-                let new_height = target_height_in_pixels;
-
-                debug!(
-                    "Pre-scaling Ada.png from {}x{} to {}x{} for exactly {} cells",
-                    width, height, new_width, new_height, IMAGE_HEIGHT_IN_CELLS
-                );
-
-                let scaled =
-                    img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3);
-
-                // Calculate image width in terminal cells
-                // Terminal cells are typically ~2:1 aspect ratio (twice as tall as wide)
-                // So we need to account for this when converting pixel width to cell width
-                let cell_aspect_ratio = 2.0; // cells are ~2x taller than wide
-                let image_width_cells =
-                    ((new_width as f32 / detected_cell_height as f32) * cell_aspect_ratio) as u16;
-                debug!(
-                    "Image width: {} pixels = {} terminal cells (cell height: {} pixels)",
-                    new_width, image_width_cells, detected_cell_height
-                );
-
-                (Some(scaled), image_width_cells)
-            }
-            Err(e) => {
-                debug!("Failed to load Ada.png: {}", e);
-                (None, 0)
             }
         };
 
@@ -176,11 +125,10 @@ impl TextReader {
             raw_text_lines: Vec::new(),
             last_content_area: None,
             auto_scroll_state: None,
-            ada_image,
             image_picker: RefCell::new(image_picker),
             cached_image_protocol: RefCell::new(None),
-            image_width_cells,
             embedded_images,
+            cached_image: RefCell::new(None),
         }
     }
 
@@ -246,33 +194,11 @@ impl TextReader {
         // Add lines for chapter title (title + empty line)
         total_lines += 2;
 
-        // Track if we'll insert image placeholder
-        let mut paragraph_count = 0;
-        let mut in_paragraph = false;
-        let mut will_insert_image = false;
-
         // Wrap each line of content
         for line in content.lines() {
             let is_empty = line.trim().is_empty();
 
-            // Track paragraph state (same logic as in parse_styled_text_cached)
-            if !is_empty && !in_paragraph {
-                in_paragraph = true;
-            } else if is_empty && in_paragraph {
-                paragraph_count += 1;
-                in_paragraph = false;
-            }
-
-            // Check if we should count image lines
-            if !will_insert_image && paragraph_count >= 6 && is_empty && self.ada_image.is_some() {
-                will_insert_image = true;
-                // Add total lines for image (empty line before + image + empty line after)
-                total_lines += IMAGE_TOTAL_LINES as usize;
-                debug!(
-                    "Adding {} lines for image (1 padding + {} image + 1 padding) at line {}",
-                    IMAGE_TOTAL_LINES, IMAGE_HEIGHT_IN_CELLS, total_lines
-                );
-            } else if is_empty {
+            if is_empty {
                 total_lines += 1;
             } else {
                 let wrapped_lines = textwrap::wrap(line, width);
@@ -282,8 +208,8 @@ impl TextReader {
 
         self.total_wrapped_lines = total_lines;
         debug!(
-            "Updated wrapped lines: {} total (including image: {}), {} visible, width: {}",
-            total_lines, will_insert_image, visible_height, width
+            "Updated wrapped lines: {} total, {} visible, width: {}",
+            total_lines, visible_height, width
         );
     }
 
@@ -409,26 +335,12 @@ impl TextReader {
             lines.push(Line::from(String::new()));
         }
 
-        // Calculate where to insert image placeholder
+        // Calculate line count for image placement tracking
         let mut line_count = 0;
-        let mut inserted_image_placeholder = false;
-        let mut paragraph_count = 0;
-        let mut in_paragraph = false;
 
         // Process each line with manual wrapping
         for (_i, line) in text.lines().enumerate() {
-            let is_empty = line.trim().is_empty();
-
-            // Track paragraph state
-            if !is_empty && !in_paragraph {
-                in_paragraph = true;
-            } else if is_empty && in_paragraph {
-                paragraph_count += 1;
-                in_paragraph = false;
-            }
-
-            // Check if we should insert image placeholder on this empty line
-            let should_insert_image = false; // Disable automatic image insertion
+            let testline_is_empty = line.trim().is_empty();
 
             // Check if this line contains an image placeholder
             let is_image_placeholder = line.trim().starts_with("[image src=");
@@ -464,38 +376,11 @@ impl TextReader {
                 }
 
                 line_count += 15; // Height of placeholder
-            } else if is_empty {
-                if should_insert_image {
-                    // Add empty line before image
-                    raw_lines.push(String::new());
-                    lines.push(Line::from(String::new()));
-                    line_count += 1;
-
-                    // Add image placeholder lines
-                    let image_height = if let Some(ref ada_image) = self.ada_image {
-                        self.calculate_image_height_in_cells(ada_image, width as u16) as usize
-                    } else {
-                        0
-                    };
-
-                    for _j in 0..image_height {
-                        raw_lines.push(String::new());
-                        lines.push(Line::from(String::new()));
-                        line_count += 1;
-                    }
-
-                    // Add empty line after image
-                    raw_lines.push(String::new());
-                    lines.push(Line::from(String::new()));
-                    line_count += 1;
-
-                    inserted_image_placeholder = true;
-                } else {
-                    // Normal empty line processing
-                    raw_lines.push(String::new());
-                    lines.push(Line::from(String::new()));
-                    line_count += 1;
-                }
+            } else if testline_is_empty {
+                // Normal empty line processing
+                raw_lines.push(String::new());
+                lines.push(Line::from(String::new()));
+                line_count += 1;
             } else {
                 // Wrap the line using textwrap
                 let wrapped_lines = textwrap::wrap(line, width);
@@ -792,8 +677,9 @@ impl TextReader {
         self.raw_text_lines.clear();
         // Clear auto-scroll state
         self.auto_scroll_state = None;
-        // Clear image cache
+        // Clear image caches
         *self.cached_image_protocol.borrow_mut() = None;
+        *self.cached_image.borrow_mut() = None;
         // Also clear content-related caches (reuse content_updated logic)
         self.content_updated(self.content_length);
     }
@@ -1193,6 +1079,8 @@ impl TextReader {
         total_chapters: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        image_storage: Option<&crate::image_storage::ImageStorage>,
+        current_file_path: Option<&str>,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
@@ -1285,86 +1173,164 @@ impl TextReader {
             .style(Style::default().fg(text_color).bg(palette.base_00));
         f.render_widget(content_paragraph, margined_content_area[1]);
 
-        // Calculate where the image should be displayed
-        if let Some(ref ada_image) = self.ada_image
-            && !self.embedded_images.is_empty()
+        // Display embedded images from the book
+        if !self.embedded_images.is_empty()
+            && image_storage.is_some()
+            && current_file_path.is_some()
+            && self.image_picker.borrow().is_some()
         {
-            let lines_before_image = self.embedded_images.get(0).unwrap().lines_before_image;
+            let image_storage = image_storage.unwrap();
+            let current_file_path = current_file_path.unwrap();
+            let epub_path = std::path::Path::new(current_file_path);
 
-            let image_start_line = lines_before_image + 2; // taking vertical margins into considerations
+            // Get the first embedded image
+            let first_embedded = &self.embedded_images[0];
+            let lines_before_image = first_embedded.lines_before_image;
+            let image_src = &first_embedded.src;
 
-            let calculated_image_height = self
-                .calculate_image_height_in_cells(ada_image, margined_content_area[1].width)
-                as usize;
+            // Check if we have this image cached
+            let mut cached_image_ref = self.cached_image.borrow_mut();
+            let mut cached_protocol_ref = self.cached_image_protocol.borrow_mut();
 
-            let image_end_line = image_start_line + calculated_image_height;
+            let needs_reload = match cached_image_ref.as_ref() {
+                Some((cached_src, _, _)) => cached_src != image_src,
+                None => true,
+            };
 
-            // Check if image is in viewport
-            let area_height = margined_content_area[1].height as usize;
+            // Load image if not cached or if it's a different image
+            if needs_reload {
+                // Clear the old protocol when loading a new image
+                debug!("RELOADED IMAGE");
+                *cached_protocol_ref = None;
 
-            if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line {
-                // Image is at least partially visible
-                if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
-                    // Calculate screen position
-                    let image_screen_start = if scroll_offset > image_start_line {
-                        0
-                    } else {
-                        image_start_line - scroll_offset
-                    };
+                // Try to resolve the image path using ImageStorage
+                if let Some(resolved_image_path) =
+                    image_storage.resolve_image_path(epub_path, image_src)
+                {
+                    // Try to load the image
+                    if let Ok(loaded_image) = image::open(&resolved_image_path) {
+                        // Calculate image dimensions
+                        let (img_width, img_height) = loaded_image.dimensions();
 
-                    // Calculate visible portion
-                    let image_top_clipped = if scroll_offset > image_start_line {
-                        scroll_offset - image_start_line
-                    } else {
-                        0
-                    };
-
-                    let visible_image_height = (calculated_image_height - image_top_clipped)
-                        .min(area_height - image_screen_start);
-
-                    if visible_image_height > 0 {
-                        // Calculate centered image area based on natural width
-                        let content_width = margined_content_area[1].width;
-                        let x_offset = if self.image_width_cells < content_width {
-                            (content_width - self.image_width_cells) / 2
+                        // Get detected cell height from picker
+                        let cell_height = if let Some(ref picker) = *self.image_picker.borrow() {
+                            picker.font_size().1
                         } else {
-                            0 // Image is wider than content area, don't offset
+                            16 // Default fallback
                         };
 
-                        // Create or get the stateful protocol
-                        let mut protocol_ref = self.cached_image_protocol.borrow_mut();
+                        // Pre-scale the image to fit exactly IMAGE_HEIGHT_IN_CELLS terminal cells height
+                        let target_height_in_pixels =
+                            IMAGE_HEIGHT_IN_CELLS as u32 * cell_height as u32;
+                        let scale = target_height_in_pixels as f32 / img_height as f32;
+                        let new_width = (img_width as f32 * scale) as u32;
+                        let new_height = target_height_in_pixels;
 
-                        if protocol_ref.is_none() {
-                            // Create the stateful protocol once
-                            *protocol_ref = Some(picker.new_resize_protocol(ada_image.clone()));
-                        }
+                        let scaled_image = loaded_image.resize_exact(
+                            new_width,
+                            new_height,
+                            image::imageops::FilterType::Lanczos3,
+                        );
 
-                        let (render_y, render_height) = if image_top_clipped > 0 {
-                            (
-                                margined_content_area[1].y,
-                                ((IMAGE_HEIGHT_IN_CELLS as usize).saturating_sub(image_top_clipped))
+                        // Calculate image width in terminal cells
+                        let cell_aspect_ratio = 2.0; // cells are ~2x taller than wide
+                        let image_width_cells =
+                            ((new_width as f32 / cell_height as f32) * cell_aspect_ratio) as u16;
+
+                        // Cache the scaled image with its width
+                        *cached_image_ref =
+                            Some((image_src.to_string(), scaled_image, image_width_cells));
+                        debug!("Cached image: {}", image_src);
+                    } else {
+                        debug!("Failed to load image from: {:?}", resolved_image_path);
+                        return; // Exit early if image loading failed
+                    }
+                } else {
+                    debug!("Failed to resolve image path for: {}", image_src);
+                    return; // Exit early if path resolution failed
+                }
+            }
+
+            // Drop the borrow early so we can re-borrow later
+            let image_width_cells = match cached_image_ref.as_ref() {
+                Some((_, _, width)) => *width,
+                None => return, // No image cached
+            };
+            drop(cached_image_ref);
+
+            // Now use the cached image for rendering
+            let cached_image_ref = self.cached_image.borrow();
+            if let Some((_, ref scaled_image, _)) = *cached_image_ref {
+                let image_start_line = lines_before_image + 2; // taking vertical margins into considerations
+
+                let calculated_image_height = IMAGE_HEIGHT_IN_CELLS as usize;
+                let image_end_line = image_start_line + calculated_image_height;
+
+                // Check if image is in viewport
+                let area_height = margined_content_area[1].height as usize;
+
+                if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line
+                {
+                    // Image is at least partially visible
+                    if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
+                        // Calculate screen position
+                        let image_screen_start = if scroll_offset > image_start_line {
+                            0
+                        } else {
+                            image_start_line - scroll_offset
+                        };
+
+                        // Calculate visible portion
+                        let image_top_clipped = if scroll_offset > image_start_line {
+                            scroll_offset - image_start_line
+                        } else {
+                            0
+                        };
+
+                        let visible_image_height = (calculated_image_height - image_top_clipped)
+                            .min(area_height - image_screen_start);
+
+                        if visible_image_height > 0 {
+                            // Calculate centered image area based on natural width
+                            let content_width = margined_content_area[1].width;
+                            let x_offset = if image_width_cells < content_width {
+                                (content_width - image_width_cells) / 2
+                            } else {
+                                0 // Image is wider than content area, don't offset
+                            };
+
+                            // Create the stateful protocol only if not cached
+                            if cached_protocol_ref.is_none() {
+                                *cached_protocol_ref =
+                                    Some(picker.new_resize_protocol(scaled_image.clone()));
+                                debug!("Created new image protocol");
+                            }
+
+                            let (render_y, render_height) = if image_top_clipped > 0 {
+                                (
+                                    margined_content_area[1].y,
+                                    ((IMAGE_HEIGHT_IN_CELLS as usize)
+                                        .saturating_sub(image_top_clipped))
                                     .min(area_height) as u16,
-                            )
-                        } else {
-                            (
-                                margined_content_area[1].y + image_screen_start as u16,
-                                (IMAGE_HEIGHT_IN_CELLS as usize)
-                                    .min(area_height.saturating_sub(image_screen_start))
-                                    as u16,
-                            )
-                        };
+                                )
+                            } else {
+                                (
+                                    margined_content_area[1].y + image_screen_start as u16,
+                                    (IMAGE_HEIGHT_IN_CELLS as usize)
+                                        .min(area_height.saturating_sub(image_screen_start))
+                                        as u16,
+                                )
+                            };
 
-                        let image_area = Rect {
-                            x: margined_content_area[1].x + x_offset,
-                            y: render_y,
-                            width: self.image_width_cells.min(margined_content_area[1].width),
-                            height: render_height,
-                        };
+                            let image_area = Rect {
+                                x: margined_content_area[1].x + x_offset,
+                                y: render_y,
+                                width: image_width_cells.min(margined_content_area[1].width),
+                                height: render_height,
+                            };
 
-                        // Render using the stateful widget
-                        if let Some(ref mut protocol) = *protocol_ref {
+                            // Render using the stateful widget
                             // Use Viewport mode for efficient scrolling
-                            // Calculate the Y offset in pixels based on how much is clipped from top
                             let y_offset_pixels =
                                 (image_top_clipped as f32 * picker.font_size().1 as f32) as u32;
 
@@ -1373,9 +1339,16 @@ impl TextReader {
                                 x_offset: 0, // No horizontal scrolling for now
                             };
 
-                            let image_widget =
-                                StatefulImage::new().resize(Resize::Viewport(viewport_options));
-                            f.render_stateful_widget(image_widget, image_area, protocol);
+                            // Use the cached protocol
+                            if let Some(ref mut protocol) = *cached_protocol_ref {
+                                let image_widget =
+                                    StatefulImage::new().resize(Resize::Viewport(viewport_options));
+                                // debug!(
+                                //     "render  in area {}.viewport: {}",
+                                //     image_area, viewport_options.y_offset
+                                // );
+                                f.render_stateful_widget(image_widget, image_area, protocol);
+                            }
                         }
                     }
                 }
@@ -1511,9 +1484,9 @@ mod tests {
         let chapter_title = Some("Test Chapter".to_string());
         let palette = &OCEANIC_NEXT;
 
-        // The TextReader should already have an image loaded from Ada.png if it exists
-        // We'll check if IMAGE_TOTAL_LINES placeholder lines are inserted when ada_image exists
-        if reader.ada_image.is_some() {
+        // Placeholder insertion is now disabled since we show actual images from books
+        // This test is kept for reference but the functionality is disabled
+        if false {
             let width = 80;
             let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
                 content,
@@ -1617,7 +1590,8 @@ mod tests {
         let chapter_title = Some("Test Chapter".to_string());
         let palette = &OCEANIC_NEXT;
 
-        if reader.ada_image.is_some() {
+        // Placeholder insertion is now disabled since we show actual images from books
+        if false {
             let width = 40; // Narrow width to force wrapping
             let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
                 content,
@@ -1676,8 +1650,9 @@ mod tests {
     fn test_image_rendering_calculations() {
         let reader = TextReader::new();
 
-        // If the reader has an ada_image loaded, test it
-        if let Some(ref ada_image) = reader.ada_image {
+        // Test with a dummy image since we no longer have ada_image
+        {
+            let ada_image = DynamicImage::ImageRgba8(ImageBuffer::new(100, 100));
             // Test area width calculation
             let area_width = 100;
             let image_width = 70; // min(100 * 0.7, 70) = 70
@@ -1690,16 +1665,8 @@ mod tests {
             );
 
             // Height should always be IMAGE_HEIGHT_IN_CELLS cells
-            let image_height = reader.calculate_image_height_in_cells(ada_image, area_width as u16);
-            assert_eq!(
-                image_height, IMAGE_HEIGHT_IN_CELLS,
-                "Image height should be exactly {} cells",
-                IMAGE_HEIGHT_IN_CELLS
-            );
-        } else {
-            // If no image loaded, create a test image
-            let test_img = DynamicImage::ImageRgba8(ImageBuffer::new(40, 20));
-            let image_height = reader.calculate_image_height_in_cells(&test_img, 100);
+            let image_height =
+                reader.calculate_image_height_in_cells(&ada_image, area_width as u16);
             assert_eq!(
                 image_height, IMAGE_HEIGHT_IN_CELLS,
                 "Image height should be exactly {} cells",

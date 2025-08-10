@@ -1212,7 +1212,7 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(f.size());
+            .split(f.area());
 
         // Fixed layout: 30% file list, 70% content
         let main_chunks = Layout::default()
@@ -1246,6 +1246,8 @@ impl App {
                     self.total_chapters,
                     &OCEANIC_NEXT,
                     self.focused_panel == FocusedPanel::Content,
+                    Some(&self.image_storage),
+                    self.current_file.as_deref(),
                 );
             } else {
                 // Render default content area when no EPUB is loaded
@@ -1666,7 +1668,7 @@ impl FPSCounter {
     fn tick(&mut self) {
         self.ticks = self.ticks.saturating_add(1);
         let elapsed = self.last_measure.elapsed();
-        if (elapsed > Duration::from_secs(1)) {
+        if elapsed > Duration::from_secs(1) {
             self.current_fps = self.ticks;
             self.last_measure = Instant::now();
             self.ticks = 0;

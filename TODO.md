@@ -12,7 +12,7 @@ ideas to implement:
 
 bugz: 
 ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
-
+SMALL IMAGES most likely needs to be ignored. 
 
 Done:
  - table of contents of a book
