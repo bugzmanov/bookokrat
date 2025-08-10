@@ -1214,8 +1214,11 @@ impl TextReader {
 
                         // Get detected cell height from picker
                         let cell_height = if let Some(ref picker) = *self.image_picker.borrow() {
-                            picker.font_size().1
+                            let font_size = picker.font_size();
+                            debug!("Using font size for image scaling: {:?}", font_size);
+                            font_size.1
                         } else {
+                            debug!("No picker available, using default cell height: 16");
                             16 // Default fallback
                         };
 
@@ -1301,6 +1304,10 @@ impl TextReader {
 
                             // Create the stateful protocol only if not cached
                             if cached_protocol_ref.is_none() {
+                                debug!(
+                                    "Creating new protocol with picker font_size: {:?}",
+                                    picker.font_size()
+                                );
                                 *cached_protocol_ref =
                                     Some(picker.new_resize_protocol(scaled_image.clone()));
                                 debug!("Created new image protocol");
@@ -1331,8 +1338,14 @@ impl TextReader {
 
                             // Render using the stateful widget
                             // Use Viewport mode for efficient scrolling
+                            let current_font_size = picker.font_size();
                             let y_offset_pixels =
-                                (image_top_clipped as f32 * picker.font_size().1 as f32) as u32;
+                                (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
+
+                            debug!(
+                                "Viewport calculation: image_top_clipped={}, font_size={:?}, y_offset_pixels={}",
+                                image_top_clipped, current_font_size, y_offset_pixels
+                            );
 
                             let viewport_options = ratatui_image::ViewportOptions {
                                 y_offset: y_offset_pixels,
@@ -1386,6 +1399,48 @@ fn extract_src(text: &str) -> Option<String> {
     }
 
     None
+}
+
+impl TextReader {
+    pub fn handle_terminal_resize(&mut self) {
+        debug!("Handling terminal resize in TextReader");
+
+        // Clear embedded images cache since text wrapping will change
+        self.embedded_images.clear();
+        debug!("Cleared embedded_images cache due to resize");
+
+        // Clear the cached styled content to force re-wrapping
+        self.cached_styled_content = None;
+        self.cached_content_hash = 0;
+        self.cached_styled_width = 0;
+        debug!("Cleared text content cache to force re-wrapping");
+
+        // Recreate the image picker to get updated font size
+        match Picker::from_query_stdio() {
+            Ok(mut picker) => {
+                // Set transparent background like in the constructor
+                picker.set_background_color([0, 0, 0, 0]);
+
+                let font_size = picker.font_size();
+                debug!("Detected new font size after resize: {:?}", font_size);
+
+                // Update the picker
+                *self.image_picker.borrow_mut() = Some(picker);
+
+                // Clear cached image protocol since it depends on old font size
+                *self.cached_image_protocol.borrow_mut() = None;
+
+                // Clear cached image to force re-scaling with new font size
+                *self.cached_image.borrow_mut() = None;
+
+                debug!("Image picker and caches updated for new font size");
+            }
+            Err(e) => {
+                debug!("Failed to recreate image picker on resize: {}", e);
+                // Keep the existing picker if we can't create a new one
+            }
+        }
+    }
 }
 
 impl VimNavMotions for TextReader {

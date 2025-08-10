@@ -1648,6 +1648,12 @@ impl App {
             _ => {}
         }
     }
+
+    pub fn handle_resize(&mut self) {
+        debug!("Terminal resize detected");
+        // Tell the text reader to update its image picker with new font size
+        self.text_reader.handle_terminal_resize();
+    }
 }
 
 pub struct FPSCounter {
@@ -1722,6 +1728,10 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                             app.handle_key_event_with_screen_height(key, Some(visible_height));
                         }
                     }
+                }
+                Event::Resize(_cols, _rows) => {
+                    // Terminal has been resized - need to update font size detection
+                    app.handle_resize();
                 }
                 _ => {}
             }
