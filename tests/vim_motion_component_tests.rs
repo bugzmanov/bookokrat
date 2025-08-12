@@ -311,7 +311,18 @@ fn test_text_reader_vim_motion_g() {
             let area = f.size();
             let palette = get_test_palette();
             let chapter_title = Some("Chapter 1".to_string());
-            text_reader.render(f, area, &test_content, &chapter_title, 1, 5, &palette, true);
+            text_reader.render(
+                f,
+                area,
+                &test_content,
+                &chapter_title,
+                1,
+                5,
+                &palette,
+                true,
+                None,
+                None,
+            );
         })
         .unwrap();
 
@@ -371,7 +382,18 @@ fn test_text_reader_vim_motion_gg() {
             let area = f.size();
             let palette = get_test_palette();
             let chapter_title = Some("Chapter 1".to_string());
-            text_reader.render(f, area, &test_content, &chapter_title, 1, 5, &palette, true);
+            text_reader.render(
+                f,
+                area,
+                &test_content,
+                &chapter_title,
+                1,
+                5,
+                &palette,
+                true,
+                None,
+                None,
+            );
         })
         .unwrap();
 
