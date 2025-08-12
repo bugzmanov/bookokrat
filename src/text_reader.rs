@@ -1236,9 +1236,27 @@ impl TextReader {
                         );
 
                         // Calculate image width in terminal cells
-                        let cell_aspect_ratio = 2.0; // cells are ~2x taller than wide
+                        // Dynamically calculate aspect ratio from detected font dimensions
+                        let cell_aspect_ratio =
+                            if let Some(ref picker) = *self.image_picker.borrow() {
+                                let font_size = picker.font_size();
+                                // Aspect ratio is width/height of a single cell
+                                font_size.0 as f32 / font_size.1 as f32
+                            } else {
+                                // Fallback to typical terminal cell aspect ratio
+                                0.5 // Most terminals have cells that are ~2x taller than wide
+                            };
+
+                        // Calculate how many cells wide the image should be
+                        // We divide image pixel width by cell pixel width to get cell count
+                        let cell_width = if let Some(ref picker) = *self.image_picker.borrow() {
+                            picker.font_size().0
+                        } else {
+                            // Fallback: assume typical 8px width for 16px height
+                            8
+                        };
                         let image_width_cells =
-                            ((new_width as f32 / cell_height as f32) * cell_aspect_ratio) as u16;
+                            (new_width as f32 / cell_width as f32).ceil() as u16;
 
                         // Cache the scaled image with its width
                         *cached_image_ref =
@@ -1342,11 +1360,6 @@ impl TextReader {
                             let y_offset_pixels =
                                 (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
 
-                            debug!(
-                                "Viewport calculation: image_top_clipped={}, font_size={:?}, y_offset_pixels={}",
-                                image_top_clipped, current_font_size, y_offset_pixels
-                            );
-
                             let viewport_options = ratatui_image::ViewportOptions {
                                 y_offset: y_offset_pixels,
                                 x_offset: 0, // No horizontal scrolling for now
@@ -1356,10 +1369,6 @@ impl TextReader {
                             if let Some(ref mut protocol) = *cached_protocol_ref {
                                 let image_widget =
                                     StatefulImage::new().resize(Resize::Viewport(viewport_options));
-                                // debug!(
-                                //     "render  in area {}.viewport: {}",
-                                //     image_area, viewport_options.y_offset
-                                // );
                                 f.render_stateful_widget(image_widget, image_area, protocol);
                             }
                         }
