@@ -57,6 +57,7 @@ impl ImagePlaceholder {
         // Middle lines (total_height - 2 for top/bottom borders)
         let middle_lines = config.total_height - 2;
         let center_line = middle_lines / 2;
+        let size_info_line = middle_lines - 1; // Show size info on the last line before bottom border
 
         for i in 0..middle_lines {
             let middle_line = if i == center_line {
@@ -93,6 +94,25 @@ impl ImagePlaceholder {
                         truncated,
                         " ".repeat(right_spaces)
                     )
+                }
+            } else if i == size_info_line {
+                // Show size info on the last line
+                let size_text = format!("{}L", config.total_height);
+                let available_width = frame_width - 2 - (2 * config.internal_padding);
+
+                if size_text.len() <= available_width {
+                    let text_padding = (available_width - size_text.len()) / 2;
+                    let left_spaces = config.internal_padding + text_padding;
+                    let right_spaces = frame_width - 2 - left_spaces - size_text.len();
+                    format!(
+                        "{}│{}{}{}│",
+                        padding_str,
+                        " ".repeat(left_spaces),
+                        size_text,
+                        " ".repeat(right_spaces)
+                    )
+                } else {
+                    format!("{}│{}│", padding_str, " ".repeat(frame_width - 2))
                 }
             } else {
                 format!("{}│{}│", padding_str, " ".repeat(frame_width - 2))
@@ -148,7 +168,7 @@ mod tests {
             "                   │                                        │",
             "                   │                                        │",
             "                   │                                        │",
-            "                   │                                        │",
+            "                   │                     15L                    │",
             "                   └────────────────────────────────────────┘",
         ];
 
@@ -190,7 +210,7 @@ mod tests {
             "│                                      │",
             "│                                      │",
             "│                                      │",
-            "│                                      │",
+            "│                  15L                  │",
             "└──────────────────────────────────────┘",
         ];
 
@@ -218,5 +238,28 @@ mod tests {
         let middle_line = &placeholder.raw_lines[7];
         assert!(middle_line.contains("..."));
         assert!(!middle_line.contains("limit.png"));
+    }
+
+    #[test]
+    fn test_7_line_placeholder() {
+        let config = ImagePlaceholderConfig {
+            internal_padding: 4,
+            total_height: 7,
+            border_color: Color::Rgb(101, 115, 126),
+        };
+        let placeholder = ImagePlaceholder::new("[image src=\"../images/wide.jpg\"]", 80, &config);
+
+        assert_eq!(
+            placeholder.raw_lines.len(),
+            7,
+            "7-line placeholder should have exactly 7 lines"
+        );
+
+        // Check that the size indicator shows 7L
+        let size_line = &placeholder.raw_lines[5]; // Second to last line
+        assert!(
+            size_line.contains("7L"),
+            "Should show 7L for 7-line placeholder"
+        );
     }
 }

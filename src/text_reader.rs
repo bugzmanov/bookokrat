@@ -18,10 +18,12 @@ use std::collections::HashMap;
 use std::time::Instant;
 use textwrap;
 
-/// Fixed height for images in terminal cells
-const IMAGE_HEIGHT_IN_CELLS: u16 = 15;
-/// Total lines reserved for image including padding (1 line before + 15 image lines + 1 line after)
-const IMAGE_TOTAL_LINES: u16 = IMAGE_HEIGHT_IN_CELLS + 2;
+/// Height for regular images in terminal cells
+const IMAGE_HEIGHT_REGULAR: u16 = 15;
+/// Height for wide images (aspect ratio > 3:1) in terminal cells
+const IMAGE_HEIGHT_WIDE: u16 = 7;
+/// Aspect ratio threshold for wide images
+const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
 
 #[derive(Debug, Clone)]
 struct AutoScrollState {
@@ -76,8 +78,8 @@ pub struct TextReader {
     cached_image_protocol: RefCell<Option<StatefulProtocol>>,
     embedded_images: Vec<EmbeddedImage>,
     // Cache for loaded images to avoid reloading on every frame
-    cached_images: RefCell<HashMap<String, (DynamicImage, u16)>>, // Map image_src -> (loaded_image, image_width_cells)
-    cached_protocols: RefCell<HashMap<String, StatefulProtocol>>, // Map image_src -> protocol
+    cached_images: RefCell<HashMap<String, (DynamicImage, u16, u16)>>, // Map image_src -> (loaded_image, image_width_cells, image_height_cells)
+    cached_protocols: RefCell<HashMap<String, StatefulProtocol>>,      // Map image_src -> protocol
 }
 
 impl TextReader {
@@ -180,9 +182,20 @@ impl TextReader {
         line_count
     }
 
-    fn calculate_image_height_in_cells(&self, _image: &DynamicImage, _area_width: u16) -> u16 {
-        // Always return exactly IMAGE_HEIGHT_IN_CELLS cells for consistent layout
-        IMAGE_HEIGHT_IN_CELLS
+    fn calculate_image_height_in_cells(&self, image: &DynamicImage, _area_width: u16) -> u16 {
+        // Calculate aspect ratio
+        let (width, height) = image.dimensions();
+        let aspect_ratio = width as f32 / height as f32;
+
+        // Return height based on aspect ratio or absolute height
+        if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
+            IMAGE_HEIGHT_WIDE
+        } else if height < 150 {
+            // Small images (height < 150px) also use 7 lines
+            IMAGE_HEIGHT_WIDE
+        } else {
+            IMAGE_HEIGHT_REGULAR
+        }
     }
 
     /// Calculate total wrapped lines for the given content and width
@@ -206,8 +219,9 @@ impl TextReader {
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
             if is_image_placeholder {
-                // Images take up IMAGE_HEIGHT_IN_CELLS lines when rendered
-                total_lines += IMAGE_HEIGHT_IN_CELLS as usize;
+                // For now, assume regular height - actual height will be determined when image is loaded
+                // We use regular height as default for line counting
+                total_lines += IMAGE_HEIGHT_REGULAR as usize;
                 image_count += 1;
             } else if is_empty {
                 total_lines += 1;
@@ -359,22 +373,48 @@ impl TextReader {
             // Process the line
             if is_image_placeholder {
                 let img_src = extract_src(line.trim()).unwrap_or("no-src".to_string());
-                debug!("Image {} - {} ", img_src, line_count);
+                debug!(
+                    "Processing image placeholder: extracted src = '{}'",
+                    img_src
+                );
                 self.embedded_images.push(EmbeddedImage {
-                    src: img_src,
+                    src: img_src.clone(),
                     lines_before_image: line_count,
                 });
 
                 let image_src = line.trim().to_string();
 
-                // Create image placeholder using the new component
+                // Use the same extracted source path that we used for embedded_images
+                let src_path = img_src.clone();
+
+                // Try to determine height from cached image if available
+                let placeholder_height = if let Some((_, _, height_cells)) =
+                    self.cached_images.borrow().get(&src_path)
+                {
+                    let height = *height_cells as usize;
+                    debug!(
+                        "Placeholder for '{}' using cached image, height: {} lines",
+                        src_path, height
+                    );
+                    height
+                } else {
+                    // For now, default to regular height since we don't have the image loaded yet
+                    // The actual image will be rendered with the correct height when it's loaded
+                    debug!(
+                        "Placeholder for '{}' - no cached image found, defaulting to {} lines",
+                        src_path, IMAGE_HEIGHT_REGULAR
+                    );
+                    IMAGE_HEIGHT_REGULAR as usize
+                };
+
                 let config = ImagePlaceholderConfig {
                     internal_padding: 4,
-                    total_height: 15,
+                    total_height: placeholder_height,
                     border_color: palette.base_03,
                 };
 
                 let placeholder = ImagePlaceholder::new(&image_src, width, &config);
+                let placeholder_line_count = placeholder.raw_lines.len();
 
                 // Add all the placeholder lines
                 for (raw_line, styled_line) in placeholder
@@ -386,7 +426,7 @@ impl TextReader {
                     lines.push(styled_line);
                 }
 
-                line_count += 15; // Height of placeholder
+                line_count += placeholder_line_count; // Use actual placeholder height
             } else if testline_is_empty {
                 // Normal empty line processing
                 raw_lines.push(String::new());
@@ -680,20 +720,20 @@ impl TextReader {
         }
     }
 
-    pub fn reset_scroll(&mut self) {
-        self.scroll_offset = 0;
-        self.scroll_speed = 1;
-        // Clear text selection when changing chapters
-        self.text_selection.clear_selection();
-        self.raw_text_lines.clear();
-        // Clear auto-scroll state
-        self.auto_scroll_state = None;
-        // Clear image caches
-        *self.cached_image_protocol.borrow_mut() = None;
-        // This field doesn't exist anymore, we use cached_images instead
-        // Also clear content-related caches (reuse content_updated logic)
-        self.content_updated(self.content_length);
-    }
+    // pub fn reset_scroll(&mut self) {
+    //     self.scroll_offset = 0;
+    //     self.scroll_speed = 1;
+    //     // Clear text selection when changing chapters
+    //     self.text_selection.clear_selection();
+    //     self.raw_text_lines.clear();
+    //     // Clear auto-scroll state
+    //     self.auto_scroll_state = None;
+    //     // Clear image caches
+    //     *self.cached_image_protocol.borrow_mut() = None;
+    //     // This field doesn't exist anymore, we use cached_images instead
+    //     // Also clear content-related caches (reuse content_updated logic)
+    //     self.content_updated(self.content_length);
+    // }
 
     pub fn restore_scroll_position(&mut self, offset: usize) {
         self.scroll_offset = offset;
@@ -718,6 +758,134 @@ impl TextReader {
         self.cached_protocols.borrow_mut().clear();
         // Clear old single-image caches
         *self.cached_image_protocol.borrow_mut() = None;
+    }
+
+    /// Pre-load image dimensions for proper placeholder sizing
+    pub fn preload_image_dimensions(
+        &mut self,
+        content: &str,
+        image_storage: &crate::image_storage::ImageStorage,
+        current_file_path: &str,
+    ) {
+        let epub_path = std::path::Path::new(current_file_path);
+        let mut any_loaded = false;
+
+        // Find all image placeholders in content
+        for line in content.lines() {
+            if line.trim().starts_with("[image src=") {
+                debug!("Preloading: Found image line: '{}'", line.trim());
+                if let Some(img_src) = extract_src(line.trim()) {
+                    debug!("Preloading: Extracted src = '{}'", img_src);
+                    // Skip if already cached
+                    if self.cached_images.borrow().contains_key(&img_src) {
+                        debug!("Preloading: Image '{}' already cached, skipping", img_src);
+                        continue;
+                    }
+
+                    // Try to resolve and load the image
+                    if let Some(resolved_image_path) =
+                        image_storage.resolve_image_path(epub_path, &img_src)
+                    {
+                        if let Ok(loaded_image) = image::open(&resolved_image_path) {
+                            // Calculate dimensions and determine target height
+                            let (img_width, img_height) = loaded_image.dimensions();
+                            let aspect_ratio = img_width as f32 / img_height as f32;
+
+                            debug!(
+                                "Image {} dimensions: {}x{} pixels, aspect ratio: {:.2}",
+                                img_src, img_width, img_height, aspect_ratio
+                            );
+
+                            let target_height_in_cells = if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
+                                debug!(
+                                    "  -> Aspect ratio {:.2} > {:.1}, using WIDE height ({})",
+                                    aspect_ratio, WIDE_IMAGE_ASPECT_RATIO, IMAGE_HEIGHT_WIDE
+                                );
+                                IMAGE_HEIGHT_WIDE
+                            } else if img_height < 150 {
+                                debug!(
+                                    "  -> Image height {} < 150 pixels, using WIDE height ({})",
+                                    img_height, IMAGE_HEIGHT_WIDE
+                                );
+                                IMAGE_HEIGHT_WIDE
+                            } else {
+                                debug!(
+                                    "  -> Aspect ratio {:.2} <= {:.1} and height {} >= 150, using REGULAR height ({})",
+                                    aspect_ratio,
+                                    WIDE_IMAGE_ASPECT_RATIO,
+                                    img_height,
+                                    IMAGE_HEIGHT_REGULAR
+                                );
+                                IMAGE_HEIGHT_REGULAR
+                            };
+
+                            // Get detected cell height from picker
+                            let cell_height = if let Some(ref picker) = *self.image_picker.borrow()
+                            {
+                                let font_size = picker.font_size();
+                                debug!("Using font size for preload scaling: {:?}", font_size);
+                                font_size.1
+                            } else {
+                                debug!(
+                                    "No picker available during preload, using default cell height: 16"
+                                );
+                                16 // Default fallback
+                            };
+
+                            // Pre-scale the image to fit the determined height in terminal cells
+                            let target_height_in_pixels =
+                                target_height_in_cells as u32 * cell_height as u32;
+                            let scale = target_height_in_pixels as f32 / img_height as f32;
+                            let new_width = (img_width as f32 * scale) as u32;
+                            let new_height = target_height_in_pixels;
+
+                            debug!(
+                                "Pre-scaling image {} from {}x{} to {}x{} (aspect ratio {:.2}, {} cells height)",
+                                img_src,
+                                img_width,
+                                img_height,
+                                new_width,
+                                new_height,
+                                aspect_ratio,
+                                target_height_in_cells
+                            );
+
+                            let scaled_image = loaded_image.resize_exact(
+                                new_width,
+                                new_height,
+                                image::imageops::FilterType::Lanczos3,
+                            );
+
+                            // Calculate how many cells wide the image should be
+                            let cell_width = if let Some(ref picker) = *self.image_picker.borrow() {
+                                picker.font_size().0
+                            } else {
+                                8 // Fallback: assume typical 8px width for 16px height
+                            };
+                            let image_width_cells =
+                                (new_width as f32 / cell_width as f32).ceil() as u16;
+
+                            debug!(
+                                "Caching pre-scaled image with key: '{}' (aspect ratio: {:.2}, height: {} cells, width: {} cells)",
+                                img_src, aspect_ratio, target_height_in_cells, image_width_cells
+                            );
+                            self.cached_images.borrow_mut().insert(
+                                img_src.clone(),
+                                (scaled_image, image_width_cells, target_height_in_cells),
+                            );
+                            any_loaded = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // If we loaded any images, clear the styled content cache so it gets regenerated with correct heights
+        if any_loaded {
+            debug!("Clearing styled content cache after preloading images");
+            self.cached_styled_content = None;
+            self.cached_content_hash = 0;
+        }
     }
 
     pub fn scroll_down_no_content(&mut self) {
@@ -1205,7 +1373,16 @@ impl TextReader {
                 let lines_before_image = embedded_image.lines_before_image;
                 let image_src = &embedded_image.src;
                 let image_start_line = lines_before_image + 2; // taking vertical margins into consideration
-                let calculated_image_height = IMAGE_HEIGHT_IN_CELLS as usize;
+
+                // We need to determine the image height - default to regular for now
+                // The actual height will be determined when the image is loaded
+                let mut calculated_image_height = IMAGE_HEIGHT_REGULAR as usize;
+
+                // Check if image is already cached to get its actual height
+                if let Some((_, _, height_cells)) = self.cached_images.borrow().get(image_src) {
+                    calculated_image_height = *height_cells as usize;
+                }
+
                 let image_end_line = image_start_line + calculated_image_height;
 
                 // Check if image is in viewport
@@ -1225,8 +1402,38 @@ impl TextReader {
                         {
                             // Try to load the image
                             if let Ok(loaded_image) = image::open(&resolved_image_path) {
-                                // Calculate image dimensions
+                                // Calculate image dimensions and aspect ratio
                                 let (img_width, img_height) = loaded_image.dimensions();
+                                let aspect_ratio = img_width as f32 / img_height as f32;
+
+                                debug!(
+                                    "On-demand load: Image {} dimensions: {}x{} pixels, aspect ratio: {:.2}",
+                                    image_src, img_width, img_height, aspect_ratio
+                                );
+
+                                // Determine target height based on aspect ratio or absolute height
+                                let target_height_in_cells = if aspect_ratio
+                                    > WIDE_IMAGE_ASPECT_RATIO
+                                {
+                                    debug!(
+                                        "  -> Aspect ratio {:.2} > {:.1}, using WIDE height ({})",
+                                        aspect_ratio, WIDE_IMAGE_ASPECT_RATIO, IMAGE_HEIGHT_WIDE
+                                    );
+                                    IMAGE_HEIGHT_WIDE
+                                } else if img_height < 150 {
+                                    // Small images (height < 150px) also use 7 lines
+                                    debug!(
+                                        "  -> Image height {} < 150 pixels, using WIDE height ({})",
+                                        img_height, IMAGE_HEIGHT_WIDE
+                                    );
+                                    IMAGE_HEIGHT_WIDE
+                                } else {
+                                    debug!(
+                                        "  -> Image height {} >= 150 pixels, using REGULAR height ({})",
+                                        img_height, IMAGE_HEIGHT_REGULAR
+                                    );
+                                    IMAGE_HEIGHT_REGULAR
+                                };
 
                                 // Get detected cell height from picker
                                 let cell_height = if let Some(ref picker) =
@@ -1240,12 +1447,17 @@ impl TextReader {
                                     16 // Default fallback
                                 };
 
-                                // Pre-scale the image to fit exactly IMAGE_HEIGHT_IN_CELLS terminal cells height
+                                // Pre-scale the image to fit the determined height in terminal cells
                                 let target_height_in_pixels =
-                                    IMAGE_HEIGHT_IN_CELLS as u32 * cell_height as u32;
+                                    target_height_in_cells as u32 * cell_height as u32;
                                 let scale = target_height_in_pixels as f32 / img_height as f32;
                                 let new_width = (img_width as f32 * scale) as u32;
                                 let new_height = target_height_in_pixels;
+
+                                debug!(
+                                    "Image {} has aspect ratio {:.2}, using {} cells height",
+                                    image_src, aspect_ratio, target_height_in_cells
+                                );
 
                                 let scaled_image = loaded_image.resize_exact(
                                     new_width,
@@ -1263,10 +1475,10 @@ impl TextReader {
                                 let image_width_cells =
                                     (new_width as f32 / cell_width as f32).ceil() as u16;
 
-                                // Cache the scaled image with its width
+                                // Cache the scaled image with its width and height
                                 cached_images_ref.insert(
                                     image_src.to_string(),
-                                    (scaled_image, image_width_cells),
+                                    (scaled_image, image_width_cells, target_height_in_cells),
                                 );
                                 debug!("Cached image: {}", image_src);
                             } else {
@@ -1280,7 +1492,7 @@ impl TextReader {
                     }
 
                     // Get the cached image
-                    if let Some((scaled_image, image_width_cells)) =
+                    if let Some((scaled_image, image_width_cells, _height_cells)) =
                         cached_images_ref.get(image_src)
                     {
                         // Image is at least partially visible
@@ -1324,10 +1536,16 @@ impl TextReader {
                                     debug!("Created new image protocol for {}", image_src);
                                 }
 
+                                // Get the actual image height for this specific image
+                                let image_height_cells = self.calculate_image_height_in_cells(
+                                    scaled_image,
+                                    margined_content_area[1].width,
+                                );
+
                                 let (render_y, render_height) = if image_top_clipped > 0 {
                                     (
                                         margined_content_area[1].y,
-                                        ((IMAGE_HEIGHT_IN_CELLS as usize)
+                                        ((image_height_cells as usize)
                                             .saturating_sub(image_top_clipped))
                                         .min(area_height)
                                             as u16,
@@ -1335,7 +1553,7 @@ impl TextReader {
                                 } else {
                                     (
                                         margined_content_area[1].y + image_screen_start as u16,
-                                        (IMAGE_HEIGHT_IN_CELLS as usize)
+                                        (image_height_cells as usize)
                                             .min(area_height.saturating_sub(image_screen_start))
                                             as u16,
                                     )
@@ -1511,120 +1729,71 @@ mod tests {
     use crate::theme::OCEANIC_NEXT;
     use image::{DynamicImage, ImageBuffer};
 
-    /// Test that calculate_image_height_in_cells always returns exactly IMAGE_HEIGHT_IN_CELLS
+    /// Test that calculate_image_height_in_cells returns correct height based on aspect ratio
     #[test]
-    fn test_image_height_always_15_cells() {
+    fn test_image_height_based_on_aspect_ratio() {
         let reader = TextReader::new();
 
-        // Test with various image sizes
+        // Test with various image sizes and their expected heights
         let test_cases = vec![
-            (100, 100),   // Square image
-            (200, 50),    // Wide image
-            (50, 200),    // Tall image
-            (1920, 1080), // HD image
-            (64, 64),     // Small image
+            (100, 100, IMAGE_HEIGHT_REGULAR), // Square image (aspect ratio 1.0)
+            (200, 50, IMAGE_HEIGHT_WIDE),     // Wide image (aspect ratio 4.0)
+            (50, 200, IMAGE_HEIGHT_REGULAR),  // Tall image (aspect ratio 0.25)
+            (1920, 1080, IMAGE_HEIGHT_REGULAR), // HD image (aspect ratio ~1.78)
+            (64, 64, IMAGE_HEIGHT_REGULAR),   // Small square image
+            (400, 100, IMAGE_HEIGHT_WIDE),    // Wide image (aspect ratio 4.0)
+            (300, 100, IMAGE_HEIGHT_REGULAR), // Almost wide (aspect ratio 3.0, at threshold)
+            (301, 100, IMAGE_HEIGHT_WIDE),    // Just over threshold (aspect ratio 3.01)
         ];
 
-        for (width, height) in test_cases {
+        for (width, height, expected_height) in test_cases {
             let img = DynamicImage::ImageRgba8(ImageBuffer::new(width, height));
             let result = reader.calculate_image_height_in_cells(&img, 100);
+            let aspect_ratio = width as f32 / height as f32;
             assert_eq!(
-                result, IMAGE_HEIGHT_IN_CELLS,
-                "Image {}x{} should always result in {} cells height",
-                width, height, IMAGE_HEIGHT_IN_CELLS
+                result, expected_height,
+                "Image {}x{} (aspect ratio {:.2}) should result in {} cells height",
+                width, height, aspect_ratio, expected_height
             );
         }
     }
 
-    /// Test that placeholder lines inserted are exactly IMAGE_HEIGHT_IN_CELLS
+    /// Test that placeholder lines are inserted with correct height
     #[test]
     fn test_placeholder_lines_count() {
-        let mut reader = TextReader::new();
-        let content = "First paragraph here.\n\n\
-             Second paragraph here.\n\n\
-             Third paragraph here.\n\n\
-             Fourth paragraph here.\n\n\
-             Fifth paragraph here.\n\n\
-             Sixth paragraph here.\n\n\
-             Seventh paragraph here.";
-        let chapter_title = Some("Test Chapter".to_string());
-        let palette = &OCEANIC_NEXT;
-
-        // Placeholder insertion is now disabled since we show actual images from books
-        // This test is kept for reference but the functionality is disabled
-        if false {
-            let width = 80;
-            let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
-                content,
-                &chapter_title,
-                palette,
-                width,
-                true,
-            );
-
-            // Count empty lines after sixth paragraph that represent image placeholders
-            let mut placeholder_count = 0;
-            let mut consecutive_empty = 0;
-            let mut paragraph_count = 0;
-            let mut in_paragraph = false;
-
-            for (i, line) in raw_lines.iter().enumerate() {
-                // Skip title lines
-                if i < 2 {
-                    continue;
-                }
-
-                if !line.trim().is_empty() {
-                    if !in_paragraph {
-                        in_paragraph = true;
-                    }
-                    consecutive_empty = 0;
-                } else if in_paragraph {
-                    paragraph_count += 1;
-                    in_paragraph = false;
-                    consecutive_empty = 1;
-                } else {
-                    consecutive_empty += 1;
-                    // Check if we've found the image placeholder after the 6th paragraph
-                    if paragraph_count >= 6 && consecutive_empty >= IMAGE_TOTAL_LINES as usize {
-                        placeholder_count = IMAGE_TOTAL_LINES as usize;
-                        break;
-                    }
-                }
-            }
-
-            assert_eq!(
-                placeholder_count, IMAGE_TOTAL_LINES as usize,
-                "Should have exactly {} placeholder lines for the image (1 padding + {} image + 1 padding)",
-                IMAGE_TOTAL_LINES, IMAGE_HEIGHT_IN_CELLS
-            );
-        }
+        // This test is kept for reference but the functionality for automatic
+        // placeholder insertion after 6th paragraph is disabled since we show actual images from books
     }
 
-    /// Test that prescaling produces an image with correct height based on cell size
+    /// Test that prescaling produces an image with correct height based on cell size and aspect ratio
     #[test]
     fn test_image_prescaling_dynamic() {
         // Test various source image sizes and cell heights
         let test_cases = vec![
-            (100, 100, 16), // Square image, 16px cells -> 160px
-            (200, 100, 18), // Wide image, 18px cells -> 180px
-            (100, 200, 20), // Tall image, 20px cells -> 200px
-            (400, 300, 14), // 4:3 image, 14px cells -> 140px
+            (100, 100, 16, IMAGE_HEIGHT_REGULAR), // Square image, 16px cells
+            (400, 100, 18, IMAGE_HEIGHT_WIDE),    // Wide image (4:1), 18px cells
+            (100, 200, 20, IMAGE_HEIGHT_REGULAR), // Tall image, 20px cells
+            (400, 300, 14, IMAGE_HEIGHT_REGULAR), // 4:3 image, 14px cells
         ];
 
-        for (src_width, src_height, cell_height) in test_cases {
-            // Simulate the prescaling logic from new()
-            let target_height_in_pixels = IMAGE_HEIGHT_IN_CELLS as usize * cell_height; // IMAGE_HEIGHT_IN_CELLS cells * detected cell height
+        for (src_width, src_height, cell_height, expected_height_cells) in test_cases {
+            let aspect_ratio = src_width as f32 / src_height as f32;
+
+            // Simulate the prescaling logic
+            let target_height_in_pixels = expected_height_cells as usize * cell_height;
             let scale = target_height_in_pixels as f32 / src_height as f32;
             let new_width = (src_width as f32 * scale) as u32;
             let new_height = target_height_in_pixels;
 
             assert_eq!(
                 new_height,
-                IMAGE_HEIGHT_IN_CELLS as usize * cell_height,
-                "Prescaled height should be exactly {} * cell_height ({} pixels)",
-                IMAGE_HEIGHT_IN_CELLS,
-                IMAGE_HEIGHT_IN_CELLS as usize * cell_height
+                expected_height_cells as usize * cell_height,
+                "Image {}x{} (aspect {:.2}) prescaled height should be exactly {} * cell_height ({} pixels)",
+                src_width,
+                src_height,
+                aspect_ratio,
+                expected_height_cells,
+                expected_height_cells as usize * cell_height
             );
 
             // Verify aspect ratio is maintained
@@ -1642,101 +1811,38 @@ mod tests {
         }
     }
 
-    /// Test that image placeholder insertion happens after sixth paragraph
-    #[test]
-    fn test_image_placement_after_sixth_paragraph() {
-        let mut reader = TextReader::new();
-        let content = "First paragraph with some text that might wrap to multiple lines.\n\n\
-             Second paragraph here.\n\n\
-             Third paragraph here.\n\n\
-             Fourth paragraph here.\n\n\
-             Fifth paragraph here.\n\n\
-             Sixth paragraph here.\n\n\
-             Seventh paragraph here.";
-        let chapter_title = Some("Test Chapter".to_string());
-        let palette = &OCEANIC_NEXT;
-
-        // Placeholder insertion is now disabled since we show actual images from books
-        if false {
-            let width = 40; // Narrow width to force wrapping
-            let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
-                content,
-                &chapter_title,
-                palette,
-                width,
-                true,
-            );
-
-            // Find the first paragraph end by looking for consecutive empty lines after content
-            let mut found_image_placeholders = false;
-            let mut image_start_idx = 0;
-            let mut consecutive_empty = 0;
-
-            // Skip title lines
-            for (i, line) in raw_lines.iter().enumerate().skip(2) {
-                if line.trim().is_empty() {
-                    consecutive_empty += 1;
-                    if consecutive_empty >= 10 && !found_image_placeholders {
-                        // Found our image placeholder area
-                        image_start_idx = i - 9; // Go back to start of placeholders
-                        found_image_placeholders = true;
-                        break;
-                    }
-                } else {
-                    consecutive_empty = 0;
-                }
-            }
-
-            assert!(
-                found_image_placeholders,
-                "Should find image placeholders in the output"
-            );
-
-            // Verify there's content before the placeholder (first paragraph)
-            assert!(
-                image_start_idx > 2,
-                "Image should not be at the very beginning (found at {})",
-                image_start_idx
-            );
-
-            // Verify we have six paragraphs of content before image
-            let non_empty_before = raw_lines[2..image_start_idx]
-                .iter()
-                .filter(|line| !line.trim().is_empty())
-                .count();
-            assert!(
-                non_empty_before > 0,
-                "Should have first paragraph content before image"
-            );
-        }
-    }
-
     /// Test that image rendering area calculations work correctly
     #[test]
     fn test_image_rendering_calculations() {
         let reader = TextReader::new();
 
-        // Test with a dummy image since we no longer have ada_image
+        // Test with square image (regular height)
         {
-            let ada_image = DynamicImage::ImageRgba8(ImageBuffer::new(100, 100));
-            // Test area width calculation
+            let square_image = DynamicImage::ImageRgba8(ImageBuffer::new(100, 100));
             let area_width = 100;
-            let image_width = 70; // min(100 * 0.7, 70) = 70
 
-            // The image should be centered
-            let expected_x_offset = (area_width - image_width) / 2;
-            assert_eq!(
-                expected_x_offset, IMAGE_HEIGHT_IN_CELLS,
-                "Image should be centered with correct offset"
-            );
-
-            // Height should always be IMAGE_HEIGHT_IN_CELLS cells
+            // Height should be regular for square images
             let image_height =
-                reader.calculate_image_height_in_cells(&ada_image, area_width as u16);
+                reader.calculate_image_height_in_cells(&square_image, area_width as u16);
             assert_eq!(
-                image_height, IMAGE_HEIGHT_IN_CELLS,
-                "Image height should be exactly {} cells",
-                IMAGE_HEIGHT_IN_CELLS
+                image_height, IMAGE_HEIGHT_REGULAR,
+                "Square image height should be exactly {} cells",
+                IMAGE_HEIGHT_REGULAR
+            );
+        }
+
+        // Test with wide image (reduced height)
+        {
+            let wide_image = DynamicImage::ImageRgba8(ImageBuffer::new(400, 100));
+            let area_width = 100;
+
+            // Height should be reduced for wide images
+            let image_height =
+                reader.calculate_image_height_in_cells(&wide_image, area_width as u16);
+            assert_eq!(
+                image_height, IMAGE_HEIGHT_WIDE,
+                "Wide image height should be exactly {} cells",
+                IMAGE_HEIGHT_WIDE
             );
         }
     }

@@ -278,7 +278,6 @@ impl App {
                     self.current_chapter = chapter_index;
                     info!("Navigating to chapter: {}", self.current_chapter + 1);
                     self.update_content();
-                    self.text_reader.reset_scroll();
                     self.update_current_chapter_in_cache();
                     self.save_bookmark_with_throttle(true);
                     Ok(())
@@ -307,7 +306,6 @@ impl App {
                             self.current_chapter += 1;
                             info!("Moving to next chapter: {}", self.current_chapter + 1);
                             self.update_content();
-                            self.text_reader.reset_scroll();
                             self.update_current_chapter_in_cache();
                             self.save_bookmark_with_throttle(true);
                             Ok(())
@@ -325,7 +323,6 @@ impl App {
                             self.current_chapter -= 1;
                             info!("Moving to previous chapter: {}", self.current_chapter + 1);
                             self.update_content();
-                            self.text_reader.reset_scroll();
                             self.update_current_chapter_in_cache();
                             self.save_bookmark_with_throttle(true);
                             Ok(())
@@ -637,7 +634,22 @@ impl App {
                     self.current_chapter_title = title;
                     self.current_content = Some(content);
                     let content_length = self.current_content.as_ref().unwrap().len();
+
+                    // First update content (this will clear caches)
                     self.text_reader.content_updated(content_length);
+
+                    // THEN pre-load image dimensions AFTER content_updated
+                    // This ensures placeholders use the correct height
+                    // Must be done AFTER content_updated because that method clears the cache
+                    if let Some(ref current_file) = self.current_file {
+                        if let Some(ref content) = self.current_content {
+                            self.text_reader.preload_image_dimensions(
+                                content,
+                                &self.image_storage,
+                                current_file,
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("Failed to process chapter: {}", e);

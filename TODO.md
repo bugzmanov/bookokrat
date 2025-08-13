@@ -1,5 +1,8 @@
 ideas to implement:
  - images in ghosty terminal
+     - images of various sized
+     - copy images to clipboard
+ - text cursor for reading ala vim normal mode
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - AI integreration
  - logs/debug window
