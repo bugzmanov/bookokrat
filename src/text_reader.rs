@@ -2,8 +2,9 @@ use crate::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig};
 use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
-use image::{DynamicImage, GenericImageView};
-use log::debug;
+use fast_image_resize as fr;
+use image::{DynamicImage, GenericImageView, ImageBuffer};
+use log::{debug, info};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -24,6 +25,54 @@ const IMAGE_HEIGHT_REGULAR: u16 = 15;
 const IMAGE_HEIGHT_WIDE: u16 = 7;
 /// Aspect ratio threshold for wide images
 const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
+
+/// Fast image resize using fast_image_resize crate
+fn fast_resize_image(
+    src_image: &DynamicImage,
+    new_width: u32,
+    new_height: u32,
+) -> Result<DynamicImage, Box<dyn std::error::Error>> {
+    let resize_start = std::time::Instant::now();
+
+    // Convert to RGBA8 for processing
+    let src_rgba = src_image.to_rgba8();
+    let (src_width, src_height) = src_rgba.dimensions();
+
+    // Create source image view
+    let src_image_view = fr::Image::from_vec_u8(
+        std::num::NonZeroU32::new(src_width).ok_or("Invalid width")?,
+        std::num::NonZeroU32::new(src_height).ok_or("Invalid height")?,
+        src_rgba.into_raw(),
+        fr::PixelType::U8x4,
+    )?;
+
+    // Create destination image
+    let dst_width = std::num::NonZeroU32::new(new_width).ok_or("Invalid target width")?;
+    let dst_height = std::num::NonZeroU32::new(new_height).ok_or("Invalid target height")?;
+    let mut dst_image = fr::Image::new(dst_width, dst_height, fr::PixelType::U8x4);
+
+    // Create resizer with Lanczos3 algorithm for quality
+    let mut resizer = fr::Resizer::new(fr::ResizeAlg::Convolution(fr::FilterType::Lanczos3));
+
+    // Perform resize
+    resizer.resize(&src_image_view.view(), &mut dst_image.view_mut())?;
+
+    // Convert back to DynamicImage
+    let buffer = ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(
+        new_width,
+        new_height,
+        dst_image.into_vec(),
+    )
+    .ok_or("Failed to create image buffer")?;
+
+    let resize_time = resize_start.elapsed();
+    debug!(
+        "        Fast resize: {}x{} -> {}x{} in {:?}",
+        src_width, src_height, new_width, new_height, resize_time
+    );
+
+    Ok(DynamicImage::ImageRgba8(buffer))
+}
 
 #[derive(Debug, Clone)]
 struct AutoScrollState {
@@ -767,8 +816,12 @@ impl TextReader {
         image_storage: &crate::image_storage::ImageStorage,
         current_file_path: &str,
     ) {
+        let preload_start = std::time::Instant::now();
         let epub_path = std::path::Path::new(current_file_path);
         let mut any_loaded = false;
+        let mut images_processed = 0;
+        let mut images_cached = 0;
+        let mut images_skipped = 0;
 
         // Find all image placeholders in content
         for line in content.lines() {
@@ -776,9 +829,12 @@ impl TextReader {
                 debug!("Preloading: Found image line: '{}'", line.trim());
                 if let Some(img_src) = extract_src(line.trim()) {
                     debug!("Preloading: Extracted src = '{}'", img_src);
+                    images_processed += 1;
+
                     // Skip if already cached
                     if self.cached_images.borrow().contains_key(&img_src) {
                         debug!("Preloading: Image '{}' already cached, skipping", img_src);
+                        images_skipped += 1;
                         continue;
                     }
 
@@ -786,6 +842,7 @@ impl TextReader {
                     if let Some(resolved_image_path) =
                         image_storage.resolve_image_path(epub_path, &img_src)
                     {
+                        let load_start = std::time::Instant::now();
                         if let Ok(loaded_image) = image::open(&resolved_image_path) {
                             // Calculate dimensions and determine target height
                             let (img_width, img_height) = loaded_image.dimensions();
@@ -850,11 +907,19 @@ impl TextReader {
                                 target_height_in_cells
                             );
 
-                            let scaled_image = loaded_image.resize_exact(
-                                new_width,
-                                new_height,
-                                image::imageops::FilterType::Lanczos3,
-                            );
+                            let scaled_image =
+                                fast_resize_image(&loaded_image, new_width, new_height)
+                                    .unwrap_or_else(|e| {
+                                        debug!(
+                                            "Fast resize failed, falling back to image crate: {}",
+                                            e
+                                        );
+                                        loaded_image.resize_exact(
+                                            new_width,
+                                            new_height,
+                                            image::imageops::FilterType::Lanczos3,
+                                        )
+                                    });
 
                             // Calculate how many cells wide the image should be
                             let cell_width = if let Some(ref picker) = *self.image_picker.borrow() {
@@ -873,6 +938,10 @@ impl TextReader {
                                 img_src.clone(),
                                 (scaled_image, image_width_cells, target_height_in_cells),
                             );
+
+                            let load_time = load_start.elapsed();
+                            debug!("      - Loaded and scaled '{}' in {:?}", img_src, load_time);
+                            images_cached += 1;
                             any_loaded = true;
                         }
                     }
@@ -885,6 +954,14 @@ impl TextReader {
             debug!("Clearing styled content cache after preloading images");
             self.cached_styled_content = None;
             self.cached_content_hash = 0;
+        }
+
+        let total_time = preload_start.elapsed();
+        if images_processed > 0 {
+            info!(
+                "      - Image preload stats: {} processed, {} newly cached, {} already cached, total time: {:?}",
+                images_processed, images_cached, images_skipped, total_time
+            );
         }
     }
 
@@ -1459,11 +1536,22 @@ impl TextReader {
                                     image_src, aspect_ratio, target_height_in_cells
                                 );
 
-                                let scaled_image = loaded_image.resize_exact(
+                                let scaled_image = fast_resize_image(
+                                    &loaded_image,
                                     new_width,
                                     new_height,
-                                    image::imageops::FilterType::Lanczos3,
-                                );
+                                )
+                                .unwrap_or_else(|e| {
+                                    debug!(
+                                        "Fast resize failed, falling back to image crate: {}",
+                                        e
+                                    );
+                                    loaded_image.resize_exact(
+                                        new_width,
+                                        new_height,
+                                        image::imageops::FilterType::Lanczos3,
+                                    )
+                                });
 
                                 // Calculate how many cells wide the image should be
                                 let cell_width =

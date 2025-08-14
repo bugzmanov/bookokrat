@@ -272,14 +272,42 @@ impl App {
 
     /// Navigate to a specific chapter - ensures all state is properly updated
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
+        let start_time = std::time::Instant::now();
+
         if let Some(doc) = &mut self.current_epub {
             if chapter_index < self.total_chapters {
                 if doc.set_current_page(chapter_index).is_ok() {
                     self.current_chapter = chapter_index;
-                    info!("Navigating to chapter: {}", self.current_chapter + 1);
+                    info!(
+                        "=== Starting navigation to chapter {} ===",
+                        self.current_chapter + 1
+                    );
+
+                    let set_page_time = start_time.elapsed();
+                    debug!("  - Set current page: {:?}", set_page_time);
+
+                    let content_start = std::time::Instant::now();
                     self.update_content();
+                    let content_time = content_start.elapsed();
+                    debug!("  - Update content: {:?}", content_time);
+
+                    let cache_start = std::time::Instant::now();
                     self.update_current_chapter_in_cache();
+                    let cache_time = cache_start.elapsed();
+                    debug!("  - Update cache: {:?}", cache_time);
+
+                    let bookmark_start = std::time::Instant::now();
                     self.save_bookmark_with_throttle(true);
+                    let bookmark_time = bookmark_start.elapsed();
+                    debug!("  - Save bookmark: {:?}", bookmark_time);
+
+                    let total_time = start_time.elapsed();
+                    info!(
+                        "=== Chapter {} loaded in {:?} ===",
+                        self.current_chapter + 1,
+                        total_time
+                    );
+
                     Ok(())
                 } else {
                     anyhow::bail!("Failed to navigate to chapter {}", chapter_index)
@@ -628,28 +656,60 @@ impl App {
     }
 
     fn update_content(&mut self) {
+        let overall_start = std::time::Instant::now();
+
         if let Some(doc) = &mut self.current_epub {
+            let process_start = std::time::Instant::now();
             match self.text_generator.process_chapter_content(doc) {
                 Ok((content, title)) => {
-                    self.current_chapter_title = title;
+                    let process_time = process_start.elapsed();
+                    debug!("    - Process chapter content: {:?}", process_time);
+
+                    self.current_chapter_title = title.clone();
+                    let content_length = content.len();
+
+                    // Count images in content for stats
+                    let image_count = content.matches("[image src=").count();
+                    if image_count > 0 {
+                        debug!("    - Found {} images in chapter", image_count);
+                    }
+
                     self.current_content = Some(content);
-                    let content_length = self.current_content.as_ref().unwrap().len();
 
                     // First update content (this will clear caches)
+                    let update_start = std::time::Instant::now();
                     self.text_reader.content_updated(content_length);
+                    let update_time = update_start.elapsed();
+                    debug!("    - Content updated: {:?}", update_time);
 
                     // THEN pre-load image dimensions AFTER content_updated
                     // This ensures placeholders use the correct height
                     // Must be done AFTER content_updated because that method clears the cache
                     if let Some(ref current_file) = self.current_file {
                         if let Some(ref content) = self.current_content {
-                            self.text_reader.preload_image_dimensions(
-                                content,
-                                &self.image_storage,
-                                current_file,
-                            );
+                            if image_count > 0 {
+                                let preload_start = std::time::Instant::now();
+                                self.text_reader.preload_image_dimensions(
+                                    content,
+                                    &self.image_storage,
+                                    current_file,
+                                );
+                                let preload_time = preload_start.elapsed();
+                                info!(
+                                    "    - Preloaded {} images in {:?}",
+                                    image_count, preload_time
+                                );
+                            }
                         }
                     }
+
+                    let total_update_time = overall_start.elapsed();
+                    debug!("    - Total update_content time: {:?}", total_update_time);
+
+                    if let Some(ref title) = self.current_chapter_title {
+                        info!("    - Chapter title: \"{}\"", title);
+                    }
+                    info!("    - Content length: {} chars", content_length);
                 }
                 Err(e) => {
                     error!("Failed to process chapter: {}", e);
