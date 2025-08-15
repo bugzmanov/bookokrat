@@ -1,3 +1,4 @@
+use crate::book_images::BookImages;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
@@ -42,6 +43,7 @@ pub struct App {
     text_reader: TextReader,
     bookmarks: Bookmarks,
     image_storage: ImageStorage,
+    book_images: BookImages,
     current_content: Option<String>,
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
     current_chapter: usize,
@@ -150,6 +152,13 @@ impl App {
                 .expect("Failed to create fallback image storage")
         });
 
+        // Initialize book images abstraction
+        let book_images = BookImages::new().unwrap_or_else(|e| {
+            error!("Failed to initialize book images: {}. Using fallback.", e);
+            BookImages::with_storage_dir(std::env::temp_dir().join("bookrat_images"))
+                .expect("Failed to create fallback book images")
+        });
+
         // let guard = pprof::ProfilerGuardBuilder::default()
         //     .frequency(1000)
         //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
@@ -162,6 +171,7 @@ impl App {
             text_reader,
             bookmarks,
             image_storage,
+            book_images,
             current_content: None,
             current_epub: None,
             current_chapter: 0,
@@ -419,6 +429,12 @@ impl App {
             // Continue loading even if image extraction fails
         } else {
             info!("Successfully extracted images from EPUB");
+        }
+
+        // Load the book in BookImages abstraction
+        if let Err(e) = self.book_images.load_book(&path_buf) {
+            error!("Failed to load book in BookImages: {}", e);
+            // Continue loading even if BookImages fails
         }
 
         // Try to load bookmark
@@ -693,6 +709,7 @@ impl App {
                                     content,
                                     &self.image_storage,
                                     current_file,
+                                    Some(&self.book_images),
                                 );
                                 let preload_time = preload_start.elapsed();
                                 info!(
@@ -1320,6 +1337,7 @@ impl App {
                     self.focused_panel == FocusedPanel::Content,
                     Some(&self.image_storage),
                     self.current_file.as_deref(),
+                    Some(&self.book_images),
                 );
             } else {
                 // Render default content area when no EPUB is loaded

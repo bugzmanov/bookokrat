@@ -10,6 +10,7 @@ use log::{error, info};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{Config, LevelFilter, WriteLogger};
 
+mod book_images;
 mod book_list;
 mod book_manager;
 mod bookmark;

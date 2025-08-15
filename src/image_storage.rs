@@ -5,10 +5,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 pub struct ImageStorage {
     base_dir: PathBuf,
-    book_dirs: HashMap<String, PathBuf>,
+    book_dirs: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
 
 impl ImageStorage {
@@ -18,7 +20,7 @@ impl ImageStorage {
 
         Ok(Self {
             base_dir,
-            book_dirs: HashMap::new(),
+            book_dirs: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -27,10 +29,10 @@ impl ImageStorage {
         Self::new(base_dir)
     }
 
-    pub fn extract_images(&mut self, epub_path: &Path) -> Result<()> {
+    pub fn extract_images(&self, epub_path: &Path) -> Result<()> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
-        if self.book_dirs.contains_key(&epub_path_str) {
+        if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
             debug!("Images already extracted for: {}", epub_path_str);
             return Ok(());
         }
@@ -75,7 +77,10 @@ impl ImageStorage {
                     "Book directory already exists with images, skipping extraction: {:?}",
                     book_dir
                 );
-                self.book_dirs.insert(epub_path_str, book_dir);
+                self.book_dirs
+                    .lock()
+                    .unwrap()
+                    .insert(epub_path_str, book_dir);
                 return Ok(());
             }
         }
@@ -118,7 +123,10 @@ impl ImageStorage {
             "Extracted {} images from {}",
             extracted_count, epub_path_str
         );
-        self.book_dirs.insert(epub_path_str, book_dir);
+        self.book_dirs
+            .lock()
+            .unwrap()
+            .insert(epub_path_str, book_dir);
 
         Ok(())
     }
@@ -126,7 +134,12 @@ impl ImageStorage {
     pub fn resolve_image_path(&self, epub_path: &Path, image_href: &str) -> Option<PathBuf> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
-        let book_dir = self.book_dirs.get(&epub_path_str)?;
+        let book_dir = self
+            .book_dirs
+            .lock()
+            .unwrap()
+            .get(&epub_path_str)
+            .cloned()?;
 
         // Try multiple strategies to resolve the image path
         let mut paths_to_try = Vec::new();
@@ -172,18 +185,23 @@ impl ImageStorage {
 
     pub fn get_book_images(&self, epub_path: &Path) -> Option<Vec<PathBuf>> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
-        let book_dir = self.book_dirs.get(&epub_path_str)?;
+        let book_dir = self
+            .book_dirs
+            .lock()
+            .unwrap()
+            .get(&epub_path_str)
+            .cloned()?;
 
         let mut images = Vec::new();
-        collect_images_recursive(book_dir, &mut images).ok()?;
+        collect_images_recursive(&book_dir, &mut images).ok()?;
 
         Some(images)
     }
 
-    pub fn cleanup_book(&mut self, epub_path: &Path) -> Result<()> {
+    pub fn cleanup_book(&self, epub_path: &Path) -> Result<()> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
-        if let Some(book_dir) = self.book_dirs.remove(&epub_path_str) {
+        if let Some(book_dir) = self.book_dirs.lock().unwrap().remove(&epub_path_str) {
             if book_dir.exists() {
                 fs::remove_dir_all(&book_dir)
                     .with_context(|| format!("Failed to remove book directory: {:?}", book_dir))?;
@@ -194,8 +212,15 @@ impl ImageStorage {
         Ok(())
     }
 
-    pub fn cleanup_all(&mut self) -> Result<()> {
-        for (_, book_dir) in self.book_dirs.drain() {
+    pub fn cleanup_all(&self) -> Result<()> {
+        let book_dirs: Vec<PathBuf> = self
+            .book_dirs
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, v)| v)
+            .collect();
+        for book_dir in book_dirs {
             if book_dir.exists() {
                 fs::remove_dir_all(&book_dir)
                     .with_context(|| format!("Failed to remove book directory: {:?}", book_dir))?;
