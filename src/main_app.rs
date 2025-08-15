@@ -1813,15 +1813,24 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             }
         }
 
-        // Draw if we processed events or on tick
-        if events_processed > 0 || last_tick.elapsed() >= tick_rate {
-            terminal.draw(|f| app.draw(f, &fps_counter))?;
-        }
+        // Handle timing and check for loaded images
+        let mut needs_redraw = events_processed > 0;
 
-        // Handle timing
         if last_tick.elapsed() >= tick_rate {
             app.update_highlight(); // Update highlight state
+            // Check for loaded images from background thread
+            let images_loaded = app.text_reader.check_for_loaded_images();
+            if images_loaded {
+                needs_redraw = true;
+                debug!("Images loaded, forcing redraw");
+            }
+            needs_redraw = needs_redraw || true; // Always redraw on tick
             last_tick = std::time::Instant::now();
+        }
+
+        // Draw if needed
+        if needs_redraw {
+            terminal.draw(|f| app.draw(f, &fps_counter))?;
         }
 
         // If no events were processed, wait a bit to avoid busy-waiting
