@@ -218,6 +218,16 @@ impl TextReader {
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
             if is_image_placeholder {
+                // Check if this image was filtered out (too small)
+                if let Some(image_src) = extract_src(line.trim()) {
+                    // Only skip if we've attempted to load dimensions and the image was filtered
+                    let embedded_images = self.embedded_images.borrow();
+                    if !embedded_images.is_empty() && !embedded_images.contains_key(&image_src) {
+                        // Image was filtered out - don't count it
+                        continue;
+                    }
+                }
+
                 // For now, assume regular height - actual height will be determined when image is loaded
                 // We use regular height as default for line counting
                 total_lines += IMAGE_HEIGHT_REGULAR as usize;
@@ -357,6 +367,16 @@ impl TextReader {
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
             if is_image_placeholder {
+                if let Some(image_src) = extract_src(line.trim()) {
+                    // Check if image exists in cache and if it was filtered out for being too small
+                    // Only skip if we've attempted to load dimensions and the image was filtered
+                    let embedded_images = self.embedded_images.borrow();
+                    if !embedded_images.is_empty() && !embedded_images.contains_key(&image_src) {
+                        // Image was filtered out (too small) during preload - skip it completely
+                        continue;
+                    }
+                }
+
                 // Add empty line before image
                 raw_lines.push(String::new());
                 lines.push(Line::from(String::new()));
@@ -642,6 +662,15 @@ impl TextReader {
                     let dimensions_result = book_images.get_image_size(&img_src);
 
                     if let Some((img_width, img_height)) = dimensions_result {
+                        // Filter out small images (less than 64x64)
+                        if img_width < 64 || img_height < 64 {
+                            warn!(
+                                "Ignoring small image ({}x{}): {}",
+                                img_width, img_height, img_src
+                            );
+                            continue;
+                        }
+
                         let height_cells = EmbeddedImage::height_in_cells(img_width, img_height);
                         self.embedded_images.borrow_mut().insert(
                             img_src.clone(),
@@ -1498,13 +1527,13 @@ mod tests {
 
         // Test with various image sizes and their expected heights
         let test_cases = vec![
-            (100, 100, IMAGE_HEIGHT_REGULAR), // Square image (aspect ratio 1.0)
+            (100, 100, IMAGE_HEIGHT_WIDE), // Square image (aspect ratio 1.0) - but height < 150, so uses WIDE
             (200, 50, IMAGE_HEIGHT_WIDE),     // Wide image (aspect ratio 4.0)
             (50, 200, IMAGE_HEIGHT_REGULAR),  // Tall image (aspect ratio 0.25)
             (1920, 1080, IMAGE_HEIGHT_REGULAR), // HD image (aspect ratio ~1.78)
-            (64, 64, IMAGE_HEIGHT_REGULAR),   // Small square image
+            (64, 64, IMAGE_HEIGHT_WIDE),   // Small square image - height < 150, so uses WIDE
             (400, 100, IMAGE_HEIGHT_WIDE),    // Wide image (aspect ratio 4.0)
-            (300, 100, IMAGE_HEIGHT_REGULAR), // Almost wide (aspect ratio 3.0, at threshold)
+            (300, 100, IMAGE_HEIGHT_WIDE), // Almost wide (aspect ratio 3.0, at threshold) - but height < 150
             (301, 100, IMAGE_HEIGHT_WIDE),    // Just over threshold (aspect ratio 3.01)
         ];
 
@@ -1578,16 +1607,16 @@ mod tests {
     fn test_image_rendering_calculations() {
         let reader = TextReader::new();
 
-        // Test with square image (regular height)
+        // Test with square image (height < 150, so uses WIDE)
         {
             let square_image = DynamicImage::ImageRgba8(ImageBuffer::new(100, 100));
 
-            // Height should be regular for square images
+            // Height should be WIDE for images with height < 150
             let image_height = reader.calculate_image_height_in_cells(&square_image);
             assert_eq!(
-                image_height, IMAGE_HEIGHT_REGULAR,
-                "Square image height should be exactly {} cells",
-                IMAGE_HEIGHT_REGULAR
+                image_height, IMAGE_HEIGHT_WIDE,
+                "Square image with height < 150 should be exactly {} cells",
+                IMAGE_HEIGHT_WIDE
             );
         }
 

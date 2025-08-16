@@ -2,6 +2,7 @@ ideas to implement:
  - images in ghosty terminal
      - images of various sized
      - copy images to clipboard
+ - links support 
  - text cursor for reading ala vim normal mode
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - AI integreration
@@ -11,7 +12,7 @@ ideas to implement:
      - make margins configurable + text color 
  - integration with GOODREADS
  - ASCII art animation
-
+ - Images in iterm and sixt protocol
 
 bugz: 
 ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
