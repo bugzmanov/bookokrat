@@ -705,12 +705,8 @@ impl App {
                         if let Some(ref content) = self.current_content {
                             if image_count > 0 {
                                 let preload_start = std::time::Instant::now();
-                                self.text_reader.preload_image_dimensions(
-                                    content,
-                                    &self.image_storage,
-                                    current_file,
-                                    Some(&self.book_images),
-                                );
+                                self.text_reader
+                                    .preload_image_dimensions(content, &self.book_images);
                                 let preload_time = preload_start.elapsed();
                                 info!(
                                     "    - Preloaded {} images in {:?}",

@@ -4,7 +4,7 @@ use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -49,12 +49,26 @@ enum AutoScrollDirection {
     Down,
 }
 
+pub enum ImageLoadState {
+    NotLoaded,
+
+    Loaded {
+        image: Arc<DynamicImage>,
+        protocol: StatefulProtocol,
+    },
+
+    Failed {
+        reason: String,
+    },
+}
+
 pub struct EmbeddedImage {
     pub src: String,
     pub lines_before_image: usize,
     pub height_cells: u16,
     pub width: u32,
     pub height: u32,
+    pub state: ImageLoadState,
 }
 
 impl EmbeddedImage {
@@ -70,22 +84,20 @@ impl EmbeddedImage {
         };
         height_cells
     }
-}
 
-/// Status of image loading for background processing
-#[derive(Clone, Debug)]
-pub enum ImageLoadStatus {
-    Placeholder {
-        width: u32,
-        height: u32,
-        height_cells: u16,
-    },
-    Loaded {
-        image: Arc<DynamicImage>,
-        width_cells: u16,
-        height_cells: u16,
-    },
-    Failed,
+    pub fn failed_img(img_src: &str, error_msg: &str) -> EmbeddedImage {
+        let height_cells = EmbeddedImage::height_in_cells(200, 200);
+        EmbeddedImage {
+            src: img_src.into(),
+            lines_before_image: 0, // Will be set properly in parse_styled_text_internal_with_raw
+            height_cells,
+            width: 200,
+            height: 200,
+            state: ImageLoadState::Failed {
+                reason: error_msg.into(),
+            },
+        }
+    }
 }
 
 pub struct TextReader {
@@ -116,15 +128,8 @@ pub struct TextReader {
     // Auto-scroll state for continuous scrolling during text selection
     auto_scroll_state: Option<AutoScrollState>,
     // Image display
-    image_picker: RefCell<Option<Picker>>,
-    // Cached stateful image protocol
-    cached_image_protocol: RefCell<Option<StatefulProtocol>>,
+    image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
-    // Cache for loaded images to avoid reloading on every frame
-    cached_images: RefCell<HashMap<String, DynamicImage>>, // Map image_src -> loaded_image
-    cached_protocols: RefCell<HashMap<String, StatefulProtocol>>, // Map image_src -> protocol
-    // Image loading status for fast placeholder display
-    image_load_status: RefCell<HashMap<String, ImageLoadStatus>>,
     // Channel for receiving loaded images from background thread
     image_receiver: Option<Receiver<ImagesLoadedMessage>>,
     // Track if background loading is in progress
@@ -133,24 +138,23 @@ pub struct TextReader {
 
 impl TextReader {
     pub fn new() -> Self {
-        // Create image picker first to get cell dimensions
-        let (image_picker, _detected_cell_height) = match Picker::from_query_stdio() {
+        let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 picker.set_background_color([0, 0, 0, 0]);
-
                 let font_size = picker.font_size();
                 debug!(
                     "Successfully created image picker, detected font size: {:?}",
                     font_size
                 );
 
-                let cell_height = font_size.1;
-
-                (Some(picker), cell_height)
+                Some(picker)
             }
             Err(e) => {
-                debug!("Failed to create image picker: {}", e);
-                (None, 16)
+                warn!(
+                    "Failed to create image picker: {}. The terminal would not support image rendering!",
+                    e
+                );
+                None
             }
         };
 
@@ -173,12 +177,8 @@ impl TextReader {
             raw_text_lines: Vec::new(),
             last_content_area: None,
             auto_scroll_state: None,
-            image_picker: RefCell::new(image_picker),
-            cached_image_protocol: RefCell::new(None),
+            image_picker,
             embedded_images: RefCell::new(HashMap::new()),
-            cached_images: RefCell::new(HashMap::new()),
-            cached_protocols: RefCell::new(HashMap::new()),
-            image_load_status: RefCell::new(HashMap::new()),
             image_receiver: None,
             loading_in_progress: RefCell::new(false),
         }
@@ -337,7 +337,7 @@ impl TextReader {
         palette: &Base16Palette,
         width: usize,
         is_focused: bool,
-        book_images: Option<&BookImages>,
+        _book_images: Option<&BookImages>,
     ) -> (Text<'static>, Vec<String>) {
         let mut lines = Vec::new();
         let mut raw_lines = Vec::new();
@@ -373,26 +373,25 @@ impl TextReader {
             if is_image_placeholder {
                 if let Some(image_src) = extract_src(line.trim()) {
                     if let Some(image) = self.embedded_images.borrow_mut().get_mut(&image_src) {
-                        // just resizing
+                        // Update the line position for this image
                         image.lines_before_image = line_count;
                         line_count += image.height_cells as usize + 2;
                     } else {
-                        // Get actual image dimensions using BookImages abstraction
-                        let (width, height) = if let Some(book_images) = book_images {
-                            book_images.get_image_size(&image_src).unwrap_or((800, 600))
-                        } else {
-                            (800, 600) // Fallback dimensions
-                        };
-
-                        let height_cells = EmbeddedImage::height_in_cells(width, height);
+                        error!(
+                            "Image '{}' not found in embedded_images cache. This suggests preload_image_dimensions was not called or failed. THIS SHOULD NOT HAPPEN",
+                            image_src
+                        );
                         self.embedded_images.borrow_mut().insert(
                             image_src.clone(),
                             EmbeddedImage {
                                 src: image_src.clone(),
                                 lines_before_image: line_count,
-                                height_cells,
-                                width,
-                                height,
+                                height_cells: IMAGE_HEIGHT_WIDE,
+                                width: 200,
+                                height: 200,
+                                state: ImageLoadState::Failed {
+                                    reason: "Not pre-loaded".to_string(),
+                                },
                             },
                         );
                     }
@@ -730,130 +729,53 @@ impl TextReader {
         self.cached_focus_state = false;
         // Clear embedded images since they're parsed from content
         self.embedded_images.borrow_mut().clear();
-        // Clear image caches for multiple images
-        self.cached_images.borrow_mut().clear();
-        self.cached_protocols.borrow_mut().clear();
-        // Clear old single-image caches
-        *self.cached_image_protocol.borrow_mut() = None;
-    }
-
-    pub fn get_image_dimensions(
-        image_storage: &crate::image_storage::ImageStorage,
-        epub_path: &std::path::Path,
-        img_src: &str,
-    ) -> Option<(u32, u32)> {
-        // width, height
-        if let Some(resolved_image_path) = image_storage.resolve_image_path(epub_path, &img_src) {
-            match imagesize::size(&resolved_image_path) {
-                Ok(size) => Some((size.width as u32, size.height as u32)),
-                Err(e) => {
-                    warn!(
-                        "Failed to read image size for {}: {}",
-                        resolved_image_path.display(),
-                        e
-                    );
-                    None
-                }
-            }
-        } else {
-            warn!(
-                "Image {}/{} wasn't resolved by ImageStorage. And would not be loaded",
-                epub_path.display(),
-                img_src
-            );
-            None
-        }
     }
 
     /// Quickly read image sizes and start background loading
-    /// Uses BookImages for dimension retrieval when available
-    pub fn preload_image_dimensions(
-        &mut self,
-        content: &str,
-        image_storage: &crate::image_storage::ImageStorage,
-        current_file_path: &str,
-        book_images: Option<&BookImages>,
-    ) {
+    pub fn preload_image_dimensions(&mut self, content: &str, book_images: &BookImages) {
         let quick_scan_start = std::time::Instant::now();
-        let epub_path = std::path::Path::new(current_file_path);
-        let mut image_load_status = self.image_load_status.borrow_mut();
         let mut images_to_load: Vec<(String, u16)> = Vec::new();
         let mut images_processed = 0;
 
-        // Clear previous load status and stop any pending background loading
-        image_load_status.clear();
+        // this is wrong!
         *self.loading_in_progress.borrow_mut() = false;
 
-        // First pass: quickly read image dimensions
         for line in content.lines() {
             if line.trim().starts_with("[image src=") {
                 if let Some(img_src) = extract_src(line.trim()) {
                     images_processed += 1;
 
-                    // Skip if already fully loaded
-                    if self.cached_images.borrow().contains_key(&img_src) {
-                        debug!("Image '{}' already cached, skipping", img_src);
+                    if self.embedded_images.borrow().contains_key(&img_src) {
                         continue;
                     }
 
-                    // Try to get dimensions from BookImages first
-                    let dimensions_result = if let Some(book_images) = book_images {
-                        book_images.get_image_size(&img_src)
-                    } else {
-                        // Fallback to imagesize
-                        if let Some(resolved_image_path) =
-                            image_storage.resolve_image_path(epub_path, &img_src)
-                        {
-                            match imagesize::size(&resolved_image_path) {
-                                Ok(size) => Some((size.width as u32, size.height as u32)),
-                                Err(e) => {
-                                    warn!("Failed to read image size for {}: {}", img_src, e);
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        }
-                    };
+                    let dimensions_result = book_images.get_image_size(&img_src);
 
                     if let Some((img_width, img_height)) = dimensions_result {
-                        let aspect_ratio = img_width as f32 / img_height as f32;
-
-                        debug!(
-                            "Quick scan: Image {} dimensions: {}x{} pixels, aspect ratio: {:.2}",
-                            img_src, img_width, img_height, aspect_ratio
-                        );
-
-                        // Determine placeholder height based on aspect ratio and size
-                        let height_cells = if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
-                            IMAGE_HEIGHT_WIDE
-                        } else if img_height < 150 {
-                            IMAGE_HEIGHT_WIDE
-                        } else {
-                            IMAGE_HEIGHT_REGULAR
-                        };
-
-                        // Store placeholder status with dimensions
-                        image_load_status.insert(
+                        let height_cells = EmbeddedImage::height_in_cells(img_width, img_height);
+                        self.embedded_images.borrow_mut().insert(
                             img_src.clone(),
-                            ImageLoadStatus::Placeholder {
+                            EmbeddedImage {
+                                src: img_src.clone(),
+                                lines_before_image: 0, // Will be set properly in parse_styled_text_internal_with_raw
+                                height_cells,
                                 width: img_width,
                                 height: img_height,
-                                height_cells,
+                                state: ImageLoadState::NotLoaded,
                             },
                         );
-
-                        // Add to list for background loading
                         images_to_load.push((img_src.clone(), height_cells));
                     } else {
                         warn!("Could not get dimensions for: {}", img_src);
-                        image_load_status.insert(img_src.clone(), ImageLoadStatus::Failed);
+                        self.embedded_images.borrow_mut().insert(
+                            img_src.clone(),
+                            EmbeddedImage::failed_img(&img_src, "Could not read image metadata"),
+                        );
                     }
                 }
             }
         }
 
-        // Report quick scan time
         let quick_scan_time = quick_scan_start.elapsed();
         if images_processed > 0 {
             info!(
@@ -862,19 +784,21 @@ impl TextReader {
             );
         }
 
-        // Clear the styled content cache so placeholders are rendered with correct heights
+        //todo this is wrong or not sufficient at best
         self.cached_styled_content = None;
         self.cached_content_hash = 0;
 
-        // Must drop the borrow before calling start_background_image_loading
-        drop(image_load_status);
-
-        // Start background loading if we have images to load and BookImages is available
         if !images_to_load.is_empty() {
-            if let Some(book_images) = book_images {
+            if self.image_picker.is_some() {
                 self.start_background_image_loading(images_to_load, book_images);
             } else {
-                warn!("Cannot start background loading without BookImages");
+                for (img, _) in images_to_load.iter() {
+                    if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
+                        img_state.state = ImageLoadState::Failed {
+                            reason: "terminal doesnt' support images".to_string(),
+                        }
+                    }
+                }
             }
         }
     }
@@ -885,21 +809,18 @@ impl TextReader {
         images_to_load: Vec<(String, u16)>,
         book_images: &BookImages,
     ) {
-        *self.loading_in_progress.borrow_mut() = true;
-
-        // Create channel for receiving loaded images
-        let (sender, receiver) = channel();
-        self.image_receiver = Some(receiver);
-
-        // Get cell dimensions from picker for scaling
-        let (cell_width, cell_height) = if let Some(ref picker) = *self.image_picker.borrow() {
+        let (cell_width, cell_height) = if let Some(ref picker) = self.image_picker {
             let font_size = picker.font_size();
             (font_size.0, font_size.1)
         } else {
-            (8, 16) // Default fallback
+            panic!("start_background_image_loading should not be called when image_picker is unavailable");
         };
 
-        // Clone BookImages for the thread
+        *self.loading_in_progress.borrow_mut() = true;
+
+        let (sender, receiver) = channel();
+        self.image_receiver = Some(receiver);
+
         let book_images = book_images.clone();
 
         // Spawn background thread for loading and scaling
@@ -945,28 +866,29 @@ impl TextReader {
                     message.images.len()
                 );
 
-                // Update our caches with the loaded images
-                let mut cached_images = self.cached_images.borrow_mut();
-                let mut image_load_status = self.image_load_status.borrow_mut();
+                // Update embedded images with loaded state
+                let mut embedded_images = self.embedded_images.borrow_mut();
+
+                // Get picker for creating protocols
+                let picker = self.image_picker.as_ref();
 
                 for (img_src, image) in message.images {
-                    // Calculate dimensions from the image
-                    let (width, height) = image.dimensions();
-                    let height_cells = EmbeddedImage::height_in_cells(width, height);
-                    let width_cells = 0; // Width cells not used anymore, kept for compatibility with ImageLoadStatus
-
-                    // Update cache
-                    cached_images.insert(img_src.clone(), image.clone());
-
-                    // Update status
-                    image_load_status.insert(
-                        img_src,
-                        ImageLoadStatus::Loaded {
-                            image: Arc::new(image),
-                            width_cells,
-                            height_cells,
-                        },
-                    );
+                    // Update the embedded image state if it exists
+                    if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
+                        // Create protocol if we have a picker
+                        if let Some(picker) = picker {
+                            let protocol = picker.new_resize_protocol(image.clone());
+                            embedded_image.state = ImageLoadState::Loaded {
+                                image: Arc::new(image),
+                                protocol,
+                            };
+                        } else {
+                            warn!("No picker available to create protocol for {}", img_src);
+                            embedded_image.state = ImageLoadState::Failed {
+                                reason: "No image picker available".to_string(),
+                            };
+                        }
+                    }
                 }
 
                 // Clear styled content cache to trigger re-render with actual images
@@ -1466,7 +1388,7 @@ impl TextReader {
         if !self.embedded_images.borrow().is_empty()
             && image_storage.is_some()
             && current_file_path.is_some()
-            && self.image_picker.borrow().is_some()
+            && self.image_picker.is_some()
         {
             let _image_storage = image_storage.unwrap();
             let _current_file_path = current_file_path.unwrap();
@@ -1474,9 +1396,9 @@ impl TextReader {
             let area_height = margined_content_area[1].height as usize;
 
             // Iterate through all embedded images
-            for (_, embedded_image) in self.embedded_images.borrow().iter() {
+            for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
                 let lines_before_image = embedded_image.lines_before_image;
-                let image_src = &embedded_image.src;
+                let _image_src = &embedded_image.src;
                 // The image should render at the exact position where placeholder starts
                 // lines_before_image is where the placeholder begins in the text
                 let image_start_line = lines_before_image;
@@ -1485,10 +1407,9 @@ impl TextReader {
                 // The actual height will be determined when the image is loaded
                 let mut calculated_image_height = IMAGE_HEIGHT_REGULAR as usize;
 
-                // Check if image is already cached to get its actual height
-                if let Some(cached_image) = self.cached_images.borrow().get(image_src) {
-                    calculated_image_height =
-                        self.calculate_image_height_in_cells(cached_image) as usize;
+                // Check if image is already loaded to get its actual height
+                if let ImageLoadState::Loaded { ref image, .. } = embedded_image.state {
+                    calculated_image_height = self.calculate_image_height_in_cells(image) as usize;
                 }
 
                 let image_end_line = image_start_line + calculated_image_height;
@@ -1496,22 +1417,16 @@ impl TextReader {
                 // Check if image is in viewport
                 if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line
                 {
-                    // Image is at least partially visible
-                    let cached_images_ref = self.cached_images.borrow_mut();
-                    let mut cached_protocols_ref = self.cached_protocols.borrow_mut();
-
-                    // Check if we have the image cached (either from preload or background loading)
-                    if !cached_images_ref.contains_key(image_src) {
-                        // Image not loaded yet - skip rendering it (placeholder is shown in text)
-                        // debug!("Image {} not loaded yet, showing placeholder", image_src);
-                        continue;
-                    }
-
-                    // Get the cached image
-                    if let Some(scaled_image) = cached_images_ref.get(image_src) {
+                    // Check if image is loaded
+                    if let ImageLoadState::Loaded {
+                        ref image,
+                        ref mut protocol,
+                    } = embedded_image.state
+                    {
+                        let scaled_image = image;
                         debug!("here");
                         // Image is at least partially visible
-                        if let Some(ref mut picker) = *self.image_picker.borrow_mut() {
+                        if let Some(ref picker) = self.image_picker {
                             // Calculate screen position
                             debug!("here2");
                             // Calculate where the image should appear on screen
@@ -1540,18 +1455,6 @@ impl TextReader {
                                     visible_image_height, image_screen_start, image_top_clipped
                                 );
                                 // Don't center the image - use full width like the placeholder
-
-                                // Create the stateful protocol only if not cached
-                                if !cached_protocols_ref.contains_key(image_src) {
-                                    debug!(
-                                        "Creating new protocol for {} with picker font_size: {:?}",
-                                        image_src,
-                                        picker.font_size()
-                                    );
-                                    let protocol = picker.new_resize_protocol(scaled_image.clone());
-                                    cached_protocols_ref.insert(image_src.to_string(), protocol);
-                                    debug!("Created new image protocol for {}", image_src);
-                                }
 
                                 // Get the actual image height for this specific image
                                 let image_height_cells =
@@ -1592,32 +1495,14 @@ impl TextReader {
                                     x_offset: 0, // No horizontal scrolling for now
                                 };
 
-                                // Use the cached protocol
-                                if let Some(protocol) = cached_protocols_ref.get_mut(image_src) {
-                                    let image_widget = StatefulImage::new()
-                                        .resize(Resize::Viewport(viewport_options));
-                                    debug!(
-                                        "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}, lines_before_image: {}",
-                                        image_area,
-                                        scroll_offset,
-                                        image_start_line,
-                                        lines_before_image
-                                    );
-                                    f.render_stateful_widget(image_widget, image_area, protocol);
-                                    // match protocol.protocol_type() {
-                                    //     StatefulProtocolType::Kitty(kitty) => {
-                                    //         debug!(
-                                    //             "here4 {:?}",
-                                    //             kitty.tiled_data.clone().unwrap().tiles.values()
-                                    //         )
-                                    //         // Access StatefulKitty here
-                                    //         // kitty is &StatefulKitty
-                                    //     }
-                                    //     _ => {
-                                    //         // Handle other protocols
-                                    //     }
-                                    // }
-                                }
+                                // Use protocol directly for rendering
+                                let image_widget =
+                                    StatefulImage::new().resize(Resize::Viewport(viewport_options));
+                                debug!(
+                                    "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}, lines_before_image: {}",
+                                    image_area, scroll_offset, image_start_line, lines_before_image
+                                );
+                                f.render_stateful_widget(image_widget, image_area, protocol);
                             }
                         }
                     }
@@ -1666,13 +1551,6 @@ impl TextReader {
         self.embedded_images.borrow_mut().clear();
         debug!("Cleared embedded_images cache due to resize");
 
-        // Clear image caches for multiple images
-        self.cached_images.borrow_mut().clear();
-        self.cached_protocols.borrow_mut().clear();
-        // Clear old single-image caches
-        *self.cached_image_protocol.borrow_mut() = None;
-        debug!("Cleared all image caches due to resize");
-
         // Clear the cached styled content to force re-wrapping
         self.cached_styled_content = None;
         self.cached_content_hash = 0;
@@ -1689,15 +1567,9 @@ impl TextReader {
                 debug!("Detected new font size after resize: {:?}", font_size);
 
                 // Update the picker
-                *self.image_picker.borrow_mut() = Some(picker);
+                self.image_picker = Some(picker);
 
-                // Clear cached image protocol since it depends on old font size
-                *self.cached_image_protocol.borrow_mut() = None;
-
-                // Clear cached image to force re-scaling with new font size
-                // This field doesn't exist anymore, we use cached_images instead
-
-                debug!("Image picker and caches updated for new font size");
+                debug!("Image picker updated for new font size");
             }
             Err(e) => {
                 debug!("Failed to recreate image picker on resize: {}", e);
