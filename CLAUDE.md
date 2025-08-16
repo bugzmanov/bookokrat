@@ -364,3 +364,5 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Text selection automatically scrolls the view when dragging near edges
 - The application supports both EPUB2 (NCX) and EPUB3 (Nav) table of contents formats
 - External EPUB readers are detected based on the platform (macOS, Windows, Linux)
+
+- one of the most important aspects of this project is perfomance. never make a significant change like switching a library if that wasn't instructed and if it's clearly would generate worse performance results
