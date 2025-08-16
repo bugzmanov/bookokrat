@@ -23,6 +23,24 @@ impl Default for ImagePlaceholderConfig {
     }
 }
 
+/// Loading status for image placeholders
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoadingStatus {
+    Loading,
+    Failed,
+    Loaded,
+}
+
+impl LoadingStatus {
+    fn as_str(&self) -> &'static str {
+        match self {
+            LoadingStatus::Loading => "loading...",
+            LoadingStatus::Failed => "loading failed",
+            LoadingStatus::Loaded => "loaded",
+        }
+    }
+}
+
 /// Represents a rendered image placeholder
 pub struct ImagePlaceholder {
     /// The raw text lines (for text selection and other purposes)
@@ -40,6 +58,7 @@ impl ImagePlaceholder {
         terminal_width: usize,
         config: &ImagePlaceholderConfig,
         visible: bool,
+        status: LoadingStatus,
     ) -> Self {
         let mut raw_lines = Vec::new();
         let mut styled_lines = Vec::new();
@@ -72,7 +91,7 @@ impl ImagePlaceholder {
         // Middle lines (total_height - 2 for top/bottom borders)
         let middle_lines = config.total_height - 2;
         let center_line = middle_lines / 2;
-        let size_info_line = middle_lines - 1; // Show size info on the last line before bottom border
+        let status_info_line = middle_lines - 1; // Show status info on the last line before bottom border
 
         for i in 0..middle_lines {
             let middle_line = if visible {
@@ -111,20 +130,20 @@ impl ImagePlaceholder {
                             " ".repeat(right_spaces)
                         )
                     }
-                } else if i == size_info_line {
-                    // Show size info on the last line
-                    let size_text = format!("{}L", config.total_height);
+                } else if i == status_info_line {
+                    // Show loading status on the last line
+                    let status_text = status.as_str();
                     let available_width = frame_width - 2 - (2 * config.internal_padding);
 
-                    if size_text.len() <= available_width {
-                        let text_padding = (available_width - size_text.len()) / 2;
+                    if status_text.len() <= available_width {
+                        let text_padding = (available_width - status_text.len()) / 2;
                         let left_spaces = config.internal_padding + text_padding;
-                        let right_spaces = frame_width - 2 - left_spaces - size_text.len();
+                        let right_spaces = frame_width - 2 - left_spaces - status_text.len();
                         format!(
                             "{}│{}{}{}│",
                             padding_str,
                             " ".repeat(left_spaces),
-                            size_text,
+                            status_text,
                             " ".repeat(right_spaces)
                         )
                     } else {
@@ -185,8 +204,13 @@ mod tests {
     #[test]
     fn test_image_placeholder_creation() {
         let config = ImagePlaceholderConfig::default();
-        let placeholder =
-            ImagePlaceholder::new("[image src=\"../images/test.png\"]", 80, &config, true);
+        let placeholder = ImagePlaceholder::new(
+            "[image src=\"../images/test.png\"]",
+            80,
+            &config,
+            true,
+            LoadingStatus::Loading,
+        );
 
         let expected_lines = vec![
             "                   ┌────────────────────────────────────────┐",
@@ -202,7 +226,7 @@ mod tests {
             "                   │                                        │",
             "                   │                                        │",
             "                   │                                        │",
-            "                   │                     15L                    │",
+            "                   │               loading...               │",
             "                   └────────────────────────────────────────┘",
         ];
 
@@ -227,8 +251,13 @@ mod tests {
             );
         }
 
-        let narrow_placeholder =
-            ImagePlaceholder::new("[image src=\"../images/test.png\"]", 40, &config, true);
+        let narrow_placeholder = ImagePlaceholder::new(
+            "[image src=\"../images/test.png\"]",
+            40,
+            &config,
+            true,
+            LoadingStatus::Failed,
+        );
 
         let expected_narrow_lines = vec![
             "┌──────────────────────────────────────┐",
@@ -244,7 +273,7 @@ mod tests {
             "│                                      │",
             "│                                      │",
             "│                                      │",
-            "│                  15L                  │",
+            "│            loading failed            │",
             "└──────────────────────────────────────┘",
         ];
 
@@ -266,7 +295,8 @@ mod tests {
     fn test_image_placeholder_truncation() {
         let config = ImagePlaceholderConfig::default();
         let long_src = "[image src=\"../very/long/path/to/image/that/exceeds/width/limit.png\"]";
-        let placeholder = ImagePlaceholder::new(long_src, 40, &config, true);
+        let placeholder =
+            ImagePlaceholder::new(long_src, 40, &config, true, LoadingStatus::Loading);
 
         // Check that the text is truncated
         let middle_line = &placeholder.raw_lines[7];
@@ -281,8 +311,13 @@ mod tests {
             total_height: 7,
             border_color: Color::Rgb(101, 115, 126),
         };
-        let placeholder =
-            ImagePlaceholder::new("[image src=\"../images/wide.jpg\"]", 80, &config, true);
+        let placeholder = ImagePlaceholder::new(
+            "[image src=\"../images/wide.jpg\"]",
+            80,
+            &config,
+            true,
+            LoadingStatus::Loaded,
+        );
 
         assert_eq!(
             placeholder.raw_lines.len(),
@@ -290,11 +325,11 @@ mod tests {
             "7-line placeholder should have exactly 7 lines"
         );
 
-        // Check that the size indicator shows 7L
-        let size_line = &placeholder.raw_lines[5]; // Second to last line
+        // Check that the status indicator shows "loaded"
+        let status_line = &placeholder.raw_lines[5]; // Second to last line
         assert!(
-            size_line.contains("7L"),
-            "Should show 7L for 7-line placeholder"
+            status_line.contains("loaded"),
+            "Should show 'loaded' for loaded status"
         );
     }
 }
