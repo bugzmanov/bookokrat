@@ -666,9 +666,9 @@ impl App {
         }
     }
 
-    fn update_highlight(&mut self) {
+    fn update_highlight(&mut self) -> bool {
         // Update highlight state in text reader
-        self.text_reader.update_highlight();
+        self.text_reader.update_highlight()
     }
 
     fn update_content(&mut self) {
@@ -755,14 +755,14 @@ impl App {
 
     pub fn scroll_down(&mut self) {
         if let Some(content) = &self.current_content {
-            self.text_reader.scroll_down(content);
+            self.text_reader.scroll_down();
             self.save_bookmark();
         }
     }
 
     pub fn scroll_up(&mut self) {
         if let Some(content) = &self.current_content {
-            self.text_reader.scroll_up(content);
+            self.text_reader.scroll_up();
             self.save_bookmark();
         }
     }
@@ -1331,9 +1331,6 @@ impl App {
                     self.total_chapters,
                     &OCEANIC_NEXT,
                     self.focused_panel == FocusedPanel::Content,
-                    Some(&self.image_storage),
-                    self.current_file.as_deref(),
-                    Some(&self.book_images),
                 );
             } else {
                 // Render default content area when no EPUB is loaded
@@ -1776,6 +1773,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
     let tick_rate = Duration::from_millis(50); // Faster tick rate for smoother animation
     let mut last_tick = std::time::Instant::now();
     let mut fps_counter = FPSCounter::new();
+    let mut first_render = true; // Ensure we always render at least once on startup
     loop {
         // Process all available events first before drawing
         let mut events_processed = 0;
@@ -1830,15 +1828,25 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
         // Handle timing and check for loaded images
         let mut needs_redraw = events_processed > 0;
 
+        // Ensure we always render at least once on startup
+        if first_render {
+            needs_redraw = true;
+            first_render = false;
+        }
+
         if last_tick.elapsed() >= tick_rate {
-            app.update_highlight(); // Update highlight state
+            let highlight_changed = app.update_highlight(); // Update highlight state
             // Check for loaded images from background thread
             let images_loaded = app.text_reader.check_for_loaded_images();
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
             }
-            needs_redraw = needs_redraw || true; // Always redraw on tick
+            if highlight_changed {
+                needs_redraw = true;
+                debug!("Highlight expired, forcing redraw");
+            }
+            // Only redraw when something actually changed - no more forced redraws
             last_tick = std::time::Instant::now();
         }
 

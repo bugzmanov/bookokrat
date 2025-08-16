@@ -249,16 +249,6 @@ impl TextReader {
         }
     }
 
-    /// Clamp scroll offset to valid bounds
-    pub fn clamp_scroll_offset(&mut self) {
-        let max_offset = self.get_max_scroll_offset();
-        self.scroll_offset = self.scroll_offset.min(max_offset);
-        debug!(
-            "Clamped scroll offset to: {} (max: {})",
-            self.scroll_offset, max_offset
-        );
-    }
-
     pub fn parse_styled_text_cached(
         &mut self,
         text: &str,
@@ -266,7 +256,6 @@ impl TextReader {
         palette: &Base16Palette,
         width: usize,
         is_focused: bool,
-        book_images: Option<&BookImages>,
     ) -> Text {
         let content_hash = Self::simple_hash(text);
         let chapter_title_hash = chapter_title
@@ -296,7 +285,6 @@ impl TextReader {
                 palette,
                 width,
                 is_focused,
-                book_images,
             );
             self.cached_styled_content = Some(styled_content);
             self.raw_text_lines = raw_lines;
@@ -337,7 +325,6 @@ impl TextReader {
         palette: &Base16Palette,
         width: usize,
         is_focused: bool,
-        _book_images: Option<&BookImages>,
     ) -> (Text<'static>, Vec<String>) {
         let mut lines = Vec::new();
         let mut raw_lines = Vec::new();
@@ -367,15 +354,18 @@ impl TextReader {
 
         // Process each line with manual wrapping
         for (_i, line) in text.lines().enumerate() {
-            let testline_is_empty = line.trim().is_empty();
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
             if is_image_placeholder {
+                // Add empty line before image
+                raw_lines.push(String::new());
+                lines.push(Line::from(String::new()));
+                line_count += 1;
+
                 if let Some(image_src) = extract_src(line.trim()) {
                     if let Some(image) = self.embedded_images.borrow_mut().get_mut(&image_src) {
-                        // Update the line position for this image
-                        image.lines_before_image = line_count;
-                        line_count += image.height_cells as usize + 2;
+                        //todo.. this +1 and +2 is very messy and needs to be consolidated
+                        image.lines_before_image = line_count + 2; // +2 <-- to account for empty line before and after the image
                     } else {
                         error!(
                             "Image '{}' not found in embedded_images cache. This suggests preload_image_dimensions was not called or failed. THIS SHOULD NOT HAPPEN",
@@ -422,9 +412,14 @@ impl TextReader {
                         lines.push(styled_line);
                     }
 
-                    line_count += placeholder_line_count; // Use actual placeholder height
+                    line_count += placeholder_line_count;
+
+                    // Add empty line after image
+                    raw_lines.push(String::new());
+                    lines.push(Line::from(String::new()));
+                    line_count += 1;
                 }
-            } else if testline_is_empty {
+            } else if line.trim().is_empty() {
                 // Normal empty line processing
                 raw_lines.push(String::new());
                 lines.push(Line::from(String::new()));
@@ -465,121 +460,6 @@ impl TextReader {
         } else {
             palette.base_01 // Even more dimmed for unfocused bold text
         };
-
-        while i < chars.len() {
-            if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(normal_text_color),
-                    ));
-                    current_text.clear();
-                }
-
-                i += 2;
-                let mut bold_text = String::new();
-                let mut found_closing = false;
-                while i + 1 < chars.len() {
-                    if chars[i] == '*' && chars[i + 1] == '*' {
-                        found_closing = true;
-                        i += 2;
-                        break;
-                    } else {
-                        bold_text.push(chars[i]);
-                        i += 1;
-                    }
-                }
-                if found_closing {
-                    spans.push(Span::styled(
-                        bold_text,
-                        Style::default()
-                            .fg(bold_text_color)
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                } else {
-                    current_text.push_str("**");
-                    current_text.push_str(&bold_text);
-                }
-            } else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}')
-                && chars[i] != '\''
-                && chars[i] != '\u{2018}'
-                && chars[i] != '\u{2019}'
-            {
-                let quote_char = chars[i];
-                let closing_quote = match quote_char {
-                    '"' => '"',
-                    '\u{201C}' => '\u{201D}',
-                    '\u{201D}' => '\u{201D}',
-                    _ => quote_char,
-                };
-
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(normal_text_color),
-                    ));
-                    current_text.clear();
-                }
-
-                let start_pos = i;
-                i += 1;
-                let mut quoted_text = String::new();
-                let mut found_closing = false;
-
-                let max_quote_length = 200;
-                let search_limit = (i + max_quote_length).min(chars.len());
-
-                while i < search_limit {
-                    if chars[i] == closing_quote || chars[i] == quote_char {
-                        spans.push(Span::styled(
-                            format!("{}{}{}", quote_char, quoted_text, chars[i]),
-                            Style::default()
-                                .fg(palette.base_0d)
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                        i += 1;
-                        found_closing = true;
-                        break;
-                    } else {
-                        quoted_text.push(chars[i]);
-                        i += 1;
-                    }
-                }
-
-                if !found_closing {
-                    current_text.push(chars[start_pos]);
-                    i = start_pos + 1;
-                }
-            } else {
-                current_text.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        if !current_text.is_empty() {
-            spans.push(Span::styled(
-                current_text,
-                Style::default().fg(normal_text_color),
-            ));
-        }
-
-        if spans.is_empty() {
-            Line::from(String::new())
-        } else {
-            Line::from(spans)
-        }
-    }
-
-    /// Parse styling for a single line (bold, quotes, etc.) - legacy version
-    fn parse_line_styling(&self, line: &str, palette: &Base16Palette) -> Line {
-        let mut spans = Vec::new();
-        let chars: Vec<char> = line.chars().collect();
-        let mut i = 0;
-        let mut current_text = String::new();
-
-        // Use original colors for legacy function
-        let normal_text_color = palette.base_07;
-        let bold_text_color = palette.base_08;
 
         while i < chars.len() {
             if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
@@ -813,7 +693,9 @@ impl TextReader {
             let font_size = picker.font_size();
             (font_size.0, font_size.1)
         } else {
-            panic!("start_background_image_loading should not be called when image_picker is unavailable");
+            panic!(
+                "start_background_image_loading should not be called when image_picker is unavailable"
+            );
         };
 
         *self.loading_in_progress.borrow_mut() = true;
@@ -837,6 +719,7 @@ impl TextReader {
                 {
                     loaded_images.insert(img_src.clone(), scaled_image);
                 } else {
+                    //todo: what to do with these images? they shold be represented in failed state
                     warn!("Failed to load and resize image: {}", img_src);
                 }
             }
@@ -848,7 +731,6 @@ impl TextReader {
                 load_time
             );
 
-            // Send the loaded images back to the main thread
             let _ = sender.send(ImagesLoadedMessage {
                 images: loaded_images,
             });
@@ -859,35 +741,29 @@ impl TextReader {
     /// Returns true if images were loaded and a redraw is needed
     pub fn check_for_loaded_images(&mut self) -> bool {
         if let Some(ref receiver) = self.image_receiver {
-            // Try to receive without blocking
             if let Ok(message) = receiver.try_recv() {
                 debug!(
                     "Received {} loaded images from background thread",
                     message.images.len()
                 );
 
-                // Update embedded images with loaded state
+                let picker = self.image_picker.as_ref().unwrap_or_else(|| {
+                    panic!("Picker is not available, this branch of code should never be executed!")
+                });
+
                 let mut embedded_images = self.embedded_images.borrow_mut();
-
-                // Get picker for creating protocols
-                let picker = self.image_picker.as_ref();
-
                 for (img_src, image) in message.images {
-                    // Update the embedded image state if it exists
                     if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
-                        // Create protocol if we have a picker
-                        if let Some(picker) = picker {
-                            let protocol = picker.new_resize_protocol(image.clone());
-                            embedded_image.state = ImageLoadState::Loaded {
-                                image: Arc::new(image),
-                                protocol,
-                            };
-                        } else {
-                            warn!("No picker available to create protocol for {}", img_src);
-                            embedded_image.state = ImageLoadState::Failed {
-                                reason: "No image picker available".to_string(),
-                            };
-                        }
+                        let protocol = picker.new_resize_protocol(image.clone()); // todo: i don't like this clone
+                        embedded_image.state = ImageLoadState::Loaded {
+                            image: Arc::new(image),
+                            protocol,
+                        };
+                    } else {
+                        panic!(
+                            "Received Loaded image {} that was not available in embedded_images case. This should never happen",
+                            &img_src
+                        );
                     }
                 }
 
@@ -899,14 +775,13 @@ impl TextReader {
                 *self.loading_in_progress.borrow_mut() = false;
                 self.image_receiver = None;
 
-                // Return true to indicate images were loaded and redraw is needed
                 return true;
             }
         }
         false
     }
 
-    pub fn scroll_down_no_content(&mut self) {
+    pub fn scroll_down(&mut self) {
         let max_offset = self.get_max_scroll_offset();
 
         // Early return if we're already at the bottom
@@ -939,7 +814,7 @@ impl TextReader {
         );
     }
 
-    pub fn scroll_up_no_content(&mut self) {
+    pub fn scroll_up(&mut self) {
         // Early return if we're already at the top
         if self.scroll_offset == 0 {
             debug!("Already at top, scroll_offset: 0");
@@ -967,14 +842,6 @@ impl TextReader {
             self.scroll_speed,
             self.get_max_scroll_offset()
         );
-    }
-
-    pub fn scroll_down(&mut self, _content: &str) {
-        self.scroll_down_no_content();
-    }
-
-    pub fn scroll_up(&mut self, _content: &str) {
-        self.scroll_up_no_content();
     }
 
     pub fn scroll_half_screen_down(&mut self, _content: &str, screen_height: usize) {
@@ -1016,11 +883,13 @@ impl TextReader {
         self.highlight_end_time = Instant::now() + std::time::Duration::from_secs(1);
     }
 
-    pub fn update_highlight(&mut self) {
+    pub fn update_highlight(&mut self) -> bool {
         // Clear expired highlight
         if self.highlight_visual_line.is_some() && Instant::now() >= self.highlight_end_time {
             self.highlight_visual_line = None;
+            return true; // Highlight state changed, needs redraw
         }
+        false // No change, no redraw needed
     }
 
     /// Handle mouse down event for text selection
@@ -1281,12 +1150,7 @@ impl TextReader {
         total_chapters: usize,
         palette: &Base16Palette,
         is_focused: bool,
-        image_storage: Option<&crate::image_storage::ImageStorage>,
-        current_file_path: Option<&str>,
-        book_images: Option<&BookImages>,
     ) {
-        // Check for loaded images from background thread
-        self.check_for_loaded_images();
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
 
@@ -1370,49 +1234,24 @@ impl TextReader {
         // Render the styled content (which now includes placeholder space for the image)
         let text_width = margined_content_area[1].width as usize;
         let scroll_offset = self.scroll_offset;
-        let styled_content = self.parse_styled_text_cached(
-            content,
-            chapter_title,
-            palette,
-            text_width,
-            is_focused,
-            book_images,
-        );
+        let styled_content =
+            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
 
         let content_paragraph = Paragraph::new(styled_content)
             .scroll((scroll_offset as u16, 0))
             .style(Style::default().fg(text_color).bg(palette.base_00));
         f.render_widget(content_paragraph, margined_content_area[1]);
 
-        // Display all embedded images from the book
-        if !self.embedded_images.borrow().is_empty()
-            && image_storage.is_some()
-            && current_file_path.is_some()
-            && self.image_picker.is_some()
-        {
-            let _image_storage = image_storage.unwrap();
-            let _current_file_path = current_file_path.unwrap();
-            let _epub_path = std::path::Path::new(_current_file_path);
+        // Display all embedded images from the chapter
+        self.check_for_loaded_images();
+        if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
             let area_height = margined_content_area[1].height as usize;
 
             // Iterate through all embedded images
             for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
-                let lines_before_image = embedded_image.lines_before_image;
-                let _image_src = &embedded_image.src;
-                // The image should render at the exact position where placeholder starts
-                // lines_before_image is where the placeholder begins in the text
-                let image_start_line = lines_before_image;
-
-                // We need to determine the image height - default to regular for now
-                // The actual height will be determined when the image is loaded
-                let mut calculated_image_height = IMAGE_HEIGHT_REGULAR as usize;
-
-                // Check if image is already loaded to get its actual height
-                if let ImageLoadState::Loaded { ref image, .. } = embedded_image.state {
-                    calculated_image_height = self.calculate_image_height_in_cells(image) as usize;
-                }
-
-                let image_end_line = image_start_line + calculated_image_height;
+                let image_height_cells = embedded_image.height_cells as usize;
+                let image_start_line = embedded_image.lines_before_image;
+                let image_end_line = image_start_line + image_height_cells;
 
                 // Check if image is in viewport
                 if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line
@@ -1424,29 +1263,22 @@ impl TextReader {
                     } = embedded_image.state
                     {
                         let scaled_image = image;
-                        debug!("here");
-                        // Image is at least partially visible
+
                         if let Some(ref picker) = self.image_picker {
-                            // Calculate screen position
-                            debug!("here2");
-                            // Calculate where the image should appear on screen
-                            // The placeholder is at line 'lines_before_image' in the text
-                            // After scrolling, it appears at (lines_before_image - scroll_offset) on screen
-                            let image_screen_start = if scroll_offset > lines_before_image {
+                            let image_screen_start = if scroll_offset > image_start_line {
                                 0
                             } else {
-                                lines_before_image - scroll_offset
+                                image_start_line - scroll_offset
                             };
 
                             // Calculate visible portion
-                            let image_top_clipped = if scroll_offset > lines_before_image {
-                                scroll_offset - lines_before_image
+                            let image_top_clipped = if scroll_offset > image_start_line {
+                                scroll_offset - image_start_line
                             } else {
                                 0
                             };
 
-                            let visible_image_height = (calculated_image_height
-                                - image_top_clipped)
+                            let visible_image_height = (image_height_cells - image_top_clipped)
                                 .min(area_height - image_screen_start);
 
                             if visible_image_height > 0 {
@@ -1477,10 +1309,23 @@ impl TextReader {
                                     )
                                 };
 
+                                // Calculate actual image width in terminal cells based on aspect ratio
+                                let (image_width_pixels, image_height_pixels) =
+                                    scaled_image.dimensions();
+                                let font_size = picker.font_size();
+                                let image_width_cells =
+                                    (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
+
+                                // Center the image horizontally within the text area
+                                let text_area_width = margined_content_area[1].width;
+                                let image_display_width = image_width_cells.min(text_area_width);
+                                let x_offset =
+                                    (text_area_width.saturating_sub(image_display_width)) / 2;
+
                                 let image_area = Rect {
-                                    x: margined_content_area[1].x,
+                                    x: margined_content_area[1].x + x_offset,
                                     y: render_y,
-                                    width: margined_content_area[1].width, // Use full width like placeholder
+                                    width: image_display_width,
                                     height: render_height,
                                 };
 
@@ -1499,8 +1344,8 @@ impl TextReader {
                                 let image_widget =
                                     StatefulImage::new().resize(Resize::Viewport(viewport_options));
                                 debug!(
-                                    "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}, lines_before_image: {}",
-                                    image_area, scroll_offset, image_start_line, lines_before_image
+                                    "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}",
+                                    image_area, scroll_offset, image_start_line
                                 );
                                 f.render_stateful_widget(image_widget, image_area, protocol);
                             }
@@ -1587,12 +1432,12 @@ impl VimNavMotions for TextReader {
 
     fn handle_j(&mut self) {
         // Down movement - scroll down one line
-        self.scroll_down_no_content();
+        self.scroll_down();
     }
 
     fn handle_k(&mut self) {
         // Up movement - scroll up one line
-        self.scroll_up_no_content();
+        self.scroll_up();
     }
 
     fn handle_l(&mut self) {
@@ -1726,7 +1571,6 @@ mod tests {
         // Test with square image (regular height)
         {
             let square_image = DynamicImage::ImageRgba8(ImageBuffer::new(100, 100));
-            let area_width = 100;
 
             // Height should be regular for square images
             let image_height = reader.calculate_image_height_in_cells(&square_image);
@@ -1740,7 +1584,6 @@ mod tests {
         // Test with wide image (reduced height)
         {
             let wide_image = DynamicImage::ImageRgba8(ImageBuffer::new(400, 100));
-            let area_width = 100;
 
             // Height should be reduced for wide images
             let image_height = reader.calculate_image_height_in_cells(&wide_image);
@@ -1771,7 +1614,6 @@ mod tests {
         let (_styled_text, raw_lines) = reader.parse_styled_text_internal_with_raw(
             test_text, &None, palette, 80,   // width
             true, // is_focused
-            None, // book_images
         );
 
         // Count lines - should have original text lines minus image placeholder lines plus 15 lines for each frame
