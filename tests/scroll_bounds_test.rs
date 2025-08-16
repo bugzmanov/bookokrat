@@ -18,7 +18,7 @@ fn test_expected_behavior_scroll_bounds() {
 
     // Scroll down many times
     for i in 0..25 {
-        reader.scroll_down(&content);
+        reader.scroll_down();
         println!(
             "Scroll {}: offset={}, max_should_be={}",
             i + 1,

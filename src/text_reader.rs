@@ -399,7 +399,17 @@ impl TextReader {
                         border_color: palette.base_03,
                     };
 
-                    let placeholder = ImagePlaceholder::new(&image_src, width, &config);
+                    // Check if image is successfully loaded to determine visibility
+                    // Only hide placeholder if image is successfully loaded, show it for NotLoaded or Failed states
+                    let is_successfully_loaded = matches!(
+                        self.embedded_images
+                            .borrow()
+                            .get(&image_src)
+                            .map(|img| &img.state),
+                        Some(ImageLoadState::Loaded { .. })
+                    );
+                    let placeholder =
+                        ImagePlaceholder::new(&image_src, width, &config, !is_successfully_loaded);
                     let placeholder_line_count = placeholder.raw_lines.len();
 
                     // Add all the placeholder lines
