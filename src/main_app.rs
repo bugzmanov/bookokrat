@@ -2,6 +2,7 @@ use crate::book_images::BookImages;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
+use crate::image_popup::ImagePopup;
 use crate::image_storage::ImageStorage;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::reading_history::ReadingHistory;
@@ -12,6 +13,8 @@ use crate::table_of_contents::{SelectedTocItem, TocItem};
 use crate::text_generator::TextGenerator;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
+use image::GenericImageView;
+use log::warn;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChapterDirection {
@@ -68,6 +71,9 @@ pub struct App {
     // Reading history
     reading_history: Option<ReadingHistory>,
     show_reading_history: bool,
+    // Image popup
+    image_popup: Option<ImagePopup>,
+    last_terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
 }
 
@@ -188,6 +194,8 @@ impl App {
             terminal_height: 24, // Default height, will be updated on render
             reading_history: None,
             show_reading_history: false,
+            image_popup: None,
+            last_terminal_size: Rect::new(0, 0, 80, 24),
             profiler: Arc::new(Mutex::new(None)),
         };
 
@@ -1004,11 +1012,20 @@ impl App {
 
                     match click_type {
                         ClickType::Single => {
-                            self.text_reader.handle_mouse_down(
+                            // Check if click is on an image first
+                            if let Some(image_src) = self.text_reader.check_image_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 content_area,
-                            );
+                            ) {
+                                self.handle_image_click(&image_src, self.last_terminal_size);
+                            } else {
+                                self.text_reader.handle_mouse_down(
+                                    mouse_event.column,
+                                    mouse_event.row,
+                                    content_area,
+                                );
+                            }
                         }
                         ClickType::Double => {
                             self.text_reader.handle_double_click(
@@ -1057,6 +1074,91 @@ impl App {
                 debug!("Unhandled mouse event: {:?}", mouse_event.kind);
             }
         }
+    }
+
+    /// Handle image click by creating or showing the image popup
+    fn handle_image_click(&mut self, image_src: &str, terminal_size: Rect) {
+        debug!("Handling image click for: {}", image_src);
+
+        // Get the image picker - required for creating protocols
+        let picker = match self.text_reader.get_image_picker() {
+            Some(picker) => picker,
+            None => {
+                debug!("No image picker available for popup");
+                return;
+            }
+        };
+
+        // Get the original image
+        let original_image = if let Some(image) = self.text_reader.get_loaded_image(image_src) {
+            debug!("Using already loaded image for popup: {}", image_src);
+            image
+        } else if let Some(image) = self.book_images.get_image(image_src) {
+            debug!("Loading image directly for popup: {}", image_src);
+            Arc::new(image)
+        } else {
+            debug!("Image not loaded and could not be loaded: {}", image_src);
+            return;
+        };
+
+        // Calculate the desired size for the popup (2x scale or max screen)
+        // terminal_size is already passed as parameter
+        let font_size = picker.font_size();
+        let (img_width, img_height) = original_image.dimensions();
+
+        // Calculate 2x scaled dimensions in pixels
+        let scaled_width = img_width * 2;
+        let scaled_height = img_height * 2;
+
+        // Calculate max dimensions that fit on screen (in pixels)
+        let max_width_pixels = terminal_size.width.saturating_sub(6) as u32 * font_size.0 as u32;
+        let max_height_pixels = terminal_size.height.saturating_sub(6) as u32 * font_size.1 as u32;
+
+        // Determine final dimensions maintaining aspect ratio
+        let (final_width, final_height) =
+            if scaled_width <= max_width_pixels && scaled_height <= max_height_pixels {
+                // 2x scale fits
+                (scaled_width, scaled_height)
+            } else {
+                // Scale to fit screen
+                let width_scale = max_width_pixels as f32 / img_width as f32;
+                let height_scale = max_height_pixels as f32 / img_height as f32;
+                let scale = width_scale.min(height_scale);
+
+                (
+                    (img_width as f32 * scale) as u32,
+                    (img_height as f32 * scale) as u32,
+                )
+            };
+
+        // Pre-scale the image using fast_image_resize for better performance
+        let prescaled_image = if final_width != img_width || final_height != img_height {
+            match self
+                .book_images
+                .resize_image_to(&original_image, final_width, final_height)
+            {
+                Ok(resized) => {
+                    debug!(
+                        "Pre-scaled image from {}x{} to {}x{} using fast_image_resize",
+                        img_width, img_height, final_width, final_height
+                    );
+                    Arc::new(resized)
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to pre-scale image with fast_image_resize: {}, using original",
+                        e
+                    );
+                    original_image
+                }
+            }
+        } else {
+            original_image
+        };
+
+        let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
+        self.image_popup = Some(popup);
+        debug!("Image popup created successfully for: {}", image_src);
     }
 
     /// Apply scroll events (positive for down, negative for up)
@@ -1285,6 +1387,7 @@ impl App {
         // Update terminal dimensions for mouse event calculations
         self.terminal_width = f.area().width;
         self.terminal_height = f.area().height;
+        self.last_terminal_size = f.area();
 
         // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
@@ -1352,6 +1455,20 @@ impl App {
             if let Some(ref mut history) = self.reading_history {
                 history.render(f, f.area());
             }
+        }
+
+        // Render image popup if active
+        if let Some(ref mut image_popup) = self.image_popup {
+            // First render a dimming overlay - very dark gray to heavily obscure background
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10)) // Very dark gray, almost black but not quite
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            // Render the image popup
+            image_popup.render(f, f.area());
         }
     }
 
@@ -1714,7 +1831,11 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if self.show_reading_history {
+                if self.image_popup.is_some() {
+                    // Close image popup first
+                    self.image_popup = None;
+                    debug!("Image popup closed via ESC key");
+                } else if self.show_reading_history {
                     // Close reading history
                     self.show_reading_history = false;
                     self.reading_history = None;

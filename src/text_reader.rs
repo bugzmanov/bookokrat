@@ -1009,6 +1009,64 @@ impl TextReader {
         }
     }
 
+    /// Check if a click is on an image and return the image source if found
+    pub fn check_image_click(
+        &self,
+        screen_x: u16,
+        screen_y: u16,
+        content_area: Rect,
+    ) -> Option<String> {
+        // Convert screen coordinates to logical line position
+        let relative_y = screen_y.saturating_sub(content_area.y);
+        let click_line = self.scroll_offset + relative_y as usize;
+
+        debug!(
+            "Checking image click at screen ({}, {}), relative_y: {}, click_line: {}",
+            screen_x, screen_y, relative_y, click_line
+        );
+
+        // Check if click is within any image boundaries
+        for (src, embedded_image) in self.embedded_images.borrow().iter() {
+            let image_start_line = embedded_image.lines_before_image;
+            let image_end_line = image_start_line + embedded_image.height_cells as usize;
+
+            debug!(
+                "Image '{}': lines {} to {} (height: {} cells)",
+                src, image_start_line, image_end_line, embedded_image.height_cells
+            );
+
+            if click_line >= image_start_line && click_line < image_end_line {
+                debug!("Image click detected on: {}", src);
+                return Some(src.clone());
+            }
+        }
+
+        debug!("No image click detected at line {}", click_line);
+        None
+    }
+
+    /// Get a reference to the image picker for creating protocols
+    pub fn get_image_picker(&self) -> Option<&Picker> {
+        self.image_picker.as_ref()
+    }
+
+    /// Get an embedded image by source path
+    pub fn get_embedded_image(&self, image_src: &str) -> Option<&EmbeddedImage> {
+        // Since we can't return a reference from the borrow, we'll need a different approach
+        // For now, let's just check if the image exists and is loaded
+        None // Placeholder - we'll implement this differently
+    }
+
+    /// Check if an embedded image is loaded and return the image if it is
+    pub fn get_loaded_image(&self, image_src: &str) -> Option<Arc<DynamicImage>> {
+        if let Some(embedded_image) = self.embedded_images.borrow().get(image_src) {
+            if let ImageLoadState::Loaded { image, .. } = &embedded_image.state {
+                return Some(image.clone());
+            }
+        }
+        None
+    }
+
     /// Perform auto-scroll based on current auto-scroll state
     fn perform_auto_scroll(&mut self) {
         if let Some(ref state) = self.auto_scroll_state.clone() {

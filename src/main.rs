@@ -17,6 +17,7 @@ mod book_manager;
 mod bookmark;
 mod event_source;
 mod image_placeholder;
+mod image_popup;
 mod image_storage;
 mod main_app;
 mod navigation_panel;

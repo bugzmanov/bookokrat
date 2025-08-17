@@ -164,6 +164,16 @@ impl BookImages {
         Some((scaled_image, width_cells, target_height_cells))
     }
 
+    /// Resize an image to specific dimensions using fast_image_resize
+    pub fn resize_image_to(
+        &self,
+        src_image: &DynamicImage,
+        new_width: u32,
+        new_height: u32,
+    ) -> Result<DynamicImage, Box<dyn std::error::Error>> {
+        self.fast_resize_image(src_image, new_width, new_height)
+    }
+
     /// Fast resize using fast_image_resize crate for better performance
     fn fast_resize_image(
         &self,
