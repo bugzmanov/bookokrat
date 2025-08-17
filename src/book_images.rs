@@ -1,6 +1,7 @@
 use anyhow::Result;
 use fast_image_resize as fr;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
+use imagesize;
 use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,8 +18,16 @@ pub struct BookImages {
 }
 
 impl BookImages {
+    /// Create a new BookImages instance with the provided ImageStorage
+    pub fn new(storage: Arc<ImageStorage>) -> Self {
+        Self {
+            storage,
+            current_epub_path: None,
+        }
+    }
+
     /// Create a new BookImages instance with images stored in the project temp directory
-    pub fn new() -> Result<Self> {
+    pub fn new_in_project_temp() -> Result<Self> {
         let storage = ImageStorage::new_in_project_temp()?;
         Ok(Self {
             storage: Arc::new(storage),
@@ -53,7 +62,7 @@ impl BookImages {
     pub fn get_image_size(&self, image_src: &str) -> Option<(u32, u32)> {
         let epub_path = self.current_epub_path.as_ref()?;
 
-        // Resolve the image path
+        // Delegate path resolution to ImageStorage
         let image_path = self.storage.resolve_image_path(epub_path, image_src)?;
 
         // Check if it's an SVG file
@@ -64,16 +73,16 @@ impl BookImages {
             return Some((800, 600));
         }
 
-        // Load the image to get its dimensions
-        match image::open(&image_path) {
-            Ok(img) => {
-                let (width, height) = (img.width(), img.height());
+        // Get image dimensions without loading the full image data
+        match imagesize::size(&image_path) {
+            Ok(size) => {
+                let (width, height) = (size.width as u32, size.height as u32);
                 debug!("Image '{}' size: {}x{}", image_src, width, height);
                 Some((width, height))
             }
             Err(e) => {
                 warn!(
-                    "Failed to load image '{}' from {:?}: {}",
+                    "Failed to get image size for '{}' from {:?}: {}",
                     image_src, image_path, e
                 );
                 None
@@ -85,7 +94,7 @@ impl BookImages {
     pub fn get_image(&self, image_src: &str) -> Option<DynamicImage> {
         let epub_path = self.current_epub_path.as_ref()?;
 
-        // Resolve the image path
+        // Delegate path resolution to ImageStorage
         let image_path = self.storage.resolve_image_path(epub_path, image_src)?;
 
         // Check if it's an SVG file

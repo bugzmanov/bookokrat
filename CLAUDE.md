@@ -366,3 +366,4 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - External EPUB readers are detected based on the platform (macOS, Windows, Linux)
 
 - one of the most important aspects of this project is perfomance. never make a significant change like switching a library if that wasn't instructed and if it's clearly would generate worse performance results
+- when logging errors, the received error object should always be logged (when possible). never log a guess of what might have happened. only actual errors

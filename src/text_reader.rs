@@ -1,3 +1,4 @@
+use crate::background_image_loader::BackgroundImageLoader;
 use crate::book_images::BookImages;
 use crate::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
 use crate::main_app::VimNavMotions;
@@ -17,8 +18,6 @@ use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, channel};
-use std::thread;
 use std::time::Instant;
 use textwrap;
 
@@ -28,11 +27,6 @@ const IMAGE_HEIGHT_REGULAR: u16 = 15;
 const IMAGE_HEIGHT_WIDE: u16 = 7;
 /// Aspect ratio threshold for wide images
 const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
-
-/// Message sent from background thread when images are loaded
-pub struct ImagesLoadedMessage {
-    pub images: HashMap<String, DynamicImage>, // src -> image
-}
 
 #[derive(Debug, Clone)]
 struct AutoScrollState {
@@ -130,10 +124,8 @@ pub struct TextReader {
     // Image display
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
-    // Channel for receiving loaded images from background thread
-    image_receiver: Option<Receiver<ImagesLoadedMessage>>,
-    // Track if background loading is in progress
-    loading_in_progress: RefCell<bool>,
+    // Background image loader
+    background_loader: BackgroundImageLoader,
 }
 
 impl TextReader {
@@ -179,8 +171,7 @@ impl TextReader {
             auto_scroll_state: None,
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
-            image_receiver: None,
-            loading_in_progress: RefCell::new(false),
+            background_loader: BackgroundImageLoader::new(),
         }
     }
 
@@ -635,6 +626,9 @@ impl TextReader {
     /// Called when content has been updated (e.g., when changing chapters)
     /// This properly resets all internal state that depends on content
     pub fn content_updated(&mut self, content_length: usize) {
+        // Cancel any ongoing background image loading
+        self.background_loader.cancel_loading();
+
         self.content_length = content_length;
         // Reset wrapped lines count - it will be calculated on next render
         self.total_wrapped_lines = 0;
@@ -654,8 +648,8 @@ impl TextReader {
         let mut images_to_load: Vec<(String, u16)> = Vec::new();
         let mut images_processed = 0;
 
-        // this is wrong!
-        *self.loading_in_progress.borrow_mut() = false;
+        // Reset any previous loading state
+        self.background_loader.cancel_loading();
 
         for line in content.lines() {
             if line.trim().starts_with("[image src=") {
@@ -715,8 +709,15 @@ impl TextReader {
         self.cached_content_hash = 0;
 
         if !images_to_load.is_empty() {
-            if self.image_picker.is_some() {
-                self.start_background_image_loading(images_to_load, book_images);
+            if let Some(ref picker) = self.image_picker {
+                let font_size = picker.font_size();
+                let (cell_width, cell_height) = (font_size.0, font_size.1);
+                self.background_loader.start_loading(
+                    images_to_load,
+                    book_images,
+                    cell_width,
+                    cell_height,
+                );
             } else {
                 for (img, _) in images_to_load.iter() {
                     if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
@@ -729,100 +730,43 @@ impl TextReader {
         }
     }
 
-    /// Start loading and scaling images in a background thread
-    fn start_background_image_loading(
-        &mut self,
-        images_to_load: Vec<(String, u16)>,
-        book_images: &BookImages,
-    ) {
-        let (cell_width, cell_height) = if let Some(ref picker) = self.image_picker {
-            let font_size = picker.font_size();
-            (font_size.0, font_size.1)
-        } else {
-            panic!(
-                "start_background_image_loading should not be called when image_picker is unavailable"
-            );
-        };
-
-        *self.loading_in_progress.borrow_mut() = true;
-
-        let (sender, receiver) = channel();
-        self.image_receiver = Some(receiver);
-
-        let book_images = book_images.clone();
-
-        // Spawn background thread for loading and scaling
-        thread::spawn(move || {
-            let mut loaded_images = HashMap::new();
-            let load_start = std::time::Instant::now();
-
-            for (img_src, height_cells) in images_to_load {
-                debug!("Background loading: {}", img_src);
-
-                // Use BookImages to load and resize the image
-                if let Some((scaled_image, _width_cells, _height_cells_result)) = book_images
-                    .load_and_resize_image(&img_src, height_cells, cell_width, cell_height)
-                {
-                    loaded_images.insert(img_src.clone(), scaled_image);
-                } else {
-                    //todo: what to do with these images? they shold be represented in failed state
-                    warn!("Failed to load and resize image: {}", img_src);
-                }
-            }
-
-            let load_time = load_start.elapsed();
-            info!(
-                "Background image loading complete: {} images loaded and scaled in {:?}",
-                loaded_images.len(),
-                load_time
-            );
-
-            let _ = sender.send(ImagesLoadedMessage {
-                images: loaded_images,
-            });
-        });
-    }
-
     /// Check for loaded images from background thread and update caches
     /// Returns true if images were loaded and a redraw is needed
     pub fn check_for_loaded_images(&mut self) -> bool {
-        if let Some(ref receiver) = self.image_receiver {
-            if let Ok(message) = receiver.try_recv() {
-                debug!(
-                    "Received {} loaded images from background thread",
-                    message.images.len()
-                );
+        if let Some(loaded_images) = self.background_loader.check_for_loaded_images() {
+            debug!(
+                "Received {} loaded images from background thread",
+                loaded_images.len()
+            );
 
-                let picker = self.image_picker.as_ref().unwrap_or_else(|| {
-                    panic!("Picker is not available, this branch of code should never be executed!")
-                });
+            let picker = self.image_picker.as_ref().unwrap_or_else(|| {
+                panic!("Picker is not available, this branch of code should never be executed!")
+            });
 
-                let mut embedded_images = self.embedded_images.borrow_mut();
-                for (img_src, image) in message.images {
-                    if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
-                        let protocol = picker.new_resize_protocol(image.clone()); // todo: i don't like this clone
-                        embedded_image.state = ImageLoadState::Loaded {
-                            image: Arc::new(image),
-                            protocol,
-                        };
-                    } else {
-                        panic!(
-                            "Received Loaded image {} that was not available in embedded_images case. This should never happen",
-                            &img_src
-                        );
-                    }
+            let mut embedded_images = self.embedded_images.borrow_mut();
+            for (img_src, image) in loaded_images {
+                if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
+                    let protocol = picker.new_resize_protocol(image.clone()); // todo: i don't like this clone
+                    embedded_image.state = ImageLoadState::Loaded {
+                        image: Arc::new(image),
+                        protocol,
+                    };
+                } else {
+                    // This can happen due to race condition when user switches chapters quickly
+                    // The background thread loaded images for the previous chapter, but we've already
+                    // switched to a new chapter and cleared embedded_images. This is expected behavior.
+                    debug!(
+                        "Received loaded image '{}' that is no longer in embedded_images (likely due to chapter switch). Ignoring.",
+                        &img_src
+                    );
                 }
-
-                // Clear styled content cache to trigger re-render with actual images
-                self.cached_styled_content = None;
-                self.cached_content_hash = 0;
-
-                // Mark loading as complete
-                *self.loading_in_progress.borrow_mut() = false;
-                self.image_receiver = None;
-
-                return true;
             }
+
+            // Clear styled content cache to trigger re-render with actual images
+            self.cached_styled_content = None;
+            self.cached_content_hash = 0;
+
+            return true;
         }
         false
     }

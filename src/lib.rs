@@ -1,4 +1,5 @@
 // Export modules for use in tests
+pub mod background_image_loader;
 pub mod book_images;
 pub mod book_list;
 pub mod book_manager;

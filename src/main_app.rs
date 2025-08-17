@@ -42,7 +42,7 @@ pub struct App {
     text_generator: TextGenerator,
     text_reader: TextReader,
     bookmarks: Bookmarks,
-    image_storage: ImageStorage,
+    image_storage: Arc<ImageStorage>,
     book_images: BookImages,
     current_content: Option<String>,
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
@@ -145,19 +145,15 @@ impl App {
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
         // Initialize image storage in project temp directory
-        let image_storage = ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
+        let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
             error!("Failed to initialize image storage: {}. Using fallback.", e);
             // Create a fallback image storage in system temp directory
             ImageStorage::new(std::env::temp_dir().join("bookrat_images"))
                 .expect("Failed to create fallback image storage")
-        });
+        }));
 
         // Initialize book images abstraction
-        let book_images = BookImages::new().unwrap_or_else(|e| {
-            error!("Failed to initialize book images: {}. Using fallback.", e);
-            BookImages::with_storage_dir(std::env::temp_dir().join("bookrat_images"))
-                .expect("Failed to create fallback book images")
-        });
+        let book_images = BookImages::new(image_storage.clone());
 
         // let guard = pprof::ProfilerGuardBuilder::default()
         //     .frequency(1000)
