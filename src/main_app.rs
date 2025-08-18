@@ -1,9 +1,9 @@
-use crate::book_images::BookImages;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
-use crate::image_popup::ImagePopup;
-use crate::image_storage::ImageStorage;
+use crate::images::book_images::BookImages;
+use crate::images::image_popup::ImagePopup;
+use crate::images::image_storage::ImageStorage;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::reading_history::ReadingHistory;
 use crate::system_command::{
@@ -1198,12 +1198,10 @@ impl App {
         let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
         self.image_popup = Some(popup);
         self.image_popup_area = None; // Will be set on render
-        debug!("Image popup created successfully for: {}", image_src);
     }
 
     /// Apply scroll events (positive for down, negative for up)
     fn apply_scroll(&mut self, scroll_amount: i32, column: u16) {
-        // Block scrolling if image popup is shown
         if self.image_popup.is_some() {
             return;
         }
@@ -1505,15 +1503,13 @@ impl App {
 
         // Render image popup if active
         if let Some(ref mut image_popup) = self.image_popup {
-            // First render a dimming overlay - very dark gray to heavily obscure background
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10)) // Very dark gray, almost black but not quite
+                    .bg(Color::Rgb(10, 10, 10)) // todo: this is not from pallette
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
 
-            // Render the image popup and store its area
             let popup_area = image_popup.render(f, f.area());
             self.image_popup_area = Some(popup_area);
         } else {
@@ -1648,7 +1644,6 @@ impl App {
         if self.image_popup.is_some() {
             self.image_popup = None;
             self.image_popup_area = None;
-            debug!("Image popup closed via key press: {:?}", key.code);
             return;
         }
 

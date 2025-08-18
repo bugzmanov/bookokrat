@@ -6,7 +6,7 @@ use log::{debug, warn};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::image_storage::ImageStorage;
+use super::image_storage::ImageStorage;
 
 /// Abstraction for managing book images
 /// Encapsulates the relationship with ImageStorage and provides

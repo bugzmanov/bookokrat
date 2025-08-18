@@ -1,6 +1,6 @@
-use crate::background_image_loader::BackgroundImageLoader;
-use crate::book_images::BookImages;
-use crate::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
+use crate::images::background_image_loader::BackgroundImageLoader;
+use crate::images::book_images::BookImages;
+use crate::images::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
 use crate::main_app::VimNavMotions;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;

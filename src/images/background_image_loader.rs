@@ -1,4 +1,4 @@
-use crate::book_images::BookImages;
+use super::book_images::BookImages;
 use image::DynamicImage;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;

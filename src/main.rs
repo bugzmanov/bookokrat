@@ -10,15 +10,11 @@ use log::{error, info};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{Config, LevelFilter, WriteLogger};
 
-mod background_image_loader;
-mod book_images;
 mod book_list;
 mod book_manager;
 mod bookmark;
 mod event_source;
-mod image_placeholder;
-mod image_popup;
-mod image_storage;
+mod images;
 mod main_app;
 mod navigation_panel;
 mod panic_handler;

@@ -1,13 +1,9 @@
 // Export modules for use in tests
-pub mod background_image_loader;
-pub mod book_images;
 pub mod book_list;
 pub mod book_manager;
 pub mod bookmark;
 pub mod event_source;
-pub mod image_placeholder;
-pub mod image_popup;
-pub mod image_storage;
+pub mod images;
 pub mod main_app;
 pub mod navigation_panel;
 pub mod panic_handler;
