@@ -247,11 +247,46 @@ impl TextGenerator {
         let normalized_text = self.multi_newline_re.replace_all(text, "\n\n");
         let paragraphs: Vec<&str> = normalized_text.split("\n\n").collect();
 
-        for (i, paragraph) in paragraphs.iter().enumerate() {
+        let mut i = 0;
+        while i < paragraphs.len() {
+            let paragraph = paragraphs[i];
             if paragraph.trim().is_empty() {
+                i += 1;
                 continue;
             }
 
+            // Check if this is the start of a dialog block
+            if self.is_dialog_line(paragraph) {
+                // Collect consecutive dialog lines
+                let mut dialog_lines = vec![paragraph];
+                let mut j = i + 1;
+
+                while j < paragraphs.len() && self.is_dialog_line(paragraphs[j]) {
+                    dialog_lines.push(paragraphs[j]);
+                    j += 1;
+                }
+
+                // Only treat as dialog if we have at least 2 consecutive dialog lines
+                if dialog_lines.len() >= 2 {
+                    // Format dialog block without empty lines between responses
+                    for (idx, dialog_line) in dialog_lines.iter().enumerate() {
+                        formatted.push_str(dialog_line);
+                        if idx < dialog_lines.len() - 1 {
+                            formatted.push('\n');
+                        }
+                    }
+
+                    // Add empty line after dialog block
+                    if j < paragraphs.len() {
+                        formatted.push_str("\n\n");
+                    }
+
+                    i = j;
+                    continue;
+                }
+            }
+
+            // Regular paragraph formatting
             let lines: Vec<&str> = paragraph.lines().collect();
             for (j, line) in lines.iter().enumerate() {
                 formatted.push_str(line);
@@ -263,9 +298,25 @@ impl TextGenerator {
             if i < paragraphs.len() - 1 {
                 formatted.push_str("\n\n");
             }
+
+            i += 1;
         }
 
         formatted
+    }
+
+    /// Check if a line starts with a dialog marker (various types of dashes)
+    fn is_dialog_line(&self, text: &str) -> bool {
+        let trimmed = text.trim_start();
+        // Check for various dash types that indicate dialog
+        trimmed.starts_with('-') ||      // Regular hyphen
+        trimmed.starts_with('–') ||      // En dash
+        trimmed.starts_with('—') ||      // Em dash
+        trimmed.starts_with('\u{2010}') || // Hyphen
+        trimmed.starts_with('\u{2011}') || // Non-breaking hyphen
+        trimmed.starts_with('\u{2012}') || // Figure dash
+        trimmed.starts_with('\u{2013}') || // En dash
+        trimmed.starts_with('\u{2014}') // Em dash
     }
 }
 
@@ -366,5 +417,65 @@ mod tests {
             "Content should contain the actual chapter text but found: '{}'",
             cleaned_content
         );
+    }
+
+    #[test]
+    fn test_dialog_formatting() {
+        let generator = TextGenerator::new();
+
+        // Test case with dialog (should be formatted without empty lines between)
+        let text_with_dialog = "Some narrative text here.\n\n— А кем работаешь?\n\n— Я аналитик, работаю на рынке ценных бумаг.\n\n— Пирамиды, что ли? Ваучеры?\n\n— Нет, что вы... Я работаю в брокере...\n\n— Ставки на спорт?! Ты кого привела в наш дом?!\n\nMore narrative text here.";
+
+        let formatted = generator.format_text_with_spacing(text_with_dialog);
+
+        // Dialog lines should be on consecutive lines without empty lines between them
+        assert!(formatted.contains("— А кем работаешь?\n— Я аналитик, работаю на рынке ценных бумаг.\n— Пирамиды, что ли? Ваучеры?\n— Нет, что вы... Я работаю в брокере...\n— Ставки на спорт?! Ты кого привела в наш дом?!"));
+
+        // There should be empty lines before and after the dialog block
+        assert!(formatted.contains("Some narrative text here.\n\n— А кем работаешь?"));
+        assert!(formatted.contains(
+            "— Ставки на спорт?! Ты кого привела в наш дом?!\n\nMore narrative text here."
+        ));
+    }
+
+    #[test]
+    fn test_dialog_detection_various_dashes() {
+        let generator = TextGenerator::new();
+
+        // Test various dash types
+        assert!(generator.is_dialog_line("- This is dialog"));
+        assert!(generator.is_dialog_line("– This is dialog"));
+        assert!(generator.is_dialog_line("— This is dialog"));
+        assert!(generator.is_dialog_line("  — This is dialog")); // With leading spaces
+        assert!(!generator.is_dialog_line("This is not dialog"));
+        assert!(!generator.is_dialog_line("This has dash - in middle"));
+    }
+
+    #[test]
+    fn test_dialog_minimum_lines() {
+        let generator = TextGenerator::new();
+
+        // Test that single dialog line is treated as regular paragraph
+        let text_with_one_dash = "Some text.\n\n— Single line.\n\nMore text.";
+        let formatted = generator.format_text_with_spacing(text_with_one_dash);
+
+        // Should have empty lines around single dash line (not treated as dialog)
+        assert!(formatted.contains("Some text.\n\n— Single line.\n\nMore text."));
+
+        // Test that 2+ dialog lines are treated as dialog
+        let text_with_two_dashes = "Some text.\n\n— First line.\n\n— Second line.\n\nMore text.";
+        let formatted = generator.format_text_with_spacing(text_with_two_dashes);
+
+        // Should NOT have empty lines between dialog lines
+        assert!(formatted.contains("— First line.\n— Second line."));
+        assert!(formatted.contains("— Second line.\n\nMore text."));
+
+        // Test that 3+ dialog lines are also treated as dialog
+        let text_with_three_dashes =
+            "Some text.\n\n— First line.\n\n— Second line.\n\n— Third line.\n\nMore text.";
+        let formatted = generator.format_text_with_spacing(text_with_three_dashes);
+
+        // Should NOT have empty lines between dialog lines
+        assert!(formatted.contains("— First line.\n— Second line.\n— Third line."));
     }
 }
