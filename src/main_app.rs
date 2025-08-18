@@ -73,6 +73,7 @@ pub struct App {
     show_reading_history: bool,
     // Image popup
     image_popup: Option<ImagePopup>,
+    image_popup_area: Option<Rect>,
     last_terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
 }
@@ -195,6 +196,7 @@ impl App {
             reading_history: None,
             show_reading_history: false,
             image_popup: None,
+            image_popup_area: None,
             last_terminal_size: Rect::new(0, 0, 80, 24),
             profiler: Arc::new(Mutex::new(None)),
         };
@@ -936,7 +938,28 @@ impl App {
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Check if reading history is shown first
+                // Check if image popup is shown first - close it on any click
+                if self.image_popup.is_some() {
+                    // Check if click is outside the popup area
+                    if let Some(popup_area) = self.image_popup_area {
+                        let click_x = mouse_event.column;
+                        let click_y = mouse_event.row;
+
+                        // If click is outside popup area, close the popup
+                        if click_x < popup_area.x
+                            || click_x >= popup_area.x + popup_area.width
+                            || click_y < popup_area.y
+                            || click_y >= popup_area.y + popup_area.height
+                        {
+                            self.image_popup = None;
+                            self.image_popup_area = None;
+                            debug!("Image popup closed via mouse click outside");
+                        }
+                    }
+                    return; // Block all other interactions
+                }
+
+                // Check if reading history is shown next
                 if self.show_reading_history {
                     let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
 
@@ -1045,6 +1068,11 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                // Block if image popup is shown
+                if self.image_popup.is_some() {
+                    return;
+                }
+
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
@@ -1056,6 +1084,11 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Block if image popup is shown
+                if self.image_popup.is_some() {
+                    return;
+                }
+
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
@@ -1164,11 +1197,16 @@ impl App {
 
         let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
         self.image_popup = Some(popup);
+        self.image_popup_area = None; // Will be set on render
         debug!("Image popup created successfully for: {}", image_src);
     }
 
     /// Apply scroll events (positive for down, negative for up)
     fn apply_scroll(&mut self, scroll_amount: i32, column: u16) {
+        // Block scrolling if image popup is shown
+        if self.image_popup.is_some() {
+            return;
+        }
         if scroll_amount == 0 {
             return;
         }
@@ -1475,8 +1513,11 @@ impl App {
             );
             f.render_widget(dim_block, f.area());
 
-            // Render the image popup
-            image_popup.render(f, f.area());
+            // Render the image popup and store its area
+            let popup_area = image_popup.render(f, f.area());
+            self.image_popup_area = Some(popup_area);
+        } else {
+            self.image_popup_area = None;
         }
 
         let render_duration = render_start.elapsed();
@@ -1602,6 +1643,14 @@ impl App {
         screen_height: Option<usize>,
     ) {
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // If image popup is shown, close it on any key press
+        if self.image_popup.is_some() {
+            self.image_popup = None;
+            self.image_popup_area = None;
+            debug!("Image popup closed via key press: {:?}", key.code);
+            return;
+        }
 
         // For non-character keys or keys with modifiers (except shift), clear any pending sequence
         match &key.code {
@@ -1844,11 +1893,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if self.image_popup.is_some() {
-                    // Close image popup first
-                    self.image_popup = None;
-                    debug!("Image popup closed via ESC key");
-                } else if self.show_reading_history {
+                if self.show_reading_history {
                     // Close reading history
                     self.show_reading_history = false;
                     self.reading_history = None;

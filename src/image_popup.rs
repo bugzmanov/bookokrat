@@ -32,7 +32,7 @@ impl ImagePopup {
         }
     }
 
-    pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) {
+    pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) -> Rect {
         let render_start = Instant::now();
         self.load_start = Some(render_start.clone());
         let popup_area = self.calculate_optimal_popup_area(terminal_size);
@@ -42,7 +42,8 @@ impl ImagePopup {
         f.render_widget(Clear, popup_area);
         let clear_duration = clear_start.elapsed();
 
-        let title = format!(" {} ", self.src_path);
+        let (width, height) = self.image.dimensions();
+        let title = format!(" {} [{}x{} px] ", self.src_path, width, height);
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -61,7 +62,6 @@ impl ImagePopup {
             block_duration.as_millis()
         );
 
-        let (width, height) = self.image.dimensions();
         let size_text = format!("{}x{} pixels", width, height);
 
         let loading_text = vec![
@@ -89,14 +89,9 @@ impl ImagePopup {
         f.render_widget(loading_paragraph, inner_area);
         let loading_duration = loading_start.elapsed();
 
-        let help_start = Instant::now();
-        self.render_help_text(f, popup_area);
-        let help_duration = help_start.elapsed();
-
         debug!(
-            "Loading screen timings: paragraph: {}ms, help: {}ms",
-            loading_duration.as_millis(),
-            help_duration.as_millis()
+            "Loading screen timings: paragraph: {}ms",
+            loading_duration.as_millis()
         );
 
         // Time the protocol creation (which includes resize)
@@ -148,14 +143,15 @@ impl ImagePopup {
             render_duration.as_millis()
         );
 
-        self.render_help_text(f, popup_area);
-
         let total_render_time = render_start.elapsed();
         debug!(
             "TOTAL render() time for '{}': {}ms",
             self.src_path,
             total_render_time.as_millis()
         );
+
+        // Return the popup area so the main app knows where the image is displayed
+        popup_area
     }
 
     /// Calculate the optimal popup area based on image dimensions and terminal size
@@ -171,9 +167,9 @@ impl ImagePopup {
         let image_width_cells = (img_width as f32 / cell_width_pixels).ceil() as u16;
         let image_height_cells = (img_height as f32 / cell_height_pixels).ceil() as u16;
 
-        // Reserve minimal space for borders (2) and help text below (2)
+        // Reserve minimal space for borders (2) only - no help text
         let max_width = terminal_size.width.saturating_sub(4);
-        let max_height = terminal_size.height.saturating_sub(4);
+        let max_height = terminal_size.height.saturating_sub(2);
 
         // Since image is pre-scaled, just ensure it fits on screen
         let content_width = image_width_cells.min(max_width);
@@ -185,7 +181,7 @@ impl ImagePopup {
 
         // Center the popup in the terminal
         let x_offset = (terminal_size.width.saturating_sub(popup_width)) / 2;
-        let y_offset = (terminal_size.height.saturating_sub(popup_height + 2)) / 2; // +2 for help text below
+        let y_offset = (terminal_size.height.saturating_sub(popup_height)) / 2;
 
         Rect {
             x: terminal_size.x + x_offset,
@@ -221,33 +217,6 @@ impl ImagePopup {
             y: inner_area.y + y_offset,
             width,
             height,
-        }
-    }
-
-    fn render_help_text(&self, f: &mut Frame, popup_area: Rect) {
-        let terminal_area = f.area();
-
-        let help_y = popup_area.y + popup_area.height + 1; // +1 for spacing
-
-        if help_y + 1 < terminal_area.height {
-            let help_area = Rect {
-                x: popup_area.x,
-                y: help_y,
-                width: popup_area.width,
-                height: 1,
-            };
-
-            let (width, height) = self.image.dimensions();
-            let help_text = format!(" ESC: close | {}x{} px ", width, height);
-
-            let help_paragraph = Paragraph::new(Line::from(vec![Span::styled(
-                help_text,
-                Style::default().fg(Color::Yellow),
-            )]))
-            .alignment(Alignment::Center)
-            .style(Style::default().bg(Color::Black));
-
-            f.render_widget(help_paragraph, help_area);
         }
     }
 }
