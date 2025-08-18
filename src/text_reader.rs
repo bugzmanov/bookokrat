@@ -126,6 +126,9 @@ pub struct TextReader {
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
     // Background image loader
     background_loader: BackgroundImageLoader,
+    // Raw HTML viewing
+    show_raw_html: bool,
+    raw_html_content: Option<String>,
 }
 
 impl TextReader {
@@ -172,6 +175,8 @@ impl TextReader {
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
             background_loader: BackgroundImageLoader::new(),
+            show_raw_html: false,
+            raw_html_content: None,
         }
     }
 
@@ -640,6 +645,23 @@ impl TextReader {
         self.cached_focus_state = false;
         // Clear embedded images since they're parsed from content
         self.embedded_images.borrow_mut().clear();
+        // Reset raw HTML view when changing chapters
+        self.show_raw_html = false;
+    }
+
+    /// Toggle raw HTML viewing mode
+    pub fn toggle_raw_html(&mut self) {
+        self.show_raw_html = !self.show_raw_html;
+        // Reset scroll position when toggling
+        self.scroll_offset = 0;
+        // Clear cached content to force re-render
+        self.cached_styled_content = None;
+        self.cached_content_hash = 0;
+    }
+
+    /// Set the raw HTML content for the current chapter
+    pub fn set_raw_html(&mut self, html: String) {
+        self.raw_html_content = Some(html);
     }
 
     /// Quickly read image sizes and start background loading
@@ -1282,120 +1304,163 @@ impl TextReader {
         // Render the styled content (which now includes placeholder space for the image)
         let text_width = margined_content_area[1].width as usize;
         let scroll_offset = self.scroll_offset;
-        let styled_content =
-            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused);
+
+        // Check if we should display raw HTML
+        let styled_content = if self.show_raw_html {
+            // Display raw HTML content
+            if let Some(ref raw_html) = self.raw_html_content {
+                // Escape potentially dangerous characters that could cause terminal glitches
+                let escaped_html = raw_html
+                    .replace('\x1b', "\\x1b") // Escape ESC character
+                    .replace('\x00', "\\x00") // Escape NULL
+                    .replace('\x07', "\\x07") // Escape BEL (bell)
+                    .replace('\x08', "\\x08") // Escape BS (backspace)
+                    .replace('\x0C', "\\x0C") // Escape FF (form feed)
+                    .replace('\r', "\\r") // Escape CR (carriage return)
+                    .chars()
+                    .filter(|c| {
+                        // Filter out other control characters except newline and tab
+                        !c.is_control() || *c == '\n' || *c == '\t'
+                    })
+                    .collect::<String>();
+
+                // Wrap the escaped HTML content and create simple styled text
+                let wrapped_lines = textwrap::wrap(&escaped_html, text_width);
+                let mut lines = Vec::new();
+                for wrapped_line in wrapped_lines {
+                    lines.push(Line::from(vec![Span::styled(
+                        wrapped_line.to_string(),
+                        Style::default().fg(text_color),
+                    )]));
+                }
+                // Update total wrapped lines for scrolling
+                self.total_wrapped_lines = lines.len();
+                Text::from(lines)
+            } else {
+                Text::from("No raw HTML content available")
+            }
+        } else {
+            // Normal styled content rendering
+            self.parse_styled_text_cached(content, chapter_title, palette, text_width, is_focused)
+        };
 
         let content_paragraph = Paragraph::new(styled_content)
             .scroll((scroll_offset as u16, 0))
             .style(Style::default().fg(text_color).bg(palette.base_00));
         f.render_widget(content_paragraph, margined_content_area[1]);
 
-        // Display all embedded images from the chapter
-        self.check_for_loaded_images();
-        if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
-            let area_height = margined_content_area[1].height as usize;
+        // Display all embedded images from the chapter (only if not showing raw HTML)
+        if !self.show_raw_html {
+            self.check_for_loaded_images();
+            if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
+                let area_height = margined_content_area[1].height as usize;
 
-            // Iterate through all embedded images
-            for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
-                let image_height_cells = embedded_image.height_cells as usize;
-                let image_start_line = embedded_image.lines_before_image;
-                let image_end_line = image_start_line + image_height_cells;
+                // Iterate through all embedded images
+                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+                    let image_height_cells = embedded_image.height_cells as usize;
+                    let image_start_line = embedded_image.lines_before_image;
+                    let image_end_line = image_start_line + image_height_cells;
 
-                // Check if image is in viewport
-                if scroll_offset < image_end_line && scroll_offset + area_height > image_start_line
-                {
-                    // Check if image is loaded
-                    if let ImageLoadState::Loaded {
-                        ref image,
-                        ref mut protocol,
-                    } = embedded_image.state
+                    // Check if image is in viewport
+                    if scroll_offset < image_end_line
+                        && scroll_offset + area_height > image_start_line
                     {
-                        let scaled_image = image;
+                        // Check if image is loaded
+                        if let ImageLoadState::Loaded {
+                            ref image,
+                            ref mut protocol,
+                        } = embedded_image.state
+                        {
+                            let scaled_image = image;
 
-                        if let Some(ref picker) = self.image_picker {
-                            let image_screen_start = if scroll_offset > image_start_line {
-                                0
-                            } else {
-                                image_start_line - scroll_offset
-                            };
-
-                            // Calculate visible portion
-                            let image_top_clipped = if scroll_offset > image_start_line {
-                                scroll_offset - image_start_line
-                            } else {
-                                0
-                            };
-
-                            let visible_image_height = (image_height_cells - image_top_clipped)
-                                .min(area_height - image_screen_start);
-
-                            if visible_image_height > 0 {
-                                debug!(
-                                    "here3 - visible_image_height: {}, image_screen_start: {}, image_top_clipped: {}",
-                                    visible_image_height, image_screen_start, image_top_clipped
-                                );
-                                // Don't center the image - use full width like the placeholder
-
-                                // Get the actual image height for this specific image
-                                let image_height_cells =
-                                    self.calculate_image_height_in_cells(scaled_image);
-
-                                let (render_y, render_height) = if image_top_clipped > 0 {
-                                    (
-                                        margined_content_area[1].y,
-                                        ((image_height_cells as usize)
-                                            .saturating_sub(image_top_clipped))
-                                        .min(area_height)
-                                            as u16,
-                                    )
+                            if let Some(ref picker) = self.image_picker {
+                                let image_screen_start = if scroll_offset > image_start_line {
+                                    0
                                 } else {
-                                    (
-                                        margined_content_area[1].y + image_screen_start as u16,
-                                        (image_height_cells as usize)
-                                            .min(area_height.saturating_sub(image_screen_start))
-                                            as u16,
-                                    )
+                                    image_start_line - scroll_offset
                                 };
 
-                                // Calculate actual image width in terminal cells based on aspect ratio
-                                let (image_width_pixels, image_height_pixels) =
-                                    scaled_image.dimensions();
-                                let font_size = picker.font_size();
-                                let image_width_cells =
-                                    (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
-
-                                // Center the image horizontally within the text area
-                                let text_area_width = margined_content_area[1].width;
-                                let image_display_width = image_width_cells.min(text_area_width);
-                                let x_offset =
-                                    (text_area_width.saturating_sub(image_display_width)) / 2;
-
-                                let image_area = Rect {
-                                    x: margined_content_area[1].x + x_offset,
-                                    y: render_y,
-                                    width: image_display_width,
-                                    height: render_height,
+                                // Calculate visible portion
+                                let image_top_clipped = if scroll_offset > image_start_line {
+                                    scroll_offset - image_start_line
+                                } else {
+                                    0
                                 };
 
-                                // Render using the stateful widget
-                                // Use Viewport mode for efficient scrolling
-                                let current_font_size = picker.font_size();
-                                let y_offset_pixels =
-                                    (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
+                                let visible_image_height = (image_height_cells - image_top_clipped)
+                                    .min(area_height - image_screen_start);
 
-                                let viewport_options = ratatui_image::ViewportOptions {
-                                    y_offset: y_offset_pixels,
-                                    x_offset: 0, // No horizontal scrolling for now
-                                };
+                                if visible_image_height > 0 {
+                                    debug!(
+                                        "here3 - visible_image_height: {}, image_screen_start: {}, image_top_clipped: {}",
+                                        visible_image_height, image_screen_start, image_top_clipped
+                                    );
+                                    // Don't center the image - use full width like the placeholder
 
-                                // Use protocol directly for rendering
-                                let image_widget =
-                                    StatefulImage::new().resize(Resize::Viewport(viewport_options));
-                                debug!(
-                                    "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}",
-                                    image_area, scroll_offset, image_start_line
-                                );
-                                f.render_stateful_widget(image_widget, image_area, protocol);
+                                    // Get the actual image height for this specific image
+                                    let image_height_cells =
+                                        self.calculate_image_height_in_cells(scaled_image);
+
+                                    let (render_y, render_height) = if image_top_clipped > 0 {
+                                        (
+                                            margined_content_area[1].y,
+                                            ((image_height_cells as usize)
+                                                .saturating_sub(image_top_clipped))
+                                            .min(area_height)
+                                                as u16,
+                                        )
+                                    } else {
+                                        (
+                                            margined_content_area[1].y + image_screen_start as u16,
+                                            (image_height_cells as usize)
+                                                .min(area_height.saturating_sub(image_screen_start))
+                                                as u16,
+                                        )
+                                    };
+
+                                    // Calculate actual image width in terminal cells based on aspect ratio
+                                    let (image_width_pixels, image_height_pixels) =
+                                        scaled_image.dimensions();
+                                    let font_size = picker.font_size();
+                                    let image_width_cells =
+                                        (image_width_pixels as f32 / font_size.0 as f32).ceil()
+                                            as u16;
+
+                                    // Center the image horizontally within the text area
+                                    let text_area_width = margined_content_area[1].width;
+                                    let image_display_width =
+                                        image_width_cells.min(text_area_width);
+                                    let x_offset =
+                                        (text_area_width.saturating_sub(image_display_width)) / 2;
+
+                                    let image_area = Rect {
+                                        x: margined_content_area[1].x + x_offset,
+                                        y: render_y,
+                                        width: image_display_width,
+                                        height: render_height,
+                                    };
+
+                                    // Render using the stateful widget
+                                    // Use Viewport mode for efficient scrolling
+                                    let current_font_size = picker.font_size();
+                                    let y_offset_pixels = (image_top_clipped as f32
+                                        * current_font_size.1 as f32)
+                                        as u32;
+
+                                    let viewport_options = ratatui_image::ViewportOptions {
+                                        y_offset: y_offset_pixels,
+                                        x_offset: 0, // No horizontal scrolling for now
+                                    };
+
+                                    // Use protocol directly for rendering
+                                    let image_widget = StatefulImage::new()
+                                        .resize(Resize::Viewport(viewport_options));
+                                    debug!(
+                                        "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}",
+                                        image_area, scroll_offset, image_start_line
+                                    );
+                                    f.render_stateful_widget(image_widget, image_area, protocol);
+                                }
                             }
                         }
                     }

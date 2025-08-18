@@ -1615,6 +1615,20 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " s" => {
+                // Handle Space->s to show raw HTML
+                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
+                    // Get raw HTML content for current chapter
+                    if let Some(ref mut epub) = self.current_epub {
+                        if let Ok(raw_html) = epub.get_current_str() {
+                            self.text_reader.set_raw_html(raw_html);
+                            self.text_reader.toggle_raw_html();
+                        }
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             _ if sequence.len() >= 2 => {
                 // Unknown sequence of 2+ chars, reset
                 self.key_sequence.clear();
@@ -1795,10 +1809,13 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                // Toggle section expansion when focused on file list and in TOC mode
-                if self.focused_panel == FocusedPanel::FileList
+                // Check if this might be part of a key sequence (space-s for raw HTML)
+                if self.focused_panel == FocusedPanel::Content && !self.handle_key_sequence(' ') {
+                    // Space by itself in content view doesn't do anything, it's waiting for the next key
+                } else if self.focused_panel == FocusedPanel::FileList
                     && self.navigation_panel.mode == NavigationMode::TableOfContents
                 {
+                    // Toggle section expansion when focused on file list and in TOC mode
                     // Get the currently selected TOC item and toggle its expansion if it's a section
                     if let Some(ref cached_info) = self.cached_current_book_info {
                         if let Some(SelectedTocItem::TocItem(toc_item)) =
@@ -1854,6 +1871,12 @@ impl App {
                     } else if let Some(visible_height) = screen_height {
                         self.scroll_half_screen_up(visible_height);
                     }
+                }
+            }
+            KeyCode::Char('s') => {
+                // Check if this completes a key sequence (space-s for raw HTML)
+                if !self.handle_key_sequence('s') {
+                    // 's' by itself doesn't do anything if not part of a sequence
                 }
             }
             KeyCode::Char('g') => {
