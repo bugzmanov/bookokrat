@@ -1133,14 +1133,20 @@ impl App {
 
         // Pre-scale the image using fast_image_resize for better performance
         let prescaled_image = if final_width != img_width || final_height != img_height {
+            let resize_start = std::time::Instant::now();
             match self
                 .book_images
                 .resize_image_to(&original_image, final_width, final_height)
             {
                 Ok(resized) => {
+                    let resize_duration = resize_start.elapsed();
                     debug!(
-                        "Pre-scaled image from {}x{} to {}x{} using fast_image_resize",
-                        img_width, img_height, final_width, final_height
+                        "Pre-scaled image from {}x{} to {}x{} using fast_image_resize in {}ms",
+                        img_width,
+                        img_height,
+                        final_width,
+                        final_height,
+                        resize_duration.as_millis()
                     );
                     Arc::new(resized)
                 }
@@ -1377,6 +1383,8 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
+        let render_start = std::time::Instant::now();
+
         // Update auto-scroll state for continuous scrolling during text selection
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
@@ -1469,6 +1477,11 @@ impl App {
 
             // Render the image popup
             image_popup.render(f, f.area());
+        }
+
+        let render_duration = render_start.elapsed();
+        if render_duration.as_millis() > 5 {
+            debug!("Rendering widgets took {}ms", render_duration.as_millis());
         }
     }
 
@@ -1969,7 +1982,14 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 
         // Draw if needed
         if needs_redraw {
+            let draw_start = std::time::Instant::now();
             terminal.draw(|f| app.draw(f, &fps_counter))?;
+            let draw_duration = draw_start.elapsed();
+
+            // Log if drawing/flushing took longer than 10ms
+            if draw_duration.as_millis() > 10 {
+                debug!("Terminal draw/flush took {}ms", draw_duration.as_millis());
+            }
         }
 
         // If no events were processed, wait a bit to avoid busy-waiting

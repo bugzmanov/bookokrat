@@ -7,11 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use ratatui_image::{
-    Resize, StatefulImage, ViewportOptions,
-    picker::Picker,
-    protocol::{Protocol, StatefulProtocol},
-};
+use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -37,9 +33,14 @@ impl ImagePopup {
     }
 
     pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) {
+        let render_start = Instant::now();
+        self.load_start = Some(render_start.clone());
         let popup_area = self.calculate_optimal_popup_area(terminal_size);
+        let calc_duration = render_start.elapsed();
 
+        let clear_start = Instant::now();
         f.render_widget(Clear, popup_area);
+        let clear_duration = clear_start.elapsed();
 
         let title = format!(" {} ", self.src_path);
         let block = Block::default()
@@ -49,70 +50,112 @@ impl ImagePopup {
 
         let inner_area = block.inner(popup_area);
 
+        let block_start = Instant::now();
         f.render_widget(block, popup_area);
+        let block_duration = block_start.elapsed();
 
-        if self.is_loading && self.protocol.is_none() {
-            let (width, height) = self.image.dimensions();
-            let size_text = format!("{}x{} pixels", width, height);
+        debug!(
+            "Pre-render timings: calc_area: {}ms, clear: {}ms, block: {}ms",
+            calc_duration.as_millis(),
+            clear_duration.as_millis(),
+            block_duration.as_millis()
+        );
 
-            let loading_text = vec![
-                Line::from(""),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "⏳ Loading image...",
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(size_text, Style::default().fg(Color::Gray))),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Processing image data, please wait",
-                    Style::default().fg(Color::DarkGray),
-                )),
-            ];
-            let loading_paragraph = Paragraph::new(loading_text)
-                .alignment(Alignment::Center)
-                .style(Style::default().bg(Color::Black));
+        let (width, height) = self.image.dimensions();
+        let size_text = format!("{}x{} pixels", width, height);
 
-            f.render_widget(loading_paragraph, inner_area);
+        let loading_text = vec![
+            Line::from(""),
+            Line::from(""),
+            Line::from(Span::styled(
+                "⏳ Loading image...",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(size_text, Style::default().fg(Color::Gray))),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Processing image data, please wait",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let loading_paragraph = Paragraph::new(loading_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().bg(Color::Black));
 
-            self.render_help_text(f, popup_area);
+        let loading_start = Instant::now();
+        f.render_widget(loading_paragraph, inner_area);
+        let loading_duration = loading_start.elapsed();
 
-            // Time the protocol creation (which includes resize)
-            let start = Instant::now();
-            let protocol = self
-                .picker
-                .new_protocol(
-                    self.image.as_ref().clone(),
-                    self.calculate_optimal_popup_area(terminal_size),
-                    Resize::Viewport(ratatui_image::ViewportOptions {
-                        y_offset: 0,
-                        x_offset: 0,
-                    }),
-                )
-                .unwrap();
-            let duration = start.elapsed();
+        let help_start = Instant::now();
+        self.render_help_text(f, popup_area);
+        let help_duration = help_start.elapsed();
 
-            self.protocol = Some(protocol);
-            self.is_loading = false;
+        debug!(
+            "Loading screen timings: paragraph: {}ms, help: {}ms",
+            loading_duration.as_millis(),
+            help_duration.as_millis()
+        );
 
-            // Log the timing information
-            let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
-            debug!(
-                "Image popup stats for '{}': protocol creation: {}ms, total time: {}ms",
-                self.src_path,
-                duration.as_millis(),
-                total_time.as_millis()
-            );
-        } else if let Some(ref mut protocol) = self.protocol {
-            let image_area = inner_area;
-            let image_widget = ratatui_image::Image::new(protocol);
+        // Time the protocol creation (which includes resize)
+        let start = Instant::now();
+        let protocol = self
+            .picker
+            .new_protocol(
+                self.image.as_ref().clone(),
+                self.calculate_optimal_popup_area(terminal_size),
+                Resize::Viewport(ratatui_image::ViewportOptions {
+                    y_offset: 0,
+                    x_offset: 0,
+                }),
+            )
+            .unwrap();
+        let duration = start.elapsed();
 
-            f.render_widget(image_widget, image_area);
-            self.render_help_text(f, popup_area);
-        }
+        self.protocol = Some(protocol);
+        self.is_loading = false;
+
+        // Log the timing information
+        let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
+        debug!(
+            "--Image popup stats for '{}': protocol creation: {}ms, total time: {}ms",
+            self.src_path,
+            duration.as_millis(),
+            total_time.as_millis()
+        );
+
+        let image_area = inner_area;
+        let image_widget = ratatui_image::Image::new(self.protocol.as_ref().unwrap());
+
+        let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
+        let duration = start.elapsed();
+        debug!(
+            "--Image creation stats for '{}': protocol creation: {}ms, total time: {}ms",
+            self.src_path,
+            duration.as_millis(),
+            total_time.as_millis()
+        );
+
+        let render_start = Instant::now();
+        f.render_widget(image_widget, image_area);
+        let render_duration = render_start.elapsed();
+
+        debug!(
+            "--Image widget render time for '{}': {}ms",
+            self.src_path,
+            render_duration.as_millis()
+        );
+
+        self.render_help_text(f, popup_area);
+
+        let total_render_time = render_start.elapsed();
+        debug!(
+            "TOTAL render() time for '{}': {}ms",
+            self.src_path,
+            total_render_time.as_millis()
+        );
     }
 
     /// Calculate the optimal popup area based on image dimensions and terminal size
