@@ -7,52 +7,51 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use ratatui_image::{StatefulImage, picker::Picker, protocol::StatefulProtocol};
+use ratatui_image::{
+    Resize, StatefulImage, ViewportOptions,
+    picker::Picker,
+    protocol::{Protocol, StatefulProtocol},
+};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub struct ImagePopup {
     pub image: Arc<DynamicImage>,
-    pub protocol: Option<StatefulProtocol>,
+    pub protocol: Option<Protocol>,
     pub src_path: String,
     pub picker: Picker,
     pub is_loading: bool,
+    pub load_start: Option<Instant>,
 }
 
 impl ImagePopup {
     pub fn new(image: Arc<DynamicImage>, picker: &Picker, src_path: String) -> Self {
-        // Don't create protocol immediately - defer to first render to show loading state
         Self {
             image,
             protocol: None,
             src_path,
             picker: picker.clone(),
             is_loading: true,
+            load_start: Some(Instant::now()),
         }
     }
 
     pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) {
-        // Calculate optimal popup size based on image dimensions and scaling mode
         let popup_area = self.calculate_optimal_popup_area(terminal_size);
 
-        // Clear the background
         f.render_widget(Clear, popup_area);
 
-        // Create the popup block with borders and title
         let title = format!(" {} ", self.src_path);
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
             .style(Style::default().bg(Color::Black));
 
-        // Get the inner area for content
         let inner_area = block.inner(popup_area);
 
-        // Render the block first
         f.render_widget(block, popup_area);
 
-        // Check if we need to create the protocol (deferred creation for better UX)
         if self.is_loading && self.protocol.is_none() {
-            // Show loading indicator with image info
             let (width, height) = self.image.dimensions();
             let size_text = format!("{}x{} pixels", width, height);
 
@@ -79,23 +78,39 @@ impl ImagePopup {
 
             f.render_widget(loading_paragraph, inner_area);
 
-            // Add help text even during loading
             self.render_help_text(f, popup_area);
 
-            // Create the protocol after rendering the loading screen
-            // This will be picked up on the next render cycle
-            self.protocol = Some(self.picker.new_resize_protocol(self.image.as_ref().clone()));
+            // Time the protocol creation (which includes resize)
+            let start = Instant::now();
+            let protocol = self
+                .picker
+                .new_protocol(
+                    self.image.as_ref().clone(),
+                    self.calculate_optimal_popup_area(terminal_size),
+                    Resize::Viewport(ratatui_image::ViewportOptions {
+                        y_offset: 0,
+                        x_offset: 0,
+                    }),
+                )
+                .unwrap();
+            let duration = start.elapsed();
+
+            self.protocol = Some(protocol);
             self.is_loading = false;
-            debug!("Protocol created for image: {}", self.src_path);
+
+            // Log the timing information
+            let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
+            debug!(
+                "Image popup stats for '{}': protocol creation: {}ms, total time: {}ms",
+                self.src_path,
+                duration.as_millis(),
+                total_time.as_millis()
+            );
         } else if let Some(ref mut protocol) = self.protocol {
-            // Protocol is ready, render the image
             let image_area = inner_area;
-            let image_widget = StatefulImage::new();
+            let image_widget = ratatui_image::Image::new(protocol);
 
-            // Render the actual image
-            f.render_stateful_widget(image_widget, image_area, protocol);
-
-            // Add help text at the bottom
+            f.render_widget(image_widget, image_area);
             self.render_help_text(f, popup_area);
         }
     }
@@ -169,16 +184,14 @@ impl ImagePopup {
     fn render_help_text(&self, f: &mut Frame, popup_area: Rect) {
         let terminal_area = f.area();
 
-        // Calculate help text position, ensuring it stays within terminal bounds
         let help_y = popup_area.y + popup_area.height + 1; // +1 for spacing
 
-        // Only render help text if there's space below the popup
         if help_y + 1 < terminal_area.height {
             let help_area = Rect {
                 x: popup_area.x,
                 y: help_y,
                 width: popup_area.width,
-                height: 1, // Single line to avoid going out of bounds
+                height: 1,
             };
 
             let (width, height) = self.image.dimensions();
