@@ -29,6 +29,15 @@ const IMAGE_HEIGHT_WIDE: u16 = 7;
 const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
 
 #[derive(Debug, Clone)]
+pub struct LinkInfo {
+    pub text: String,
+    pub url: String,
+    pub line: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+}
+
+#[derive(Debug, Clone)]
 struct AutoScrollState {
     direction: AutoScrollDirection,
     mouse_x: u16,
@@ -129,6 +138,8 @@ pub struct TextReader {
     // Raw HTML viewing
     show_raw_html: bool,
     raw_html_content: Option<String>,
+    // Store link information for click handling
+    links: Vec<LinkInfo>,
 }
 
 impl TextReader {
@@ -177,6 +188,7 @@ impl TextReader {
             background_loader: BackgroundImageLoader::new(),
             show_raw_html: false,
             raw_html_content: None,
+            links: Vec::new(),
         }
     }
 
@@ -335,6 +347,9 @@ impl TextReader {
         let mut lines = Vec::new();
         let mut raw_lines = Vec::new();
 
+        // Clear links for new content
+        self.links.clear();
+
         // Add chapter title lines to raw text
         if let Some(title) = chapter_title {
             raw_lines.push(title.clone());
@@ -463,7 +478,8 @@ impl TextReader {
                 for wrapped_line in wrapped_lines {
                     let line_str = wrapped_line.to_string();
                     raw_lines.push(line_str.clone());
-                    let styled_line = self.parse_line_styling_owned(&line_str, palette, is_focused);
+                    let styled_line =
+                        self.parse_line_styling_owned(&line_str, palette, is_focused, line_count);
                     lines.push(styled_line);
                     line_count += 1;
                 }
@@ -474,12 +490,13 @@ impl TextReader {
         (Text::from(lines), raw_lines)
     }
 
-    /// Parse styling for a single line (bold, quotes, etc.) - owned version for caching
+    /// Parse styling for a single line (bold, quotes, links, etc.) - owned version for caching
     fn parse_line_styling_owned(
-        &self,
+        &mut self,
         line: &str,
         palette: &Base16Palette,
         is_focused: bool,
+        line_num: usize,
     ) -> Line<'static> {
         let mut spans = Vec::new();
         let chars: Vec<char> = line.chars().collect();
@@ -493,9 +510,77 @@ impl TextReader {
         } else {
             palette.base_01 // Even more dimmed for unfocused bold text
         };
+        let link_text_color = if is_focused {
+            palette.base_0c // Cyan for links when focused
+        } else {
+            palette.base_03 // Dimmed for unfocused links
+        };
 
         while i < chars.len() {
-            if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
+            // Check for markdown-style links [text](url)
+            if chars[i] == '[' {
+                // Look for the matching ]( pattern
+                let mut link_text = String::new();
+                let mut j = i + 1;
+                let mut found_link = false;
+
+                while j < chars.len() && chars[j] != ']' {
+                    link_text.push(chars[j]);
+                    j += 1;
+                }
+
+                if j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(' {
+                    // Found link pattern, extract URL
+                    j += 2; // Skip ](
+                    let mut url = String::new();
+                    while j < chars.len() && chars[j] != ')' {
+                        url.push(chars[j]);
+                        j += 1;
+                    }
+
+                    if j < chars.len() && chars[j] == ')' {
+                        // Valid link found
+                        found_link = true;
+
+                        // Add any pending text
+                        if !current_text.is_empty() {
+                            spans.push(Span::styled(
+                                current_text.clone(),
+                                Style::default().fg(normal_text_color),
+                            ));
+                            current_text.clear();
+                        }
+
+                        // Store link information for click handling
+                        let start_col = spans.iter().map(|s| s.content.len()).sum::<usize>();
+                        let end_col = start_col + link_text.len();
+                        self.links.push(LinkInfo {
+                            text: link_text.clone(),
+                            url: url.clone(),
+                            line: line_num,
+                            start_col,
+                            end_col,
+                        });
+
+                        // Add link with underline styling
+                        spans.push(Span::styled(
+                            link_text,
+                            Style::default()
+                                .fg(link_text_color)
+                                .add_modifier(Modifier::UNDERLINED),
+                        ));
+
+                        i = j + 1; // Move past the closing )
+                        continue;
+                    }
+                }
+
+                if !found_link {
+                    // Not a valid link, treat [ as normal character
+                    current_text.push('[');
+                    i += 1;
+                }
+            } else if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
                 if !current_text.is_empty() {
                     spans.push(Span::styled(
                         current_text.clone(),
@@ -657,6 +742,23 @@ impl TextReader {
         // Clear cached content to force re-render
         self.cached_styled_content = None;
         self.cached_content_hash = 0;
+    }
+
+    /// Check if a click at the given coordinates is on a link
+    pub fn get_link_at_position(&self, x: u16, y: u16) -> Option<&LinkInfo> {
+        if let Some(content_area) = self.last_content_area {
+            // Convert screen coordinates to content coordinates
+            let rel_x = x.saturating_sub(content_area.x) as usize;
+            let rel_y = (y.saturating_sub(content_area.y) as usize) + self.scroll_offset;
+
+            // Find link at this position
+            for link in &self.links {
+                if link.line == rel_y && rel_x >= link.start_col && rel_x < link.end_col {
+                    return Some(link);
+                }
+            }
+        }
+        None
     }
 
     /// Set the raw HTML content for the current chapter

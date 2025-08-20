@@ -1035,8 +1035,15 @@ impl App {
 
                     match click_type {
                         ClickType::Single => {
-                            // Check if click is on an image first
-                            if let Some(image_src) = self.text_reader.check_image_click(
+                            // Check if click is on a link first
+                            if let Some(link_info) = self
+                                .text_reader
+                                .get_link_at_position(mouse_event.column, mouse_event.row)
+                            {
+                                // Handle link click - open in external browser or navigate internally
+                                let url = link_info.url.clone();
+                                self.handle_link_click(&url);
+                            } else if let Some(image_src) = self.text_reader.check_image_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 content_area,
@@ -1110,6 +1117,40 @@ impl App {
     }
 
     /// Handle image click by creating or showing the image popup
+    fn handle_link_click(&mut self, url: &str) {
+        debug!("Handling link click for: {}", url);
+
+        // Check if it's an internal link (within the EPUB)
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            // Internal link - try to navigate to the chapter
+            if let Some(ref mut doc) = self.current_epub {
+                // Try to find the chapter with this href
+                let normalized_url = url.trim_start_matches('#');
+
+                // Search through spine for matching chapter
+                for i in 0..doc.get_num_pages() {
+                    if let Some(href) = Self::get_chapter_href(doc, i) {
+                        if href.contains(normalized_url) || normalized_url.contains(&href) {
+                            // Navigate to this chapter using existing navigation method
+                            if let Err(e) = self.navigate_to_chapter(i) {
+                                error!("Failed to navigate to chapter {}: {}", url, e);
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                // If not found in spine, might be a fragment/anchor in current chapter
+                info!("Internal link not found in spine: {}", url);
+            }
+        } else {
+            // External link - open in browser
+            if let Err(e) = open::that(url) {
+                error!("Failed to open link in browser: {}", e);
+            }
+        }
+    }
+
     fn handle_image_click(&mut self, image_src: &str, terminal_size: Rect) {
         debug!("Handling image click for: {}", image_src);
 

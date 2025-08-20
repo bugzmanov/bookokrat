@@ -183,6 +183,10 @@ impl TextGenerator {
         let mut content = style_re.replace_all(content, "").into_owned();
         content = script_re.replace_all(&content, "").into_owned();
 
+        // Process links before removing tags - replace with markdown-style format
+        let link_re = Regex::new(r#"<a[^>]*\shref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap();
+        content = link_re.replace_all(&content, "[$2]($1)").into_owned();
+
         if let Some(_title) = chapter_title {
             // Remove h1/h2 tags that contain the chapter title
             // This handles complex nested structures by removing the entire h1/h2 tag
