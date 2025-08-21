@@ -1682,6 +1682,18 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " c" => {
+                // Handle Space->c to copy entire chapter content
+                if self.focused_panel == FocusedPanel::Content {
+                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
+                        debug!("Copy chapter failed: {}", e);
+                    } else {
+                        debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             _ if sequence.len() >= 2 => {
                 // Unknown sequence of 2+ chars, reset
                 self.key_sequence.clear();
@@ -1958,9 +1970,12 @@ impl App {
                 }
             }
             KeyCode::Char('c') => {
-                // Handle copy
-                if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
-                    debug!("Copy failed: {}", e);
+                // Check if this completes a key sequence (space-c for copy chapter)
+                if !self.handle_key_sequence('c') {
+                    // 'c' by itself copies selected text
+                    if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
+                        debug!("Copy failed: {}", e);
+                    }
                 }
             }
             KeyCode::Esc => {

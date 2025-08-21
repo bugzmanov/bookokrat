@@ -1262,6 +1262,42 @@ impl TextReader {
         }
     }
 
+    /// Copy entire chapter content to clipboard
+    pub fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
+        let content_to_copy = if self.show_raw_html {
+            // If in raw HTML mode, copy the raw HTML content
+            self.raw_html_content.clone().unwrap_or_default()
+        } else {
+            // In normal mode, copy the rendered text lines
+            self.raw_text_lines.join("\n")
+        };
+
+        if content_to_copy.is_empty() {
+            let error_msg = "No chapter content to copy".to_string();
+            debug!("{}", error_msg);
+            return Err(error_msg);
+        }
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(content_to_copy) {
+                Ok(()) => {
+                    debug!("Successfully copied chapter content to clipboard");
+                    Ok(())
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to copy chapter to clipboard: {}", e);
+                    debug!("{}", error_msg);
+                    Err(error_msg)
+                }
+            },
+            Err(e) => {
+                let error_msg = format!("Failed to access clipboard: {}", e);
+                debug!("{}", error_msg);
+                Err(error_msg)
+            }
+        }
+    }
+
     /// Check if there is text currently selected
     pub fn has_text_selection(&self) -> bool {
         self.text_selection.has_selection()
