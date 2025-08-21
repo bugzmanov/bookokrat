@@ -14,8 +14,6 @@ use std::io::BufReader;
 
 pub struct TextGenerator {
     p_tag_re: Regex,
-    h_open_re: Regex,
-    h_close_re: Regex,
     multi_space_re: Regex,
     multi_newline_re: Regex,
     leading_space_re: Regex,
@@ -29,9 +27,6 @@ impl TextGenerator {
     pub fn new() -> Self {
         Self {
             p_tag_re: Regex::new(r"<p[^>]*>").expect("Failed to compile paragraph tag regex"),
-            h_open_re: Regex::new(r"<h[1-6][^>]*>")
-                .expect("Failed to compile header open tag regex"),
-            h_close_re: Regex::new(r"</h[1-6]>").expect("Failed to compile header close tag regex"),
             multi_space_re: Regex::new(r" +").expect("Failed to compile multi space regex"),
             multi_newline_re: Regex::new(r"\n{3,}").expect("Failed to compile multi newline regex"),
             leading_space_re: Regex::new(r"^ +").expect("Failed to compile leading space regex"),
@@ -46,22 +41,36 @@ impl TextGenerator {
     }
 
     pub fn extract_chapter_title(&self, html_content: &str) -> Option<String> {
-        let title_patterns = [
-            Regex::new(r"<h[12][^>]*>([^<]+)</h[12]>").ok()?,
-            Regex::new(r"<title[^>]*>([^<]+)</title>").ok()?,
-        ];
+        let h1_pattern = Regex::new(r"(?s)<h1[^>]*>(.*?)</h1>").ok()?;
+        let h2_pattern = Regex::new(r"(?s)<h2[^>]*>(.*?)</h2>").ok()?;
+        let h3_pattern = Regex::new(r"(?s)<h3[^>]*>(.*?)</h3>").ok()?;
+        let title_pattern = Regex::new(r"(?s)<title[^>]*>(.*?)</title>").ok()?;
 
-        for pattern in &title_patterns {
-            if let Some(captures) = pattern.captures(html_content) {
+        for re in vec![h1_pattern, h2_pattern, h3_pattern, title_pattern] {
+            if let Some(captures) = re.captures(html_content) {
                 if let Some(title_match) = captures.get(1) {
-                    let title = title_match.as_str().trim();
+                    let title = self.extract_text_from_html(title_match.as_str());
                     if !title.is_empty() && title.len() < 100 {
-                        return Some(title.to_string());
+                        return Some(title);
                     }
                 }
             }
         }
+
         None
+    }
+
+    /// Helper function to extract plain text from HTML, removing tags but keeping content
+    fn extract_text_from_html(&self, html: &str) -> String {
+        // Remove all HTML tags but keep their content, don't add spaces
+        let tag_re = Regex::new(r"<[^>]+>").unwrap();
+        let text = tag_re.replace_all(html, " ");
+
+        // Clean up all whitespace (spaces, newlines, tabs) and collapse to single space
+        let whitespace_re = Regex::new(r"\s+").unwrap();
+        let cleaned = whitespace_re.replace_all(&text, " ");
+
+        cleaned.trim().to_string()
     }
 
     /// Check if this chapter is a section header by comparing its href with the TOC structure
@@ -120,20 +129,8 @@ impl TextGenerator {
         }
     }
 
-    /// Extract section title - will be handled by TOC parsing
-    pub fn extract_section_title(&self, html_content: &str) -> Option<String> {
-        // Fallback to regular chapter title extraction
-        self.extract_chapter_title(html_content)
-    }
-
-    /// Parse EPUB table of contents to get hierarchical structure
     pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
-        debug!("TextGenerator::parse_toc_structure called");
         let result = self.toc_parser.parse_toc_structure(doc);
-        debug!(
-            "TextGenerator::parse_toc_structure returning {} entries",
-            result.len()
-        );
         result
     }
 
@@ -170,6 +167,28 @@ impl TextGenerator {
 
             Ok((final_text, chapter_title))
         }
+    }
+
+    /// Convert HTML headings to Markdown format
+    fn convert_headings_to_markdown(&self, text: &str) -> String {
+        let heading_re = Regex::new(r"(?s)<h([1-7])[^>]*>(.*?)</h[1-7]>").unwrap();
+
+        heading_re
+            .replace_all(text, |caps: &regex::Captures| {
+                let level = caps.get(1).unwrap().as_str();
+                let content = caps.get(2).unwrap().as_str().trim();
+
+                let level_num: usize = level.parse().unwrap_or(1);
+                let hashes = "#".repeat(level_num);
+                let final_content = if level_num == 1 {
+                    content.to_uppercase()
+                } else {
+                    content.to_string()
+                };
+
+                format!("\n\n{} {}\n\n", hashes, final_content)
+            })
+            .to_string()
     }
 
     fn clean_html_content(
@@ -274,8 +293,7 @@ impl TextGenerator {
             .replace("<div>", "")
             .replace("</div>", "\n");
 
-        let text = self.h_open_re.replace_all(&text, "\n\n").to_string();
-        let text = self.h_close_re.replace_all(&text, "\n\n").to_string();
+        let text = self.convert_headings_to_markdown(&text);
 
         // Only remove HTML tags, not content that looks like tags (e.g., <BOS>)
         // This regex only matches actual HTML tags starting with a letter or /
@@ -590,6 +608,132 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_heading_conversion_to_markdown() {
+        let generator = TextGenerator::new();
+
+        // Test h1 conversion (should be uppercase)
+        let html = "<h1>Main Title</h1>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n# MAIN TITLE\n\n");
+
+        // Test h2 conversion
+        let html = "<h2>Chapter Title</h2>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n## Chapter Title\n\n");
+
+        // Test h3 conversion
+        let html = "<h3>Section Title</h3>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n### Section Title\n\n");
+
+        // Test h4 conversion
+        let html = "<h4>Subsection</h4>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n#### Subsection\n\n");
+
+        // Test h5 conversion
+        let html = "<h5>Small Heading</h5>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n##### Small Heading\n\n");
+
+        // Test h6 conversion
+        let html = "<h6>Tiny Heading</h6>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n###### Tiny Heading\n\n");
+
+        // Test h7 conversion (rare but supported)
+        let html = "<h7>Very Tiny Heading</h7>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n####### Very Tiny Heading\n\n");
+    }
+
+    #[test]
+    fn test_heading_with_attributes() {
+        let generator = TextGenerator::new();
+
+        // Test heading with class attribute
+        let html = r#"<h2 class="chapter-title">Chapter One</h2>"#;
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n## Chapter One\n\n");
+
+        // Test heading with id attribute
+        let html = r#"<h3 id="section-1">Introduction</h3>"#;
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n### Introduction\n\n");
+
+        // Test heading with multiple attributes (h1 should be uppercase)
+        let html = r#"<h1 class="title" id="main" style="color: red;">Book Title</h1>"#;
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n# BOOK TITLE\n\n");
+    }
+
+    #[test]
+    fn test_heading_with_nested_content() {
+        let generator = TextGenerator::new();
+
+        // Test heading with nested emphasis
+        let html = "<h2>Chapter <em>One</em></h2>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n## Chapter <em>One</em>\n\n");
+
+        // Test heading with nested strong
+        let html = "<h3>Important <strong>Section</strong></h3>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n### Important <strong>Section</strong>\n\n");
+
+        // Test heading with nested span
+        let html = r#"<h2>Chapter <span class="number">2</span>: The Journey</h2>"#;
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(
+            result,
+            "\n\n## Chapter <span class=\"number\">2</span>: The Journey\n\n"
+        );
+    }
+
+    #[test]
+    fn test_multiple_headings() {
+        let generator = TextGenerator::new();
+
+        // Test multiple headings in sequence (h1 should be uppercase)
+        let html = "<h1>Title</h1><p>Some text</p><h2>Chapter</h2><p>More text</p><h3>Section</h3>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(
+            result,
+            "\n\n# TITLE\n\n<p>Some text</p>\n\n## Chapter\n\n<p>More text</p>\n\n### Section\n\n"
+        );
+    }
+
+    #[test]
+    fn test_heading_with_whitespace() {
+        let generator = TextGenerator::new();
+
+        // Test heading with extra whitespace
+        let html = "<h2>  Chapter Title  </h2>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n## Chapter Title\n\n");
+
+        // Test heading with newlines
+        let html = "<h3>\n    Section Title\n    </h3>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n### Section Title\n\n");
+    }
+
+    #[test]
+    fn test_heading_edge_cases() {
+        let generator = TextGenerator::new();
+
+        // Test empty heading
+        let html = "<h2></h2>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n## \n\n");
+
+        // Test heading with only whitespace
+        let html = "<h3>   </h3>";
+        let result = generator.convert_headings_to_markdown(html);
+        assert_eq!(result, "\n\n### \n\n");
+    }
+
+    #[test]
     fn test_is_section_header_with_toc_structure() {
         let generator = TextGenerator::new();
 
@@ -667,7 +811,8 @@ mod tests {
         "#;
 
         let extracted_title = generator.extract_chapter_title(html_content);
-        assert_eq!(extracted_title, Some("1. Simpleminded Hope".to_string()));
+        // The h1 tag contains "1 Simpleminded Hope" (without period), which should be prioritized over title tag
+        assert_eq!(extracted_title, Some("1 Simpleminded Hope".to_string()));
 
         let cleaned_content = generator.clean_html_content(html_content, &extracted_title, 80);
 
@@ -915,6 +1060,207 @@ mod tests {
         assert!(
             cleaned.contains("[internal link](chapter2.html)"),
             "Internal link not converted. Got: {}",
+            cleaned
+        );
+    }
+
+    #[test]
+    fn test_heading_conversion_in_clean_html() {
+        let generator = TextGenerator::new();
+
+        // Test full HTML processing with headings
+        let html = r#"
+            <html>
+            <body>
+                <h1>Book Title</h1>
+                <p>This is the introduction.</p>
+                <h2>Chapter 1: Getting Started</h2>
+                <p>Welcome to chapter one.</p>
+                <h3>Section 1.1: Prerequisites</h3>
+                <p>Before we begin, you need to know...</p>
+                <h4>Subsection: Tools</h4>
+                <p>The following tools are required.</p>
+            </body>
+            </html>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check that headings are converted to Markdown format (h1 should be uppercase)
+        assert!(
+            cleaned.contains("# BOOK TITLE"),
+            "H1 not converted to Markdown or not uppercase. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("## Chapter 1: Getting Started"),
+            "H2 not converted to Markdown. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("### Section 1.1: Prerequisites"),
+            "H3 not converted to Markdown. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("#### Subsection: Tools"),
+            "H4 not converted to Markdown. Got: {}",
+            cleaned
+        );
+
+        // Ensure paragraph text is preserved
+        assert!(cleaned.contains("This is the introduction"));
+        assert!(cleaned.contains("Welcome to chapter one"));
+        assert!(cleaned.contains("Before we begin, you need to know"));
+        assert!(cleaned.contains("The following tools are required"));
+    }
+
+    #[test]
+    fn test_heading_conversion_with_mixed_content() {
+        let generator = TextGenerator::new();
+
+        // Test headings mixed with other HTML elements
+        let html = r#"
+            <h2>Chapter <em>Two</em>: The <strong>Adventure</strong></h2>
+            <p>Some text with <a href="link.html">a link</a>.</p>
+            <h3>Section with <code>code</code></h3>
+            <blockquote>A quote here</blockquote>
+            <h4>Lists and More</h4>
+            <ul>
+                <li>Item 1</li>
+                <li>Item 2</li>
+            </ul>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check headings are converted properly even with nested tags
+        assert!(
+            cleaned.contains("##"),
+            "H2 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("###"),
+            "H3 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("####"),
+            "H4 markdown not found. Got: {}",
+            cleaned
+        );
+    }
+
+    #[test]
+    fn test_real_world_chapter_with_labels() {
+        let generator = TextGenerator::new();
+
+        // Test real-world HTML from a technical book with chapter labels and complex structure
+        let html = r#"
+            <h1><span class="label">Chapter 1. </span>Introduction to Building AI Applications with Foundation Models</h1>
+            <p><a contenteditable="false" data-primary="application building" data-type="indexterm" id="ch01.html0"></a>If I could use only one word to describe AI post-2020, it'd be <em>scale</em>. The AI models behind applications like ChatGPT, Google's Gemini, and Midjourney are at such a scale that they're consuming <a href="https://oreil.ly/J0IyO">a nontrivial portion</a> of the world's electricity, and we're at risk of <a href="https://arxiv.org/abs/2211.04325">running out of publicly available internet data</a> to train them.</p>
+            <p>The scaling up of AI models has two major consequences. First, AI models are becoming more powerful and capable of more tasks, enabling more applications. More people and teams leverage AI to increase productivity, create economic value, and improve quality of life.</p>
+            <p>Second, training large language models (LLMs) requires data, compute resources, and specialized talent that only a few organizations can afford. This has led to the emergence of <em>model as a service</em>: models developed by these few organizations are made available for others to use as a service. Anyone who wishes to leverage AI to build applications can now use these models to do so without having to invest up front in building a model.</p>
+            <p>In short, the demand for AI applications has increased while the barrier to entry for building AI applications has decreased. This has turned <em>AI engineering</em>—the process of building applications on top of readily available models—into one of the fastest-growing engineering disciplines.</p>
+            <p>Building applications on top of machine learning (ML) models isn't new. Long before LLMs became prominent, AI was already powering many applications, including product recommendations, fraud detection, and churn prediction. While many principles of productionizing AI applications remain the same, the new generation of large-scale, readily available models brings about new possibilities and new challenges, which are the focus of this book.</p>
+            <p>This chapter begins with an overview of foundation models, the key catalyst behind the explosion of AI engineering. I'll then discuss a range of successful AI use cases, each illustrating what AI is good and not yet good at. As AI's capabilities expand daily, predicting its future possibilities becomes increasingly challenging. However, existing application patterns can help uncover opportunities today and offer clues about how AI may continue to be used in the future.</p>
+            <p>To close out the chapter, I'll provide an overview of the new AI stack, including what has changed with foundation models, what remains the same, and how the role of an AI engineer today differs from that of a traditional ML engineer.<sup><a data-type="noteref" id="id534-marker" href="ch01.html#id534">1</a></sup></p>
+            <section data-type="sect1" data-pdf-bookmark="The Rise of AI Engineering"><div class="sect1" id="ch01_the_rise_of_ai_engineering_1730130814984854">
+                <h1>The Rise of AI Engineering</h1>
+                <p><a contenteditable="false" data-primary="AI engineering (AIE)" data-secondary="rise of AI engineering" data-type="indexterm" id="ch01.html1"></a><a contenteditable="false" data-primary="application building" data-secondary="rise of AI engineering" data-type="indexterm" id="ch01.html2"></a>Foundation models emerged from large language models, which, in turn, originated as just language models. While applications like ChatGPT and GitHub's Copilot may seem to have come out of nowhere, they are the culmination of decades of technology advancements, with the first language models emerging in the 1950s. This section traces the key breakthroughs that enabled the evolution from language models to AI engineering.</p>
+                <section data-type="sect2" data-pdf-bookmark="From Language Models to Large Language Models"><div class="sect2" id="ch01_from_language_models_to_large_language_models_1730130814984966">
+                    <h2>From Language Models to Large Language Models</h2>
+                </div></section>
+            </div></section>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Use multiline regex to check that key elements are present in the output
+        let expected_patterns = vec![
+            r"#.*CHAPTER 1.*INTRODUCTION TO BUILDING AI APPLICATIONS", // H1 heading
+            r"#.*THE RISE OF AI ENGINEERING",                          // Nested H1
+            r"##.*From Language Models to Large Language Models",      // H2 heading
+            r"_scale_",                                                // Emphasis preserved
+            r"\[a nontrivial portion\]\(https://oreil\.ly/J0IyO\)",    // Link 1
+            r"\[running out of publicly available internet data\]\(https://arxiv\.org/abs/2211\.04325\)", // Link 2
+            r"If I could use only one word to describe AI post-2020", // Text content
+            r"model as a service",                                    // Key phrase
+            r"AI engineering",                                        // Key phrase
+            r"traditional ML engineer",                               // Text with footnote
+        ];
+
+        for pattern in expected_patterns {
+            let re = Regex::new(pattern).unwrap();
+            assert!(
+                re.is_match(&cleaned),
+                "Pattern '{}' not found in output. Got:\n{}",
+                pattern,
+                cleaned
+            );
+        }
+    }
+
+    #[test]
+    fn test_complex_nested_heading_structure() {
+        let generator = TextGenerator::new();
+
+        // Test various complex heading structures that might appear in real EPUBs
+        let html = r#"
+            <h1><span class="part-number">Part I.</span> <span class="part-title">Getting Started</span></h1>
+            <h2><span class="chapter-number">1.</span> <span class="chapter-title">Introduction</span></h2>
+            <h3><span class="section-number">1.1</span> <span class="section-title">Overview</span></h3>
+            <h4><span>1.1.1</span> Background</h4>
+            <h5>Details</h5>
+            <h6>Fine Print</h6>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // All headings should be converted to appropriate markdown levels
+        assert!(
+            cleaned.contains("#"),
+            "No markdown headings found. Got: {}",
+            cleaned
+        );
+
+        // Check that nested spans are preserved in the heading content
+        assert!(
+            cleaned.contains("PART I") || cleaned.contains("PART I."),
+            "Part number not found in output. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("GETTING STARTED"),
+            "Part title not found in output. Got: {}",
+            cleaned
+        );
+
+        // Verify heading hierarchy is preserved
+        assert!(
+            cleaned.contains("##"),
+            "H2 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("###"),
+            "H3 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("####"),
+            "H4 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("#####"),
+            "H5 markdown not found. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("######"),
+            "H6 markdown not found. Got: {}",
             cleaned
         );
     }

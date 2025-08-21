@@ -478,6 +478,14 @@ impl TextReader {
                 lines.push(Line::from(String::new()));
                 line_count += 1;
             } else {
+                // Check if this is a markdown heading
+                let is_heading = line.starts_with('#');
+                let heading_level = if is_heading {
+                    line.chars().take_while(|&c| c == '#').count()
+                } else {
+                    0
+                };
+
                 // First, replace markdown links with just their text for wrapping purposes
                 // but keep track of link positions
                 let link_re = Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").unwrap();
@@ -511,11 +519,106 @@ impl TextReader {
                     lines.push(styled_line);
                     line_count += 1;
                 }
+
+                // Add decoration lines after headings
+                if is_heading && heading_level >= 1 && heading_level <= 3 {
+                    let decoration_line = match heading_level {
+                        1 => {
+                            // h1: thick line (using ━ character)
+                            let thick_line = "▀".repeat(width);
+                            raw_lines.push(thick_line.clone());
+                            Line::from(vec![Span::styled(
+                                thick_line,
+                                Style::default().fg(if is_focused {
+                                    palette.base_0a
+                                } else {
+                                    palette.base_03
+                                }),
+                            )])
+                        }
+                        2 => {
+                            // h2: double thin lines
+                            let thin_line = "═".repeat(width);
+                            raw_lines.push(thin_line.clone());
+                            let line1 = Line::from(vec![Span::styled(
+                                thin_line.clone(),
+                                Style::default().fg(if is_focused {
+                                    palette.base_0a
+                                } else {
+                                    palette.base_03
+                                }),
+                            )]);
+                            lines.push(line1);
+                            line_count += 1;
+
+                            raw_lines.push(thin_line.clone());
+                            Line::from(vec![Span::styled(
+                                thin_line,
+                                Style::default().fg(if is_focused {
+                                    palette.base_0a
+                                } else {
+                                    palette.base_03
+                                }),
+                            )])
+                        }
+                        3 => {
+                            // h3: single thin line
+                            let thin_line = "─".repeat(width);
+                            raw_lines.push(thin_line.clone());
+                            Line::from(vec![Span::styled(
+                                thin_line,
+                                Style::default().fg(if is_focused {
+                                    palette.base_0a
+                                } else {
+                                    palette.base_03
+                                }),
+                            )])
+                        }
+                        _ => Line::from(String::new()),
+                    };
+                    lines.push(decoration_line);
+                    line_count += 1;
+                }
             }
         }
 
         // Return both styled content and raw lines
         (Text::from(lines), raw_lines)
+    }
+
+    /// Parse markdown heading and return styled line
+    fn parse_markdown_heading(
+        &self,
+        line: &str,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) -> Line<'static> {
+        // Count the number of # symbols to determine heading level
+        let level = line.chars().take_while(|&c| c == '#').count();
+
+        // Extract the heading text (remove # symbols and trim)
+        let text = line.trim_start_matches('#').trim();
+
+        // Get focus-aware colors
+        let heading_color = if is_focused {
+            palette.base_0a // Yellow for all heading levels
+        } else {
+            palette.base_03 // Dimmed for unfocused
+        };
+
+        // Create the styled heading text
+        // For h4, add underline modifier
+        // For h5-h7, just bold
+        let modifiers = if level == 4 {
+            Modifier::BOLD | Modifier::UNDERLINED
+        } else {
+            Modifier::BOLD
+        };
+
+        Line::from(vec![Span::styled(
+            text.to_string(),
+            Style::default().fg(heading_color).add_modifier(modifiers),
+        )])
     }
 
     /// Parse styling for a wrapped line that may contain link text (but not the full markdown syntax)
@@ -527,6 +630,11 @@ impl TextReader {
         is_focused: bool,
         line_num: usize,
     ) -> Line<'static> {
+        // Check if this is a markdown heading
+        if line.starts_with('#') {
+            return self.parse_markdown_heading(line, palette, is_focused);
+        }
+
         let mut spans = Vec::new();
         let mut current_pos = 0;
 
@@ -609,6 +717,11 @@ impl TextReader {
         is_focused: bool,
         line_num: usize,
     ) -> Line<'static> {
+        // Check if this is a markdown heading
+        if line.starts_with('#') {
+            return self.parse_markdown_heading(line, palette, is_focused);
+        }
+
         let mut spans = Vec::new();
         let chars: Vec<char> = line.chars().collect();
         let mut i = 0;

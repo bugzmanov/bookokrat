@@ -2,18 +2,35 @@ ideas to implement:
  - images in ghosty terminal
      - images of various sized - needs larger size for large images
      - copy images to clipboard
- - HTML Support
-     - show raw html
-     - tables support
-     - links support 
-     - lists 
- - text cursor for reading ala vim normal mode
+ - HTML Support & markdown
+     [x] show raw html
+         [ ] Format html into readable
+         [ ] Navigate to the position where rendering mode was showing
+         [ ] Alow mouse selection & stuff
+     [ ] Markdown
+         [.] links support 
+             [x] external links
+             [ ] internal links
+         [ ] Horizontal rule
+         [x] Headers
+         [ ] Blockquote
+         [ ] tables support
+         [ ] bold & italic 
+         [ ] lists  
+         [.] Image
+         [ ] Code 
+ - Search
+     - Local to the chapter
+     - Quick search with jumps in books and navigation panel
+     - Global in the book
+     - Globali in the library
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - AI integreration
  - logs/debug window
  - NOTES & comments
  - settings window
      - make margins configurable + text color 
+ - text cursor for reading ala vim normal mode
  - Images in iterm and sixt protocol
 
  - integration with GOODREADS
@@ -21,11 +38,13 @@ ideas to implement:
 
 bugz: 
 ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
+without code block support comments like # are translated to header
+
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt
 - https://github.com/benjajaja/mdfried  - render headers as images to have different scales.. don't know if i like it
-
+- https://github.com/bgreenwell/doxx - docx reader
 
 CLAUD ideas:
 Phase 1: Local LLM Integration (Month 1-2)
