@@ -243,7 +243,11 @@ impl TextReader {
             } else if is_empty {
                 total_lines += 1;
             } else {
-                let wrapped_lines = textwrap::wrap(line, width);
+                // Process markdown links before wrapping (remove URL part for accurate line counting)
+                let link_re = Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap();
+                let line_for_wrapping = link_re.replace_all(line, "$1").to_string();
+
+                let wrapped_lines = textwrap::wrap(&line_for_wrapping, width);
                 total_lines += wrapped_lines.len();
             }
         }
@@ -371,7 +375,8 @@ impl TextReader {
         }
 
         // Calculate line count for image placement tracking
-        let mut line_count = 0;
+        // Start at 2 if we have a title (title line + empty line)
+        let mut line_count = if chapter_title.is_some() { 2 } else { 0 };
 
         // Process each line with manual wrapping
         for (_i, line) in text.lines().enumerate() {
@@ -396,7 +401,7 @@ impl TextReader {
                 if let Some(image_src) = extract_src(line.trim()) {
                     if let Some(image) = self.embedded_images.borrow_mut().get_mut(&image_src) {
                         //todo.. this +1 and +2 is very messy and needs to be consolidated
-                        image.lines_before_image = line_count + 2; // +2 <-- to account for empty line before and after the image
+                        image.lines_before_image = line_count; // +2 <-- to account for empty line before and after the image
                     } else {
                         error!(
                             "Image '{}' not found in embedded_images cache. This suggests preload_image_dimensions was not called or failed. THIS SHOULD NOT HAPPEN",
@@ -473,13 +478,36 @@ impl TextReader {
                 lines.push(Line::from(String::new()));
                 line_count += 1;
             } else {
-                // Wrap the line using textwrap
-                let wrapped_lines = textwrap::wrap(line, width);
+                // First, replace markdown links with just their text for wrapping purposes
+                // but keep track of link positions
+                let link_re = Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").unwrap();
+                let mut links_in_line = Vec::new();
+
+                // Collect all links in this line
+                for cap in link_re.captures_iter(line) {
+                    if let (Some(text), Some(url)) = (cap.get(1), cap.get(2)) {
+                        links_in_line.push((text.as_str().to_string(), url.as_str().to_string()));
+                    }
+                }
+
+                // Replace links with just text for wrapping
+                let line_for_wrapping = link_re.replace_all(line, "$1").to_string();
+
+                // Wrap the line
+                let wrapped_lines = textwrap::wrap(&line_for_wrapping, width);
                 for wrapped_line in wrapped_lines {
                     let line_str = wrapped_line.to_string();
                     raw_lines.push(line_str.clone());
-                    let styled_line =
-                        self.parse_line_styling_owned(&line_str, palette, is_focused, line_count);
+
+                    // Parse styling for this wrapped line segment
+                    // Note: Links are already processed, so we parse the text with link text visible
+                    let styled_line = self.parse_line_styling_for_wrapped(
+                        &line_str,
+                        &links_in_line,
+                        palette,
+                        is_focused,
+                        line_count,
+                    );
                     lines.push(styled_line);
                     line_count += 1;
                 }
@@ -488,6 +516,89 @@ impl TextReader {
 
         // Return both styled content and raw lines
         (Text::from(lines), raw_lines)
+    }
+
+    /// Parse styling for a wrapped line that may contain link text (but not the full markdown syntax)
+    fn parse_line_styling_for_wrapped(
+        &mut self,
+        line: &str,
+        links_in_original: &[(String, String)],
+        palette: &Base16Palette,
+        is_focused: bool,
+        line_num: usize,
+    ) -> Line<'static> {
+        let mut spans = Vec::new();
+        let mut current_pos = 0;
+
+        // Get focus-aware colors
+        let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+        let link_text_color = if is_focused {
+            palette.base_0c // Cyan for links when focused
+        } else {
+            palette.base_03 // Dimmed for unfocused links
+        };
+
+        // Check if any link text appears in this wrapped line segment
+        let mut found_links = Vec::new();
+        for (link_text, url) in links_in_original {
+            if let Some(pos) = line.find(link_text) {
+                found_links.push((pos, link_text.clone(), url.clone()));
+            }
+        }
+
+        // Sort by position to process in order
+        found_links.sort_by_key(|k| k.0);
+
+        // Process the line with link highlighting
+        for (link_pos, link_text, url) in found_links {
+            // Add text before the link
+            if link_pos > current_pos {
+                let before_text = &line[current_pos..link_pos];
+                if !before_text.is_empty() {
+                    spans.push(Span::styled(
+                        before_text.to_string(),
+                        Style::default().fg(normal_text_color),
+                    ));
+                }
+            }
+
+            // Store link information for click handling
+            self.links.push(LinkInfo {
+                text: link_text.clone(),
+                url: url.clone(),
+                line: line_num,
+                start_col: link_pos,
+                end_col: link_pos + link_text.len(),
+            });
+
+            // Add the link with styling
+            spans.push(Span::styled(
+                link_text.clone(),
+                Style::default()
+                    .fg(link_text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ));
+
+            current_pos = link_pos + link_text.len();
+        }
+
+        // Add any remaining text
+        if current_pos < line.len() {
+            let remaining = &line[current_pos..];
+            if !remaining.is_empty() {
+                spans.push(Span::styled(
+                    remaining.to_string(),
+                    Style::default().fg(normal_text_color),
+                ));
+            }
+        }
+
+        if spans.is_empty() {
+            // No links found, process normally for other styling (bold, quotes)
+            self.parse_line_styling_owned(line, palette, is_focused, line_num)
+        } else {
+            Line::from(spans)
+        }
     }
 
     /// Parse styling for a single line (bold, quotes, links, etc.) - owned version for caching
@@ -552,8 +663,17 @@ impl TextReader {
                         }
 
                         // Store link information for click handling
-                        let start_col = spans.iter().map(|s| s.content.len()).sum::<usize>();
-                        let end_col = start_col + link_text.len();
+                        // Calculate the actual position where the link text will appear in the rendered line
+                        // This is the position BEFORE adding the link span
+                        let mut rendered_pos = 0;
+                        for span in &spans {
+                            rendered_pos += span.content.chars().count();
+                        }
+                        rendered_pos += current_text.chars().count(); // Add any pending text
+
+                        let start_col = rendered_pos;
+                        let end_col = start_col + link_text.chars().count();
+
                         self.links.push(LinkInfo {
                             text: link_text.clone(),
                             url: url.clone(),
@@ -745,17 +865,13 @@ impl TextReader {
     }
 
     /// Check if a click at the given coordinates is on a link
-    pub fn get_link_at_position(&self, x: u16, y: u16) -> Option<&LinkInfo> {
-        if let Some(content_area) = self.last_content_area {
-            // Convert screen coordinates to content coordinates
-            let rel_x = x.saturating_sub(content_area.x) as usize;
-            let rel_y = (y.saturating_sub(content_area.y) as usize) + self.scroll_offset;
-
-            // Find link at this position
-            for link in &self.links {
-                if link.line == rel_y && rel_x >= link.start_col && rel_x < link.end_col {
-                    return Some(link);
-                }
+    pub fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo> {
+        debug!("Links - {:?}", &self.links[0..5]);
+        debug!("mouse position - {}:{}", line, column);
+        for link in &self.links {
+            if link.line == line && column >= link.start_col && column < link.end_col {
+                debug!("Found link match: '{}'", link.url);
+                return Some(link);
             }
         }
         None
@@ -1008,7 +1124,14 @@ impl TextReader {
 
     /// Handle mouse down event for text selection
     pub fn handle_mouse_down(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+        // Check if click is on a link first
         if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
+            if self.get_link_at_position(line, column).is_some() {
+                // Don't start text selection if clicking on a link
+                debug!("Mouse down on link, skipping text selection");
+                return;
+            }
+
             debug!(
                 "Mouse down at text coordinates: line {}, column {}",
                 line, column
@@ -1058,13 +1181,48 @@ impl TextReader {
     }
 
     /// Handle mouse up event for text selection
-    pub fn handle_mouse_up(&mut self, screen_x: u16, screen_y: u16, content_area: Rect) {
+    /// Returns Some(url) if a link was clicked without text selection
+    pub fn handle_mouse_up(
+        &mut self,
+        screen_x: u16,
+        screen_y: u16,
+        content_area: Rect,
+    ) -> Option<String> {
         // Stop auto-scrolling when mouse is released
         self.auto_scroll_state = None;
+
+        let mut link_url = None;
+
         if let Some((line, column)) = self.screen_to_text_coords(screen_x, screen_y, content_area) {
             self.text_selection.update_selection(line, column);
+
+            // Check if this is just a click (no meaningful selection)
+            // Selection is considered meaningful if start and end are different
+            let is_just_click = if let (Some(start), Some(end)) =
+                (&self.text_selection.start, &self.text_selection.end)
+            {
+                start.line == end.line && (start.column as i32 - end.column as i32).abs() <= 1
+            } else {
+                true
+            };
+
+            // If it's just a click (no selection), check for link
+            if is_just_click {
+                if let Some(link) = self.get_link_at_position(line, column) {
+                    link_url = Some(link.url.clone());
+                    debug!("Link clicked: {}", link.url);
+                }
+            }
         }
+
         self.text_selection.end_selection();
+
+        // Clear selection if it was just a click
+        if link_url.is_some() {
+            self.text_selection.clear_selection();
+        }
+
+        link_url
     }
 
     /// Clear text selection

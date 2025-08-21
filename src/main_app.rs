@@ -791,10 +791,12 @@ impl App {
         use std::time::Duration;
 
         let start_time = std::time::Instant::now();
-        debug!(
-            "handle_mouse_event called with: {:?} at ({}, {})",
-            initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
-        );
+        if initial_mouse_event.kind != MouseEventKind::Moved {
+            debug!(
+                "handle_mouse_event called with: {:?} at ({}, {})",
+                initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
+            );
+        }
 
         // Extra validation for horizontal scrolls to prevent crossterm overflow bug
         if matches!(
@@ -1036,14 +1038,7 @@ impl App {
                     match click_type {
                         ClickType::Single => {
                             // Check if click is on a link first
-                            if let Some(link_info) = self
-                                .text_reader
-                                .get_link_at_position(mouse_event.column, mouse_event.row)
-                            {
-                                // Handle link click - open in external browser or navigate internally
-                                let url = link_info.url.clone();
-                                self.handle_link_click(&url);
-                            } else if let Some(image_src) = self.text_reader.check_image_click(
+                            if let Some(image_src) = self.text_reader.check_image_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 content_area,
@@ -1083,11 +1078,19 @@ impl App {
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
-                    self.text_reader.handle_mouse_up(
+                    if let Some(url) = self.text_reader.handle_mouse_up(
                         mouse_event.column,
                         mouse_event.row,
                         content_area,
-                    );
+                    ) {
+                        // Check if it's an external link (not internal to the book)
+                        if url.starts_with("http://") || url.starts_with("https://") {
+                            self.open_external_link(&url);
+                        } else {
+                            // Internal link - will be implemented later
+                            debug!("Internal link clicked (not yet implemented): {}", url);
+                        }
+                    }
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
@@ -1111,7 +1114,7 @@ impl App {
                 }
             }
             _ => {
-                debug!("Unhandled mouse event: {:?}", mouse_event.kind);
+                //do nothing
             }
         }
     }
@@ -1148,6 +1151,15 @@ impl App {
             if let Err(e) = open::that(url) {
                 error!("Failed to open link in browser: {}", e);
             }
+        }
+    }
+
+    fn open_external_link(&mut self, url: &str) {
+        debug!("Opening external link: {}", url);
+
+        // Use the open crate to open the URL in the default browser
+        if let Err(e) = open::that(url) {
+            error!("Failed to open URL {}: {}", url, e);
         }
     }
 

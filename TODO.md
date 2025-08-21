@@ -22,6 +22,10 @@ ideas to implement:
 bugz: 
 ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
 
+Tools with cool ratatui UI: 
+- https://github.com/erikjuhani/basalt
+- https://github.com/benjajaja/mdfried  - render headers as images to have different scales.. don't know if i like it
+
 
 CLAUD ideas:
 Phase 1: Local LLM Integration (Month 1-2)

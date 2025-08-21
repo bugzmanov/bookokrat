@@ -178,10 +178,27 @@ impl TextGenerator {
         chapter_title: &Option<String>,
         terminal_width: usize,
     ) -> String {
+        // First remove XML declaration and DOCTYPE
+        let xml_decl_re = Regex::new(r"<\?xml[^?]*\?>").unwrap();
+        let doctype_re = Regex::new(r"(?i)<!DOCTYPE[^>]*>").unwrap();
+        let mut content = xml_decl_re.replace_all(content, "").into_owned();
+        content = doctype_re.replace_all(&content, "").into_owned();
+
+        // Remove style and script tags
         let style_re = Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
         let script_re = Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
-        let mut content = style_re.replace_all(content, "").into_owned();
+        content = style_re.replace_all(&content, "").into_owned();
         content = script_re.replace_all(&content, "").into_owned();
+
+        // Remove head tag and all its contents
+        let head_re = Regex::new(r"(?s)<head[^>]*>.*?</head>").unwrap();
+        content = head_re.replace_all(&content, "").into_owned();
+
+        // Remove html and body tags (but keep their content)
+        let html_open_re = Regex::new(r"</?html[^>]*>").unwrap();
+        let body_open_re = Regex::new(r"</?body[^>]*>").unwrap();
+        content = html_open_re.replace_all(&content, "").into_owned();
+        content = body_open_re.replace_all(&content, "").into_owned();
 
         // Process links before removing tags - replace with markdown-style format
         let link_re = Regex::new(r#"<a[^>]*\shref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap();
@@ -878,6 +895,28 @@ mod tests {
         assert!(parsed.contains("love"));
         // Check for table content (Ratatui creates clean aligned tables)
         assert!(parsed.len() > 0);
+    }
+
+    #[test]
+    fn test_link_extraction() {
+        let generator = TextGenerator::new();
+
+        // Test HTML with links
+        let html = r#"<p>Text with <a href="https://example.com">external link</a> and <a href="chapter2.html">internal link</a>.</p>"#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Should contain markdown-style links
+        assert!(
+            cleaned.contains("[external link](https://example.com)"),
+            "External link not converted. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("[internal link](chapter2.html)"),
+            "Internal link not converted. Got: {}",
+            cleaned
+        );
     }
 
     #[test]

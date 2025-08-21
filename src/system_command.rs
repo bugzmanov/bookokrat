@@ -4,6 +4,7 @@ use std::process::Command;
 pub trait SystemCommandExecutor {
     fn open_file(&self, path: &str) -> Result<(), String>;
     fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String>;
+    fn open_url(&self, url: &str) -> Result<(), String>;
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
@@ -59,6 +60,25 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
                 e
             )),
         }
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        // Determine the command based on the operating system
+        let (command, args) = if cfg!(target_os = "macos") {
+            ("open", vec![url])
+        } else if cfg!(target_os = "windows") {
+            ("cmd", vec!["/C", "start", "", url])
+        } else {
+            // Linux and other Unix-like systems
+            ("xdg-open", vec![url])
+        };
+
+        Command::new(command)
+            .args(&args)
+            .spawn()
+            .map_err(|e| format!("Failed to open URL: {}", e))?;
+
+        Ok(())
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -205,6 +225,17 @@ impl SystemCommandExecutor for MockSystemCommandExecutor {
         self.executed_commands
             .borrow_mut()
             .push(format!("{}@chapter{}", path, chapter));
+        if self.should_fail {
+            Err("Mock failure".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        self.executed_commands
+            .borrow_mut()
+            .push(format!("URL:{}", url));
         if self.should_fail {
             Err("Mock failure".to_string())
         } else {

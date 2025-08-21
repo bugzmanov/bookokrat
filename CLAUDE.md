@@ -22,6 +22,13 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - Vim-like keybindings throughout the interface
 - Bookmark persistence and reading progress tracking
 - Cross-platform support (macOS, Windows, Linux)
+- Embedded image display with dynamic sizing and placeholder support
+- Syntax highlighting for code blocks
+- Link display and handling
+- Background image loading and caching
+- Image popup viewer for detailed image viewing
+- Performance profiling support
+- FPS monitoring for UI performance
 
 ## Key Commands
 
@@ -42,6 +49,8 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - **EPUB Inspector**: `cargo run --example epub_inspector <file.epub>` - Extracts and displays raw HTML content from EPUB chapters for debugging text processing issues
 - **Panic Test**: `cargo run --example panic_test` - Interactive test to verify panic handler properly restores mouse functionality
 - **Simulated Input Example**: `cargo run --example simulated_input_example` - Demonstrates running the app with simulated keyboard input for testing
+- **Table Formatting Test**: `cargo run --example test_table_formatting` - Tests table formatting in EPUB content
+- **Table Parsing Test**: `cargo run --example test_table_parsing` - Tests table parsing capabilities
 
 ## Architecture
 
@@ -61,6 +70,9 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
    - Text selection and clipboard integration
    - Bookmark management with throttled saving
    - Reading history popup management
+   - Image popup display and interaction
+   - Performance profiling integration with pprof
+   - FPS monitoring through `FPSCounter` struct
 
 3. **bookmark.rs** - Bookmark persistence (src/bookmark.rs)
    - `Bookmark` struct: Stores chapter, scroll position, and timestamp
@@ -108,6 +120,12 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
    - Half-screen scrolling with visual highlights
    - Text selection integration
    - Implements `VimNavMotions` for consistent navigation
+   - Embedded image display with dynamic sizing
+   - Image placeholders with loading status
+   - Link information extraction and display
+   - Auto-scroll functionality during text selection
+   - Raw HTML viewing mode toggle
+   - Background image loading coordination
 
 10. **text_selection.rs** - Text selection system (src/text_selection.rs)
     - `TextSelection` struct: Manages selection state and rendering
@@ -124,6 +142,10 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Paragraph formatting with proper indentation
     - Entity decoding (e.g., &mdash;, &ldquo;)
     - Code block detection and formatting
+    - Table parsing and formatting
+    - Image tag extraction and placeholder insertion
+    - Link extraction and formatting
+    - Syntax highlighting support for code blocks
 
 12. **reading_history.rs** - Recent books popup (src/reading_history.rs)
     - `ReadingHistory` struct: Manages history display and interaction
@@ -158,8 +180,50 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Terminal state restoration on panic to prevent broken terminal
     - Proper mouse capture restoration to maintain mouse functionality post-panic
 
+17. **syntax_highlighter.rs** - Code syntax highlighting (src/syntax_highlighter.rs)
+    - `SyntaxHighlighter` struct: Provides syntax highlighting for code blocks
+    - Uses syntect library for highlighting
+    - Multiple theme support (Monokai, base16 themes)
+    - Language detection and appropriate syntax rules
+    - Converts highlighted code to ratatui-compatible styled text
+
+### Image Components (src/images/)
+
+18. **image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
+    - `ImageStorage` struct: Manages extracted EPUB images
+    - Automatic image extraction from EPUB files
+    - Directory-based caching in `temp_images/`
+    - Thread-safe storage with Arc<Mutex>
+    - Deduplication of already extracted images
+
+19. **book_images.rs** - Book-specific image management (src/images/book_images.rs)
+    - `BookImages` struct: Manages images for current book
+    - Image path resolution from EPUB resources
+    - Integration with ImageStorage for caching
+    - Support for various image formats (PNG, JPEG, etc.)
+
+20. **image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
+    - `ImagePlaceholder` struct: Displays loading/error states
+    - `LoadingStatus` enum: NotStarted, Loading, Loaded, Failed
+    - Visual feedback during image loading
+    - Error message display for failed loads
+    - Configurable styling and dimensions
+
+21. **image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
+    - `ImagePopup` struct: Modal image display
+    - Full-screen overlay with centered image
+    - Keyboard controls (Esc to close, navigation)
+    - Mouse interaction support
+    - Image scaling and aspect ratio preservation
+
+22. **background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
+    - `BackgroundImageLoader` struct: Non-blocking image loads
+    - Thread-based background loading
+    - Prevents UI freezing during image loading
+    - Callback-based completion notification
+
 ### Key Dependencies (Cargo.toml)
-- `ratatui` (0.26.1): Terminal UI framework
+- `ratatui` (0.29.0): Terminal UI framework
 - `crossterm` (0.27.0): Cross-platform terminal manipulation
 - `epub` (1.1.0): EPUB file parsing
 - `regex` (1.10.3): HTML tag processing
@@ -175,7 +239,13 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - `zip` (0.6): EPUB file handling
 - `tempfile` (3.8): Temporary file management
 - `textwrap` (0.16): Text wrapping utilities
-- `pprof` (0.13): Performance profiling support
+- `pprof` (0.15): Performance profiling support
+- `ratatui-image` (local path): Terminal image rendering
+- `image` (0.25): Image processing and manipulation
+- `fast_image_resize` (3.0): Fast image resizing
+- `imagesize` (0.13): Image dimension detection
+- `open` (5.3): Cross-platform file opening
+- `syntect` (via dependencies): Syntax highlighting
 
 ### State Management
 The application maintains state through the `App` struct in `main_app.rs` which includes:
@@ -189,18 +259,29 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 - Focus tracking between panels
 - Multi-key sequence handling for vim motions
 - Mouse event batching for smooth scrolling
+- Image storage and caching system
+- Book-specific image management
+- Image popup display state
+- Background image loading coordination
+- Performance profiler state
+- FPS counter for performance monitoring
 
 ### Content Processing Pipeline
 1. EPUB file is opened and validated
-2. Table of contents is parsed from NCX or Nav documents
-3. Chapter HTML content is extracted via epub crate
-4. Chapter title is extracted from h1/h2/title tags
-5. HTML is cleaned (scripts, styles removed)
-6. HTML entities are decoded
-7. Code blocks are detected and preserved
-8. Tags are converted to text formatting
-9. Paragraphs are indented for readability
-10. Text is wrapped to terminal width
+2. Images are extracted and cached to `temp_images/` directory
+3. Table of contents is parsed from NCX or Nav documents
+4. Chapter HTML content is extracted via epub crate
+5. Chapter title is extracted from h1/h2/title tags
+6. HTML is cleaned (scripts, styles removed)
+7. HTML entities are decoded
+8. Code blocks are detected and preserved with syntax highlighting
+9. Tables are parsed and formatted for terminal display
+10. Image tags are replaced with placeholders
+11. Links are extracted and formatted
+12. Tags are converted to text formatting
+13. Paragraphs are indented for readability
+14. Text is wrapped to terminal width
+15. Images are loaded asynchronously in background
 
 ### User Interface Features
 - **Navigation Panel**: Switchable between book list and table of contents
@@ -213,6 +294,14 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 - **External Reader Integration**: Open books in GUI EPUB readers
 - **Responsive Design**: Adjusts to terminal size changes
 - **Vim Navigation**: Consistent vim-like keybindings throughout
+- **Embedded Images**: Display images inline with dynamic sizing
+- **Image Placeholders**: Loading indicators for images
+- **Image Popup**: Full-screen image viewer with keyboard controls
+- **Syntax Highlighting**: Colored code blocks with language detection
+- **Table Support**: Formatted table display in terminal
+- **Link Display**: Clickable links with URL information
+- **FPS Monitor**: Real-time performance monitoring
+- **Raw HTML View**: Toggle to view original HTML content
 
 ### Keyboard Controls
 - `j`/`k`: Navigate file list, TOC, or scroll content (line by line)
@@ -226,15 +315,20 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 - `Ctrl+o`: Open current book in external EPUB reader
 - `g`/`G`: Go to top/bottom (vim-style)
 - `gg`: Go to beginning (vim-style multi-key)
+- `i`: Open image popup when cursor is on an image
+- `v`: Toggle raw HTML view
+- `p`: Start/stop performance profiling
 - `q`: Quit the application
-- `Esc`: Cancel text selection or close popups
+- `Esc`: Cancel text selection, close popups, or exit image viewer
 
 ### Mouse Controls
-- **Click**: Select items in lists or TOC
+- **Click**: Select items in lists or TOC, or click on images/links
 - **Drag**: Select text in reading area
 - **Double-click**: Select word
 - **Triple-click**: Select paragraph
 - **Scroll**: Scroll content or navigate lists
+- **Click on image**: Open image in popup viewer
+- **Click on link**: Display link URL information
 
 ## Snapshot Testing
 
@@ -364,6 +458,25 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Text selection automatically scrolls the view when dragging near edges
 - The application supports both EPUB2 (NCX) and EPUB3 (Nav) table of contents formats
 - External EPUB readers are detected based on the platform (macOS, Windows, Linux)
+- Images are extracted to `temp_images/` directory and cached for performance
+- Image loading happens asynchronously to prevent UI blocking
+- Syntax highlighting uses syntect with multiple theme options
+- Tables are parsed and formatted for terminal display
+- Performance profiling can be enabled with pprof integration
+- FPS monitoring helps track UI performance in real-time
+- The application uses a local fork of ratatui-image for terminal image rendering
 
-- one of the most important aspects of this project is perfomance. never make a significant change like switching a library if that wasn't instructed and if it's clearly would generate worse performance results
-- when logging errors, the received error object should always be logged (when possible). never log a guess of what might have happened. only actual errors
+## Performance Considerations
+- **CRITICAL**: Performance is one of the most important aspects of this project
+- Never make significant changes like switching libraries unless explicitly instructed
+- Always consider performance implications of any changes
+- Image loading is done asynchronously to maintain UI responsiveness
+- Images are cached after extraction to avoid repeated disk I/O
+- Text content is cached to avoid expensive re-parsing
+- Mouse events are batched to prevent performance degradation
+
+## Error Handling Guidelines
+- When logging errors, the received error object should always be logged (when possible)
+- Never log a guess of what might have happened - only actual errors
+- Use proper error context with anyhow for better debugging
+- Preserve error chains for proper error tracing
