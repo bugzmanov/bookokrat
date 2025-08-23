@@ -621,6 +621,87 @@ impl TextReader {
         )])
     }
 
+    /// Parse list item and return styled line
+    fn parse_list_item(
+        &self,
+        line: &str,
+        palette: &Base16Palette,
+        is_focused: bool,
+        is_numbered: bool,
+    ) -> Line<'static> {
+        let mut spans = Vec::new();
+
+        // Get focus-aware colors
+        let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+        let list_marker_color = if is_focused {
+            palette.base_0b // Green for list markers when focused
+        } else {
+            palette.base_03 // Dimmed for unfocused
+        };
+
+        if is_numbered {
+            // Parse numbered list item (e.g., "1. Item text")
+            if let Some(captures) = Regex::new(r"^(\d+\.) (.*)").unwrap().captures(line) {
+                if let (Some(number), Some(content)) = (captures.get(1), captures.get(2)) {
+                    // Add indentation for nested appearance
+                    spans.push(Span::styled("  ".to_string(), Style::default()));
+                    // Add styled number
+                    spans.push(Span::styled(
+                        number.as_str().to_string(),
+                        Style::default()
+                            .fg(list_marker_color)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled(" ".to_string(), Style::default()));
+                    // Add content
+                    spans.push(Span::styled(
+                        content.as_str().to_string(),
+                        Style::default().fg(normal_text_color),
+                    ));
+                }
+            }
+        } else {
+            // Parse bullet list item (e.g., "• Item text" or "- Item text")
+            let (marker, content) = if line.starts_with("• ") {
+                // Use char boundary safe slicing for multi-byte bullet character
+                let content_start = "• ".len(); // This gets the byte length of "• "
+                ("•", &line[content_start..])
+            } else if line.starts_with("- ") {
+                ("•", &line[2..]) // Dash is single byte, safe to use index 2
+            } else {
+                return Line::from(vec![Span::styled(
+                    line.to_string(),
+                    Style::default().fg(normal_text_color),
+                )]);
+            };
+
+            // Add indentation for nested appearance
+            spans.push(Span::styled("  ".to_string(), Style::default()));
+            // Add styled bullet
+            spans.push(Span::styled(
+                marker.to_string(),
+                Style::default()
+                    .fg(list_marker_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(" ".to_string(), Style::default()));
+            // Add content
+            spans.push(Span::styled(
+                content.to_string(),
+                Style::default().fg(normal_text_color),
+            ));
+        }
+
+        if spans.is_empty() {
+            Line::from(vec![Span::styled(
+                line.to_string(),
+                Style::default().fg(normal_text_color),
+            )])
+        } else {
+            Line::from(spans)
+        }
+    }
+
     /// Parse styling for a wrapped line that may contain link text (but not the full markdown syntax)
     fn parse_line_styling_for_wrapped(
         &mut self,
@@ -633,6 +714,18 @@ impl TextReader {
         // Check if this is a markdown heading
         if line.starts_with('#') {
             return self.parse_markdown_heading(line, palette, is_focused);
+        }
+
+        // Check if this is a list item
+        if line.starts_with("• ") || line.starts_with("- ") {
+            return self.parse_list_item(line, palette, is_focused, false);
+        }
+
+        // Check if this is a numbered list item
+        if let Some(captures) = Regex::new(r"^(\d+)\. ").unwrap().captures(line) {
+            if captures.get(1).is_some() {
+                return self.parse_list_item(line, palette, is_focused, true);
+            }
         }
 
         let mut spans = Vec::new();
@@ -720,6 +813,18 @@ impl TextReader {
         // Check if this is a markdown heading
         if line.starts_with('#') {
             return self.parse_markdown_heading(line, palette, is_focused);
+        }
+
+        // Check if this is a list item
+        if line.starts_with("• ") || line.starts_with("- ") {
+            return self.parse_list_item(line, palette, is_focused, false);
+        }
+
+        // Check if this is a numbered list item
+        if let Some(captures) = Regex::new(r"^(\d+)\. ").unwrap().captures(line) {
+            if captures.get(1).is_some() {
+                return self.parse_list_item(line, palette, is_focused, true);
+            }
         }
 
         let mut spans = Vec::new();

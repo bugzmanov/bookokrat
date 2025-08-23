@@ -36,15 +36,25 @@ ideas to implement:
  - integration with GOODREADS
  - ASCII art animation
 
-bugz: 
+Ideas to properly try:
+ - Markdown proper parsing instead of regexp (like in basalt)
+
+
+bugs: 
+---------------------
+Nested chapter should have better representation (now they are treate like one blob) 
+Internal links is not supported yet
 ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
 without code block support comments like # are translated to header
+
 
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt
 - https://github.com/benjajaja/mdfried  - render headers as images to have different scales.. don't know if i like it
 - https://github.com/bgreenwell/doxx - docx reader
+
+
 
 CLAUD ideas:
 Phase 1: Local LLM Integration (Month 1-2)

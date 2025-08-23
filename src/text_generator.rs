@@ -191,6 +191,47 @@ impl TextGenerator {
             .to_string()
     }
 
+    /// Convert HTML lists to markdown format
+    fn convert_lists_to_markdown(&self, text: &str) -> String {
+        // Handle unordered lists
+        let ul_re = Regex::new(r"(?s)<ul[^>]*>(.*?)</ul>").unwrap();
+        let mut content = ul_re
+            .replace_all(text, |caps: &regex::Captures| {
+                let list_content = caps.get(1).unwrap().as_str();
+                let li_re = Regex::new(r"(?s)<li[^>]*>(.*?)</li>").unwrap();
+                let mut result = String::new();
+                for li_cap in li_re.captures_iter(list_content) {
+                    if let Some(item_content) = li_cap.get(1) {
+                        let cleaned_item = item_content.as_str().trim();
+                        result.push_str(&format!("• {}\n", cleaned_item));
+                    }
+                }
+                format!("\n{}\n", result)
+            })
+            .to_string();
+
+        // Handle ordered lists
+        let ol_re = Regex::new(r"(?s)<ol[^>]*>(.*?)</ol>").unwrap();
+        content = ol_re
+            .replace_all(&content, |caps: &regex::Captures| {
+                let list_content = caps.get(1).unwrap().as_str();
+                let li_re = Regex::new(r"(?s)<li[^>]*>(.*?)</li>").unwrap();
+                let mut result = String::new();
+                let mut index = 1;
+                for li_cap in li_re.captures_iter(list_content) {
+                    if let Some(item_content) = li_cap.get(1) {
+                        let cleaned_item = item_content.as_str().trim();
+                        result.push_str(&format!("{}. {}\n", index, cleaned_item));
+                        index += 1;
+                    }
+                }
+                format!("\n{}\n", result)
+            })
+            .to_string();
+
+        content
+    }
+
     fn clean_html_content(
         &self,
         content: &str,
@@ -222,6 +263,9 @@ impl TextGenerator {
         // Process links before removing tags - replace with markdown-style format
         let link_re = Regex::new(r#"<a[^>]*\shref\s*=\s*["']([^"']+)["'][^>]*>(.*?)</a>"#).unwrap();
         content = link_re.replace_all(&content, "[$2]($1)").into_owned();
+
+        // Convert lists to markdown format before removing tags
+        content = self.convert_lists_to_markdown(&content);
 
         if let Some(_title) = chapter_title {
             // Remove h1/h2 tags that contain the chapter title
@@ -334,6 +378,41 @@ impl TextGenerator {
                 continue;
             }
 
+            // Check if this is the start of a list block
+            if self.is_list_item(paragraph) {
+                // Collect consecutive list items
+                let mut list_items = vec![paragraph];
+                let mut j = i + 1;
+
+                while j < paragraphs.len() && self.is_list_item(paragraphs[j]) {
+                    list_items.push(paragraphs[j]);
+                    j += 1;
+                }
+
+                // Format list block without empty lines between items
+                for (idx, list_item) in list_items.iter().enumerate() {
+                    // Process each line in the list item (in case it spans multiple lines)
+                    let lines: Vec<&str> = list_item.lines().collect();
+                    for (line_idx, line) in lines.iter().enumerate() {
+                        formatted.push_str(line);
+                        if line_idx < lines.len() - 1 {
+                            formatted.push('\n');
+                        }
+                    }
+                    if idx < list_items.len() - 1 {
+                        formatted.push('\n');
+                    }
+                }
+
+                // Add empty line after list block
+                if j < paragraphs.len() {
+                    formatted.push_str("\n\n");
+                }
+
+                i = j;
+                continue;
+            }
+
             // Check if this is the start of a dialog block
             if self.is_dialog_line(paragraph) {
                 // Collect consecutive dialog lines
@@ -382,6 +461,20 @@ impl TextGenerator {
         }
 
         formatted
+    }
+
+    /// Check if a line is a list item (bullet or numbered)
+    fn is_list_item(&self, text: &str) -> bool {
+        let trimmed = text.trim_start();
+        // Check for bullet points
+        if trimmed.starts_with("• ") || trimmed.starts_with("- ") {
+            return true;
+        }
+        // Check for numbered lists
+        if let Some(captures) = Regex::new(r"^\d+\. ").unwrap().captures(trimmed) {
+            return captures.get(0).is_some();
+        }
+        false
     }
 
     /// Check if a line starts with a dialog marker (various types of dashes)
@@ -1261,6 +1354,183 @@ mod tests {
         assert!(
             cleaned.contains("######"),
             "H6 markdown not found. Got: {}",
+            cleaned
+        );
+    }
+
+    #[test]
+    fn test_unordered_list_conversion() {
+        let generator = TextGenerator::new();
+
+        // Test simple unordered list
+        let html = r#"
+        <p>Some text before list.</p>
+        <ul>
+            <li>First item</li>
+            <li>Second item</li>
+            <li>Third item</li>
+        </ul>
+        <p>Some text after list.</p>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check that list items are converted to bullet points
+        assert!(
+            cleaned.contains("• First item"),
+            "First item not converted to bullet. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("• Second item"),
+            "Second item not converted to bullet. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("• Third item"),
+            "Third item not converted to bullet. Got: {}",
+            cleaned
+        );
+
+        // Check that surrounding text is preserved
+        assert!(cleaned.contains("Some text before list"));
+        assert!(cleaned.contains("Some text after list"));
+    }
+
+    #[test]
+    fn test_ordered_list_conversion() {
+        let generator = TextGenerator::new();
+
+        // Test simple ordered list
+        let html = r#"
+        <p>Steps to follow:</p>
+        <ol>
+            <li>Open the file</li>
+            <li>Edit the content</li>
+            <li>Save and close</li>
+        </ol>
+        <p>That's it!</p>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check that list items are converted to numbered format
+        assert!(
+            cleaned.contains("1. Open the file"),
+            "First item not numbered. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("2. Edit the content"),
+            "Second item not numbered. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("3. Save and close"),
+            "Third item not numbered. Got: {}",
+            cleaned
+        );
+
+        // Check that surrounding text is preserved
+        assert!(cleaned.contains("Steps to follow"));
+        assert!(cleaned.contains("That's it!"));
+    }
+
+    #[test]
+    fn test_list_formatting_no_empty_lines() {
+        let generator = TextGenerator::new();
+
+        // Test that list items are not separated by empty lines
+        let text_with_list = "Some paragraph.\n\n• First item\n\n• Second item\n\n• Third item\n\nAnother paragraph.";
+
+        let formatted = generator.format_text_with_spacing(text_with_list);
+
+        // List items should be on consecutive lines
+        assert!(
+            formatted.contains("• First item\n• Second item\n• Third item"),
+            "List items should not have empty lines between them. Got: {}",
+            formatted
+        );
+
+        // There should be empty lines before and after the list block
+        assert!(formatted.contains("Some paragraph.\n\n• First item"));
+        assert!(formatted.contains("• Third item\n\nAnother paragraph"));
+    }
+
+    #[test]
+    fn test_numbered_list_formatting() {
+        let generator = TextGenerator::new();
+
+        // Test that numbered list items are not separated by empty lines
+        let text_with_list =
+            "Introduction.\n\n1. First step\n\n2. Second step\n\n3. Third step\n\nConclusion.";
+
+        let formatted = generator.format_text_with_spacing(text_with_list);
+
+        // List items should be on consecutive lines
+        assert!(
+            formatted.contains("1. First step\n2. Second step\n3. Third step"),
+            "Numbered list items should not have empty lines between them. Got: {}",
+            formatted
+        );
+    }
+
+    #[test]
+    fn test_mixed_list_types() {
+        let generator = TextGenerator::new();
+
+        // Test HTML with both list types
+        let html = r#"
+        <p>Here are unordered items:</p>
+        <ul>
+            <li>Apple</li>
+            <li>Banana</li>
+        </ul>
+        <p>And ordered items:</p>
+        <ol>
+            <li>First</li>
+            <li>Second</li>
+        </ol>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check both list types are converted
+        assert!(cleaned.contains("• Apple"));
+        assert!(cleaned.contains("• Banana"));
+        assert!(cleaned.contains("1. First"));
+        assert!(cleaned.contains("2. Second"));
+    }
+
+    #[test]
+    fn test_nested_html_in_list_items() {
+        let generator = TextGenerator::new();
+
+        // Test list items with nested HTML
+        let html = r#"
+        <ul>
+            <li>Item with <strong>bold</strong> text</li>
+            <li>Item with <em>italic</em> text</li>
+            <li>Item with <a href="link.html">a link</a></li>
+        </ul>
+        "#;
+
+        let cleaned = generator.clean_html_content(html, &None, 80);
+
+        // Check that list items are converted and nested tags are processed
+        assert!(
+            cleaned.contains("• Item with **bold** text"),
+            "Bold not preserved in list. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("• Item with _italic_ text"),
+            "Italic not preserved in list. Got: {}",
+            cleaned
+        );
+        assert!(
+            cleaned.contains("• Item with [a link](link.html)"),
+            "Link not preserved in list. Got: {}",
             cleaned
         );
     }
