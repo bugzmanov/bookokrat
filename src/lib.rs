@@ -5,6 +5,7 @@ pub mod bookmark;
 pub mod event_source;
 pub mod images;
 pub mod main_app;
+pub mod mathml_renderer;
 pub mod navigation_panel;
 pub mod panic_handler;
 pub mod reading_history;

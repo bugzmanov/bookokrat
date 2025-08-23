@@ -38,12 +38,13 @@ image = "0.25"
 fast_image_resize = "3.0"
 imagesize = "0.13"
 open = "5.3"
+roxmltree = "0.18"
+once_cell = "1.19"
 
 [dev-dependencies]
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"
-once_cell = "1.19"
 tempfile = "3.8"
 walkdir = "2.4"
 
