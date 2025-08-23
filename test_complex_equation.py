@@ -112,3 +112,57 @@ print("=" * 60)
 result4 = mathml_to_ascii(duper)
 print(result4)
 print("=" * 60)
+
+# Square root test examples
+sqrt_simple = '''
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msqrt>
+        <mrow><mi>x</mi><mo>+</mo><mn>1</mn></mrow>
+    </msqrt>
+</math>
+'''
+
+print("\nSimple Square Root Test:")
+print("=" * 60)
+result5 = mathml_to_ascii(sqrt_simple)
+print(result5)
+print("=" * 60)
+
+# Complex square root with fraction
+sqrt_complex = '''
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msqrt>
+        <mfrac>
+            <mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msub><mi>b</mi><mi>c</mi></msub></mrow>
+            <mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo><msup><mi>cos</mi><mrow><mo>(</mo><mi>y</mi><mo>)</mo></mrow></msup><mo>+</mo><msup><mi>e</mi><mrow><mi>z</mi><mo>⋅</mo><mn>5</mn></mrow></msup></mrow>
+        </mfrac>
+    </msqrt>
+</math>
+'''
+
+print("\nComplex Square Root with Fraction:")
+print("=" * 60)
+result6 = mathml_to_ascii(sqrt_complex)
+print(result6)
+print("=" * 60)
+
+# Nested square roots
+sqrt_nested = '''
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msqrt>
+        <mrow>
+            <mi>a</mi>
+            <mo>+</mo>
+            <msqrt>
+                <mrow><mi>b</mi><mo>+</mo><mi>c</mi></mrow>
+            </msqrt>
+        </mrow>
+    </msqrt>
+</math>
+'''
+
+print("\nNested Square Roots Test:")
+print("=" * 60)
+result7 = mathml_to_ascii(sqrt_nested)
+print(result7)
+print("=" * 60)

@@ -122,4 +122,41 @@ fn main() {
         Err(e) => println!("Error: {}", e),
     }
     println!("{}", "=".repeat(60));
+
+    // Square root examples
+    let sqrt_simple = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msqrt>
+        <mrow><mi>x</mi><mo>+</mo><mn>1</mn></mrow>
+    </msqrt>
+</math>
+"#;
+
+    println!("\nSimple Square Root Test:");
+    println!("{}", "=".repeat(60));
+    match mathml_to_ascii(sqrt_simple, true) {
+        Ok(result) => println!("{}", result),
+        Err(e) => println!("Error: {}", e),
+    }
+    println!("{}", "=".repeat(60));
+
+    // Complex square root with fraction
+    let sqrt_complex = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msqrt>
+        <mfrac>
+            <mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msub><mi>b</mi><mi>c</mi></msub></mrow>
+            <mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo><msup><mi>cos</mi><mrow><mo>(</mo><mi>y</mi><mo>)</mo></mrow></msup><mo>+</mo><msup><mi>e</mi><mrow><mi>z</mi><mo>⋅</mo><mn>5</mn></mrow></msup></mrow>
+        </mfrac>
+    </msqrt>
+</math>
+"#;
+
+    println!("\nComplex Square Root with Fraction:");
+    println!("{}", "=".repeat(60));
+    match mathml_to_ascii(sqrt_complex, true) {
+        Ok(result) => println!("{}", result),
+        Err(e) => println!("Error: {}", e),
+    }
+    println!("{}", "=".repeat(60));
 }

@@ -145,6 +145,10 @@ class MathMLParser:
             # Under (like sum with subscript)
             return self.process_under(elem)
         
+        elif tag == 'msqrt':
+            # Square root
+            return self.process_square_root(elem)
+        
         else:
             # Default: concatenate children horizontally
             if len(elem) > 0:
@@ -214,12 +218,16 @@ class MathMLParser:
         if not self.use_unicode or not text:
             return None
         
+        # For complex subscripts, use underscore format instead
+        if len(text) > 1 or any(c not in self.unicode_subscripts for c in text):
+            return f"_{text}"
+        
         result = ""
         for char in text:
             if char in self.unicode_subscripts:
                 result += self.unicode_subscripts[char]
             else:
-                return None  # Can't convert this character
+                return f"_{text}"  # Use underscore format if can't convert
         return result
     
     def try_unicode_superscript(self, text: str) -> Optional[str]:
@@ -356,6 +364,89 @@ class MathMLParser:
         
         return result
     
+    def generate_sqrt_radical(self, height, length):
+        """Generate square root radical symbol with given height and length."""
+        if height < 3:
+            height = 3  # Minimum height
+        
+        lines = []
+        
+        # Top line: overline with diagonal start
+        top_padding = height + 1  # Space before the overline
+        overline = "⟋" + "─" * length
+        lines.append(" " * top_padding + overline)
+        
+        # Middle diagonal lines
+        for i in range(1, height - 2):
+            padding = height + 1 - i
+            lines.append(" " * padding + "╱  ")
+        
+        # Second to last line: connecting part
+        if height > 2:
+            lines.append("_  ╱  ")
+        
+        # Last line: tail
+        lines.append(" \\╱  ")
+        
+        return lines
+
+    def process_square_root(self, elem: ET.Element) -> MathBox:
+        """Process a square root element."""
+        if len(elem) == 0:
+            return MathBox('√')
+        
+        # Step 1: Generate the inner formula content
+        if len(elem) == 1:
+            inner = self.process_element(elem[0])
+        else:
+            # Multiple children - treat as horizontal group
+            boxes = [self.process_element(child) for child in elem]
+            inner = self.horizontal_concat(boxes)
+        
+        # For single line expressions, use simple format
+        if inner.height == 1:
+            inner_text = ''.join(inner.content[0]).strip()
+            return MathBox(f'√({inner_text})')
+        
+        # Step 2: Measure the formula dimensions
+        formula_width = inner.width
+        formula_height = inner.height
+        
+        # Step 3: Generate the radical symbol using our function
+        # Add 1 to height to account for the overline space
+        radical_lines = self.generate_sqrt_radical(formula_height + 1, formula_width + 4)
+        
+        # Step 4: Calculate total dimensions
+        radical_width = len(radical_lines[0]) if radical_lines else 0
+        total_width = max(radical_width, formula_width + 10)  # Extra padding
+        total_height = len(radical_lines)
+        baseline = inner.baseline + 1
+        
+        # Create result box
+        result = MathBox.create_empty(total_width, total_height, baseline)
+        
+        # Place the radical symbol
+        for y, line in enumerate(radical_lines):
+            for x, char in enumerate(line):
+                if x < total_width and char != ' ':
+                    result.set_char(x, y, char)
+        
+        # Step 5: Place the formula content in the space under the overline
+        # Content should start after the diagonal space
+        content_x_offset = formula_height + 3  # Space for diagonal + padding
+        content_y_offset = 1  # Below the overline
+        
+        for y in range(inner.height):
+            for x in range(inner.width):
+                char = inner.get_char(x, y)
+                if char and char != ' ':
+                    target_x = content_x_offset + x
+                    target_y = content_y_offset + y
+                    if target_x < total_width and target_y < total_height:
+                        result.set_char(target_x, target_y, char)
+        
+        return result
+    
     def horizontal_concat(self, boxes: List[MathBox]) -> MathBox:
         """Concatenate boxes horizontally, aligning at baseline."""
         # Filter out empty boxes
@@ -419,18 +510,35 @@ def mathml_to_ascii(html: str, use_unicode: bool = True) -> str:
 
 def main():
     """Example usage."""
-    # Example MathML
+    # Example MathML with square root
     mathml = """
     <math xmlns="http://www.w3.org/1998/Math/MathML">
-        <mfrac>
-            <mrow><mi>P</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>
-            <mrow><mi>Q</mi><mo>(</mo><mi>x</mi><mo>)</mo></mrow>
-        </mfrac>
+        <msqrt>
+            <mfrac>
+                <mrow><msup><mi>x</mi><mn>2</mn></msup><mo>+</mo><msub><mi>b</mi><mi>c</mi></msub></mrow>
+                <mrow><mi>sin</mi><mo>(</mo><mi>x</mi><mo>)</mo><msup><mi>cos</mi><mrow><mo>(</mo><mi>y</mi><mo>)</mo></mrow></msup><mo>+</mo><msup><mi>e</mi><mrow><mi>z</mi><mo>⋅</mo><mn>5</mn></mrow></msup></mrow>
+            </mfrac>
+        </msqrt>
     </math>
     """
     
     result = mathml_to_ascii(mathml)
+    print("Square root example:")
     print(result)
+    print()
+    
+    # Simple square root example
+    simple_sqrt = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML">
+        <msqrt>
+            <mrow><mi>x</mi><mo>+</mo><mn>1</mn></mrow>
+        </msqrt>
+    </math>
+    """
+    
+    result2 = mathml_to_ascii(simple_sqrt)
+    print("Simple square root:")
+    print(result2)
 
 
 if __name__ == "__main__":

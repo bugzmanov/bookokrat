@@ -1,3 +1,4 @@
+use crate::mathml_renderer::{MathMLError, mathml_to_ascii};
 use crate::table_of_contents::TocItem;
 use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
@@ -20,6 +21,7 @@ pub struct TextGenerator {
     line_leading_space_re: Regex,
     img_tag_re: Regex,
     table_re: Regex,
+    mathml_re: Regex,
     toc_parser: TocParser,
 }
 
@@ -36,6 +38,8 @@ impl TextGenerator {
                 .expect("Failed to compile image tag regex"),
             table_re: Regex::new(r"(?s)<table[^>]*>.*?</table>")
                 .expect("Failed to compile table regex"),
+            mathml_re: Regex::new(r"(?s)<math[^>]*>.*?</math>")
+                .expect("Failed to compile MathML regex"),
             toc_parser: TocParser::new(),
         }
     }
@@ -295,6 +299,36 @@ impl TextGenerator {
 
         content = tables_processed;
 
+        // Process MathML formulas BEFORE entity replacement and tag removal
+        // Use placeholders to protect MathML content
+        let mut mathml_placeholders = Vec::new();
+        let mut mathml_processed = content.clone();
+
+        for (idx, mathml_match) in self.mathml_re.find_iter(&content).enumerate() {
+            let placeholder = format!("__MATHML_PLACEHOLDER_{}__", idx);
+            match mathml_to_ascii(mathml_match.as_str(), true) {
+                Ok(ascii_math) => {
+                    mathml_placeholders.push((placeholder.clone(), ascii_math));
+                }
+                Err(e) => {
+                    debug!("Failed to convert MathML to ASCII: {}", e);
+                    // Fallback to original MathML content without tags
+                    let fallback = mathml_match
+                        .as_str()
+                        .replace("<math", "")
+                        .replace("</math>", "")
+                        .trim()
+                        .to_string();
+                    mathml_placeholders.push((placeholder.clone(), fallback));
+                }
+            }
+
+            // Replace MathML HTML with placeholder
+            mathml_processed = mathml_processed.replace(mathml_match.as_str(), &placeholder);
+        }
+
+        content = mathml_processed;
+
         // Process img tags into text placeholders
         content = self
             .img_tag_re
@@ -360,6 +394,11 @@ impl TextGenerator {
         // Restore table content from placeholders
         for (placeholder, table_text) in table_placeholders {
             text = text.replace(&placeholder, &table_text);
+        }
+
+        // Restore MathML content from placeholders
+        for (placeholder, mathml_text) in mathml_placeholders {
+            text = text.replace(&placeholder, &mathml_text);
         }
 
         text.trim().to_string()
@@ -1533,6 +1572,58 @@ mod tests {
             "Link not preserved in list. Got: {}",
             cleaned
         );
+    }
+
+    #[test]
+    fn test_mathml_integration() {
+        let generator = TextGenerator::new();
+
+        // Test HTML with MathML formula
+        let html_with_mathml = r#"
+        <p>This is the quadratic formula:</p>
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <mrow>
+                <mi>x</mi>
+                <mo>=</mo>
+                <mfrac>
+                    <mrow>
+                        <mo>-</mo>
+                        <mi>b</mi>
+                        <mo>±</mo>
+                        <msqrt>
+                            <mrow>
+                                <msup>
+                                    <mi>b</mi>
+                                    <mn>2</mn>
+                                </msup>
+                                <mo>-</mo>
+                                <mn>4</mn>
+                                <mi>a</mi>
+                                <mi>c</mi>
+                            </mrow>
+                        </msqrt>
+                    </mrow>
+                    <mrow>
+                        <mn>2</mn>
+                        <mi>a</mi>
+                    </mrow>
+                </mfrac>
+            </mrow>
+        </math>
+        <p>Where a, b, and c are coefficients.</p>
+        "#;
+
+        let cleaned = generator.clean_html_content(html_with_mathml, &None, 80);
+
+        // Check that the text before and after is preserved
+        assert!(cleaned.contains("This is the quadratic formula"));
+        assert!(cleaned.contains("Where a, b, and c are coefficients"));
+
+        // Check that some mathematical content is present
+        // The exact format will depend on the MathML renderer output
+        assert!(cleaned.contains("x") || cleaned.contains("="));
+
+        println!("MathML test result:\n{}", cleaned);
     }
 
     #[test]

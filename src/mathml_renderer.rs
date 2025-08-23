@@ -43,6 +43,7 @@ static UNICODE_SUBSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
         ('a', 'ₐ'),
         ('e', 'ₑ'),
         ('i', 'ᵢ'),
+        ('j', 'ⱼ'),
         ('o', 'ₒ'),
         ('u', 'ᵤ'),
         ('x', 'ₓ'),
@@ -130,6 +131,7 @@ static UNICODE_SUPERSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
         ('=', '⁼'),
         ('(', '⁽'),
         (')', '⁾'),
+        ('θ', 'ᶿ'),
         ('\'', '′'), // Prime symbol
     ]
     .iter()
@@ -287,6 +289,13 @@ impl MathMLParser {
                 Ok(MathBox::new(node.text().unwrap_or("")))
             }
 
+            "mspace" => {
+                // Space - render as a single space character for terminal
+                // In MathML, mspace can have width/height attributes but for terminal
+                // rendering we'll just use a simple space
+                Ok(MathBox::new(" "))
+            }
+
             "mfrac" => {
                 // Fraction
                 self.process_fraction(node)
@@ -305,6 +314,11 @@ impl MathMLParser {
             "munder" => {
                 // Under (like sum with subscript)
                 self.process_under(node)
+            }
+
+            "msqrt" => {
+                // Square root
+                self.process_square_root(node)
             }
 
             _ => {
@@ -462,6 +476,17 @@ impl MathMLParser {
                 let combined_text = format!("{base_text}{unicode_sub}");
                 return Ok(MathBox::new(&combined_text));
             }
+
+            // Try LaTeX notation for simple subscripts (1-2 characters) when Unicode fails
+            if subscript_text.len() <= 2 && subscript_text.chars().all(|c| c.is_alphanumeric()) {
+                let base_text = base.content[0]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                let latex_text = format!("{}_{}", base_text, subscript_text);
+                return Ok(MathBox::new(&latex_text));
+            }
         }
 
         // Fall back to multiline positioning (match Python logic exactly)
@@ -523,6 +548,18 @@ impl MathMLParser {
                     .to_string();
                 let combined_text = format!("{base_text}{unicode_sup}");
                 return Ok(MathBox::new(&combined_text));
+            }
+
+            // Try LaTeX notation for simple superscripts (1-2 characters) when Unicode fails
+            if superscript_text.len() <= 2 && superscript_text.chars().all(|c| c.is_alphanumeric())
+            {
+                let base_text = base.content[0]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string();
+                let latex_text = format!("{}^{}", base_text, superscript_text);
+                return Ok(MathBox::new(&latex_text));
             }
         }
 
@@ -594,6 +631,111 @@ impl MathMLParser {
         for y in 0..under.height {
             for x in 0..under.width {
                 result.set_char(x + under_offset, base.height + y, under.get_char(x, y));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Generate square root radical symbol with given height and length
+    fn generate_sqrt_radical(&self, height: usize, length: usize) -> Vec<String> {
+        let height = if height < 3 { 3 } else { height }; // Minimum height
+
+        let mut lines = Vec::new();
+
+        // Top line: overline with diagonal start
+        let top_padding = height + 1; // Space before the overline
+        let overline = format!("⟋{}", "─".repeat(length));
+        lines.push(format!("{}{}", " ".repeat(top_padding), overline));
+
+        // Middle diagonal lines
+        for i in 1..(height - 2) {
+            let padding = height + 1 - i;
+            lines.push(format!("{}╱  ", " ".repeat(padding)));
+        }
+
+        // Second to last line: connecting part
+        if height > 2 {
+            lines.push("_  ╱  ".to_string());
+        }
+
+        // Last line: tail
+        lines.push(" \\╱  ".to_string());
+
+        lines
+    }
+
+    /// Process a square root element
+    fn process_square_root(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+        if children.is_empty() {
+            return Ok(MathBox::new("√"));
+        }
+
+        // Step 1: Generate the inner formula content
+        let inner = if children.len() == 1 {
+            self.process_element(&children[0])?
+        } else {
+            // Multiple children - treat as horizontal group
+            let boxes: Result<Vec<_>, _> = children
+                .iter()
+                .map(|child| self.process_element(child))
+                .collect();
+            let boxes = boxes?;
+            self.horizontal_concat(boxes)
+        };
+
+        // For single line expressions, use simple format
+        if inner.height == 1 {
+            let inner_text = inner.content[0]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string();
+            return Ok(MathBox::new(&format!("√({})", inner_text)));
+        }
+
+        // Step 2: Measure the formula dimensions
+        let formula_width = inner.width;
+        let formula_height = inner.height;
+
+        // Step 3: Generate the radical symbol using our function
+        // Add 1 to height to account for the overline space
+        let radical_lines = self.generate_sqrt_radical(formula_height + 1, formula_width + 4);
+
+        // Step 4: Calculate total dimensions
+        let radical_width = radical_lines.get(0).map_or(0, |line| line.chars().count());
+        let total_width = radical_width.max(formula_width + 10); // Extra padding
+        let total_height = radical_lines.len();
+        let baseline = inner.baseline + 1;
+
+        // Create result box
+        let mut result = MathBox::create_empty(total_width, total_height, baseline);
+
+        // Place the radical symbol
+        for (y, line) in radical_lines.iter().enumerate() {
+            for (x, ch) in line.chars().enumerate() {
+                if x < total_width && ch != ' ' {
+                    result.set_char(x, y, ch);
+                }
+            }
+        }
+
+        // Step 5: Place the formula content in the space under the overline
+        // Content should start after the diagonal space
+        let content_x_offset = formula_height + 3; // Space for diagonal + padding
+        let content_y_offset = 1; // Below the overline
+
+        for y in 0..inner.height {
+            for x in 0..inner.width {
+                let ch = inner.get_char(x, y);
+                if ch != ' ' && ch != '\0' {
+                    let target_x = content_x_offset + x;
+                    let target_y = content_y_offset + y;
+                    if target_x < total_width && target_y < total_height {
+                        result.set_char(target_x, target_y, ch);
+                    }
+                }
             }
         }
 
@@ -700,6 +842,14 @@ pub fn mathml_to_ascii(html: &str, use_unicode: bool) -> Result<String, MathMLEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    //
+    //  DO NOT REMOVE THIS!
+    //
+    //        let expected = r#"
+    //      ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲ ̲
+    //    ╱       x² + b_c
+    //_  ╱  ───────────────────────
+    // \╱     sin(x)ᶜᵒˢ⁽ʸ⁾ + eᶻ·⁵    "#;
 
     #[test]
     fn test_simple_fraction() {
@@ -887,5 +1037,267 @@ i"#
         .trim();
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_likelihood_function() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper L left-parenthesis x semicolon theta right-parenthesis equals sigma-summation Underscript j Endscripts upper C Subscript i j Baseline upper P left-parenthesis j vertical-bar x semicolon theta right-parenthesis">
+  <mrow>
+    <mi>L</mi>
+    <mrow>
+      <mo>(</mo>
+      <mi>x</mi>
+      <mo>;</mo>
+      <mi>θ</mi>
+      <mo>)</mo>
+    </mrow>
+    <mo>=</mo>
+    <msub><mo>∑</mo> <mi>j</mi> </msub>
+    <msub><mi>C</mi> <mrow><mi>i</mi><mi>j</mi></mrow> </msub>
+    <mi>P</mi>
+    <mrow>
+      <mo>(</mo>
+      <mi>j</mi>
+      <mo>|</mo>
+      <mi>x</mi>
+      <mo>;</mo>
+      <mi>θ</mi>
+      <mo>)</mo>
+    </mrow>
+  </mrow>
+</math>
+        "#;
+
+        let expected = "L(x;θ) = ∑ⱼCᵢⱼP(j|x;θ)";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_average_likelihood_with_fraction() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper L left-parenthesis upper X semicolon theta right-parenthesis equals sigma-summation Underscript x Endscripts StartFraction 1 Over upper N EndFraction upper L left-parenthesis x semicolon theta right-parenthesis">
+  <mrow>
+    <mi>L</mi>
+    <mrow>
+      <mo>(</mo>
+      <mi>X</mi>
+      <mo>;</mo>
+      <mi>θ</mi>
+      <mo>)</mo>
+    </mrow>
+    <mo>=</mo>
+    <msub><mo>∑</mo> <mi>x</mi> </msub>
+    <mfrac><mn>1</mn> <mi>N</mi></mfrac>
+    <mi>L</mi>
+    <mrow>
+      <mo>(</mo>
+      <mi>x</mi>
+      <mo>;</mo>
+      <mi>θ</mi>
+      <mo>)</mo>
+    </mrow>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"1
+L(X;θ) = ∑ₓ─L(x;θ)
+           N"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_weight_formula_with_text() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper W Subscript i Baseline equals StartFraction upper N Over number of samples of class reverse-solidus emph left-brace i right-brace EndFraction">
+  <mrow>
+    <msub><mi>W</mi> <mi>i</mi> </msub>
+    <mo>=</mo>
+    <mfrac><mi>N</mi> <mrow><mtext>number</mtext><mspace width="4.pt"/><mtext>of</mtext><mspace width="4.pt"/><mtext>samples</mtext><mspace width="4.pt"/><mtext>of</mtext><mspace width="4.pt"/><mtext>class</mtext><mspace width="4.pt"/><mtext>i</mtext></mrow></mfrac>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"N
+Wᵢ = ────────────────────────────
+     number of samples of class i"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_mspace_handling() {
+        let mathml = r#"
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <mrow>
+                <mtext>hello</mtext>
+                <mspace width="5pt"/>
+                <mtext>world</mtext>
+            </mrow>
+        </math>
+        "#;
+
+        let expected = "hello world";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_nested_subscript_superscript() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="sigma-summation Underscript j Endscripts e Superscript x Super Subscript j">
+  <mrow>
+    <msub><mo>∑</mo> <mi>j</mi> </msub>
+    <msup><mi>e</mi> <msub><mi>x</mi> <mi>j</mi> </msub> </msup>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"xⱼ
+∑ⱼe"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_latex_notation_subscripts() {
+        let mathml = r#"
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <msub>
+                <mi>A</mi>
+                <mi>bc</mi>
+            </msub>
+        </math>
+        "#;
+
+        let expected = "A_bc";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_latex_notation_superscripts() {
+        let mathml = r#"
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <msup>
+                <mi>y</mi>
+                <mi>q1</mi>
+            </msup>
+        </math>
+        "#;
+
+        let expected = "y^q1";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_latex_notation_fallback_to_multiline() {
+        let mathml = r#"
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <msub>
+                <mi>x</mi>
+                <mi>abc</mi>
+            </msub>
+        </math>
+        "#;
+
+        // Should fall back to multiline since "abc" is 3 characters (> 2)
+        let expected = r#"x
+ abc"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_attention_mechanism() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="Attention left-parenthesis upper Q comma upper K comma upper V right-parenthesis equals softmax left-parenthesis StartFraction upper Q upper K Superscript upper T Baseline Over StartRoot d EndRoot EndFraction right-parenthesis upper V">
+  <mrow>
+    <mtext>Attention</mtext>
+    <mrow>
+      <mo>(</mo>
+      <mi>Q</mi>
+      <mo>,</mo>
+      <mi>K</mi>
+      <mo>,</mo>
+      <mi>V</mi>
+      <mo>)</mo>
+    </mrow>
+    <mo>=</mo>
+    <mi> softmax </mi>
+    <mrow>
+      <mo>(</mo>
+      <mfrac><mrow><mi>Q</mi><msup><mi>K</mi> <mi>T</mi> </msup></mrow> <msqrt><mi>d</mi></msqrt></mfrac>
+      <mo>)</mo>
+    </mrow>
+    <mi>V</mi>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"                             QKᵀ
+Attention(Q,K,V) =  softmax (────)V
+                             √(d)"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_complex_square_root() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+  <msqrt>
+    <mfrac>
+      <mrow>
+        <msup><mi>x</mi> <mn>2</mn> </msup>
+        <mo>+</mo>
+        <msub><mi>b</mi> <mi>c</mi> </msub>
+      </mrow>
+      <mrow>
+        <msup>
+          <mrow>
+            <mo form="prefix">sin</mo>
+            <mrow>
+              <mo>(</mo>
+              <mi>x</mi>
+              <mo>)</mo>
+            </mrow>
+          </mrow>
+          <mrow>
+            <mo form="prefix">cos</mo>
+            <mrow>
+              <mo>(</mo>
+              <mi>y</mi>
+              <mo>)</mo>
+            </mrow>
+          </mrow>
+        </msup>
+        <mo>+</mo>
+        <msup><mi>e</mi>
+          <mrow>
+            <mi>z</mi>
+            <mo>*</mo>
+            <mn>5</mn>
+          </mrow>
+        </msup>
+      </mrow>
+    </mfrac>
+  </msqrt>
+</math>
+        "#;
+
+        let expected = r#"
+      ⟋─────────────────────────
+     ╱       x² + b_c
+    ╱  ─────────────────────
+_  ╱                   z * 5
+ \╱    sin(x)ᶜᵒˢ⁽ʸ⁾ + e"#;
+
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
     }
 }

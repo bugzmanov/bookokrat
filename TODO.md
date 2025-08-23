@@ -11,20 +11,34 @@ ideas to implement:
              [ ] internal links
          [ ] Horizontal rule
          [x] Headers
+           [ ] H1 getting removed bug  (because special treatment of headers that i had before)
          [ ] Blockquote
          [ ] tables support
          [ ] bold & italic 
          [x] lists
+           [ ] Nested lists are buggy
+           [ ] Links inside lists get broken
          [ ] checkboxes /-- not really needs to for epub
-         [.] Image
-         [ ] Code 
+         [x] Image
+         [ ] Code & "render as is"
+ - AI integreration
+     - Embeded validation for correct rendering (and markdown parsing) 
+     - Smart reading: 
+         - Chapter Summary and main points
+         - Quize
+     - Phase 2: RAG Implementation 
+         - Build a local RAG system for your books:
+         - Index entire library into embedded vectors
+         - "Find passages about X across all my books"
+         - "Show me similar concepts in other books"
+         - Cross-reference technical books automatically
+    
  - Search
      - Local to the chapter
      - Quick search with jumps in books and navigation panel
      - Global in the book
      - Globali in the library
  - Code formatting & coloring. Goal: Manning books should be nice to read
- - AI integreration
  - logs/debug window
  - NOTES & comments
  - settings window
@@ -65,12 +79,6 @@ Phase 1: Local LLM Integration (Month 1-2)
     Reading Comprehension: ? key opens Q&A mode about current page
     Smart Bookmarks: AI generates context-aware bookmark names
 
-Phase 2: RAG Implementation (Month 2-3)
-    Build a local RAG system for your books:
-    Index entire library into embedded vectors
-    "Find passages about X across all my books"
-    "Show me similar concepts in other books"
-    Cross-reference technical books automatically
 
     Technical flex: Use Rust + FAISS/Qdrant for blazing-fast vector search
 

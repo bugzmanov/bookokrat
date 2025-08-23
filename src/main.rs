@@ -16,6 +16,7 @@ mod bookmark;
 mod event_source;
 mod images;
 mod main_app;
+mod mathml_renderer;
 mod navigation_panel;
 mod panic_handler;
 mod reading_history;
