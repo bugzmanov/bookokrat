@@ -1,12 +1,10 @@
 ideas to implement:
- - images in ghosty terminal
-     - images of various sized - needs larger size for large images
-     - copy images to clipboard
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
          [ ] Navigate to the position where rendering mode was showing
          [ ] Alow mouse selection & stuff
+     [ ] Math Formulas
      [ ] Markdown
          [.] links support 
              [x] external links
@@ -16,7 +14,8 @@ ideas to implement:
          [ ] Blockquote
          [ ] tables support
          [ ] bold & italic 
-         [ ] lists  
+         [x] lists
+         [ ] checkboxes /-- not really needs to for epub
          [.] Image
          [ ] Code 
  - Search
@@ -31,8 +30,11 @@ ideas to implement:
  - settings window
      - make margins configurable + text color 
  - text cursor for reading ala vim normal mode
- - Images in iterm and sixt protocol
 
+ - images in ghosty terminal
+     - images of various sized - needs larger size for large images
+     - copy images to clipboard
+ - Images in iterm and sixt protocol
  - integration with GOODREADS
  - ASCII art animation
 

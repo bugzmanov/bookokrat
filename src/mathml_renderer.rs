@@ -685,17 +685,13 @@ impl MathMLParser {
 pub fn mathml_to_ascii(html: &str, use_unicode: bool) -> Result<String, MathMLError> {
     let parser = MathMLParser::new(use_unicode);
 
-    // Extract MathML from HTML (with DOTALL flag for multiline)
     let math_pattern = Regex::new(r"(?s)<math[^>]*>.*?</math>").unwrap();
     let matches: Vec<_> = math_pattern.find_iter(html).collect();
 
     if matches.is_empty() {
-        // No math elements found - return original HTML
         return Ok(html.to_string());
     }
 
-    // For now, just process the first math element found
-    // In a full implementation, we'd replace them in the HTML
     let mathml = matches[0].as_str();
     let math_box = parser.parse(mathml)?;
     Ok(math_box.render())
