@@ -733,6 +733,11 @@ impl TextReader {
 
         // Get focus-aware colors
         let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+        let bold_text_color = if is_focused {
+            palette.base_0e // Bright red for focused bold text
+        } else {
+            palette.base_01 // Even more dimmed for unfocused bold text
+        };
         let link_text_color = if is_focused {
             palette.base_0c // Cyan for links when focused
         } else {
@@ -752,14 +757,16 @@ impl TextReader {
 
         // Process the line with link highlighting
         for (link_pos, link_text, url) in found_links {
-            // Add text before the link
+            // Add text before the link with formatting
             if link_pos > current_pos {
                 let before_text = &line[current_pos..link_pos];
                 if !before_text.is_empty() {
-                    spans.push(Span::styled(
-                        before_text.to_string(),
-                        Style::default().fg(normal_text_color),
-                    ));
+                    let before_spans = self.parse_text_with_formatting(
+                        before_text,
+                        normal_text_color,
+                        bold_text_color,
+                    );
+                    spans.extend(before_spans);
                 }
             }
 
@@ -783,14 +790,13 @@ impl TextReader {
             current_pos = link_pos + link_text.len();
         }
 
-        // Add any remaining text
+        // Process any remaining text with formatting (bold, italic, etc.)
         if current_pos < line.len() {
             let remaining = &line[current_pos..];
             if !remaining.is_empty() {
-                spans.push(Span::styled(
-                    remaining.to_string(),
-                    Style::default().fg(normal_text_color),
-                ));
+                let remaining_spans =
+                    self.parse_text_with_formatting(remaining, normal_text_color, bold_text_color);
+                spans.extend(remaining_spans);
             }
         }
 
@@ -800,6 +806,105 @@ impl TextReader {
         } else {
             Line::from(spans)
         }
+    }
+
+    /// Helper method to parse text with basic formatting (bold and italic)
+    fn parse_text_with_formatting(
+        &self,
+        text: &str,
+        normal_color: Color,
+        bold_color: Color,
+    ) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        let chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        let mut current_text = String::new();
+
+        while i < chars.len() {
+            if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
+                // Handle bold text
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(normal_color),
+                    ));
+                    current_text.clear();
+                }
+
+                i += 2; // Skip opening **
+                let mut bold_text = String::new();
+                let mut found_closing = false;
+
+                while i + 1 < chars.len() {
+                    if chars[i] == '*' && chars[i + 1] == '*' {
+                        found_closing = true;
+                        i += 2; // Skip closing **
+                        break;
+                    } else {
+                        bold_text.push(chars[i]);
+                        i += 1;
+                    }
+                }
+
+                if found_closing {
+                    spans.push(Span::styled(
+                        bold_text,
+                        Style::default().fg(bold_color).add_modifier(Modifier::BOLD),
+                    ));
+                } else {
+                    current_text.push_str("**");
+                    current_text.push_str(&bold_text);
+                }
+            } else if chars[i] == '_' {
+                // Handle italic text (single underscore)
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(normal_color),
+                    ));
+                    current_text.clear();
+                }
+
+                i += 1; // Skip opening _
+                let mut italic_text = String::new();
+                let mut found_closing = false;
+
+                while i < chars.len() {
+                    if chars[i] == '_' {
+                        found_closing = true;
+                        i += 1; // Skip closing _
+                        break;
+                    } else {
+                        italic_text.push(chars[i]);
+                        i += 1;
+                    }
+                }
+
+                if found_closing && !italic_text.is_empty() {
+                    spans.push(Span::styled(
+                        italic_text,
+                        Style::default()
+                            .fg(normal_color)
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                } else {
+                    current_text.push('_');
+                    current_text.push_str(&italic_text);
+                }
+            } else {
+                current_text.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        if !current_text.is_empty() {
+            spans.push(Span::styled(
+                current_text,
+                Style::default().fg(normal_color),
+            ));
+        }
+
+        spans
     }
 
     /// Parse styling for a single line (bold, quotes, links, etc.) - owned version for caching
@@ -950,6 +1055,42 @@ impl TextReader {
                 } else {
                     current_text.push_str("**");
                     current_text.push_str(&bold_text);
+                }
+            } else if chars[i] == '_' {
+                // Handle single underscore for italic text
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(normal_text_color),
+                    ));
+                    current_text.clear();
+                }
+
+                i += 1; // Skip the opening underscore
+                let mut italic_text = String::new();
+                let mut found_closing = false;
+
+                while i < chars.len() {
+                    if chars[i] == '_' {
+                        found_closing = true;
+                        i += 1; // Skip the closing underscore
+                        break;
+                    } else {
+                        italic_text.push(chars[i]);
+                        i += 1;
+                    }
+                }
+
+                if found_closing && !italic_text.is_empty() {
+                    spans.push(Span::styled(
+                        italic_text,
+                        Style::default()
+                            .fg(normal_text_color)
+                            .add_modifier(Modifier::ITALIC),
+                    ));
+                } else {
+                    current_text.push('_');
+                    current_text.push_str(&italic_text);
                 }
             } else if (chars[i] == '"' || chars[i] == '\u{201C}' || chars[i] == '\u{201D}')
                 && chars[i] != '\''
