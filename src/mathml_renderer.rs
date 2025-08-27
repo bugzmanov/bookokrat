@@ -63,6 +63,7 @@ static UNICODE_SUBSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
         ('(', '₍'),
         (')', '₎'),
         ('ə', 'ₔ'),
+        ('-', '₋'),
     ]
     .iter()
     .copied()
@@ -311,6 +312,11 @@ impl MathMLParser {
                 self.process_superscript(node)
             }
 
+            "msubsup" => {
+                // Subscript and superscript
+                self.process_subscript_superscript(node)
+            }
+
             "munder" => {
                 // Under (like sum with subscript)
                 self.process_under(node)
@@ -424,7 +430,14 @@ impl MathMLParser {
         }
 
         text.chars()
-            .map(|c| UNICODE_SUBSCRIPTS.get(&c).copied())
+            .map(|c| {
+                // Handle spaces in subscripts
+                if c == ' ' {
+                    Some(' ')
+                } else {
+                    UNICODE_SUBSCRIPTS.get(&c).copied()
+                }
+            })
             .collect::<Option<String>>()
     }
 
@@ -456,36 +469,63 @@ impl MathMLParser {
         let base = self.process_element(&children[0])?;
         let subscript = self.process_element(&children[1])?;
 
-        // Try Unicode subscript first if both base and subscript are simple text
-        if base.height == 1
-            && base.baseline == 0
-            && subscript.height == 1
-            && subscript.baseline == 0
-        {
-            let subscript_text = subscript.content[0]
-                .iter()
-                .collect::<String>()
-                .trim()
-                .to_string();
-            if let Some(unicode_sub) = self.try_unicode_subscript(&subscript_text) {
-                let base_text = base.content[0]
+        // Try Unicode subscript first if both base and subscript are simple text or can be flattened to single line
+        if base.height == 1 && base.baseline == 0 {
+            // Get the subscript text, handling both single-line and multi-line cases
+            let subscript_text = if subscript.height == 1 && subscript.baseline == 0 {
+                // Simple single-line case
+                subscript.content[0]
                     .iter()
                     .collect::<String>()
                     .trim()
+                    .to_string()
+            } else {
+                // For multi-line subscripts, try to flatten them to a single line
+                // This handles cases like mrow with "i - 1" that create multi-line boxes
+                let flattened = subscript
+                    .content
+                    .iter()
+                    .map(|row| row.iter().collect::<String>().trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<String>>()
+                    .join("")
+                    .trim()
                     .to_string();
-                let combined_text = format!("{base_text}{unicode_sub}");
-                return Ok(MathBox::new(&combined_text));
-            }
 
-            // Try LaTeX notation for simple subscripts (1-2 characters) when Unicode fails
-            if subscript_text.len() <= 2 && subscript_text.chars().all(|c| c.is_alphanumeric()) {
-                let base_text = base.content[0]
-                    .iter()
-                    .collect::<String>()
-                    .trim()
-                    .to_string();
-                let latex_text = format!("{}_{}", base_text, subscript_text);
-                return Ok(MathBox::new(&latex_text));
+                // Only use flattened text if it's reasonably short (likely a simple subscript)
+                if flattened.len() <= 10 {
+                    flattened
+                } else {
+                    String::new() // Fall back to multiline rendering
+                }
+            };
+
+            // Try Unicode subscript if we have reasonable text
+            if !subscript_text.is_empty() {
+                if let Some(unicode_sub) = self.try_unicode_subscript(&subscript_text) {
+                    let base_text = base.content[0]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    let combined_text = format!("{base_text}{unicode_sub}");
+                    return Ok(MathBox::new(&combined_text));
+                }
+
+                // Try LaTeX notation for simple subscripts (1-5 characters) when Unicode fails
+                if subscript_text.len() <= 5
+                    && subscript_text
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '-' || c == '+')
+                {
+                    let base_text = base.content[0]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    let latex_text = format!("{}_{}", base_text, subscript_text);
+                    return Ok(MathBox::new(&latex_text));
+                }
             }
         }
 
@@ -582,6 +622,130 @@ impl MathMLParser {
         for y in 0..base.height {
             for x in 0..base.width {
                 result.set_char(x, superscript.height + y, base.get_char(x, y));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Process a subscript and superscript element (msubsup)
+    fn process_subscript_superscript(
+        &self,
+        node: &roxmltree::Node,
+    ) -> Result<MathBox, MathMLError> {
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+        if children.len() != 3 {
+            return Err(MathMLError::InvalidStructure(
+                "Subscript-superscript needs exactly 3 children".into(),
+            ));
+        }
+
+        let base = self.process_element(&children[0])?;
+        let subscript = self.process_element(&children[1])?;
+        let superscript = self.process_element(&children[2])?;
+
+        // Check if the base is a mathematical operator that should use multiline positioning
+        let is_math_operator = if base.height == 1 && base.baseline == 0 {
+            let base_text = base.content[0]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string();
+            matches!(base_text.as_str(), "∏" | "∑" | "∫" | "⋃" | "⋂" | "⋁" | "⋀")
+        } else {
+            false
+        };
+
+        // Try Unicode for simple cases first, but skip for mathematical operators
+        if base.height == 1 && base.baseline == 0 && !is_math_operator {
+            // Get subscript text
+            let subscript_text = if subscript.height == 1 && subscript.baseline == 0 {
+                subscript.content[0]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            } else {
+                // For multi-line subscripts, try to flatten them
+                let flattened = subscript
+                    .content
+                    .iter()
+                    .map(|row| row.iter().collect::<String>().trim().to_string())
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<String>>()
+                    .join("")
+                    .trim()
+                    .to_string();
+
+                if flattened.len() <= 10 {
+                    flattened
+                } else {
+                    String::new()
+                }
+            };
+
+            // Get superscript text
+            let superscript_text = if superscript.height == 1 && superscript.baseline == 0 {
+                superscript.content[0]
+                    .iter()
+                    .collect::<String>()
+                    .trim()
+                    .to_string()
+            } else {
+                String::new()
+            };
+
+            // Try Unicode if both are simple
+            if !subscript_text.is_empty() && !superscript_text.is_empty() {
+                if let (Some(unicode_sub), Some(unicode_sup)) = (
+                    self.try_unicode_subscript(&subscript_text),
+                    self.try_unicode_superscript(&superscript_text),
+                ) {
+                    let base_text = base.content[0]
+                        .iter()
+                        .collect::<String>()
+                        .trim()
+                        .to_string();
+                    let combined_text = format!("{base_text}{unicode_sub}{unicode_sup}");
+                    return Ok(MathBox::new(&combined_text));
+                }
+            }
+        }
+
+        // Fall back to multiline positioning
+        // Calculate dimensions - superscript above, base in middle, subscript below
+        let width = base.width.max(subscript.width).max(superscript.width);
+        let height = superscript.height + base.height + subscript.height;
+        let baseline = superscript.height + base.baseline;
+
+        // Create result box
+        let mut result = MathBox::create_empty(width, height, baseline);
+
+        // Place superscript (top, centered if needed)
+        let super_offset = (width.saturating_sub(superscript.width)) / 2;
+        for y in 0..superscript.height {
+            for x in 0..superscript.width {
+                result.set_char(x + super_offset, y, superscript.get_char(x, y));
+            }
+        }
+
+        // Place base (middle)
+        let base_offset = (width.saturating_sub(base.width)) / 2;
+        for y in 0..base.height {
+            for x in 0..base.width {
+                result.set_char(x + base_offset, superscript.height + y, base.get_char(x, y));
+            }
+        }
+
+        // Place subscript (bottom, centered if needed)
+        let sub_offset = (width.saturating_sub(subscript.width)) / 2;
+        for y in 0..subscript.height {
+            for x in 0..subscript.width {
+                result.set_char(
+                    x + sub_offset,
+                    superscript.height + base.height + y,
+                    subscript.get_char(x, y),
+                );
             }
         }
 
@@ -742,10 +906,243 @@ impl MathMLParser {
         Ok(result)
     }
 
+    /// Check if a MathBox contains mathematical operators that need spacing
+    fn contains_math_operator_needing_spacing(&self, math_box: &MathBox) -> bool {
+        if math_box.height == 0 {
+            return false;
+        }
+
+        // Only add spacing for complex multi-line mathematical operators that have
+        // both subscript and superscript (like ∏ with both i=1 below and n above)
+        // Don't add spacing for simple munder elements (like ∑ with just subscript)
+        if math_box.height > 2 {
+            // Need at least 3 lines for subscript + operator + superscript
+            for row in &math_box.content {
+                let text: String = row.iter().collect();
+                if text
+                    .chars()
+                    .any(|c| matches!(c, '∏' | '∑' | '∫' | '⋃' | '⋂' | '⋁' | '⋀'))
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Add spacing around mathematical operators in a list of boxes
+    fn add_operator_spacing(&self, boxes: Vec<MathBox>) -> Vec<MathBox> {
+        let mut result = Vec::new();
+
+        for (i, box_item) in boxes.iter().enumerate() {
+            // Add space before mathematical operators (except at the beginning)
+            if i > 0 && self.contains_math_operator_needing_spacing(box_item) {
+                result.push(MathBox::new(" "));
+            }
+
+            result.push(box_item.clone());
+
+            // Add space after mathematical operators (except at the end)
+            if i < boxes.len() - 1 && self.contains_math_operator_needing_spacing(box_item) {
+                result.push(MathBox::new(" "));
+            }
+        }
+
+        result
+    }
+
+    /// Check if a box contains only a single parenthesis character
+    fn is_single_paren(&self, math_box: &MathBox) -> Option<char> {
+        if math_box.height == 1 && math_box.width == 1 {
+            let text: String = math_box.content[0].iter().collect();
+            let ch = text.chars().next()?;
+            if matches!(ch, '(' | ')' | '[' | ']' | '{' | '}') {
+                Some(ch)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Create multi-line parenthesis for given height
+    fn create_multiline_paren(&self, paren_char: char, height: usize) -> MathBox {
+        if height < 3 {
+            // For small expressions, use regular parentheses
+            return MathBox::new(&paren_char.to_string());
+        }
+
+        let mut content = Vec::new();
+
+        match paren_char {
+            '(' => {
+                // First line: ⎛
+                content.push(vec!['⎛']);
+                // Middle lines: ⎜
+                for _ in 1..height - 1 {
+                    content.push(vec!['⎜']);
+                }
+                // Last line: ⎝
+                content.push(vec!['⎝']);
+            }
+            ')' => {
+                // First line: ⎞
+                content.push(vec!['⎞']);
+                // Middle lines: ⎟
+                for _ in 1..height - 1 {
+                    content.push(vec!['⎟']);
+                }
+                // Last line: ⎠
+                content.push(vec!['⎠']);
+            }
+            '[' => {
+                // For square brackets, use similar characters or fall back to regular
+                // First line: ⎡
+                content.push(vec!['⎡']);
+                // Middle lines: ⎢
+                for _ in 1..height - 1 {
+                    content.push(vec!['⎢']);
+                }
+                // Last line: ⎣
+                content.push(vec!['⎣']);
+            }
+            ']' => {
+                // First line: ⎤
+                content.push(vec!['⎤']);
+                // Middle lines: ⎥
+                for _ in 1..height - 1 {
+                    content.push(vec!['⎥']);
+                }
+                // Last line: ⎦
+                content.push(vec!['⎦']);
+            }
+            '{' => {
+                // For curly braces, use similar approach
+                // First line: ⎧
+                content.push(vec!['⎧']);
+                // Middle lines: ⎨ (only one in the middle) or ⎪ for multiple
+                if height == 3 {
+                    content.push(vec!['⎨']);
+                } else {
+                    for i in 1..height - 1 {
+                        if i == height / 2 {
+                            content.push(vec!['⎨']); // Middle connector
+                        } else {
+                            content.push(vec!['⎪']); // Vertical line
+                        }
+                    }
+                }
+                // Last line: ⎩
+                content.push(vec!['⎩']);
+            }
+            '}' => {
+                // First line: ⎫
+                content.push(vec!['⎫']);
+                // Middle lines: ⎬ (only one in the middle) or ⎪ for multiple
+                if height == 3 {
+                    content.push(vec!['⎬']);
+                } else {
+                    for i in 1..height - 1 {
+                        if i == height / 2 {
+                            content.push(vec!['⎬']); // Middle connector
+                        } else {
+                            content.push(vec!['⎪']); // Vertical line
+                        }
+                    }
+                }
+                // Last line: ⎭
+                content.push(vec!['⎭']);
+            }
+            _ => {
+                // Fallback: use regular character
+                for _ in 0..height {
+                    content.push(vec![paren_char]);
+                }
+            }
+        }
+
+        MathBox {
+            width: 1,
+            height,
+            baseline: height / 2, // Middle baseline
+            content,
+        }
+    }
+
+    /// Replace single parentheses with multi-line versions when appropriate
+    fn upgrade_parentheses(&self, boxes: Vec<MathBox>) -> Vec<MathBox> {
+        if boxes.len() < 3 {
+            return boxes; // Need at least opening paren, content, closing paren
+        }
+
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < boxes.len() {
+            // Check for pattern: opening_paren + content + closing_paren
+            if i + 2 < boxes.len() {
+                if let Some(open_char) = self.is_single_paren(&boxes[i]) {
+                    // Look ahead to find matching closing parenthesis
+                    let mut paren_count = 1;
+                    let mut closing_pos = None;
+
+                    for j in (i + 1)..boxes.len() {
+                        if let Some(ch) = self.is_single_paren(&boxes[j]) {
+                            match (open_char, ch) {
+                                ('(', ')') | ('[', ']') | ('{', '}') => {
+                                    paren_count -= 1;
+                                    if paren_count == 0 {
+                                        closing_pos = Some(j);
+                                        break;
+                                    }
+                                }
+                                ('(', '(') | ('[', '[') | ('{', '{') => {
+                                    paren_count += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // If we found a matching closing parenthesis
+                    if let Some(close_idx) = closing_pos {
+                        // Check the height of content between parentheses
+                        let content_boxes = &boxes[i + 1..close_idx];
+                        let max_height = content_boxes.iter().map(|b| b.height).max().unwrap_or(0);
+
+                        if max_height >= 3 {
+                            // Use multi-line parentheses
+                            let close_char = match open_char {
+                                '(' => ')',
+                                '[' => ']',
+                                '{' => '}',
+                                _ => open_char,
+                            };
+
+                            result.push(self.create_multiline_paren(open_char, max_height));
+                            result.extend_from_slice(content_boxes);
+                            result.push(self.create_multiline_paren(close_char, max_height));
+
+                            i = close_idx + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            // Default case: just add the box as-is
+            result.push(boxes[i].clone());
+            i += 1;
+        }
+
+        result
+    }
+
     /// Concatenate boxes horizontally, aligning at baseline
     fn horizontal_concat(&self, boxes: Vec<MathBox>) -> MathBox {
         // Filter out empty boxes
-        let boxes: Vec<_> = boxes
+        let mut boxes: Vec<_> = boxes
             .into_iter()
             .filter(|b| b.width > 0 && b.height > 0)
             .collect();
@@ -757,6 +1154,12 @@ impl MathMLParser {
         if boxes.len() == 1 {
             return boxes.into_iter().next().unwrap();
         }
+
+        // Add spacing around mathematical operators
+        boxes = self.add_operator_spacing(boxes);
+
+        // Upgrade single parentheses to multi-line when appropriate
+        boxes = self.upgrade_parentheses(boxes);
 
         // ALWAYS try to create simple single-line text first
         // This is more aggressive - if all content can fit on one line, force it
@@ -775,12 +1178,11 @@ impl MathMLParser {
                         vec![b.content[0].iter().collect::<String>()]
                     } else {
                         // For multi-line boxes that contain simple content, just take first line
-                        vec![
-                            b.content
-                                .get(0)
-                                .map(|row| row.iter().collect::<String>())
-                                .unwrap_or_default(),
-                        ]
+                        vec![b
+                            .content
+                            .get(0)
+                            .map(|row| row.iter().collect::<String>())
+                            .unwrap_or_default()]
                     }
                 })
                 .collect();
@@ -931,9 +1333,9 @@ mod tests {
         "#;
 
         let expected = r#"
-                            P(x)          P(x)
-E    [x] = ∑ P(x)x = ∑ Q(x)x──── = E    [x────]
- P(x)      x         x      Q(x)    Q(x)  Q(x) "#
+                            P(x)        ⎡ P(x)⎤
+E    [x] = ∑ P(x)x = ∑ Q(x)x──── = E    ⎢x────⎥
+ P(x)      x         x      Q(x)    Q(x)⎣ Q(x)⎦"#
             .trim();
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected);
@@ -1205,9 +1607,8 @@ Wᵢ = ────────────────────────�
         </math>
         "#;
 
-        // Should fall back to multiline since "abc" is 3 characters (> 2)
-        let expected = r#"x
- abc"#;
+        // Now uses LaTeX notation since "abc" is 3 characters (≤ 5 and alphanumeric)
+        let expected = r#"x_abc"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected.trim());
     }
@@ -1239,9 +1640,10 @@ Wᵢ = ────────────────────────�
 </math>
         "#;
 
-        let expected = r#"                             QKᵀ
-Attention(Q,K,V) =  softmax (────)V
-                             √(d)"#;
+        let expected = r#"
+                            ⎛QKᵀ ⎞
+Attention(Q,K,V) =  softmax ⎜────⎟V
+                            ⎝√(d)⎠"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected.trim());
     }
@@ -1297,6 +1699,32 @@ Attention(Q,K,V) =  softmax (────)V
 _  ╱                   z * 5
  \╱    sin(x)ᶜᵒˢ⁽ʸ⁾ + e"#;
 
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected.trim());
+    }
+
+    #[test]
+    fn test_probability_formula_with_product() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper P left-parenthesis x 1 comma x 2 comma period period period comma x Subscript n Baseline right-parenthesis Superscript minus StartFraction 1 Over n EndFraction Baseline equals left-parenthesis StartFraction 1 Over upper P left-parenthesis x 1 comma x 2 comma ellipsis comma x Subscript n Baseline right-parenthesis EndFraction right-parenthesis Superscript StartFraction 1 Over n EndFraction Baseline equals left-parenthesis product Underscript i equals 1 Overscript n Endscripts StartFraction 1 Over upper P left-parenthesis x Subscript i Baseline vertical-bar x 1 comma period period period comma x Subscript i minus 1 Baseline right-parenthesis EndFraction right-parenthesis Superscript StartFraction 1 Over n EndFraction">
+  <mrow>
+    <mi>P</mi>
+    <msup><mrow><mo>(</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><msub><mi>x</mi> <mn>2</mn> </msub><mo>,</mo><mo>.</mo><mo>.</mo><mo>.</mo><mo>,</mo><msub><mi>x</mi> <mi>n</mi> </msub><mo>)</mo></mrow> <mrow><mo>-</mo><mfrac><mn>1</mn> <mi>n</mi></mfrac></mrow> </msup>
+    <mo>=</mo>
+    <msup><mrow><mo>(</mo><mfrac><mn>1</mn> <mrow><mi>P</mi><mo>(</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><msub><mi>x</mi> <mn>2</mn> </msub><mo>,</mo><mi>â</mi><mi></mi><mi>¦</mi><mo>,</mo><msub><mi>x</mi> <mi>n</mi> </msub><mo>)</mo></mrow></mfrac><mo>)</mo></mrow> <mfrac><mn>1</mn> <mi>n</mi></mfrac> </msup>
+    <mo>=</mo>
+    <msup><mrow><mo>(</mo><msubsup><mo>∏</mo> <mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow> <mi>n</mi> </msubsup><mfrac><mn>1</mn> <mrow><mi>P</mi><mo>(</mo><msub><mi>x</mi> <mi>i</mi> </msub><mo>|</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><mo>.</mo><mo>.</mo><mo>.</mo><mo>,</mo><msub><mi>x</mi> <mrow><mi>i</mi><mo>-</mo><mn>1</mn></mrow> </msub><mo>)</mo></mrow></mfrac><mo>)</mo></mrow> <mfrac><mn>1</mn> <mi>n</mi></mfrac> </msup>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"
+                                      1                                1
+                  1                   ─                                ─
+                - ─                   n                                n
+                  n   ⎛      1       ⎞     ⎛   n            1         ⎞
+P(x₁,x₂,...,xₙ)     = ⎜──────────────⎟  =  ⎜   ∏   ───────────────────⎟
+                      ⎝P(x₁,x₂,â¦,xₙ)⎠     ⎝ i = 1 P(xᵢ|x₁,...,xᵢ ₋ ₁)⎠"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected.trim());
     }

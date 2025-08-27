@@ -17,9 +17,18 @@ use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulPro
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 use textwrap;
+
+// Pre-compiled regex patterns for performance
+static LINK_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").unwrap());
+static NUMBERED_LIST_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d+)\. ").unwrap());
+static NUMBERED_LIST_CAPTURE_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^(\d+\.) (.*)").unwrap());
+static IMAGE_SRC_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\[\s*image\s+src\s*=\s*"([^"]+)"\s*\]"#).unwrap());
 
 /// Height for regular images in terminal cells
 const IMAGE_HEIGHT_REGULAR: u16 = 15;
@@ -488,18 +497,17 @@ impl TextReader {
 
                 // First, replace markdown links with just their text for wrapping purposes
                 // but keep track of link positions
-                let link_re = Regex::new(r"\[([^\]]+)\]\(([^\)]+)\)").unwrap();
                 let mut links_in_line = Vec::new();
 
                 // Collect all links in this line
-                for cap in link_re.captures_iter(line) {
+                for cap in LINK_REGEX.captures_iter(line) {
                     if let (Some(text), Some(url)) = (cap.get(1), cap.get(2)) {
                         links_in_line.push((text.as_str().to_string(), url.as_str().to_string()));
                     }
                 }
 
                 // Replace links with just text for wrapping
-                let line_for_wrapping = link_re.replace_all(line, "$1").to_string();
+                let line_for_wrapping = LINK_REGEX.replace_all(line, "$1").to_string();
 
                 // Wrap the line
                 let wrapped_lines = textwrap::wrap(&line_for_wrapping, width);
@@ -641,7 +649,7 @@ impl TextReader {
 
         if is_numbered {
             // Parse numbered list item (e.g., "1. Item text")
-            if let Some(captures) = Regex::new(r"^(\d+\.) (.*)").unwrap().captures(line) {
+            if let Some(captures) = NUMBERED_LIST_CAPTURE_REGEX.captures(line) {
                 if let (Some(number), Some(content)) = (captures.get(1), captures.get(2)) {
                     // Add indentation for nested appearance
                     spans.push(Span::styled("  ".to_string(), Style::default()));
@@ -722,7 +730,7 @@ impl TextReader {
         }
 
         // Check if this is a numbered list item
-        if let Some(captures) = Regex::new(r"^(\d+)\. ").unwrap().captures(line) {
+        if let Some(captures) = NUMBERED_LIST_REGEX.captures(line) {
             if captures.get(1).is_some() {
                 return self.parse_list_item(line, palette, is_focused, true);
             }
@@ -926,7 +934,7 @@ impl TextReader {
         }
 
         // Check if this is a numbered list item
-        if let Some(captures) = Regex::new(r"^(\d+)\. ").unwrap().captures(line) {
+        if let Some(captures) = NUMBERED_LIST_REGEX.captures(line) {
             if captures.get(1).is_some() {
                 return self.parse_list_item(line, palette, is_focused, true);
             }
@@ -2147,9 +2155,7 @@ impl TextReader {
 }
 
 fn extract_src(text: &str) -> Option<String> {
-    let re = Regex::new(r#"(?i)\[\s*image\s+src\s*=\s*"([^"]+)"\s*\]"#).unwrap();
-
-    for cap in re.captures_iter(text) {
+    for cap in IMAGE_SRC_REGEX.captures_iter(text) {
         return Some(format!("{}", &cap[1]));
     }
 
