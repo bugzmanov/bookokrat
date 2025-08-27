@@ -1,4 +1,4 @@
-use crate::mathml_renderer::{MathMLError, mathml_to_ascii};
+use crate::mathml_renderer::mathml_to_ascii;
 use crate::table_of_contents::TocItem;
 use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
@@ -77,47 +77,6 @@ impl TextGenerator {
         cleaned.trim().to_string()
     }
 
-    /// Check if this chapter is a section header by comparing its href with the TOC structure
-    /// A chapter is a section header if it appears in the TOC and has children
-    pub fn is_section_header(&self, chapter_href: &str, toc_entries: &[TocItem]) -> bool {
-        self.find_entry_with_children(chapter_href, toc_entries)
-    }
-
-    /// Recursively search for an entry with the given href that has children
-    fn find_entry_with_children(&self, href: &str, entries: &[TocItem]) -> bool {
-        for entry in entries {
-            match entry {
-                TocItem::Chapter {
-                    href: entry_href, ..
-                } => {
-                    // Chapters don't have children
-                    let _ = entry_href; // Unused, just for clarity
-                }
-                TocItem::Section {
-                    href: entry_href,
-                    children,
-                    ..
-                } => {
-                    if let Some(entry_href) = entry_href {
-                        // Normalize hrefs for comparison (remove leading ../ and ./)
-                        let normalized_entry_href = self.normalize_href(entry_href);
-                        let normalized_target_href = self.normalize_href(href);
-
-                        if normalized_entry_href == normalized_target_href && !children.is_empty() {
-                            return true;
-                        }
-                    }
-
-                    // Also check children recursively
-                    if self.find_entry_with_children(href, children) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-
     /// Normalize href for comparison by removing relative path prefixes, OEBPS directory, and fragments
     pub fn normalize_href(&self, href: &str) -> String {
         let normalized = href
@@ -149,7 +108,7 @@ impl TextGenerator {
 
         let chapter_title = self.extract_chapter_title(&content);
         // Use a default width of 120 for chapter extraction (will be properly wrapped later)
-        let processed_text = self.clean_html_content(&content, &chapter_title, 120);
+        let processed_text = self.clean_html_content(&content, 120);
 
         if processed_text.is_empty() {
             warn!("Converted text is empty");
@@ -161,15 +120,7 @@ impl TextGenerator {
             debug!("Final text length: {} bytes", processed_text.len());
             let formatted_text = self.format_text_with_spacing(&processed_text);
 
-            let mut final_text = formatted_text;
-            if let Some(ref title) = chapter_title {
-                let trimmed_content = final_text.trim_start();
-                if trimmed_content.starts_with(title) {
-                    final_text = trimmed_content[title.len()..].trim_start().to_string();
-                }
-            }
-
-            Ok((final_text, chapter_title))
+            Ok((formatted_text, chapter_title))
         }
     }
 
@@ -236,12 +187,7 @@ impl TextGenerator {
         content
     }
 
-    fn clean_html_content(
-        &self,
-        content: &str,
-        chapter_title: &Option<String>,
-        terminal_width: usize,
-    ) -> String {
+    fn clean_html_content(&self, content: &str, terminal_width: usize) -> String {
         // First remove XML declaration and DOCTYPE
         let xml_decl_re = Regex::new(r"<\?xml[^?]*\?>").unwrap();
         let doctype_re = Regex::new(r"(?i)<!DOCTYPE[^>]*>").unwrap();
@@ -270,17 +216,6 @@ impl TextGenerator {
 
         // Convert lists to markdown format before removing tags
         content = self.convert_lists_to_markdown(&content);
-
-        if let Some(_title) = chapter_title {
-            // Remove h1/h2 tags that contain the chapter title
-            // This handles complex nested structures by removing the entire h1/h2 tag
-            let title_removal_re = Regex::new(r"(?s)<h[12][^>]*>.*?</h[12]>").unwrap();
-            content = title_removal_re.replace_all(&content, "").into_owned();
-
-            // Also remove title tags since they can contain duplicate title text
-            let title_tag_re = Regex::new(r"(?s)<title[^>]*>.*?</title>").unwrap();
-            content = title_tag_re.replace_all(&content, "").into_owned();
-        }
 
         // Process tables BEFORE entity replacement and tag removal
         // Tables handle their own entity processing internally
@@ -336,7 +271,7 @@ impl TextGenerator {
             .into_owned();
 
         // Process HTML entities for the rest of the content
-        let mut text = content
+        let text = content
             .replace("&nbsp;", " ")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
@@ -866,58 +801,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_section_header_with_toc_structure() {
-        let generator = TextGenerator::new();
-
-        // Create a sample TOC structure with sections and chapters
-        let toc_entries = vec![
-            TocItem::Chapter {
-                title: "Introduction".to_string(),
-                href: "Text/intro.html".to_string(),
-                index: 0, // No children - not a section header
-            },
-            TocItem::Section {
-                title: "Chapter 1: Getting Started".to_string(),
-                href: Some("Text/chapter1.html".to_string()),
-                index: Some(1),
-                children: vec![
-                    // Has children - is a section header
-                    TocItem::Chapter {
-                        title: "1.1 Setup".to_string(),
-                        href: "Text/chapter1_1.html".to_string(),
-                        index: 2,
-                    },
-                    TocItem::Chapter {
-                        title: "1.2 Configuration".to_string(),
-                        href: "Text/chapter1_2.html".to_string(),
-                        index: 3,
-                    },
-                ],
-                is_expanded: true,
-            },
-        ];
-
-        // Test that chapters without children are not section headers
-        assert!(!generator.is_section_header("Text/intro.html", &toc_entries));
-        assert!(!generator.is_section_header("Text/chapter1_1.html", &toc_entries));
-        assert!(!generator.is_section_header("Text/chapter1_2.html", &toc_entries));
-
-        // Test that chapters with children are section headers
-        assert!(generator.is_section_header("Text/chapter1.html", &toc_entries));
-
-        // Test href normalization (relative paths, OEBPS directory, and fragments)
-        assert!(generator.is_section_header("../Text/chapter1.html", &toc_entries));
-        assert!(generator.is_section_header("./Text/chapter1.html", &toc_entries));
-        assert!(generator.is_section_header("OEBPS/Text/chapter1.html", &toc_entries));
-        assert!(generator.is_section_header("../OEBPS/Text/chapter1.html", &toc_entries));
-        assert!(generator.is_section_header("Text/chapter1.html#ch1", &toc_entries));
-        assert!(generator.is_section_header("OEBPS/Text/chapter1.html#anchor", &toc_entries));
-
-        // Test non-existent hrefs
-        assert!(!generator.is_section_header("Text/nonexistent.html", &toc_entries));
-    }
-
-    #[test]
     fn test_duplicate_title_removal() {
         let generator = TextGenerator::new();
 
@@ -946,7 +829,7 @@ mod tests {
         // The h1 tag contains "1 Simpleminded Hope" (without period), which should be prioritized over title tag
         assert_eq!(extracted_title, Some("1 Simpleminded Hope".to_string()));
 
-        let cleaned_content = generator.clean_html_content(html_content, &extracted_title, 80);
+        let cleaned_content = generator.clean_html_content(html_content, 80);
 
         assert!(
             !cleaned_content.contains("Simpleminded Hope"),
@@ -1064,7 +947,7 @@ mod tests {
         <p>Some text after the table.</p>
         "#;
 
-        let cleaned = generator.clean_html_content(html_with_table, &None, 80);
+        let cleaned = generator.clean_html_content(html_with_table, 80);
 
         // Check that the table caption is present
         assert!(
@@ -1116,7 +999,7 @@ mod tests {
         </table>
         "#;
 
-        let cleaned = generator.clean_html_content(html_with_table, &None, 80);
+        let cleaned = generator.clean_html_content(html_with_table, 80);
 
         // Check table structure
         assert!(cleaned.contains("Name"));
@@ -1181,7 +1064,7 @@ mod tests {
         // Test HTML with links
         let html = r#"<p>Text with <a href="https://example.com">external link</a> and <a href="chapter2.html">internal link</a>.</p>"#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Should contain markdown-style links
         assert!(
@@ -1216,7 +1099,7 @@ mod tests {
             </html>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check that headings are converted to Markdown format (h1 should be uppercase)
         assert!(
@@ -1264,7 +1147,7 @@ mod tests {
             </ul>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check headings are converted properly even with nested tags
         assert!(
@@ -1307,7 +1190,7 @@ mod tests {
             </div></section>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Use multiline regex to check that key elements are present in the output
         let expected_patterns = vec![
@@ -1348,7 +1231,7 @@ mod tests {
             <h6>Fine Print</h6>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // All headings should be converted to appropriate markdown levels
         assert!(
@@ -1412,7 +1295,7 @@ mod tests {
         <p>Some text after list.</p>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check that list items are converted to bullet points
         assert!(
@@ -1451,7 +1334,7 @@ mod tests {
         <p>That's it!</p>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check that list items are converted to numbered format
         assert!(
@@ -1532,7 +1415,7 @@ mod tests {
         </ol>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check both list types are converted
         assert!(cleaned.contains("• Apple"));
@@ -1554,7 +1437,7 @@ mod tests {
         </ul>
         "#;
 
-        let cleaned = generator.clean_html_content(html, &None, 80);
+        let cleaned = generator.clean_html_content(html, 80);
 
         // Check that list items are converted and nested tags are processed
         assert!(
@@ -1613,7 +1496,7 @@ mod tests {
         <p>Where a, b, and c are coefficients.</p>
         "#;
 
-        let cleaned = generator.clean_html_content(html_with_mathml, &None, 80);
+        let cleaned = generator.clean_html_content(html_with_mathml, 80);
 
         // Check that the text before and after is preserved
         assert!(cleaned.contains("This is the quadratic formula"));

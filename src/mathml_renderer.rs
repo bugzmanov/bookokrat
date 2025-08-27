@@ -1178,11 +1178,12 @@ impl MathMLParser {
                         vec![b.content[0].iter().collect::<String>()]
                     } else {
                         // For multi-line boxes that contain simple content, just take first line
-                        vec![b
-                            .content
-                            .get(0)
-                            .map(|row| row.iter().collect::<String>())
-                            .unwrap_or_default()]
+                        vec![
+                            b.content
+                                .get(0)
+                                .map(|row| row.iter().collect::<String>())
+                                .unwrap_or_default(),
+                        ]
                     }
                 })
                 .collect();

@@ -224,9 +224,6 @@ impl TextReader {
         let mut total_lines = 0;
         let mut image_count = 0;
 
-        // Add lines for chapter title (title + empty line)
-        total_lines += 2;
-
         // Wrap each line of content
         for line in content.lines() {
             let is_empty = line.trim().is_empty();
@@ -363,29 +360,8 @@ impl TextReader {
         // Clear links for new content
         self.links.clear();
 
-        // Add chapter title lines to raw text
-        if let Some(title) = chapter_title {
-            raw_lines.push(title.clone());
-            raw_lines.push(String::new());
-
-            // Use focus-aware color for chapter title
-            let title_color = if is_focused {
-                palette.base_0d // Keep bright blue for focused chapter titles
-            } else {
-                palette.base_02 // Much dimmer for unfocused
-            };
-            lines.push(Line::from(vec![Span::styled(
-                title.clone(),
-                Style::default()
-                    .fg(title_color)
-                    .add_modifier(Modifier::BOLD),
-            )]));
-            lines.push(Line::from(String::new()));
-        }
-
         // Calculate line count for image placement tracking
-        // Start at 2 if we have a title (title line + empty line)
-        let mut line_count = if chapter_title.is_some() { 2 } else { 0 };
+        let mut line_count = 0;
 
         // Process each line with manual wrapping
         for (_i, line) in text.lines().enumerate() {
@@ -545,23 +521,11 @@ impl TextReader {
                             )])
                         }
                         2 => {
-                            // h2: double thin lines
-                            let thin_line = "═".repeat(width);
-                            raw_lines.push(thin_line.clone());
-                            let line1 = Line::from(vec![Span::styled(
-                                thin_line.clone(),
-                                Style::default().fg(if is_focused {
-                                    palette.base_0a
-                                } else {
-                                    palette.base_03
-                                }),
-                            )]);
-                            lines.push(line1);
-                            line_count += 1;
-
-                            raw_lines.push(thin_line.clone());
+                            // h2: single double line
+                            let double_line = "═".repeat(width);
+                            raw_lines.push(double_line.clone());
                             Line::from(vec![Span::styled(
-                                thin_line,
+                                double_line,
                                 Style::default().fg(if is_focused {
                                     palette.base_0a
                                 } else {
