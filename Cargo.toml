@@ -40,6 +40,8 @@ imagesize = "0.13"
 open = "5.3"
 roxmltree = "0.18"
 once_cell = "1.19"
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
 
 [dev-dependencies]
 snapbox = { version = "0.6", features = ["term-svg"] }

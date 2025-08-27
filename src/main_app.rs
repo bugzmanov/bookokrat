@@ -10,7 +10,7 @@ use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
 use crate::table_of_contents::{SelectedTocItem, TocItem};
-use crate::text_generator::TextGenerator;
+use crate::text_generator_wrapper::TextGeneratorWrapper;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 use image::GenericImageView;
@@ -42,7 +42,7 @@ use ratatui::{
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
-    text_generator: TextGenerator,
+    text_generator: TextGeneratorWrapper,
     text_reader: TextReader,
     bookmarks: Bookmarks,
     image_storage: Arc<ImageStorage>,
@@ -146,7 +146,7 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
-        let text_generator = TextGenerator::new();
+        let text_generator = TextGeneratorWrapper::new_html5ever();
         let text_reader = TextReader::new();
 
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
@@ -498,7 +498,7 @@ impl App {
     fn map_chapter_indices(
         toc_items: &mut Vec<TocItem>,
         chapter_map: &std::collections::HashMap<String, usize>,
-        text_generator: &TextGenerator,
+        text_generator: &TextGeneratorWrapper,
     ) {
         for item in toc_items.iter_mut() {
             match item {
