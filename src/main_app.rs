@@ -380,7 +380,7 @@ impl App {
                 }
             }
         } else {
-            anyhow::bail!("No EPUB document loaded")
+            anyhow::bail!("No document loaded")
         }
     }
 
@@ -704,10 +704,7 @@ impl App {
                     let update_time = update_start.elapsed();
                     debug!("    - Content updated: {:?}", update_time);
 
-                    // THEN pre-load image dimensions AFTER content_updated
-                    // This ensures placeholders use the correct height
-                    // Must be done AFTER content_updated because that method clears the cache
-                    if let Some(ref current_file) = self.current_file {
+                    if self.current_file.is_some() {
                         if let Some(ref content) = self.current_content {
                             if image_count > 0 {
                                 let preload_start = std::time::Instant::now();
