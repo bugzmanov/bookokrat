@@ -1995,6 +1995,208 @@ fn test_toc_chapter_navigation_svg() {
 }
 
 #[test]
+fn test_mathml_content_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+
+    // Create a temporary EPUB file with MathML content similar to snap.html
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_epub_path = temp_dir.path().join("mathml_test.epub");
+
+    // Create the content with MathML from snap.html
+    let mathml_content = r#"
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE html>
+        <html xml:lang="en"
+        lang="en"
+        xmlns="http://www.w3.org/1999/xhtml"
+        xmlns:epub="http://www.idpf.org/2007/ops">
+        <head>
+        <title>AI Engineering</title>
+        <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+        <link rel="stylesheet" type="text/css" href="epub.css"/>
+        </head>
+        <body>
+        <div id="book-content">
+                  <aside data-type="sidebar" epub:type="sidebar"><div class="sidebar" id="id902">
+                    <h1>How to Use a Language Model to Compute a Text’s Perplexity</h1>
+
+        <p><a contenteditable="false" data-primary="evaluation methodology" data-secondary="language model for computing text perplexity" data-type="indexterm" id="id903"></a><a contenteditable="false" data-primary="language models" data-type="indexterm" id="id904"></a>A model’s perplexity with respect to a text measures how difficult it is for the model to predict that text. Given a language model <em>X</em>, and a sequence of tokens <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="left-bracket x 1 comma x 2 comma period period period comma x Subscript n Baseline right-bracket">
+          <mrow>
+            <mo>[</mo>
+            <msub><mi>x</mi> <mn>1</mn> </msub>
+            <mo>,</mo>
+            <msub><mi>x</mi> <mn>2</mn> </msub>
+            <mo>,</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>,</mo>
+            <msub><mi>x</mi> <mi>n</mi> </msub>
+            <mo>]</mo>
+          </mrow>
+        </math>, <em>X</em>’s perplexity for this sequence is:</p>
+        <div data-type="equation">
+                    <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper P left-parenthesis x 1 comma x 2 comma period period period comma x Subscript n Baseline right-parenthesis Superscript minus StartFraction 1 Over n EndFraction Baseline equals left-parenthesis StartFraction 1 Over upper P left-parenthesis x 1 comma x 2 comma ellipsis comma x Subscript n Baseline right-parenthesis EndFraction right-parenthesis Superscript StartFraction 1 Over n EndFraction Baseline equals left-parenthesis product Underscript i equals 1 Overscript n Endscripts StartFraction 1 Over upper P left-parenthesis x Subscript i Baseline vertical-bar x 1 comma period period period comma x Subscript i minus 1 Baseline right-parenthesis EndFraction right-parenthesis Superscript StartFraction 1 Over n EndFraction">
+          <mrow>
+            <mi>P</mi>
+            <msup><mrow><mo>(</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><msub><mi>x</mi> <mn>2</mn> </msub><mo>,</mo><mo>.</mo><mo>.</mo><mo>.</mo><mo>,</mo><msub><mi>x</mi> <mi>n</mi> </msub><mo>)</mo></mrow> <mrow><mo>-</mo><mfrac><mn>1</mn> <mi>n</mi></mfrac></mrow> </msup>
+            <mo>=</mo>
+            <msup><mrow><mo>(</mo><mfrac><mn>1</mn> <mrow><mi>P</mi><mo>(</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><msub><mi>x</mi> <mn>2</mn> </msub><mo>,</mo><mi>â</mi><mi></mi><mi>¦</mi><mo>,</mo><msub><mi>x</mi> <mi>n</mi> </msub><mo>)</mo></mrow></mfrac><mo>)</mo></mrow> <mfrac><mn>1</mn> <mi>n</mi></mfrac> </msup>
+            <mo>=</mo>
+            <msup><mrow><mo>(</mo><msubsup><mo>∏</mo> <mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow> <mi>n</mi> </msubsup><mfrac><mn>1</mn> <mrow><mi>P</mi><mo>(</mo><msub><mi>x</mi> <mi>i</mi> </msub><mo>|</mo><msub><mi>x</mi> <mn>1</mn> </msub><mo>,</mo><mo>.</mo><mo>.</mo><mo>.</mo><mo>,</mo><msub><mi>x</mi> <mrow><mi>i</mi><mo>-</mo><mn>1</mn></mrow> </msub><mo>)</mo></mrow></mfrac><mo>)</mo></mrow> <mfrac><mn>1</mn> <mi>n</mi></mfrac> </msup>
+          </mrow>
+        </math>
+        </div>
+        <p>where <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="upper P left-parenthesis x Subscript i Baseline vertical-bar x 1 comma period period period comma x Subscript i minus 1 Baseline right-parenthesis">
+          <mrow>
+            <mi>P</mi>
+            <mo>(</mo>
+            <msub><mi>x</mi> <mi>i</mi> </msub>
+            <mo>|</mo>
+            <msub><mi>x</mi> <mn>1</mn> </msub>
+            <mo>,</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>,</mo>
+            <msub><mi>x</mi> <mrow><mi>i</mi><mo>-</mo><mn>1</mn></mrow> </msub>
+            <mo>)</mo>
+          </mrow>
+        </math> denotes the probability that <em>X</em> assigns to the token <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="x Subscript i">
+          <msub><mi>x</mi> <mi>i</mi> </msub>
+        </math> given the previous tokens <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="x 1 comma period period period comma x Subscript i minus 1 Baseline">
+          <mrow>
+            <msub><mi>x</mi> <mn>1</mn> </msub>
+            <mo>,</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>.</mo>
+            <mo>,</mo>
+            <msub><mi>x</mi> <mrow><mi>i</mi><mo>-</mo><mn>1</mn></mrow> </msub>
+          </mrow>
+        </math>.</p>
+
+        <p>To compute perplexity, you need access to the probabilities (or logprobs) the language model assigns to each next token. Unfortunately, not all commercial models expose their models’ logprobs, as discussed in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a>.</p>
+                  </div></aside>
+        </body>
+        </html>
+
+        "#;
+
+    // Create a minimal EPUB structure
+    use std::fs;
+    use std::io::Write;
+    use zip::ZipWriter;
+    use zip::write::FileOptions;
+
+    let file = fs::File::create(&temp_epub_path).unwrap();
+    let mut zip = ZipWriter::new(file);
+
+    // mimetype file (must be first and uncompressed)
+    zip.start_file(
+        "mimetype",
+        FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+    )
+    .unwrap();
+    zip.write_all(b"application/epub+zip").unwrap();
+
+    // META-INF/container.xml
+    zip.start_file("META-INF/container.xml", FileOptions::default())
+        .unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+    )
+    .unwrap();
+
+    // OEBPS/content.opf
+    zip.start_file("OEBPS/content.opf", FileOptions::default())
+        .unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">mathml-test</dc:identifier>
+    <dc:title>MathML Test Book</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx">
+    <itemref idref="chapter1"/>
+  </spine>
+</package>"#,
+    )
+    .unwrap();
+
+    // OEBPS/toc.ncx
+    zip.start_file("OEBPS/toc.ncx", FileOptions::default())
+        .unwrap();
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx version="2005-1" xmlns="http://www.daisy.org/z3986/2005/ncx/">
+  <head>
+    <meta name="dtb:uid" content="mathml-test"/>
+  </head>
+  <docTitle><text>MathML Test</text></docTitle>
+  <navMap>
+    <navPoint id="chapter1">
+      <navLabel><text>Perplexity Calculation</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+</ncx>"#,
+    )
+    .unwrap();
+
+    // OEBPS/chapter1.xhtml (our MathML content)
+    zip.start_file("OEBPS/chapter1.xhtml", FileOptions::default())
+        .unwrap();
+    zip.write_all(mathml_content.as_bytes()).unwrap();
+
+    zip.finish().unwrap();
+
+    // Now test with the created EPUB
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    // Load the MathML test book
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Write to debug file
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_mathml_content_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/mathml_content_rendering.svg"),
+        "test_mathml_content_rendering_svg",
+        create_test_failure_handler("test_mathml_content_rendering_svg"),
+    );
+}
+
+#[test]
 fn test_book_reading_history_with_many_entries_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40); // Larger terminal for better visibility
