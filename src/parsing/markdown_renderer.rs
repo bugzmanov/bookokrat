@@ -30,9 +30,14 @@ use crate::markdown::{Block, Document, HeadingLevel, Inline, Node, Text, TextNod
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```rust,no_run
+/// use bookrat::parsing::markdown_renderer::MarkdownRenderer;
+/// # use bookrat::markdown::Document;
+/// # fn main() {
 /// let renderer = MarkdownRenderer::new();
+/// # let markdown_document = Document::new();
 /// let output_text = renderer.render(&markdown_document);
+/// # }
 /// ```
 pub struct MarkdownRenderer {
     // Simple renderer - no cleanup logic needed as it's handled during conversion
@@ -137,56 +142,28 @@ impl MarkdownRenderer {
 
     fn render_text(&self, text: &Text) -> String {
         let mut output = String::new();
-        let items: Vec<TextOrInline> = text.clone().into_iter().collect();
 
-        for (i, item) in items.iter().enumerate() {
-            let is_first = i == 0;
-            let is_last = i == items.len() - 1;
-            let prev_item = if i > 0 { Some(&items[i - 1]) } else { None };
-            let next_item = if i < items.len() - 1 { Some(&items[i + 1]) } else { None };
-
+        for item in text.clone().into_iter() {
             match item {
                 TextOrInline::Text(text_node) => {
-                    // Handle spacing for text nodes adjacent to inline elements
-                    if let Some(TextOrInline::Inline(_)) = prev_item {
-                        // If previous was inline and current text doesn't start with space or punctuation
-                        let starts_with_punctuation = text_node.content.starts_with(&[' ', '.', ',', '!', '?', ':', ';', ')', ']', '}']);
-                        if !starts_with_punctuation {
-                            // Add space between inline element and following text
-                            if !output.ends_with(' ') {
-                                output.push(' ');
-                            }
-                        }
-                    }
-                    self.render_text_node(text_node, &mut output);
+                    self.render_text_node(&text_node, &mut output);
                 }
                 TextOrInline::Inline(inline) => {
-                    self.render_inline_with_spacing(inline, &mut output, prev_item, next_item, is_first, is_last);
+                    self.render_inline(&inline, &mut output);
                 }
             }
         }
 
-        // Clean up any double spaces that might have been introduced
-        let cleaned = output.replace("  ", " ");
-        cleaned
+        output
     }
 
     fn render_text_node(&self, text_node: &TextNode, output: &mut String) {
         match &text_node.style {
             Some(style) => match style {
                 crate::markdown::Style::Code => {
-                    // Add space before inline code if the previous character isn't whitespace
-                    if !output.is_empty() {
-                        let last_char = output.chars().last().unwrap();
-                        if !last_char.is_whitespace() && !matches!(last_char, '(' | '[' | '{') {
-                            output.push(' ');
-                        }
-                    }
                     output.push('`');
                     output.push_str(&text_node.content);
                     output.push('`');
-                    // Only add space after if we're not at the end or followed immediately by punctuation
-                    // Let the next element handle its own spacing
                 }
                 crate::markdown::Style::Emphasis => {
                     output.push('_');
@@ -210,7 +187,15 @@ impl MarkdownRenderer {
         }
     }
 
-    fn render_inline_with_spacing(&self, inline: &Inline, output: &mut String, _prev_item: Option<&TextOrInline>, _next_item: Option<&TextOrInline>, _is_first: bool, _is_last: bool) {
+    fn render_inline_with_spacing(
+        &self,
+        inline: &Inline,
+        output: &mut String,
+        _prev_item: Option<&TextOrInline>,
+        _next_item: Option<&TextOrInline>,
+        _is_first: bool,
+        _is_last: bool,
+    ) {
         match inline {
             Inline::Image {
                 alt_text: _,

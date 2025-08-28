@@ -7,15 +7,16 @@ ideas to implement:
      [ ] Math Formulas
      [ ] Markdown
          [.] links support 
+             [ ] visited link tracking
              [x] external links
              [ ] internal links
          [ ] Horizontal rule
          [x] Headers
-           [ ] H1 getting removed bug  (because special treatment of headers that i had before)
          [ ] Blockquote
          [ ] tables support
-         [ ] bold & italic 
-         [x] lists
+         [x] bold & italic 
+           [ ] Bold needs some visual treatment
+         [ ] lists
            [ ] Nested lists are buggy
            [ ] Links inside lists get broken
          [ ] checkboxes /-- not really needs to for epub

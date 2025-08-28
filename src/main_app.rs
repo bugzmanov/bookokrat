@@ -5,12 +5,12 @@ use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
+use crate::parsing::text_generator_wrapper::TextGeneratorWrapper;
 use crate::reading_history::ReadingHistory;
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
 };
 use crate::table_of_contents::{SelectedTocItem, TocItem};
-use crate::text_generator_wrapper::TextGeneratorWrapper;
 use crate::text_reader::TextReader;
 use crate::theme::OCEANIC_NEXT;
 use image::GenericImageView;

@@ -29,6 +29,9 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - Image popup viewer for detailed image viewing
 - Performance profiling support
 - FPS monitoring for UI performance
+- MathML rendering with ASCII art conversion
+- Markdown AST-based text processing pipeline
+- Multiple HTML parsing implementations (regex and html5ever)
 
 ## Key Commands
 
@@ -49,8 +52,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - **EPUB Inspector**: `cargo run --example epub_inspector <file.epub>` - Extracts and displays raw HTML content from EPUB chapters for debugging text processing issues
 - **Panic Test**: `cargo run --example panic_test` - Interactive test to verify panic handler properly restores mouse functionality
 - **Simulated Input Example**: `cargo run --example simulated_input_example` - Demonstrates running the app with simulated keyboard input for testing
-- **Table Formatting Test**: `cargo run --example test_table_formatting` - Tests table formatting in EPUB content
-- **Table Parsing Test**: `cargo run --example test_table_parsing` - Tests table parsing capabilities
+- **MathML Test**: `cargo run --example test_mathml_rust` - Tests MathML parsing and ASCII rendering functionality
 
 ## Architecture
 
@@ -187,36 +189,90 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Language detection and appropriate syntax rules
     - Converts highlighted code to ratatui-compatible styled text
 
+18. **mathml_renderer.rs** - MathML to ASCII conversion (src/mathml_renderer.rs)
+    - `MathMLParser` struct: Converts MathML expressions to terminal-friendly ASCII art
+    - `MathBox` struct: Represents rendered mathematical expressions with positioning
+    - Unicode subscript/superscript support for improved readability
+    - LaTeX notation fallback for complex expressions
+    - Comprehensive fraction, square root, and summation rendering
+    - Multi-line parentheses for complex expressions
+    - Baseline alignment for proper mathematical layout
+
+19. **markdown.rs** - Markdown AST definitions (src/markdown.rs)
+    - `Document` struct: Root container for parsed content
+    - `Node` struct: Individual content blocks with source tracking
+    - `Block` enum: Different content types (heading, paragraph, code, table, etc.)
+    - `Text` struct: Rich text with formatting and inline elements
+    - `Style` enum: Text formatting options (emphasis, strong, code, strikethrough)
+    - `Inline` enum: Inline elements (links, images, line breaks)
+    - `HeadingLevel` enum: H1-H6 heading levels
+    - Complete table support structures (rows, cells, alignment)
+
+### Parsing Components (src/parsing/)
+
+20. **html_to_markdown.rs** - HTML to Markdown AST conversion (src/parsing/html_to_markdown.rs)
+    - `HtmlToMarkdownConverter` struct: Converts HTML content to clean Markdown AST
+    - Uses html5ever for robust DOM parsing and traversal
+    - Handles various HTML elements (headings, paragraphs, images, MathML)
+    - Integrates MathML processing with mathml_to_ascii conversion
+    - Preserves text formatting and inline elements during conversion
+    - Entity decoding for proper text representation
+
+21. **markdown_renderer.rs** - Markdown AST to string rendering (src/parsing/markdown_renderer.rs)
+    - `MarkdownRenderer` struct: Converts Markdown AST to formatted text output
+    - Simple AST traversal and string conversion without cleanup logic
+    - Applies Markdown formatting syntax (headers, bold, italic, code)
+    - Handles inline elements (links, images, line breaks)
+    - H1 uppercase transformation for consistency
+    - Proper spacing and formatting for terminal display
+
+22. **html5ever_text_generator.rs** - Modern HTML parsing implementation (src/parsing/html5ever_text_generator.rs)
+    - `TextGenerator` struct: Alternative to regex-based HTML processing
+    - Uses html5ever for standards-compliant HTML parsing
+    - Integration with Markdown AST pipeline for clean text processing
+    - Improved handling of complex HTML structures and nested elements
+
+23. **text_generator_wrapper.rs** - Implementation abstraction layer (src/parsing/text_generator_wrapper.rs)
+    - `TextGeneratorWrapper` struct: Provides unified interface for different text generators
+    - `TextGeneratorImpl` enum: Switches between regex and html5ever implementations
+    - Allows easy switching between parsing approaches for testing and development
+    - Delegates core functionality (chapter processing, TOC parsing) to chosen implementation
+
+24. **text_generator.rs** - Legacy regex-based HTML processing (src/parsing/text_generator.rs)
+    - Original regex-based implementation maintained for compatibility
+    - Direct HTML tag processing and text extraction
+    - Comprehensive entity decoding and content cleaning
+
 ### Image Components (src/images/)
 
-18. **image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
+25. **image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
     - `ImageStorage` struct: Manages extracted EPUB images
     - Automatic image extraction from EPUB files
     - Directory-based caching in `temp_images/`
     - Thread-safe storage with Arc<Mutex>
     - Deduplication of already extracted images
 
-19. **book_images.rs** - Book-specific image management (src/images/book_images.rs)
+26. **book_images.rs** - Book-specific image management (src/images/book_images.rs)
     - `BookImages` struct: Manages images for current book
     - Image path resolution from EPUB resources
     - Integration with ImageStorage for caching
     - Support for various image formats (PNG, JPEG, etc.)
 
-20. **image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
+27. **image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
     - `ImagePlaceholder` struct: Displays loading/error states
     - `LoadingStatus` enum: NotStarted, Loading, Loaded, Failed
     - Visual feedback during image loading
     - Error message display for failed loads
     - Configurable styling and dimensions
 
-21. **image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
+28. **image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
     - `ImagePopup` struct: Modal image display
     - Full-screen overlay with centered image
     - Keyboard controls (Esc to close, navigation)
     - Mouse interaction support
     - Image scaling and aspect ratio preservation
 
-22. **background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
+29. **background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
     - `BackgroundImageLoader` struct: Non-blocking image loads
     - Thread-based background loading
     - Prevents UI freezing during image loading
@@ -245,7 +301,11 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - `fast_image_resize` (3.0): Fast image resizing
 - `imagesize` (0.13): Image dimension detection
 - `open` (5.3): Cross-platform file opening
-- `syntect` (via dependencies): Syntax highlighting
+- `html2text` (0.2.1): HTML to plain text conversion
+- `roxmltree` (0.18): XML parsing for MathML processing
+- `once_cell` (1.19): Lazy static initialization for Unicode mappings
+- `html5ever` (0.27): Modern HTML5 parsing
+- `markup5ever_rcdom` (0.3): DOM representation for html5ever
 
 ### State Management
 The application maintains state through the `App` struct in `main_app.rs` which includes:
@@ -267,12 +327,26 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 - FPS counter for performance monitoring
 
 ### Content Processing Pipeline
+
+**Modern HTML5ever-based Pipeline (default):**
+1. EPUB file is opened and validated
+2. Images are extracted and cached to `temp_images/` directory
+3. Table of contents is parsed from NCX or Nav documents
+4. Chapter HTML content is extracted via epub crate
+5. HTML is parsed using html5ever into proper DOM structure
+6. DOM is converted to clean Markdown AST with preserved formatting
+7. MathML elements are converted to ASCII art using mathml_renderer
+8. Markdown AST is rendered to formatted text output
+9. HTML entities are decoded in the final text
+10. Images are loaded asynchronously in background
+
+**Legacy Regex-based Pipeline (available via wrapper):**
 1. EPUB file is opened and validated
 2. Images are extracted and cached to `temp_images/` directory
 3. Table of contents is parsed from NCX or Nav documents
 4. Chapter HTML content is extracted via epub crate
 5. Chapter title is extracted from h1/h2/title tags
-6. HTML is cleaned (scripts, styles removed)
+6. HTML is cleaned using regex (scripts, styles removed)
 7. HTML entities are decoded
 8. Code blocks are detected and preserved with syntax highlighting
 9. Tables are parsed and formatted for terminal display
@@ -282,6 +356,9 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 13. Paragraphs are indented for readability
 14. Text is wrapped to terminal width
 15. Images are loaded asynchronously in background
+
+**Text Generator Selection:**
+The application uses `TextGeneratorWrapper` to switch between implementations. Currently defaults to html5ever-based processing for improved HTML handling and MathML support.
 
 ### User Interface Features
 - **Navigation Panel**: Switchable between book list and table of contents
@@ -302,6 +379,9 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 - **Link Display**: Clickable links with URL information
 - **FPS Monitor**: Real-time performance monitoring
 - **Raw HTML View**: Toggle to view original HTML content
+- **MathML Support**: Mathematical expressions rendered as ASCII art
+- **Unicode Math**: Subscripts and superscripts using Unicode characters
+- **LaTeX Fallback**: LaTeX notation for complex mathematical expressions
 
 ### Keyboard Controls
 - `j`/`k`: Navigate file list, TOC, or scroll content (line by line)
@@ -465,6 +545,10 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Performance profiling can be enabled with pprof integration
 - FPS monitoring helps track UI performance in real-time
 - The application uses a local fork of ratatui-image for terminal image rendering
+- MathML expressions are converted to ASCII art with Unicode subscripts/superscripts when possible
+- The text processing pipeline has been migrated from direct regex processing to a Markdown AST-based approach
+- Multiple text generation implementations are available via TextGeneratorWrapper for flexibility
+- Mathematical expressions support advanced layouts including fractions, square roots, and summations
 
 ## Performance Considerations
 - **CRITICAL**: Performance is one of the most important aspects of this project

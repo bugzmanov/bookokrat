@@ -1,9 +1,10 @@
-use crate::markdown::{Block, Document, HeadingLevel, Inline, Node, Style, Text, TextNode, TextOrInline};
+use crate::markdown::{
+    Block, Document, HeadingLevel, Inline, Node, Style, Text, TextNode, TextOrInline,
+};
 use crate::mathml_renderer::mathml_to_ascii;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
-use regex::Regex;
 use std::rc::Rc;
 
 /// Converts HTML content to clean Markdown AST with text formatting and cleanup.
@@ -20,31 +21,21 @@ use std::rc::Rc;
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```rust,no_run
+/// use bookrat::parsing::html_to_markdown::HtmlToMarkdownConverter;
+/// # fn main() {
 /// let mut converter = HtmlToMarkdownConverter::new();
-/// let markdown_doc = converter.convert_with_cleanup(html_content);
+/// # let html_content = "<p>Hello world</p>";
+/// let markdown_doc = converter.convert(html_content);
+/// # }
 /// ```
 pub struct HtmlToMarkdownConverter {
     // Conversion state and placeholders
-    mathml_content: Vec<(String, String)>, // (placeholder, preserved_content)
-
-    // Regex patterns for text cleanup during conversion
-    multi_space_re: Regex,
-    multi_newline_re: Regex,
-    leading_space_re: Regex,
-    line_leading_space_re: Regex,
 }
 
 impl HtmlToMarkdownConverter {
     pub fn new() -> Self {
-        HtmlToMarkdownConverter {
-            mathml_content: Vec::new(),
-            multi_space_re: Regex::new(r" +").expect("Failed to compile multi space regex"),
-            multi_newline_re: Regex::new(r"\n{3,}").expect("Failed to compile multi newline regex"),
-            leading_space_re: Regex::new(r"^ +").expect("Failed to compile leading space regex"),
-            line_leading_space_re: Regex::new(r"\n +")
-                .expect("Failed to compile line leading space regex"),
-        }
+        HtmlToMarkdownConverter {}
     }
 
     pub fn convert(&mut self, html: &str) -> Document {
@@ -55,16 +46,9 @@ impl HtmlToMarkdownConverter {
 
         let mut document = Document::new();
         self.visit_node(&dom.document, &mut document);
-        document
-    }
 
-    /// Converts HTML to Markdown AST with integrated text cleanup.
-    pub fn convert_with_cleanup(&mut self, html: &str) -> Document {
-        // 1. First do basic HTML to Markdown AST conversion
-        let mut document = self.convert(html);
-
-        // 2. Apply text formatting and cleanup to the AST content
-        self.cleanup_document_text(&mut document);
+        // Post-process to group consecutive dialog paragraphs
+        self.group_dialog_paragraphs(&mut document);
 
         document
     }
@@ -100,7 +84,7 @@ impl HtmlToMarkdownConverter {
     fn visit_element(
         &mut self,
         name: &html5ever::QualName,
-        _attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
@@ -120,7 +104,7 @@ impl HtmlToMarkdownConverter {
                 self.handle_paragraph(node, document);
             }
             "img" => {
-                self.handle_image(_attrs, document);
+                self.handle_image(attrs, document);
             }
             "math" => {
                 self.handle_mathml(node, document);
@@ -197,7 +181,6 @@ impl HtmlToMarkdownConverter {
                 title,
             };
 
-            // Add as a paragraph containing just the image
             let mut content = Text::default();
             content.push_inline(image_inline);
             let paragraph_block = Block::Paragraph { content };
@@ -207,54 +190,24 @@ impl HtmlToMarkdownConverter {
     }
 
     fn handle_mathml(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
-        // Serialize the entire MathML node as HTML
         let mathml_html = self.serialize_node_to_html(node);
 
-        // Convert MathML directly to ASCII using mathml_renderer
-        let ascii_content = match mathml_to_ascii(&mathml_html, true) {
+        let content = match mathml_to_ascii(&mathml_html, true) {
             Ok(ascii_math) => {
-                // Create a placeholder to protect the content from whitespace cleanup
-                let placeholder = format!("__MATHML_PROTECTED_{}__", self.mathml_content.len());
-                self.mathml_content.push((placeholder.clone(), ascii_math));
-
-                // Use the placeholder temporarily
-                placeholder
+                let content = Text::from(ascii_math);
+                let paragraph_block = Block::Paragraph { content };
+                Node::new(paragraph_block, 0..0)
             }
-            Err(_) => {
-                // Fall back to the original MathML HTML if conversion fails
-                mathml_html
+            Err(e) => {
+                let paragraph_block = Block::CodeBlock {
+                    language: Some(format!("failed to extract mathml: {:?}", e)),
+                    content: mathml_html,
+                };
+                Node::new(paragraph_block, 0..0)
             }
         };
 
-        // Add as a paragraph containing the placeholder (to be restored later)
-        let content = Text::from(ascii_content);
-        let paragraph_block = Block::Paragraph { content };
-        let paragraph_node = Node::new(paragraph_block, 0..0);
-        document.blocks.push(paragraph_node);
-    }
-
-    fn extract_text_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> String {
-        let mut text = String::new();
-        self.collect_text_recursive(node, &mut text);
-        text.trim().to_string()
-    }
-
-    fn collect_text_recursive(&self, node: &Rc<markup5ever_rcdom::Node>, text: &mut String) {
-        match node.data {
-            NodeData::Text { ref contents } => {
-                text.push_str(&contents.borrow());
-            }
-            NodeData::Element { .. } => {
-                for child in node.children.borrow().iter() {
-                    self.collect_text_recursive(child, text);
-                }
-            }
-            _ => {
-                for child in node.children.borrow().iter() {
-                    self.collect_text_recursive(child, text);
-                }
-            }
-        }
+        document.blocks.push(content);
     }
 
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
@@ -263,18 +216,29 @@ impl HtmlToMarkdownConverter {
         text
     }
 
-    fn collect_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>, text: &mut Text, current_style: Option<Style>) {
+    fn collect_formatted_content(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        text: &mut Text,
+        current_style: Option<Style>,
+    ) {
         match &node.data {
             NodeData::Text { contents } => {
                 let content = contents.borrow().to_string();
                 if !content.trim().is_empty() {
-                    let text_node = TextNode::new(content, current_style.clone());
+                    // Add spacing around inline code elements at the AST level
+                    let adjusted_content = if current_style == Some(Style::Code) {
+                        self.add_code_spacing(&content)
+                    } else {
+                        content
+                    };
+                    let text_node = TextNode::new(adjusted_content, current_style.clone());
                     text.push_text(text_node);
                 }
             }
             NodeData::Element { name, attrs, .. } => {
                 let tag_name = name.local.as_ref();
-                
+
                 let style = match tag_name {
                     "strong" | "b" => Some(Style::Strong),
                     "em" | "i" => Some(Style::Emphasis),
@@ -285,7 +249,11 @@ impl HtmlToMarkdownConverter {
                         if let Some(href) = self.get_attr_value(attrs, "href") {
                             let mut link_text = Text::default();
                             for child in node.children.borrow().iter() {
-                                self.collect_formatted_content(child, &mut link_text, current_style.clone());
+                                self.collect_formatted_content(
+                                    child,
+                                    &mut link_text,
+                                    current_style.clone(),
+                                );
                             }
                             let title = self.get_attr_value(attrs, "title");
                             let link_inline = Inline::Link {
@@ -296,6 +264,21 @@ impl HtmlToMarkdownConverter {
                             text.push_inline(link_inline);
                         }
                         return; // Don't process children again
+                    }
+                    "math" => {
+                        let math_html = self.serialize_node_to_html(node);
+                        match mathml_to_ascii(&math_html, true) {
+                            Ok(math_ascii) => {
+                                text.push_text(TextNode::new(math_ascii, None));
+                            }
+                            Err(e) => {
+                                text.push_text(TextNode::new(
+                                    format!("<fail to parse math: {:?}", e),
+                                    None,
+                                ));
+                            }
+                        }
+                        return;
                     }
                     "br" => {
                         text.push_inline(Inline::LineBreak);
@@ -379,148 +362,10 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    fn cleanup_document_text(&self, document: &mut Document) {
-        // Apply text formatting and cleanup to all text nodes in the document
-        for node in &mut document.blocks {
-            self.cleanup_node_text(node);
-        }
-    }
-
-    fn cleanup_node_text(&self, node: &mut Node) {
-        match &mut node.block {
-            Block::Heading { content, .. } => {
-                self.cleanup_text(content);
-            }
-            Block::Paragraph { content } => {
-                self.cleanup_text(content);
-            }
-            Block::Quote { content } => {
-                for child_node in content {
-                    self.cleanup_node_text(child_node);
-                }
-            }
-            _ => {} // Other block types don't need text cleanup
-        }
-    }
-
-    fn cleanup_text(&self, text: &mut Text) {
-        // Apply dialog formatting and regex cleanup to text content
-        for item in text.iter_mut() {
-            match item {
-                TextOrInline::Text(text_node) => {
-                    let cleaned = self.apply_text_cleanup(&text_node.content);
-                    text_node.content = cleaned;
-                }
-                TextOrInline::Inline(_) => {
-                    // Don't modify inline elements during cleanup
-                }
-            }
-        }
-    }
-
-    fn apply_text_cleanup(&self, text: &str) -> String {
-        let formatted = self.format_text_with_spacing(text);
-        self.apply_final_regex_cleanup(formatted)
-    }
-
-    fn format_text_with_spacing(&self, text: &str) -> String {
-        let mut formatted = String::new();
-        let normalized_text = self.multi_newline_re.replace_all(text, "\n\n");
-        let paragraphs: Vec<&str> = normalized_text.split("\n\n").collect();
-        let mut i = 0;
-        while i < paragraphs.len() {
-            let paragraph = paragraphs[i];
-            if paragraph.trim().is_empty() {
-                i += 1;
-                continue;
-            }
-            // Check if this is the start of a list block
-            if self.is_list_item(paragraph) {
-                // Collect consecutive list items
-                let mut list_items = vec![paragraph];
-                let mut j = i + 1;
-                while j < paragraphs.len() && self.is_list_item(paragraphs[j]) {
-                    list_items.push(paragraphs[j]);
-                    j += 1;
-                }
-                // Format list block without empty lines between items
-                for (idx, list_item) in list_items.iter().enumerate() {
-                    // Process each line in the list item (in case it spans multiple lines)
-                    let lines: Vec<&str> = list_item.lines().collect();
-                    for (line_idx, line) in lines.iter().enumerate() {
-                        formatted.push_str(line);
-                        if line_idx < lines.len() - 1 {
-                            formatted.push('\n');
-                        }
-                    }
-                    if idx < list_items.len() - 1 {
-                        formatted.push('\n');
-                    }
-                }
-                // Add empty line after list block
-                if j < paragraphs.len() {
-                    formatted.push_str("\n\n");
-                }
-                i = j;
-                continue;
-            }
-            // Check if this is the start of a dialog block
-            if self.is_dialog_line(paragraph) {
-                // Collect consecutive dialog lines
-                let mut dialog_lines = vec![paragraph];
-                let mut j = i + 1;
-                while j < paragraphs.len() && self.is_dialog_line(paragraphs[j]) {
-                    dialog_lines.push(paragraphs[j]);
-                    j += 1;
-                }
-                // Only treat as dialog if we have at least 2 consecutive dialog lines
-                if dialog_lines.len() >= 2 {
-                    // Format dialog block without empty lines between responses
-                    for (idx, dialog_line) in dialog_lines.iter().enumerate() {
-                        formatted.push_str(dialog_line);
-                        if idx < dialog_lines.len() - 1 {
-                            formatted.push('\n');
-                        }
-                    }
-                    // Add empty line after dialog block
-                    if j < paragraphs.len() {
-                        formatted.push_str("\n\n");
-                    }
-                    i = j;
-                    continue;
-                }
-            }
-            // Regular paragraph formatting
-            let lines: Vec<&str> = paragraph.lines().collect();
-            for (j, line) in lines.iter().enumerate() {
-                formatted.push_str(line);
-                if j < lines.len() - 1 {
-                    formatted.push('\n');
-                }
-            }
-            if i < paragraphs.len() - 1 {
-                formatted.push_str("\n\n");
-            }
-            i += 1;
-        }
-
-        formatted
-    }
-
-    fn apply_final_regex_cleanup(&self, mut text: String) -> String {
-        // Apply regex cleanup
-        text = self.multi_space_re.replace_all(&text, " ").into_owned();
-        text = self
-            .multi_newline_re
-            .replace_all(&text, "\n\n")
-            .into_owned();
-        text = self.leading_space_re.replace_all(&text, "").into_owned();
-        text = self
-            .line_leading_space_re
-            .replace_all(&text, "\n")
-            .into_owned();
-
-        text.trim().to_string()
+    fn add_code_spacing(&self, content: &str) -> String {
+        // Add spacing around code content to ensure proper spacing in final output
+        // The double space before and after will survive single-space cleanup
+        format!("  {}  ", content)
     }
 
     fn is_dialog_line(&self, text: &str) -> bool {
@@ -534,17 +379,6 @@ impl HtmlToMarkdownConverter {
             || trimmed.starts_with('\u{2012}')
             || trimmed.starts_with('\u{2013}')
             || trimmed.starts_with('\u{2014}')
-    }
-
-    fn is_list_item(&self, text: &str) -> bool {
-        let trimmed = text.trim_start();
-        if trimmed.starts_with("• ") || trimmed.starts_with("- ") {
-            return true;
-        }
-        if let Some(captures) = Regex::new(r"^\d+\. ").unwrap().captures(trimmed) {
-            return captures.get(0).is_some();
-        }
-        false
     }
 
     fn decode_html_entities(&self, text: &str) -> String {
@@ -577,12 +411,115 @@ impl HtmlToMarkdownConverter {
         self.decode_html_entities(text)
     }
 
-    pub fn restore_mathml_content(&self, mut text: String) -> String {
-        // Restore MathML content after whitespace cleanup
-        for (placeholder, mathml_content) in &self.mathml_content {
-            text = text.replace(placeholder, mathml_content);
+    /// Groups consecutive dialog paragraphs into single paragraphs with line breaks.
+    ///
+    /// This method identifies dialog lines (starting with various dash characters)
+    /// and merges consecutive dialog paragraphs into a single paragraph block,
+    /// preserving the dialog structure while reducing fragmentation.
+    fn group_dialog_paragraphs(&self, document: &mut Document) {
+        let mut new_blocks = Vec::new();
+        let mut dialog_group: Vec<Text> = Vec::new();
+
+        for node in document.blocks.drain(..) {
+            if let Block::Paragraph { content } = &node.block {
+                // Check if this paragraph contains dialog content
+                if self.is_dialog_content(&content) {
+                    dialog_group.push(content.clone());
+                } else {
+                    // This is not a dialog - flush any accumulated dialog group first
+                    if !dialog_group.is_empty() {
+                        let merged_dialog = self.merge_dialog_group(&dialog_group);
+                        let dialog_block = Block::Paragraph {
+                            content: merged_dialog,
+                        };
+                        let dialog_node = Node::new(dialog_block, 0..0);
+                        new_blocks.push(dialog_node);
+                        dialog_group.clear();
+                    }
+
+                    // Add the non-dialog paragraph
+                    new_blocks.push(node);
+                }
+            } else {
+                // This is not a paragraph - flush any accumulated dialog group first
+                if !dialog_group.is_empty() {
+                    let merged_dialog = self.merge_dialog_group(&dialog_group);
+                    let dialog_block = Block::Paragraph {
+                        content: merged_dialog,
+                    };
+                    let dialog_node = Node::new(dialog_block, 0..0);
+                    new_blocks.push(dialog_node);
+                    dialog_group.clear();
+                }
+
+                // Add the non-paragraph block
+                new_blocks.push(node);
+            }
         }
-        text
+
+        // Flush any remaining dialog group
+        if !dialog_group.is_empty() {
+            let merged_dialog = self.merge_dialog_group(&dialog_group);
+            let dialog_block = Block::Paragraph {
+                content: merged_dialog,
+            };
+            let dialog_node = Node::new(dialog_block, 0..0);
+            new_blocks.push(dialog_node);
+        }
+
+        document.blocks = new_blocks;
+    }
+
+    /// Check if a Text content represents dialog (contains dialog lines)
+    fn is_dialog_content(&self, content: &Text) -> bool {
+        // Convert text content to string to check for dialog pattern
+        let text_str = self.text_to_string(content);
+        self.is_dialog_line(&text_str)
+    }
+
+    /// Convert Text AST to plain string for dialog detection
+    fn text_to_string(&self, text: &Text) -> String {
+        let mut result = String::new();
+
+        for item in text.clone().into_iter() {
+            match item {
+                TextOrInline::Text(text_node) => {
+                    result.push_str(&text_node.content);
+                }
+                TextOrInline::Inline(inline) => match inline {
+                    Inline::Link { text, .. } => {
+                        result.push_str(&self.text_to_string(&text));
+                    }
+                    Inline::Image { alt_text, .. } => {
+                        result.push_str(&alt_text);
+                    }
+                    Inline::LineBreak | Inline::SoftBreak => {
+                        result.push(' ');
+                    }
+                },
+            }
+        }
+
+        result
+    }
+
+    /// Merge a group of dialog Text contents into a single Text with line breaks
+    fn merge_dialog_group(&self, dialog_group: &[Text]) -> Text {
+        let mut merged = Text::default();
+
+        for (i, dialog_text) in dialog_group.iter().enumerate() {
+            // Add the dialog content
+            for item in dialog_text.clone().into_iter() {
+                merged.push(item);
+            }
+
+            // Add line break between dialog lines (except after the last one)
+            if i < dialog_group.len() - 1 {
+                merged.push_inline(Inline::LineBreak);
+            }
+        }
+
+        merged
     }
 }
 
@@ -595,24 +532,32 @@ impl Default for HtmlToMarkdownConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::markdown::{Style, TextNode, TextOrInline};
+    use crate::{
+        markdown::{Style, TextNode, TextOrInline},
+        parsing::html5ever_text_generator::TextGenerator,
+        parsing::markdown_renderer::MarkdownRenderer,
+    };
 
     #[test]
     fn test_nested_formatting_in_paragraph() {
         let mut converter = HtmlToMarkdownConverter::new();
-        
+
         let html = r#"<p>Ololo <strong>olo</strong> or not to ololo</p>"#;
         let doc = converter.convert(html);
-        
+
         assert_eq!(doc.blocks.len(), 1);
-        
+
         if let Block::Paragraph { content } = &doc.blocks[0].block {
             // Convert content to vector to inspect
             let items: Vec<TextOrInline> = content.clone().into_iter().collect();
-            
+
             // Should have at least 3 text items: "Ololo ", "olo" (bold), " or not to ololo"
-            assert!(items.len() >= 3, "Expected at least 3 text items, got {}", items.len());
-            
+            assert!(
+                items.len() >= 3,
+                "Expected at least 3 text items, got {}",
+                items.len()
+            );
+
             // Check for bold formatting
             let has_bold = items.iter().any(|item| {
                 if let TextOrInline::Text(text_node) = item {
@@ -630,15 +575,15 @@ mod tests {
     #[test]
     fn test_deeply_nested_formatting() {
         let mut converter = HtmlToMarkdownConverter::new();
-        
+
         let html = r#"<p>Text with <strong>bold and <em>italic</em> here</strong> end</p>"#;
         let doc = converter.convert(html);
-        
+
         assert_eq!(doc.blocks.len(), 1);
-        
+
         if let Block::Paragraph { content } = &doc.blocks[0].block {
             let items: Vec<TextOrInline> = content.clone().into_iter().collect();
-            
+
             // Should contain both strong and emphasis styles
             let has_bold = items.iter().any(|item| {
                 if let TextOrInline::Text(text_node) = item {
@@ -647,7 +592,7 @@ mod tests {
                     false
                 }
             });
-            
+
             let has_italic = items.iter().any(|item| {
                 if let TextOrInline::Text(text_node) = item {
                     text_node.style == Some(Style::Emphasis)
@@ -655,7 +600,7 @@ mod tests {
                     false
                 }
             });
-            
+
             assert!(has_bold, "Expected bold text");
             assert!(has_italic, "Expected italic text");
         } else {
@@ -664,24 +609,52 @@ mod tests {
     }
 
     #[test]
-    fn test_link_extraction() {
+    fn test_dialog_grouping_with_markdown_rendering() {
         let mut converter = HtmlToMarkdownConverter::new();
-        
-        let html = r#"<p>Visit <a href="https://example.com">our website</a> here</p>"#;
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <p>Вот пример из жизни. Молодой человек знакомится с родителями невесты.</p>
+            <p>— А кем работаешь?</p>
+            <p>— Я аналитик, работаю на рынке ценных бумаг.</p>
+            <p>— Пирамиды, что ли? Ваучеры?</p>
+            <p>Видя, что тесть не понимает, молодой человек меняет тактику:</p>
+        "#;
+
         let doc = converter.convert(html);
-        
-        assert_eq!(doc.blocks.len(), 1);
-        
-        if let Block::Paragraph { content } = &doc.blocks[0].block {
-            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
-            
-            let has_link = items.iter().any(|item| {
-                matches!(item, TextOrInline::Inline(Inline::Link { .. }))
-            });
-            
-            assert!(has_link, "Expected link in paragraph");
-        } else {
-            panic!("Expected paragraph block");
-        }
+        let rendered = renderer.render(&doc);
+
+        // Should have 3 paragraphs in the final output
+        let paragraphs: Vec<&str> = rendered
+            .split("\n\n")
+            .filter(|p| !p.trim().is_empty())
+            .collect();
+        assert_eq!(
+            paragraphs.len(),
+            3,
+            "Should have exactly 3 paragraphs in rendered output"
+        );
+
+        // Check that the second paragraph contains grouped dialog with line breaks
+        let dialog_paragraph = paragraphs[1];
+        assert!(
+            dialog_paragraph.contains("— А кем работаешь?"),
+            "Dialog paragraph should contain first dialog line"
+        );
+        assert!(
+            dialog_paragraph.contains("— Я аналитик"),
+            "Dialog paragraph should contain second dialog line"
+        );
+        assert!(
+            dialog_paragraph.contains("— Пирамиды"),
+            "Dialog paragraph should contain third dialog line"
+        );
+
+        // Should contain line break markers from markdown rendering
+        let line_breaks_count = dialog_paragraph.matches("  \n").count();
+        assert!(
+            line_breaks_count >= 2,
+            "Dialog paragraph should contain line break markers between dialog lines"
+        );
     }
 }

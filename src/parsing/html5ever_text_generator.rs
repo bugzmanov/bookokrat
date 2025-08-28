@@ -1,6 +1,8 @@
+use crate::parsing::{
+    html_to_markdown::HtmlToMarkdownConverter, markdown_renderer::MarkdownRenderer,
+};
 use crate::table_of_contents::TocItem;
 use crate::toc_parser::TocParser;
-use crate::{html_to_markdown::HtmlToMarkdownConverter, markdown_renderer::MarkdownRenderer};
 use epub::doc::EpubDoc;
 use log::{debug, warn};
 use regex::Regex;
@@ -23,10 +25,17 @@ use std::io::BufReader;
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```rust,no_run
+/// use bookrat::parsing::html5ever_text_generator::TextGenerator;
+/// # use std::io::BufReader;
+/// # use epub::doc::EpubDoc;
+/// # fn main() -> Result<(), String> {
 /// let generator = TextGenerator::new();
+/// # let mut epub_doc = EpubDoc::new("test.epub").unwrap();
 /// let (processed_text, chapter_title) = generator
 ///     .process_chapter_content(&mut epub_doc)?;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// # Design Notes
@@ -160,16 +169,15 @@ impl TextGenerator {
     /// Clean, formatted text suitable for terminal display
     pub fn convert_to_clean_text(&self, html: &str) -> String {
         let mut converter = HtmlToMarkdownConverter::new();
-        let clean_markdown_doc = converter.convert_with_cleanup(html);
+        let clean_markdown_doc = converter.convert(html);
 
         let renderer = MarkdownRenderer::new();
         let rendered = renderer.render(&clean_markdown_doc);
 
-        let substituted = converter.decode_entities(&rendered);
-        converter.restore_mathml_content(substituted)
+        converter.decode_entities(&rendered)
     }
 
-    //todo this is needs to be moved to html_to_markdown.rs
+    //todo! this is needs to be moved to html_to_markdown.rs
     fn clean_xml_and_doctype(&self, content: &str) -> String {
         // First remove XML declaration and DOCTYPE
         let xml_decl_re = Regex::new(r"<\?xml[^?]*\?>").unwrap();

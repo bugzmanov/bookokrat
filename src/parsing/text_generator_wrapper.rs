@@ -4,8 +4,8 @@ use std::io::BufReader;
 
 // Simple enum to choose between implementations
 pub enum TextGeneratorImpl {
-    Regex(crate::text_generator::TextGenerator),
-    Html5ever(crate::html5ever_text_generator::TextGenerator),
+    Regex(crate::parsing::text_generator::TextGenerator),
+    Html5ever(crate::parsing::html5ever_text_generator::TextGenerator),
 }
 
 pub struct TextGeneratorWrapper {
@@ -15,14 +15,16 @@ pub struct TextGeneratorWrapper {
 impl TextGeneratorWrapper {
     pub fn new_regex() -> Self {
         Self {
-            implementation: TextGeneratorImpl::Regex(crate::text_generator::TextGenerator::new()),
+            implementation: TextGeneratorImpl::Regex(
+                crate::parsing::text_generator::TextGenerator::new(),
+            ),
         }
     }
 
     pub fn new_html5ever() -> Self {
         Self {
             implementation: TextGeneratorImpl::Html5ever(
-                crate::html5ever_text_generator::TextGenerator::new(),
+                crate::parsing::html5ever_text_generator::TextGenerator::new(),
             ),
         }
     }

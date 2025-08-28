@@ -1,4 +1,4 @@
-use bookrat::text_generator::TextGenerator;
+use bookrat::parsing::text_generator::TextGenerator;
 use epub::doc::EpubDoc;
 use std::fs::{self, File};
 use std::io::BufReader;

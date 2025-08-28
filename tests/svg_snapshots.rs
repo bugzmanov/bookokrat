@@ -1999,27 +1999,18 @@ fn test_mathml_content_rendering_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40);
 
-    // Create a temporary EPUB file with MathML content similar to snap.html
-    let temp_dir = tempfile::tempdir().unwrap();
-    let temp_epub_path = temp_dir.path().join("mathml_test.epub");
-
-    // Create the content with MathML from snap.html
-    let mathml_content = r#"
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE html>
-        <html xml:lang="en"
-        lang="en"
-        xmlns="http://www.w3.org/1999/xhtml"
-        xmlns:epub="http://www.idpf.org/2007/ops">
-        <head>
-        <title>AI Engineering</title>
-        <link rel="stylesheet" type="text/css" href="override_v1.css"/>
-        <link rel="stylesheet" type="text/css" href="epub.css"/>
-        </head>
-        <body>
-        <div id="book-content">
-                  <aside data-type="sidebar" epub:type="sidebar"><div class="sidebar" id="id902">
-                    <h1>How to Use a Language Model to Compute a Text’s Perplexity</h1>
+    let mathml_content = r#"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>AI Engineering - How to Use a Language Model to Compute a Text's Perplexity</title>
+    <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+    <link rel="stylesheet" type="text/css" href="epub.css"/>
+</head>
+<body>
+    <div id="book-content">
+        <aside data-type="sidebar" epub:type="sidebar">
+            <div class="sidebar" id="id902">
+                <h1>How to Use a Language Model to Compute a Text's Perplexity</h1>
 
         <p><a contenteditable="false" data-primary="evaluation methodology" data-secondary="language model for computing text perplexity" data-type="indexterm" id="id903"></a><a contenteditable="false" data-primary="language models" data-type="indexterm" id="id904"></a>A model’s perplexity with respect to a text measures how difficult it is for the model to predict that text. Given a language model <em>X</em>, and a sequence of tokens <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="left-bracket x 1 comma x 2 comma period period period comma x Subscript n Baseline right-bracket">
           <mrow>
@@ -2084,89 +2075,12 @@ fn test_mathml_content_rendering_svg() {
 
         "#;
 
-    // Create a minimal EPUB structure
-    use std::fs;
-    use std::io::Write;
-    use zip::ZipWriter;
-    use zip::write::FileOptions;
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("mathml_test.html");
+    std::fs::write(&temp_html_path, mathml_content).unwrap();
 
-    let file = fs::File::create(&temp_epub_path).unwrap();
-    let mut zip = ZipWriter::new(file);
-
-    // mimetype file (must be first and uncompressed)
-    zip.start_file(
-        "mimetype",
-        FileOptions::default().compression_method(zip::CompressionMethod::Stored),
-    )
-    .unwrap();
-    zip.write_all(b"application/epub+zip").unwrap();
-
-    // META-INF/container.xml
-    zip.start_file("META-INF/container.xml", FileOptions::default())
-        .unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles>
-    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-  </rootfiles>
-</container>"#,
-    )
-    .unwrap();
-
-    // OEBPS/content.opf
-    zip.start_file("OEBPS/content.opf", FileOptions::default())
-        .unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<package version="3.0" xmlns="http://www.idpf.org/2007/opf" unique-identifier="uid">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="uid">mathml-test</dc:identifier>
-    <dc:title>MathML Test Book</dc:title>
-    <dc:language>en</dc:language>
-  </metadata>
-  <manifest>
-    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
-    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
-  </manifest>
-  <spine toc="ncx">
-    <itemref idref="chapter1"/>
-  </spine>
-</package>"#,
-    )
-    .unwrap();
-
-    // OEBPS/toc.ncx
-    zip.start_file("OEBPS/toc.ncx", FileOptions::default())
-        .unwrap();
-    zip.write_all(
-        br#"<?xml version="1.0" encoding="UTF-8"?>
-<ncx version="2005-1" xmlns="http://www.daisy.org/z3986/2005/ncx/">
-  <head>
-    <meta name="dtb:uid" content="mathml-test"/>
-  </head>
-  <docTitle><text>MathML Test</text></docTitle>
-  <navMap>
-    <navPoint id="chapter1">
-      <navLabel><text>Perplexity Calculation</text></navLabel>
-      <content src="chapter1.xhtml"/>
-    </navPoint>
-  </navMap>
-</ncx>"#,
-    )
-    .unwrap();
-
-    // OEBPS/chapter1.xhtml (our MathML content)
-    zip.start_file("OEBPS/chapter1.xhtml", FileOptions::default())
-        .unwrap();
-    zip.write_all(mathml_content.as_bytes()).unwrap();
-
-    zip.finish().unwrap();
-
-    // Now test with the created EPUB
     let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
 
-    // Load the MathML test book
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
         let _ = app.open_book_for_reading_by_path(&path);
@@ -2180,7 +2094,6 @@ fn test_mathml_content_rendering_svg() {
         .unwrap();
     let svg_output = terminal_to_svg(&terminal);
 
-    // Write to debug file
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write(
         "tests/snapshots/debug_mathml_content_rendering.svg",
@@ -2419,5 +2332,75 @@ fn test_book_reading_history_with_many_entries_svg() {
         &std::path::Path::new("tests/snapshots/book_reading_history_many_entries.svg"),
         "test_book_reading_history_with_many_entries_svg",
         create_test_failure_handler("test_book_reading_history_with_many_entries_svg"),
+    );
+}
+
+#[test]
+fn test_headings_h1_to_h6_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+
+    let headings_content = r#"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>H1-H6 Headings Test</title>
+    <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+    <link rel="stylesheet" type="text/css" href="epub.css"/>
+</head>
+<body>
+    <div id="book-content">
+        <h1>Level 1: Main Chapter Title</h1>
+        <p>This is content under the main heading.</p>
+        
+        <h2>Level 2: Major Section</h2>
+        <p>This is content under the major section.</p>
+        
+        <h3>Level 3: Subsection</h3>
+        <p>This is content under the subsection.</p>
+        
+        <h4>Level 4: Minor Heading</h4>
+        <p>This is content under the minor heading.</p>
+        
+        <h5>Level 5: Sub-minor Heading</h5>
+        <p>This is content under the sub-minor heading.</p>
+        
+        <h6>Level 6: Smallest Heading</h6>
+        <p>This is content under the smallest heading level. This test demonstrates the complete hierarchy of all heading levels from H1 through H6 and how they are visually distinguished in the terminal interface.</p>
+    </div>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("headings_test.html");
+    std::fs::write(&temp_html_path, headings_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_headings_h1_to_h6_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/headings_h1_to_h6_rendering.svg"),
+        "test_headings_h1_to_h6_rendering_svg",
+        create_test_failure_handler("test_headings_h1_to_h6_rendering_svg"),
     );
 }

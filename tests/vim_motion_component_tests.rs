@@ -357,14 +357,16 @@ fn test_text_reader_vim_motion_gg() {
         .join("\n");
 
     // Update wrapped lines
-    text_reader.update_wrapped_lines(&test_content, 48, 18);
+    let area = terminal.get_frame().size();
+    text_reader.update_wrapped_lines_if_needed(&test_content, area);
 
     // Scroll down first
     text_reader.scroll_offset = 50;
 
     // Test gg (go to top)
-    text_reader.handle_gg();
     text_reader.handle_j();
+    text_reader.handle_j();
+    text_reader.handle_gg();
     // Render only the text reader
     terminal
         .draw(|f| {

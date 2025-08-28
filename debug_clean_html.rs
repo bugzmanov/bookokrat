@@ -1,4 +1,4 @@
-use bookrat::text_generator::TextGenerator;
+use bookrat::parsing::text_generator::TextGenerator;
 use regex::Regex;
 use std::fs;
 
