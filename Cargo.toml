@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Your Name <your.email@example.com>"]
 description = "A TUI EPUB reader application"
+default-run = "bookrat"
 
 [lib]
 name = "bookrat"

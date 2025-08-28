@@ -1,4 +1,4 @@
-use crate::markdown::{Block, Document, HeadingLevel, Inline, Node, Text, TextOrInline};
+use crate::markdown::{Block, Document, HeadingLevel, Inline, Node, Style, Text, TextNode, TextOrInline};
 use crate::mathml_renderer::mathml_to_ascii;
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
@@ -129,6 +129,13 @@ impl HtmlToMarkdownConverter {
             "style" | "script" | "head" => {
                 // Do nothing - skip these elements
             }
+            // Handle inline formatting elements within other content
+            "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" => {
+                // These are handled within extract_formatted_content, skip at block level
+                for child in node.children.borrow().iter() {
+                    self.visit_node(child, document);
+                }
+            }
             // For now, skip tables and lists as per the plan
             "table" | "ul" | "ol" | "li" => {
                 // Do nothing - skip these elements initially
@@ -158,8 +165,7 @@ impl HtmlToMarkdownConverter {
             _ => HeadingLevel::H1,
         };
 
-        let content_text = self.extract_text_content(node);
-        let content = Text::from(content_text);
+        let content = self.extract_formatted_content(node);
 
         let heading_block = Block::Heading { level, content };
         let heading_node = Node::new(heading_block, 0..0); // TODO: proper source range
@@ -167,9 +173,8 @@ impl HtmlToMarkdownConverter {
     }
 
     fn handle_paragraph(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
-        let content_text = self.extract_text_content(node);
-        if !content_text.trim().is_empty() {
-            let content = Text::from(content_text);
+        let content = self.extract_formatted_content(node);
+        if !content.is_empty() {
             let paragraph_block = Block::Paragraph { content };
             let paragraph_node = Node::new(paragraph_block, 0..0); // TODO: proper source range
             document.blocks.push(paragraph_node);
@@ -247,6 +252,67 @@ impl HtmlToMarkdownConverter {
             _ => {
                 for child in node.children.borrow().iter() {
                     self.collect_text_recursive(child, text);
+                }
+            }
+        }
+    }
+
+    fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
+        let mut text = Text::default();
+        self.collect_formatted_content(node, &mut text, None);
+        text
+    }
+
+    fn collect_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>, text: &mut Text, current_style: Option<Style>) {
+        match &node.data {
+            NodeData::Text { contents } => {
+                let content = contents.borrow().to_string();
+                if !content.trim().is_empty() {
+                    let text_node = TextNode::new(content, current_style.clone());
+                    text.push_text(text_node);
+                }
+            }
+            NodeData::Element { name, attrs, .. } => {
+                let tag_name = name.local.as_ref();
+                
+                let style = match tag_name {
+                    "strong" | "b" => Some(Style::Strong),
+                    "em" | "i" => Some(Style::Emphasis),
+                    "code" => Some(Style::Code),
+                    "del" | "s" | "strike" => Some(Style::Strikethrough),
+                    "a" => {
+                        // Handle links as inline elements
+                        if let Some(href) = self.get_attr_value(attrs, "href") {
+                            let mut link_text = Text::default();
+                            for child in node.children.borrow().iter() {
+                                self.collect_formatted_content(child, &mut link_text, current_style.clone());
+                            }
+                            let title = self.get_attr_value(attrs, "title");
+                            let link_inline = Inline::Link {
+                                text: link_text,
+                                url: href,
+                                title,
+                            };
+                            text.push_inline(link_inline);
+                        }
+                        return; // Don't process children again
+                    }
+                    "br" => {
+                        text.push_inline(Inline::LineBreak);
+                        return;
+                    }
+                    _ => current_style.clone(),
+                };
+
+                // Process children with the new or inherited style
+                for child in node.children.borrow().iter() {
+                    self.collect_formatted_content(child, text, style.clone());
+                }
+            }
+            _ => {
+                // For other node types, process children with inherited style
+                for child in node.children.borrow().iter() {
+                    self.collect_formatted_content(child, text, current_style.clone());
                 }
             }
         }
@@ -523,5 +589,99 @@ impl HtmlToMarkdownConverter {
 impl Default for HtmlToMarkdownConverter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown::{Style, TextNode, TextOrInline};
+
+    #[test]
+    fn test_nested_formatting_in_paragraph() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        
+        let html = r#"<p>Ololo <strong>olo</strong> or not to ololo</p>"#;
+        let doc = converter.convert(html);
+        
+        assert_eq!(doc.blocks.len(), 1);
+        
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Convert content to vector to inspect
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+            
+            // Should have at least 3 text items: "Ololo ", "olo" (bold), " or not to ololo"
+            assert!(items.len() >= 3, "Expected at least 3 text items, got {}", items.len());
+            
+            // Check for bold formatting
+            let has_bold = items.iter().any(|item| {
+                if let TextOrInline::Text(text_node) = item {
+                    text_node.style == Some(Style::Strong)
+                } else {
+                    false
+                }
+            });
+            assert!(has_bold, "Expected bold text in paragraph");
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_deeply_nested_formatting() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        
+        let html = r#"<p>Text with <strong>bold and <em>italic</em> here</strong> end</p>"#;
+        let doc = converter.convert(html);
+        
+        assert_eq!(doc.blocks.len(), 1);
+        
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+            
+            // Should contain both strong and emphasis styles
+            let has_bold = items.iter().any(|item| {
+                if let TextOrInline::Text(text_node) = item {
+                    text_node.style == Some(Style::Strong)
+                } else {
+                    false
+                }
+            });
+            
+            let has_italic = items.iter().any(|item| {
+                if let TextOrInline::Text(text_node) = item {
+                    text_node.style == Some(Style::Emphasis)
+                } else {
+                    false
+                }
+            });
+            
+            assert!(has_bold, "Expected bold text");
+            assert!(has_italic, "Expected italic text");
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_link_extraction() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        
+        let html = r#"<p>Visit <a href="https://example.com">our website</a> here</p>"#;
+        let doc = converter.convert(html);
+        
+        assert_eq!(doc.blocks.len(), 1);
+        
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+            
+            let has_link = items.iter().any(|item| {
+                matches!(item, TextOrInline::Inline(Inline::Link { .. }))
+            });
+            
+            assert!(has_link, "Expected link in paragraph");
+        } else {
+            panic!("Expected paragraph block");
+        }
     }
 }
