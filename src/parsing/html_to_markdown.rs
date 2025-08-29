@@ -47,7 +47,7 @@ impl HtmlToMarkdownConverter {
         let mut document = Document::new();
         self.visit_node(&dom.document, &mut document);
 
-        // Post-process to group consecutive dialog paragraphs
+        // Post-process:
         self.group_dialog_paragraphs(&mut document);
 
         document
@@ -56,7 +56,6 @@ impl HtmlToMarkdownConverter {
     fn visit_node(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
         match node.data {
             NodeData::Document => {
-                // Visit all children of the document
                 for child in node.children.borrow().iter() {
                     self.visit_node(child, document);
                 }
@@ -92,7 +91,6 @@ impl HtmlToMarkdownConverter {
 
         match tag_name {
             "html" | "body" => {
-                // Visit children for these container elements
                 for child in node.children.borrow().iter() {
                     self.visit_node(child, document);
                 }
@@ -109,9 +107,8 @@ impl HtmlToMarkdownConverter {
             "math" => {
                 self.handle_mathml(node, document);
             }
-            // Skip these elements entirely
             "style" | "script" | "head" => {
-                // Do nothing - skip these elements
+                // Do nothing
             }
             // Handle inline formatting elements within other content
             "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" => {
@@ -121,11 +118,8 @@ impl HtmlToMarkdownConverter {
                 }
             }
             // For now, skip tables and lists as per the plan
-            "table" | "ul" | "ol" | "li" => {
-                // Do nothing - skip these elements initially
-            }
+            "table" | "ul" | "ol" | "li" => {}
             _ => {
-                // For other elements, just visit children
                 for child in node.children.borrow().iter() {
                     self.visit_node(child, document);
                 }
@@ -314,74 +308,54 @@ impl HtmlToMarkdownConverter {
     }
 
     fn serialize_node_to_html(&self, node: &Rc<markup5ever_rcdom::Node>) -> String {
-        let mut html = String::new();
-        self.serialize_node_recursive(node, &mut html);
-        html
-    }
+        fn serialize_node_recursive(node: &Rc<markup5ever_rcdom::Node>, html: &mut String) {
+            match node.data {
+                NodeData::Element {
+                    ref name,
+                    ref attrs,
+                    ..
+                } => {
+                    html.push('<');
+                    html.push_str(&name.local);
 
-    fn serialize_node_recursive(&self, node: &Rc<markup5ever_rcdom::Node>, html: &mut String) {
-        match node.data {
-            NodeData::Element {
-                ref name,
-                ref attrs,
-                ..
-            } => {
-                // Opening tag
-                html.push('<');
-                html.push_str(&name.local);
+                    for attr in attrs.borrow().iter() {
+                        html.push(' ');
+                        html.push_str(&attr.name.local);
+                        html.push_str("=\"");
+                        html.push_str(&attr.value);
+                        html.push('"');
+                    }
+                    html.push('>');
 
-                // Attributes
-                for attr in attrs.borrow().iter() {
-                    html.push(' ');
-                    html.push_str(&attr.name.local);
-                    html.push_str("=\"");
-                    html.push_str(&attr.value);
-                    html.push('"');
+                    for child in node.children.borrow().iter() {
+                        serialize_node_recursive(child, html);
+                    }
+
+                    html.push_str("</");
+                    html.push_str(&name.local);
+                    html.push('>');
                 }
-                html.push('>');
-
-                // Children
-                for child in node.children.borrow().iter() {
-                    self.serialize_node_recursive(child, html);
+                NodeData::Text { ref contents } => {
+                    html.push_str(&contents.borrow());
                 }
-
-                // Closing tag
-                html.push_str("</");
-                html.push_str(&name.local);
-                html.push('>');
-            }
-            NodeData::Text { ref contents } => {
-                html.push_str(&contents.borrow());
-            }
-            _ => {
-                // For other node types, just serialize children
-                for child in node.children.borrow().iter() {
-                    self.serialize_node_recursive(child, html);
+                _ => {
+                    for child in node.children.borrow().iter() {
+                        serialize_node_recursive(child, html);
+                    }
                 }
             }
         }
+        let mut html = String::new();
+        serialize_node_recursive(node, &mut html);
+        html
     }
 
     fn add_code_spacing(&self, content: &str) -> String {
-        // Add spacing around code content to ensure proper spacing in final output
-        // The double space before and after will survive single-space cleanup
         format!("  {}  ", content)
     }
 
-    fn is_dialog_line(&self, text: &str) -> bool {
-        let trimmed = text.trim_start();
-        // Check for various dash types that indicate dialog
-        trimmed.starts_with('-')
-            || trimmed.starts_with('–')
-            || trimmed.starts_with('—')
-            || trimmed.starts_with('\u{2010}')
-            || trimmed.starts_with('\u{2011}')
-            || trimmed.starts_with('\u{2012}')
-            || trimmed.starts_with('\u{2013}')
-            || trimmed.starts_with('\u{2014}')
-    }
-
-    fn decode_html_entities(&self, text: &str) -> String {
+    //todo: this should be done on a parsing/convertion phase
+    pub fn decode_entities(&self, text: &str) -> String {
         text.replace("&nbsp;", " ")
             .replace("&amp;", "&")
             .replace("&lt;", "<")
@@ -397,110 +371,77 @@ impl HtmlToMarkdownConverter {
             .replace("&rsquo;", "\u{2019}")
     }
 
-    /// Decodes HTML entities in rendered text.
-    ///
-    /// This method performs HTML entity decoding after the Markdown AST
-    /// has been rendered to string.
-    ///
-    /// # Arguments
-    /// * `text` - Rendered text containing HTML entities
-    ///
-    /// # Returns
-    /// Text with HTML entities decoded
-    pub fn decode_entities(&self, text: &str) -> String {
-        self.decode_html_entities(text)
-    }
-
     /// Groups consecutive dialog paragraphs into single paragraphs with line breaks.
     ///
     /// This method identifies dialog lines (starting with various dash characters)
     /// and merges consecutive dialog paragraphs into a single paragraph block,
     /// preserving the dialog structure while reducing fragmentation.
     fn group_dialog_paragraphs(&self, document: &mut Document) {
-        let mut new_blocks = Vec::new();
-        let mut dialog_group: Vec<Text> = Vec::new();
+        let mut i = 0;
 
-        for node in document.blocks.drain(..) {
-            if let Block::Paragraph { content } = &node.block {
-                // Check if this paragraph contains dialog content
-                if self.is_dialog_content(&content) {
-                    dialog_group.push(content.clone());
-                } else {
-                    // This is not a dialog - flush any accumulated dialog group first
-                    if !dialog_group.is_empty() {
-                        let merged_dialog = self.merge_dialog_group(&dialog_group);
-                        let dialog_block = Block::Paragraph {
-                            content: merged_dialog,
-                        };
-                        let dialog_node = Node::new(dialog_block, 0..0);
-                        new_blocks.push(dialog_node);
-                        dialog_group.clear();
+        while i < document.blocks.len() {
+            if let Block::Paragraph { content } = &document.blocks[i].block {
+                if self.is_dialog_content(content) {
+                    let mut dialog_contents = vec![content.clone()];
+                    let mut j = i + 1;
+
+                    while j < document.blocks.len() {
+                        if let Block::Paragraph { content } = &document.blocks[j].block {
+                            if self.is_dialog_content(content) {
+                                dialog_contents.push(content.clone());
+                                j += 1;
+                            } else {
+                                break;
+                            }
+                        } else {
+                            break;
+                        }
                     }
 
-                    // Add the non-dialog paragraph
-                    new_blocks.push(node);
-                }
-            } else {
-                // This is not a paragraph - flush any accumulated dialog group first
-                if !dialog_group.is_empty() {
-                    let merged_dialog = self.merge_dialog_group(&dialog_group);
-                    let dialog_block = Block::Paragraph {
-                        content: merged_dialog,
-                    };
-                    let dialog_node = Node::new(dialog_block, 0..0);
-                    new_blocks.push(dialog_node);
-                    dialog_group.clear();
-                }
+                    if dialog_contents.len() > 1 {
+                        let merged_content = self.merge_dialog_group(&dialog_contents);
+                        if let Block::Paragraph { content } = &mut document.blocks[i].block {
+                            *content = merged_content;
+                        }
 
-                // Add the non-paragraph block
-                new_blocks.push(node);
+                        document.blocks.drain(i + 1..j);
+                    }
+                }
             }
-        }
 
-        // Flush any remaining dialog group
-        if !dialog_group.is_empty() {
-            let merged_dialog = self.merge_dialog_group(&dialog_group);
-            let dialog_block = Block::Paragraph {
-                content: merged_dialog,
-            };
-            let dialog_node = Node::new(dialog_block, 0..0);
-            new_blocks.push(dialog_node);
+            i += 1;
         }
-
-        document.blocks = new_blocks;
     }
 
     /// Check if a Text content represents dialog (contains dialog lines)
     fn is_dialog_content(&self, content: &Text) -> bool {
-        // Convert text content to string to check for dialog pattern
-        let text_str = self.text_to_string(content);
-        self.is_dialog_line(&text_str)
-    }
-
-    /// Convert Text AST to plain string for dialog detection
-    fn text_to_string(&self, text: &Text) -> String {
-        let mut result = String::new();
-
-        for item in text.clone().into_iter() {
+        for item in content.clone().into_iter() {
             match item {
                 TextOrInline::Text(text_node) => {
-                    result.push_str(&text_node.content);
+                    let trimmed = text_node.content.trim_start();
+                    if !trimmed.is_empty() {
+                        return trimmed.starts_with('-')
+                            || trimmed.starts_with('–')
+                            || trimmed.starts_with('—')
+                            || trimmed.starts_with('\u{2010}')
+                            || trimmed.starts_with('\u{2011}')
+                            || trimmed.starts_with('\u{2012}')
+                            || trimmed.starts_with('\u{2013}')
+                            || trimmed.starts_with('\u{2014}');
+                    }
                 }
-                TextOrInline::Inline(inline) => match inline {
-                    Inline::Link { text, .. } => {
-                        result.push_str(&self.text_to_string(&text));
+                TextOrInline::Inline(Inline::Link { text, .. }) => {
+                    // Recursively check link text
+                    if self.is_dialog_content(&text) {
+                        return true;
                     }
-                    Inline::Image { alt_text, .. } => {
-                        result.push_str(&alt_text);
-                    }
-                    Inline::LineBreak | Inline::SoftBreak => {
-                        result.push(' ');
-                    }
-                },
+                }
+                _ => {
+                    // Skip images, line breaks, etc. and continue looking
+                }
             }
         }
-
-        result
+        false
     }
 
     /// Merge a group of dialog Text contents into a single Text with line breaks
@@ -508,12 +449,10 @@ impl HtmlToMarkdownConverter {
         let mut merged = Text::default();
 
         for (i, dialog_text) in dialog_group.iter().enumerate() {
-            // Add the dialog content
             for item in dialog_text.clone().into_iter() {
                 merged.push(item);
             }
 
-            // Add line break between dialog lines (except after the last one)
             if i < dialog_group.len() - 1 {
                 merged.push_inline(Inline::LineBreak);
             }
