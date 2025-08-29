@@ -76,8 +76,8 @@ impl MarkdownRenderer {
             Block::Quote { content } => {
                 self.render_quote(content, output);
             }
-            Block::List { kind: _, items: _ } => {
-                // Skip lists for now as per the plan
+            Block::List { kind, items } => {
+                self.render_list(kind, items, output, 0);
             }
             Block::Table {
                 header: _,
@@ -138,6 +138,116 @@ impl MarkdownRenderer {
             self.render_node(node, output);
         }
         output.push('\n');
+    }
+
+    fn render_list(
+        &self,
+        kind: &crate::markdown::ListKind,
+        items: &[crate::markdown::ListItem],
+        output: &mut String,
+        depth: usize,
+    ) {
+        for (index, item) in items.iter().enumerate() {
+            self.render_list_item(kind, item, index, output, depth);
+        }
+
+        // Add extra newline after top-level lists
+        if depth == 0 {
+            output.push('\n');
+        }
+    }
+
+    fn render_list_item(
+        &self,
+        kind: &crate::markdown::ListKind,
+        item: &crate::markdown::ListItem,
+        index: usize,
+        output: &mut String,
+        depth: usize,
+    ) {
+        // Indentation for nested lists
+        let indent = "  ".repeat(depth);
+
+        // Render the list marker
+        output.push_str(&indent);
+        match kind {
+            crate::markdown::ListKind::Ordered { start } => {
+                let number = start + index as u32;
+                output.push_str(&format!("{}. ", number));
+            }
+            crate::markdown::ListKind::Unordered => {
+                // Use different bullets for different nesting levels
+                let bullet = match depth % 3 {
+                    0 => '-',
+                    1 => '*',
+                    2 => '+',
+                    _ => '-',
+                };
+                output.push(bullet);
+                output.push(' ');
+            }
+        }
+
+        // Render the list item content
+        let mut first_block = true;
+        for node in &item.content {
+            match &node.block {
+                Block::Paragraph { content } => {
+                    let content_str = self.render_text(content);
+                    // Skip empty paragraphs (those with only whitespace)
+                    if !content_str.trim().is_empty() {
+                        if !first_block {
+                            // Additional paragraphs in list items need indentation
+                            output.push_str(&indent);
+                            output.push_str("  ");
+                        }
+                        output.push_str(&content_str);
+                        output.push('\n');
+                    }
+                }
+                Block::List {
+                    kind: nested_kind,
+                    items: nested_items,
+                } => {
+                    // Render nested list with increased depth
+                    self.render_list(nested_kind, nested_items, output, depth + 1);
+                }
+                Block::CodeBlock {
+                    language: _,
+                    content,
+                } => {
+                    // Code blocks in lists need proper indentation
+                    if !first_block {
+                        output.push('\n');
+                    }
+                    let lines: Vec<&str> = content.lines().collect();
+                    for line in lines {
+                        output.push_str(&indent);
+                        output.push_str("    ");
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+                _ => {
+                    // Other block types - render with indentation
+                    if !first_block {
+                        output.push('\n');
+                    }
+                    let mut temp_output = String::new();
+                    self.render_node(node, &mut temp_output);
+                    // Indent each line of the output
+                    for line in temp_output.lines() {
+                        if !line.is_empty() {
+                            output.push_str(&indent);
+                            output.push_str("  ");
+                        }
+                        output.push_str(line);
+                        output.push('\n');
+                    }
+                }
+            }
+            first_block = false;
+        }
     }
 
     fn render_text(&self, text: &Text) -> String {

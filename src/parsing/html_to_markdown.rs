@@ -107,6 +107,9 @@ impl HtmlToMarkdownConverter {
             "math" => {
                 self.handle_mathml(node, document);
             }
+            "ul" | "ol" => {
+                self.handle_list(tag_name, attrs, node, document);
+            }
             "style" | "script" | "head" => {
                 // Do nothing
             }
@@ -117,8 +120,10 @@ impl HtmlToMarkdownConverter {
                     self.visit_node(child, document);
                 }
             }
-            // For now, skip tables and lists as per the plan
-            "table" | "ul" | "ol" | "li" => {}
+            // Skip tables for now as per the plan
+            "table" => {}
+            // Skip li at this level - they're handled within lists
+            "li" => {}
             _ => {
                 for child in node.children.borrow().iter() {
                     self.visit_node(child, document);
@@ -204,6 +209,187 @@ impl HtmlToMarkdownConverter {
         document.blocks.push(content);
     }
 
+    fn handle_list(
+        &mut self,
+        tag_name: &str,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        let kind = if tag_name == "ol" {
+            // Check for start attribute
+            let start = self
+                .get_attr_value(attrs, "start")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            crate::markdown::ListKind::Ordered { start }
+        } else {
+            crate::markdown::ListKind::Unordered
+        };
+
+        let items = self.extract_list_items(node);
+
+        if !items.is_empty() {
+            let list_block = Block::List { kind, items };
+            let list_node = Node::new(list_block, 0..0); // TODO: proper source range
+            document.blocks.push(list_node);
+        }
+    }
+
+    fn extract_list_items(
+        &mut self,
+        list_node: &Rc<markup5ever_rcdom::Node>,
+    ) -> Vec<crate::markdown::ListItem> {
+        let mut items = Vec::new();
+
+        for child in list_node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, .. } => {
+                    if name.local.as_ref() == "li" {
+                        let item = self.extract_list_item(child);
+                        items.push(item);
+                    }
+                }
+                NodeData::Text { contents } => {
+                    // Skip whitespace-only text nodes between list items
+                    if !contents.borrow().trim().is_empty() {
+                        // If there's actual text content between list items (which shouldn't happen in valid HTML),
+                        // we could handle it here, but for now we'll just skip it
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        items
+    }
+
+    fn extract_list_item(
+        &mut self,
+        li_node: &Rc<markup5ever_rcdom::Node>,
+    ) -> crate::markdown::ListItem {
+        let mut content = Vec::new();
+        let mut current_text = Text::default();
+
+        for child in li_node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+
+                    match tag_name {
+                        "ul" | "ol" => {
+                            // Before flushing, trim trailing whitespace from current_text
+                            // since we're about to hit a block element
+                            self.trim_text_trailing_whitespace(&mut current_text);
+
+                            // Flush current text as paragraph if it has actual content
+                            if !current_text.is_empty() {
+                                let has_content =
+                                    current_text.clone().into_iter().any(|item| match item {
+                                        TextOrInline::Text(node) => !node.content.trim().is_empty(),
+                                        TextOrInline::Inline(_) => true,
+                                    });
+
+                                if has_content {
+                                    let paragraph = Block::Paragraph {
+                                        content: current_text.clone(),
+                                    };
+                                    content.push(Node::new(paragraph, 0..0));
+                                }
+                                current_text = Text::default();
+                            }
+
+                            let kind = if tag_name == "ol" {
+                                let start = self
+                                    .get_attr_value(attrs, "start")
+                                    .and_then(|s| s.parse::<u32>().ok())
+                                    .unwrap_or(1);
+                                crate::markdown::ListKind::Ordered { start }
+                            } else {
+                                crate::markdown::ListKind::Unordered
+                            };
+
+                            let nested_items = self.extract_list_items(child);
+                            if !nested_items.is_empty() {
+                                let nested_list = Block::List {
+                                    kind,
+                                    items: nested_items,
+                                };
+                                content.push(Node::new(nested_list, 0..0));
+                            }
+                        }
+                        "p" => {
+                            // Before flushing, trim trailing whitespace from current_text
+                            // since we're about to hit a block element
+                            self.trim_text_trailing_whitespace(&mut current_text);
+
+                            // Flush current text as paragraph if it has actual content
+                            if !current_text.is_empty() {
+                                let has_content =
+                                    current_text.clone().into_iter().any(|item| match item {
+                                        TextOrInline::Text(node) => !node.content.trim().is_empty(),
+                                        TextOrInline::Inline(_) => true,
+                                    });
+
+                                if has_content {
+                                    let paragraph = Block::Paragraph {
+                                        content: current_text.clone(),
+                                    };
+                                    content.push(Node::new(paragraph, 0..0));
+                                }
+                                current_text = Text::default();
+                            }
+
+                            let para_content = self.extract_formatted_content(child);
+                            if !para_content.is_empty() {
+                                let paragraph = Block::Paragraph {
+                                    content: para_content,
+                                };
+                                content.push(Node::new(paragraph, 0..0));
+                            }
+                        }
+                        _ => {
+                            self.collect_formatted_content(child, &mut current_text, None);
+                        }
+                    }
+                }
+                NodeData::Text { contents } => {
+                    // Process text nodes through the normal formatted content collector
+                    // This preserves proper spacing and formatting
+                    self.collect_formatted_content(child, &mut current_text, None);
+                }
+                _ => {
+                    // Process other node types
+                    for grandchild in child.children.borrow().iter() {
+                        self.collect_formatted_content(grandchild, &mut current_text, None);
+                    }
+                }
+            }
+        }
+
+        // Flush any remaining text as a paragraph
+        // But only if it contains actual content (not just whitespace)
+        if !current_text.is_empty() {
+            // Check if the text has any non-whitespace content
+            let has_content = current_text.clone().into_iter().any(|item| match item {
+                TextOrInline::Text(node) => !node.content.trim().is_empty(),
+                TextOrInline::Inline(_) => true,
+            });
+
+            if has_content {
+                let paragraph = Block::Paragraph {
+                    content: current_text,
+                };
+                content.push(Node::new(paragraph, 0..0));
+            }
+        }
+
+        crate::markdown::ListItem {
+            content,
+            task_status: None, // HTML doesn't have task lists
+        }
+    }
+
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
         let mut text = Text::default();
         self.collect_formatted_content(node, &mut text, None);
@@ -220,11 +406,30 @@ impl HtmlToMarkdownConverter {
             NodeData::Text { contents } => {
                 let content = contents.borrow().to_string();
                 if !content.trim().is_empty() {
+                    // Normalize whitespace while preserving meaningful leading/trailing spaces
+                    let mut normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+
+                    // Preserve leading space if original had it and we already have content
+                    if !text.is_empty()
+                        && content.chars().next().map_or(false, |c| c.is_whitespace())
+                    {
+                        normalized = format!(" {}", normalized);
+                    }
+
+                    // Preserve trailing space if original had it
+                    if content.chars().last().map_or(false, |c| c.is_whitespace()) {
+                        normalized.push(' ');
+                    }
+
+                    if normalized.trim().is_empty() {
+                        return;
+                    }
+
                     // Add spacing around inline code elements at the AST level
                     let adjusted_content = if current_style == Some(Style::Code) {
-                        self.add_code_spacing(&content)
+                        self.add_code_spacing(&normalized)
                     } else {
-                        content
+                        normalized
                     };
                     let text_node = TextNode::new(adjusted_content, current_style.clone());
                     text.push_text(text_node);
@@ -352,6 +557,68 @@ impl HtmlToMarkdownConverter {
 
     fn add_code_spacing(&self, content: &str) -> String {
         format!("  {}  ", content)
+    }
+
+    fn trim_text_trailing_whitespace(&self, text: &mut Text) {
+        // Find the last text node and trim its trailing whitespace
+        let items: Vec<TextOrInline> = text.clone().into_iter().collect();
+        if items.is_empty() {
+            return;
+        }
+
+        // Process items in reverse to find the last text node
+        let mut new_items = items.clone();
+        for i in (0..new_items.len()).rev() {
+            match &mut new_items[i] {
+                TextOrInline::Text(node) => {
+                    // Trim trailing whitespace from the last text node
+                    node.content = node.content.trim_end().to_string();
+                    break;
+                }
+                TextOrInline::Inline(_) => {
+                    // Inline elements like links/images shouldn't have whitespace trimmed
+                    // But if we hit an inline, we're done (no text nodes after it to trim)
+                    break;
+                }
+            }
+        }
+
+        // Rebuild the Text from the modified items
+        *text = Text::default();
+        for item in new_items {
+            text.push(item);
+        }
+    }
+
+    fn normalize_text_whitespace(&self, content: &str, text: &Text) -> String {
+        // If the text is all whitespace, check if we need to preserve a space
+        if content.chars().all(|c| c.is_whitespace()) {
+            // If we already have content in the Text, and this is whitespace between elements,
+            // preserve a single space
+            if !text.is_empty() {
+                return " ".to_string();
+            } else {
+                return String::new();
+            }
+        }
+
+        // For actual text content, normalize whitespace
+        let mut result = String::new();
+
+        // Check if we need a leading space (text doesn't start with whitespace-only beginning)
+        if !text.is_empty() && content.starts_with(|c: char| c.is_whitespace()) {
+            result.push(' ');
+        }
+
+        // Add the trimmed content
+        result.push_str(content.trim());
+
+        // Check if we need a trailing space
+        if content.ends_with(|c: char| c.is_whitespace()) && !content.trim().is_empty() {
+            result.push(' ');
+        }
+
+        result
     }
 
     //todo: this should be done on a parsing/convertion phase
@@ -548,6 +815,249 @@ mod tests {
     }
 
     #[test]
+    fn test_mixed_nested_lists() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"
+            <ol>
+                <li>
+                    <p>Chapter 1 introduction paragraph.</p>
+                    <p>This chapter covers the basics of our topic with detailed explanations.</p>
+                </li>
+                <li>Chapter 2: Advanced Topics
+                    <ul>
+                        <li>
+                            <p>Section A - Theory</p>
+                            <p>This section explains theoretical foundations that will be used throughout.</p>
+                        </li>
+                        <li>Section B - Practice
+                            <ol>
+                                <li>Exercise 1: Basic implementation</li>
+                                <li>
+                                    <p>Exercise 2: Advanced implementation</p>
+                                    <p>This exercise builds upon the previous one and introduces new concepts.</p>
+                                    <ul>
+                                        <li>Subtask 2.1: Setup environment</li>
+                                        <li>
+                                            <p>Subtask 2.2: Write code</p>
+                                            <p>Make sure to follow best practices.</p>
+                                        </li>
+                                        <li>Subtask 2.3: Test thoroughly</li>
+                                    </ul>
+                                </li>
+                                <li>Exercise 3: Integration</li>
+                            </ol>
+                        </li>
+                        <li>Section C - Review
+                            <ul>
+                                <li>Review point 1</li>
+                                <li>
+                                    <p>Review point 2</p>
+                                    <p>Additional notes about this review point.</p>
+                                </li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+                <li>
+                    <p>Chapter 3: Conclusion</p>
+                    <p>This final chapter summarizes everything we learned.</p>
+                    <ol>
+                        <li>Summary of key points</li>
+                        <li>
+                            <p>Future directions</p>
+                            <p>Where to go from here and additional resources.</p>
+                        </li>
+                    </ol>
+                </li>
+            </ol>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"1. Chapter 1 introduction paragraph.
+  This chapter covers the basics of our topic with detailed explanations.
+2. Chapter 2: Advanced Topics
+  * Section A - Theory
+    This section explains theoretical foundations that will be used throughout.
+  * Section B - Practice
+    1. Exercise 1: Basic implementation
+    2. Exercise 2: Advanced implementation
+      This exercise builds upon the previous one and introduces new concepts.
+      - Subtask 2.1: Setup environment
+      - Subtask 2.2: Write code
+        Make sure to follow best practices.
+      - Subtask 2.3: Test thoroughly
+    3. Exercise 3: Integration
+  * Section C - Review
+    + Review point 1
+    + Review point 2
+      Additional notes about this review point.
+3. Chapter 3: Conclusion
+  This final chapter summarizes everything we learned.
+  1. Summary of key points
+  2. Future directions
+    Where to go from here and additional resources.
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_lists() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"
+            <ul>
+                <li>Level 1 Item 1</li>
+                <li>Level 1 Item 2
+                    <ul>
+                        <li>Level 2 Item 1</li>
+                        <li>Level 2 Item 2
+                            <ul>
+                                <li>Level 3 Item 1</li>
+                                <li>Level 3 Item 2</li>
+                                <li>Level 3 Item 3</li>
+                            </ul>
+                        </li>
+                        <li>Level 2 Item 3</li>
+                    </ul>
+                </li>
+                <li>Level 1 Item 3</li>
+                <li>Level 1 Item 4
+                    <ul>
+                        <li>Another Level 2 Item</li>
+                        <li>Another Level 2 Item with nesting
+                            <ul>
+                                <li>Another Level 3 Item</li>
+                            </ul>
+                        </li>
+                    </ul>
+                </li>
+            </ul>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+        eprintln!("{:#?}", doc);
+        let expected = r#"
+- Level 1 Item 1
+- Level 1 Item 2
+  * Level 2 Item 1
+  * Level 2 Item 2
+    + Level 3 Item 1
+    + Level 3 Item 2
+    + Level 3 Item 3
+  * Level 2 Item 3
+- Level 1 Item 3
+- Level 1 Item 4
+  * Another Level 2 Item
+  * Another Level 2 Item with nesting
+    + Another Level 3 Item
+
+"#
+        .trim_start();
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_nested_ordered_lists() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"
+            <ol>
+                <li>Chapter 1</li>
+                <li>Chapter 2
+                    <ol>
+                        <li>Section 2.1</li>
+                        <li>Section 2.2
+                            <ol>
+                                <li>Subsection 2.2.1</li>
+                                <li>Subsection 2.2.2</li>
+                                <li>Subsection 2.2.3</li>
+                            </ol>
+                        </li>
+                        <li>Section 2.3</li>
+                    </ol>
+                </li>
+                <li>Chapter 3</li>
+                <li>Chapter 4
+                    <ol>
+                        <li>Section 4.1</li>
+                        <li>Section 4.2
+                            <ol>
+                                <li>Subsection 4.2.1</li>
+                            </ol>
+                        </li>
+                    </ol>
+                </li>
+            </ol>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"1. Chapter 1
+2. Chapter 2
+  1. Section 2.1
+  2. Section 2.2
+    1. Subsection 2.2.1
+    2. Subsection 2.2.2
+    3. Subsection 2.2.3
+  3. Section 2.3
+3. Chapter 3
+4. Chapter 4
+  1. Section 4.1
+  2. Section 4.2
+    1. Subsection 4.2.1
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_div_with_heading_and_list() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"
+            <div class="technical-note">
+                <h4>Protocol ACADEMIC Architecture</h4>
+                <p>The protocol operates on multiple layers:</p>
+                <ul>
+                    <li><strong>Transport Layer:</strong> Standard academic network protocols (HTTP/HTTPS, SSH, FTP)</li>
+                    <li><strong>Encoding Layer:</strong> Steganographic embedding in computational data</li>
+                    <li><strong>Routing Layer:</strong> Messages distributed through research collaboration networks</li>
+                    <li><strong>Command Layer:</strong> Encrypted instructions disguised as algorithm parameters</li>
+                </ul>
+            </div>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"#### Protocol ACADEMIC Architecture
+
+The protocol operates on multiple layers:
+
+- **Transport Layer:** Standard academic network protocols (HTTP/HTTPS, SSH, FTP)
+- **Encoding Layer:** Steganographic embedding in computational data
+- **Routing Layer:** Messages distributed through research collaboration networks
+- **Command Layer:** Encrypted instructions disguised as algorithm parameters
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
     fn test_dialog_grouping_with_markdown_rendering() {
         let mut converter = HtmlToMarkdownConverter::new();
         let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
@@ -595,5 +1105,53 @@ mod tests {
             line_breaks_count >= 2,
             "Dialog paragraph should contain line break markers between dialog lines"
         );
+    }
+
+    #[test]
+    fn test_mathml_with_subscripts_in_paragraph() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<p><a contenteditable="false" data-primary="evaluation methodology" data-secondary="language model for computing text perplexity" data-type="indexterm" id="id903"></a><a contenteditable="false" data-primary="language models" data-type="indexterm" id="id904"></a>A model's perplexity with respect to a text measures how difficult it is for the model to predict that text. Given a language model <em>X</em>, and a sequence of tokens <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="left-bracket x 1 comma x 2 comma period period period comma x Subscript n Baseline right-bracket">
+  <mrow>
+    <mo>[</mo>
+    <msub><mi>x</mi> <mn>1</mn> </msub>
+    <mo>,</mo>
+    <msub><mi>x</mi> <mn>2</mn> </msub>
+    <mo>,</mo>
+    <mo>.</mo>
+    <mo>.</mo>
+    <mo>.</mo>
+    <mo>,</mo>
+    <msub><mi>x</mi> <mi>n</mi> </msub>
+    <mo>]</mo>
+  </mrow>
+</math>, <em>X</em>'s perplexity for this sequence is good</p>"#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"A model's perplexity with respect to a text measures how difficult it is for the model to predict that text. Given a language model _X_, and a sequence of tokens [x₁,x₂,...,xₙ], _X_'s perplexity for this sequence is good
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_paragraph_with_link_and_data_attributes() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<p>To compute perplexity, you need access to the probabilities (or logprobs) the language model assigns to each next token. Unfortunately, not all commercial models expose their models' logprobs, as discussed in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a> that is awesome.</p>"#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"To compute perplexity, you need access to the probabilities (or logprobs) the language model assigns to each next token. Unfortunately, not all commercial models expose their models' logprobs, as discussed in [Chapter 2](ch02.html#ch02_understanding_foundation_models_1730147895571359) that is awesome.
+
+"#;
+
+        assert_eq!(rendered, expected);
     }
 }

@@ -611,12 +611,18 @@ impl TextReader {
             palette.base_03 // Dimmed for unfocused
         };
 
+        // Calculate indentation level based on leading spaces
+        let leading_spaces = line.len() - line.trim_start().len();
+        let indent_level = leading_spaces / 2; // Every 2 spaces is one indent level
+        let trimmed_line = line.trim_start();
+
         if is_numbered {
             // Parse numbered list item (e.g., "1. Item text")
-            if let Some(captures) = NUMBERED_LIST_CAPTURE_REGEX.captures(line) {
+            if let Some(captures) = NUMBERED_LIST_CAPTURE_REGEX.captures(trimmed_line) {
                 if let (Some(number), Some(content)) = (captures.get(1), captures.get(2)) {
-                    // Add indentation for nested appearance
-                    spans.push(Span::styled("  ".to_string(), Style::default()));
+                    // Add indentation based on nesting level (2 spaces per level)
+                    let indent = "  ".repeat(indent_level + 1);
+                    spans.push(Span::styled(indent, Style::default()));
                     // Add styled number
                     spans.push(Span::styled(
                         number.as_str().to_string(),
@@ -633,13 +639,17 @@ impl TextReader {
                 }
             }
         } else {
-            // Parse bullet list item (e.g., "• Item text" or "- Item text")
-            let (marker, content) = if line.starts_with("• ") {
+            // Parse bullet list item (e.g., "• Item text", "- Item text", "* Item text", "+ Item text")
+            let (marker, content) = if trimmed_line.starts_with("• ") {
                 // Use char boundary safe slicing for multi-byte bullet character
                 let content_start = "• ".len(); // This gets the byte length of "• "
-                ("•", &line[content_start..])
-            } else if line.starts_with("- ") {
-                ("•", &line[2..]) // Dash is single byte, safe to use index 2
+                ("•", &trimmed_line[content_start..])
+            } else if trimmed_line.starts_with("- ") {
+                ("-", &trimmed_line[2..]) // Keep original dash marker
+            } else if trimmed_line.starts_with("* ") {
+                ("*", &trimmed_line[2..]) // Support asterisk marker
+            } else if trimmed_line.starts_with("+ ") {
+                ("+", &trimmed_line[2..]) // Support plus marker
             } else {
                 return Line::from(vec![Span::styled(
                     line.to_string(),
@@ -647,8 +657,9 @@ impl TextReader {
                 )]);
             };
 
-            // Add indentation for nested appearance
-            spans.push(Span::styled("  ".to_string(), Style::default()));
+            // Add indentation based on nesting level (2 spaces per level)
+            let indent = "  ".repeat(indent_level + 1);
+            spans.push(Span::styled(indent, Style::default()));
             // Add styled bullet
             spans.push(Span::styled(
                 marker.to_string(),
@@ -688,13 +699,18 @@ impl TextReader {
             return self.parse_markdown_heading(line, palette, is_focused);
         }
 
-        // Check if this is a list item
-        if line.starts_with("• ") || line.starts_with("- ") {
+        // Check if this is a list item (including indented ones)
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("• ")
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+        {
             return self.parse_list_item(line, palette, is_focused, false);
         }
 
-        // Check if this is a numbered list item
-        if let Some(captures) = NUMBERED_LIST_REGEX.captures(line) {
+        // Check if this is a numbered list item (including indented ones)
+        if let Some(captures) = NUMBERED_LIST_REGEX.captures(trimmed) {
             if captures.get(1).is_some() {
                 return self.parse_list_item(line, palette, is_focused, true);
             }
@@ -892,13 +908,18 @@ impl TextReader {
             return self.parse_markdown_heading(line, palette, is_focused);
         }
 
-        // Check if this is a list item
-        if line.starts_with("• ") || line.starts_with("- ") {
+        // Check if this is a list item (including indented ones)
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("• ")
+            || trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("+ ")
+        {
             return self.parse_list_item(line, palette, is_focused, false);
         }
 
-        // Check if this is a numbered list item
-        if let Some(captures) = NUMBERED_LIST_REGEX.captures(line) {
+        // Check if this is a numbered list item (including indented ones)
+        if let Some(captures) = NUMBERED_LIST_REGEX.captures(trimmed) {
             if captures.get(1).is_some() {
                 return self.parse_list_item(line, palette, is_focused, true);
             }
