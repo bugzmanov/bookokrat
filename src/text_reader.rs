@@ -796,7 +796,7 @@ impl TextReader {
         }
     }
 
-    /// Helper method to parse text with basic formatting (bold and italic)
+    /// Helper method to parse text with basic formatting (bold, italic, and code)
     fn parse_text_with_formatting(
         &self,
         text: &str,
@@ -842,6 +842,41 @@ impl TextReader {
                 } else {
                     current_text.push_str("**");
                     current_text.push_str(&bold_text);
+                }
+            } else if chars[i] == '`' {
+                // Handle inline code
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(normal_color),
+                    ));
+                    current_text.clear();
+                }
+
+                i += 1; // Skip opening `
+                let mut code_text = String::new();
+                let mut found_closing = false;
+
+                while i < chars.len() {
+                    if chars[i] == '`' {
+                        found_closing = true;
+                        i += 1; // Skip closing `
+                        break;
+                    } else {
+                        code_text.push(chars[i]);
+                        i += 1;
+                    }
+                }
+
+                if found_closing && !code_text.is_empty() {
+                    // Use base_07 (gray) as background and base_00 (black) as foreground for inline code
+                    spans.push(Span::styled(
+                        code_text,
+                        Style::default().fg(Color::Black).bg(Color::Gray),
+                    ));
+                } else {
+                    current_text.push('`');
+                    current_text.push_str(&code_text);
                 }
             } else if chars[i] == '_' {
                 // Handle italic text (single underscore)
