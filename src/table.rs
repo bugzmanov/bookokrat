@@ -1,0 +1,629 @@
+use ratatui::{
+    layout::{Constraint, Rect},
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::{Block, StatefulWidget, Widget},
+};
+use std::cmp::max;
+
+/// Configuration for table appearance
+#[derive(Debug, Clone)]
+pub struct TableConfig {
+    pub border_color: Color,
+    pub header_color: Color,
+    pub text_color: Color,
+    pub use_block: bool,
+}
+
+impl Default for TableConfig {
+    fn default() -> Self {
+        Self {
+            border_color: Color::White,
+            header_color: Color::Yellow,
+            text_color: Color::White,
+            use_block: false,
+        }
+    }
+}
+
+/// A custom table widget that renders with solid Unicode box-drawing characters
+#[derive(Debug, Clone)]
+pub struct Table {
+    rows: Vec<Vec<String>>,
+    header: Option<Vec<String>>,
+    constraints: Vec<Constraint>,
+    config: TableConfig,
+    block: Option<Block<'static>>,
+}
+
+impl Table {
+    pub fn new(rows: Vec<Vec<String>>) -> Self {
+        Self {
+            rows,
+            header: None,
+            constraints: Vec::new(),
+            config: TableConfig::default(),
+            block: None,
+        }
+    }
+
+    pub fn header(mut self, header: Vec<String>) -> Self {
+        self.header = Some(header);
+        self
+    }
+
+    pub fn constraints(mut self, constraints: Vec<Constraint>) -> Self {
+        self.constraints = constraints;
+        self
+    }
+
+    pub fn config(mut self, config: TableConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    pub fn block(mut self, block: Block<'static>) -> Self {
+        self.block = Some(block);
+        self
+    }
+
+    /// Calculate column widths based on constraints and available space
+    fn calculate_column_widths(&self, available_width: u16) -> Vec<u16> {
+        let num_cols = self.constraints.len();
+        if num_cols == 0 {
+            return Vec::new();
+        }
+
+        // Account for borders: left border (1) + column separators (num_cols - 1) + right border (1)
+        let border_width = 1 + (num_cols - 1) + 1;
+        let content_width = available_width.saturating_sub(border_width as u16);
+
+        let mut widths = Vec::new();
+        let mut remaining_width = content_width;
+        let mut length_constraints = Vec::new();
+
+        // First pass: handle Length constraints
+        for constraint in &self.constraints {
+            match constraint {
+                Constraint::Length(len) => {
+                    let width = (*len).min(remaining_width);
+                    widths.push(width);
+                    remaining_width = remaining_width.saturating_sub(width);
+                    length_constraints.push(None);
+                }
+                _ => {
+                    widths.push(0);
+                    length_constraints.push(Some(constraint));
+                }
+            }
+        }
+
+        // Second pass: distribute remaining width among percentage/ratio constraints
+        let flexible_count = length_constraints.iter().filter(|c| c.is_some()).count();
+        if flexible_count > 0 && remaining_width > 0 {
+            let width_per_flexible = remaining_width / flexible_count as u16;
+            let mut extra = remaining_width % flexible_count as u16;
+
+            for (i, constraint_opt) in length_constraints.iter().enumerate() {
+                if constraint_opt.is_some() {
+                    let mut width = width_per_flexible;
+                    if extra > 0 {
+                        width += 1;
+                        extra -= 1;
+                    }
+                    widths[i] = width;
+                }
+            }
+        }
+
+        widths
+    }
+
+    /// Render top border with proper Unicode box-drawing characters
+    fn render_top_border(&self, widths: &[u16]) -> Line<'static> {
+        if widths.is_empty() {
+            return Line::from("");
+        }
+
+        let mut line = String::new();
+        line.push('┌'); // Top-left corner
+
+        for (i, &width) in widths.iter().enumerate() {
+            line.push_str(&"─".repeat(width as usize));
+            if i < widths.len() - 1 {
+                line.push('┬'); // Top tee
+            }
+        }
+
+        line.push('┐'); // Top-right corner
+        Line::from(Span::styled(
+            line,
+            Style::default().fg(self.config.border_color),
+        ))
+    }
+
+    /// Render middle border (between header and data rows)
+    fn render_middle_border(&self, widths: &[u16]) -> Line<'static> {
+        if widths.is_empty() {
+            return Line::from("");
+        }
+
+        let mut line = String::new();
+        line.push('├'); // Left tee
+
+        for (i, &width) in widths.iter().enumerate() {
+            line.push_str(&"─".repeat(width as usize));
+            if i < widths.len() - 1 {
+                line.push('┼'); // Cross
+            }
+        }
+
+        line.push('┤'); // Right tee
+        Line::from(Span::styled(
+            line,
+            Style::default().fg(self.config.border_color),
+        ))
+    }
+
+    /// Render bottom border
+    fn render_bottom_border(&self, widths: &[u16]) -> Line<'static> {
+        if widths.is_empty() {
+            return Line::from("");
+        }
+
+        let mut line = String::new();
+        line.push('└'); // Bottom-left corner
+
+        for (i, &width) in widths.iter().enumerate() {
+            line.push_str(&"─".repeat(width as usize));
+            if i < widths.len() - 1 {
+                line.push('┴'); // Bottom tee
+            }
+        }
+
+        line.push('┘'); // Bottom-right corner
+        Line::from(Span::styled(
+            line,
+            Style::default().fg(self.config.border_color),
+        ))
+    }
+
+    /// Render a data row with proper cell formatting and wrapping
+    fn render_row(&self, row: &[String], widths: &[u16], is_header: bool) -> Vec<Line<'static>> {
+        if widths.is_empty() || row.is_empty() {
+            return vec![Line::from("")];
+        }
+
+        let text_color = if is_header {
+            self.config.header_color
+        } else {
+            self.config.text_color
+        };
+
+        // Wrap each cell content and find the maximum height
+        let mut wrapped_cells: Vec<Vec<String>> = Vec::new();
+        let mut max_height = 1;
+
+        for (i, cell) in row.iter().enumerate() {
+            let width = widths.get(i).copied().unwrap_or(0) as usize;
+            if width == 0 {
+                wrapped_cells.push(vec![String::new()]);
+                continue;
+            }
+
+            // First process <br/> tags by replacing them with actual newlines
+            let cell_with_newlines = cell.replace("<br/> ", "\n").replace("<br/>", "\n");
+            let cell_lines_from_br: Vec<&str> = cell_with_newlines.split('\n').collect();
+
+            // Then wrap each line separately
+            let mut all_wrapped_lines = Vec::new();
+            for br_line in cell_lines_from_br {
+                let wrapped = textwrap::wrap(br_line, width);
+                for wrapped_line in wrapped {
+                    all_wrapped_lines.push(wrapped_line.to_string());
+                }
+            }
+
+            // If we had no content, ensure at least one empty line
+            if all_wrapped_lines.is_empty() {
+                all_wrapped_lines.push(String::new());
+            }
+
+            max_height = max(max_height, all_wrapped_lines.len());
+            wrapped_cells.push(all_wrapped_lines);
+        }
+
+        // Render each line of the row
+        let mut lines = Vec::new();
+        for line_idx in 0..max_height {
+            let mut line_content = String::new();
+            line_content.push('│'); // Left border
+
+            for (col_idx, cell_lines) in wrapped_cells.iter().enumerate() {
+                let width = widths[col_idx] as usize;
+                let cell_text = cell_lines.get(line_idx).cloned().unwrap_or_default();
+
+                // Pad or truncate to exact width
+                let formatted_cell = if cell_text.len() > width {
+                    cell_text[..width].to_string()
+                } else {
+                    format!("{:<width$}", cell_text, width = width)
+                };
+
+                line_content.push_str(&formatted_cell);
+
+                if col_idx < wrapped_cells.len() - 1 {
+                    line_content.push('│'); // Column separator
+                }
+            }
+
+            line_content.push('│'); // Right border
+
+            lines.push(Line::from(Span::styled(
+                line_content,
+                Style::default().fg(text_color),
+            )));
+        }
+
+        lines
+    }
+
+    /// Calculate the total height the table will occupy
+    pub fn calculate_height(&self, available_width: u16) -> u16 {
+        let widths = self.calculate_column_widths(available_width);
+        let mut height = 0;
+
+        // Top border
+        height += 1;
+
+        // Header if present
+        if let Some(ref header) = self.header {
+            let header_lines = self.render_row(header, &widths, true);
+            height += header_lines.len() as u16;
+            height += 1; // Middle border
+        }
+
+        // Data rows
+        for row in &self.rows {
+            let row_lines = self.render_row(row, &widths, false);
+            height += row_lines.len() as u16;
+        }
+
+        // Bottom border
+        height += 1;
+
+        height
+    }
+
+    /// Render the table into a vector of lines for integration with Paragraph widget
+    pub fn render_to_lines(&self, available_width: u16) -> Vec<Line<'static>> {
+        self.render_to_lines_with_offset(available_width, 0, None)
+    }
+
+    /// Render the table with optional line offset and height limit for scrolling
+    pub fn render_to_lines_with_offset(
+        &self,
+        available_width: u16,
+        line_offset: usize,
+        max_lines: Option<usize>,
+    ) -> Vec<Line<'static>> {
+        // First, render all lines normally
+        let all_lines = self.render_all_lines(available_width);
+
+        // Then apply offset and limit
+        let start_index = line_offset.min(all_lines.len());
+        let end_index = if let Some(limit) = max_lines {
+            (start_index + limit).min(all_lines.len())
+        } else {
+            all_lines.len()
+        };
+
+        all_lines[start_index..end_index].to_vec()
+    }
+
+    /// Render all table lines without any offset or limit
+    fn render_all_lines(&self, available_width: u16) -> Vec<Line<'static>> {
+        let widths = self.calculate_column_widths(available_width);
+        let mut lines = Vec::new();
+
+        // Top border
+        lines.push(self.render_top_border(&widths));
+
+        // Header if present
+        if let Some(ref header) = self.header {
+            let header_lines = self.render_row(header, &widths, true);
+            lines.extend(header_lines);
+            lines.push(self.render_middle_border(&widths));
+        }
+
+        // Data rows
+        for row in &self.rows {
+            let row_lines = self.render_row(row, &widths, false);
+            lines.extend(row_lines);
+        }
+
+        // Bottom border
+        lines.push(self.render_bottom_border(&widths));
+
+        lines
+    }
+}
+
+impl Widget for Table {
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer) {
+        let lines = self.render_to_lines(area.width);
+
+        // Use Paragraph to render the table lines
+        let paragraph = ratatui::widgets::Paragraph::new(ratatui::text::Text::from(lines));
+
+        if let Some(block) = self.block {
+            paragraph.block(block).render(area, buf);
+        } else {
+            paragraph.render(area, buf);
+        }
+    }
+}
+
+/// State for stateful table widget (currently minimal, but allows for future extensions)
+#[derive(Debug, Default)]
+pub struct TableState {
+    pub selected_row: Option<usize>,
+}
+
+impl StatefulWidget for Table {
+    type State = TableState;
+
+    fn render(self, area: Rect, buf: &mut ratatui::buffer::Buffer, _state: &mut Self::State) {
+        // For now, stateful rendering is the same as stateless
+        // Future enhancements could include row selection highlighting
+        Widget::render(self, area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Constraint;
+
+    #[test]
+    fn test_table_creation() {
+        let rows = vec![
+            vec!["Cell 1".to_string(), "Cell 2".to_string()],
+            vec!["Cell 3".to_string(), "Cell 4".to_string()],
+        ];
+
+        let table = Table::new(rows.clone())
+            .constraints(vec![Constraint::Length(10), Constraint::Length(10)]);
+
+        assert_eq!(table.rows, rows);
+        assert_eq!(table.constraints.len(), 2);
+        assert!(table.header.is_none());
+    }
+
+    #[test]
+    fn test_table_with_header() {
+        let header = vec!["Header 1".to_string(), "Header 2".to_string()];
+        let rows = vec![vec!["Cell 1".to_string(), "Cell 2".to_string()]];
+
+        let table = Table::new(rows)
+            .header(header.clone())
+            .constraints(vec![Constraint::Length(10), Constraint::Length(10)]);
+
+        assert_eq!(table.header, Some(header));
+    }
+
+    #[test]
+    fn test_column_width_calculation() {
+        let table = Table::new(vec![]).constraints(vec![
+            Constraint::Length(10),
+            Constraint::Length(15),
+            Constraint::Length(5),
+        ]);
+
+        // Available width: 40, borders: 1 + 2 + 1 = 4, content: 36
+        // Should fit exactly: 10 + 15 + 5 = 30, with 6 remaining distributed
+        let widths = table.calculate_column_widths(40);
+
+        assert_eq!(widths.len(), 3);
+        assert_eq!(widths[0], 10);
+        assert_eq!(widths[1], 15);
+        assert_eq!(widths[2], 5);
+    }
+
+    #[test]
+    fn test_height_calculation() {
+        let rows = vec![
+            vec![
+                "Short".to_string(),
+                "This is a longer text that will wrap".to_string(),
+            ],
+            vec!["Row 2".to_string(), "Simple".to_string()],
+        ];
+
+        let table = Table::new(rows)
+            .header(vec!["Col 1".to_string(), "Col 2".to_string()])
+            .constraints(vec![Constraint::Length(8), Constraint::Length(12)]);
+
+        let height = table.calculate_height(30);
+
+        // Should include: top border (1) + header (1) + middle border (1) + data rows (varies based on wrapping) + bottom border (1)
+        assert!(height >= 5); // Minimum expected height
+    }
+
+    #[test]
+    fn test_render_to_lines() {
+        let rows = vec![
+            vec!["A".to_string(), "B".to_string()],
+            vec!["C".to_string(), "D".to_string()],
+        ];
+
+        let table =
+            Table::new(rows).constraints(vec![Constraint::Length(3), Constraint::Length(3)]);
+
+        let lines = table.render_to_lines(20);
+
+        // Should have at least: top border + 2 data rows + bottom border = 4 lines
+        assert!(lines.len() >= 4);
+
+        // First line should be top border
+        let first_line_content = &lines[0].spans[0].content;
+        assert!(first_line_content.contains('┌'));
+        assert!(first_line_content.contains('┐'));
+    }
+
+    #[test]
+    fn test_unicode_borders() {
+        let table =
+            Table::new(vec![vec!["Test".to_string()]]).constraints(vec![Constraint::Length(5)]);
+
+        let lines = table.render_to_lines(15);
+
+        // Check that we're using proper Unicode box-drawing characters
+        let top_border = &lines[0].spans[0].content;
+        assert!(top_border.contains('┌')); // Top-left corner
+        assert!(top_border.contains('─')); // Horizontal line
+        assert!(top_border.contains('┐')); // Top-right corner
+
+        let bottom_border = &lines[lines.len() - 1].spans[0].content;
+        assert!(bottom_border.contains('└')); // Bottom-left corner
+        assert!(bottom_border.contains('┘')); // Bottom-right corner
+    }
+
+    #[test]
+    fn test_table_with_wrapping_content() {
+        let rows = vec![
+            vec!["Short".to_string(), "This is a very long text that should wrap across multiple lines when rendered in a narrow column".to_string()],
+            vec!["Row 2".to_string(), "Another long text that will also wrap and demonstrate how table height is calculated".to_string()],
+        ];
+
+        let table = Table::new(rows)
+            .header(vec!["Col 1".to_string(), "Col 2".to_string()])
+            .constraints(vec![Constraint::Length(8), Constraint::Length(20)]);
+
+        // Test with narrow width to force wrapping
+        let height_narrow = table.calculate_height(35);
+
+        // Test with wide width - should be shorter due to less wrapping
+        let height_wide = table.calculate_height(80);
+
+        // Height with narrow width should be greater than height with wide width
+        // because narrow columns cause more text wrapping
+        assert!(height_narrow >= height_wide);
+
+        // Should be at least the minimum (top border + header + middle border + 2 data rows + bottom border)
+        assert!(height_narrow >= 5);
+        assert!(height_wide >= 5);
+    }
+
+    #[test]
+    fn test_table_with_br_tags() {
+        let rows = vec![
+            vec![
+                "Cell with<br/>line break".to_string(),
+                "Normal cell".to_string(),
+            ],
+            vec![
+                "Another<br/>multi<br/>line".to_string(),
+                "Simple".to_string(),
+            ],
+        ];
+
+        let table =
+            Table::new(rows).constraints(vec![Constraint::Length(15), Constraint::Length(10)]);
+
+        let height = table.calculate_height(30);
+
+        // Should account for line breaks in cells
+        // Top border (1) + first row with <br/> (2) + second row with 2 <br/> (3) + bottom border (1) = 7
+        assert!(height >= 7);
+    }
+
+    #[test]
+    fn test_table_with_newlines() {
+        let rows = vec![
+            vec![
+                "Cell with\nactual newline".to_string(),
+                "Normal cell".to_string(),
+            ],
+            vec!["Another\nmulti\nline".to_string(), "Simple".to_string()],
+        ];
+
+        let table =
+            Table::new(rows).constraints(vec![Constraint::Length(15), Constraint::Length(10)]);
+
+        let height = table.calculate_height(30);
+
+        // Should account for newlines in cells
+        // Top border (1) + first row with newline (2) + second row with 2 newlines (3) + bottom border (1) = 7
+        assert!(height >= 7);
+
+        let lines = table.render_to_lines(30);
+
+        // Verify the content shows up correctly (should split on newlines)
+        let content_lines: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+
+        // Should contain the split content
+        let full_content = content_lines.join("");
+        assert!(full_content.contains("Cell with"));
+        assert!(full_content.contains("actual newline"));
+        assert!(full_content.contains("multi"));
+    }
+
+    #[test]
+    fn test_table_scrolling_with_offset() {
+        let rows = vec![
+            vec![
+                "Row 1 Col 1".to_string(),
+                "Row 1<br/>with break".to_string(),
+            ],
+            vec!["Row 2".to_string(), "Simple".to_string()],
+            vec![
+                "Row 3 with<br/>multiple<br/>breaks".to_string(),
+                "Col 2".to_string(),
+            ],
+        ];
+
+        let table = Table::new(rows)
+            .header(vec!["Header 1".to_string(), "Header 2".to_string()])
+            .constraints(vec![Constraint::Length(15), Constraint::Length(15)]);
+
+        // Render full table
+        let all_lines = table.render_to_lines(35);
+        let full_height = all_lines.len();
+
+        // Render with offset of 2 lines (should skip top border and first header line)
+        let offset_lines = table.render_to_lines_with_offset(35, 2, None);
+
+        // Should have fewer lines
+        assert!(offset_lines.len() < full_height);
+        assert_eq!(offset_lines.len(), full_height - 2);
+
+        // Render with offset and limit
+        let limited_lines = table.render_to_lines_with_offset(35, 1, Some(3));
+        assert_eq!(limited_lines.len(), 3);
+
+        // Verify that the content is different (offset should show different lines)
+        if full_height > 3 {
+            let first_3_lines = &all_lines[0..3];
+            let offset_3_lines = &all_lines[1..4];
+            assert_ne!(
+                first_3_lines
+                    .iter()
+                    .map(|l| &l.spans[0].content)
+                    .collect::<Vec<_>>(),
+                offset_3_lines
+                    .iter()
+                    .map(|l| &l.spans[0].content)
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}

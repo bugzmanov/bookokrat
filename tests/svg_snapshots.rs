@@ -2423,14 +2423,14 @@ fn test_table_with_links_and_linebreaks_svg() {
           <thead>
             <tr>
               <th>Category</th>
-              <th>Examples of consumer use cases</th>
-              <th>Examples of enterprise use cases</th>
+              <th>Examples of **consumer** use cases</th>
+              <th>Examples of **enterprise** use cases</th>
             </tr>
           </thead>
           <tr>
             <td>Coding</td>
-            <td>Coding</td>
-            <td>Coding</td>
+            <td>Coding on [localhost](http://localhost)</td>
+            <td>Coding _again!_</td>
           </tr>
           <tr>
             <td>Image and video production</td>

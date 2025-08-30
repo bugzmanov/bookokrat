@@ -17,6 +17,7 @@ ideas to implement:
          [x] bold & italic 
            [ ] Bold needs some visual treatment
          [x] lists
+            [ ] BUG: _ Olo _  insid list is not rendered but shown as Is
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
          [ ] Code & "render as is"

@@ -2,6 +2,7 @@ use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::images::book_images::BookImages;
 use crate::images::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
 use crate::main_app::VimNavMotions;
+use crate::table::{Table as CustomTable, TableConfig};
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
@@ -11,7 +12,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Paragraph},
 };
 use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
 use regex::Regex;
@@ -245,6 +246,9 @@ impl TextReader {
             // Check if this line is an image placeholder
             let is_image_placeholder = line.trim().starts_with("[image src=");
 
+            // Check if this line is a table placeholder
+            let is_table_placeholder = line.trim().starts_with("[table ");
+
             if is_image_placeholder {
                 // Check if this image was filtered out (too small)
                 if let Some(image_src) = extract_src(line.trim()) {
@@ -260,6 +264,23 @@ impl TextReader {
                 // We use regular height as default for line counting
                 total_lines += IMAGE_HEIGHT_REGULAR as usize;
                 image_count += 1;
+            } else if is_table_placeholder {
+                // Find the corresponding embedded table to get its actual rendered height
+                let embedded_tables = self.embedded_tables.borrow();
+                if let Some(table) = embedded_tables.iter().find(|t| {
+                    // Check if this table placeholder corresponds to this table
+                    // For now, we'll use a simple approach based on position in the content
+                    // This might need refinement for multiple tables
+                    total_lines >= t.lines_before_table
+                        && total_lines < t.lines_before_table + t.height_cells
+                }) {
+                    total_lines += table.height_cells;
+                } else {
+                    // If we can't find the table, skip it as it likely hasn't been processed yet
+                    // This can happen during initial parsing - the table will be counted when
+                    // the styled content is generated
+                    debug!("Table placeholder found but no corresponding embedded table");
+                }
             } else if is_empty {
                 total_lines += 1;
             } else {
@@ -424,8 +445,13 @@ impl TextReader {
                         let mut embedded_table = table;
                         embedded_table.lines_before_table = table_line_start;
 
-                        // Add placeholder lines (just empty lines for now)
-                        for _ in 0..embedded_table.height_cells {
+                        // Calculate actual rendered height based on content and available width
+                        let actual_height =
+                            self.calculate_table_rendered_height(&embedded_table, width);
+                        embedded_table.height_cells = actual_height;
+
+                        // Add placeholder lines based on actual rendered height
+                        for _ in 0..actual_height {
                             raw_lines.push(String::new());
                             lines.push(Line::from(String::new()));
                             line_count += 1;
@@ -747,6 +773,47 @@ impl TextReader {
         ))
     }
 
+    /// Calculate the actual rendered height of a table based on content wrapping
+    fn calculate_table_rendered_height(
+        &self,
+        table: &EmbeddedTable,
+        available_width: usize,
+    ) -> usize {
+        // Get column constraints for width calculation
+        let constraints = self.calculate_balanced_column_widths(table, available_width as u16);
+
+        // Create temporary table widget to calculate actual rendered height
+        let mut table_rows = Vec::new();
+
+        // Add header if present
+        let mut header_data = None;
+        if let Some(ref header) = table.header_row {
+            header_data = Some(header.clone());
+        }
+
+        // Add all data rows
+        for row_data in &table.data_rows {
+            table_rows.push(row_data.clone());
+        }
+
+        // Create temporary table widget
+        let mut temp_table = CustomTable::new(table_rows).constraints(constraints);
+
+        if let Some(header) = header_data {
+            temp_table = temp_table.header(header);
+        }
+
+        // Calculate the actual rendered height
+        let rendered_height = temp_table.calculate_height(available_width as u16) as usize;
+
+        debug!(
+            "Table rendered height calculation: {} rows -> {} terminal lines",
+            table.num_rows, rendered_height
+        );
+
+        rendered_height
+    }
+
     /// Calculate balanced column widths based on content
     fn calculate_balanced_column_widths(
         &self,
@@ -857,71 +924,6 @@ impl TextReader {
             .collect();
 
         Some(cleaned_cells)
-    }
-
-    /// Create a table cell with proper formatting and link support
-    fn create_table_cell(
-        &self,
-        text: &str,
-        palette: &Base16Palette,
-        is_focused: bool,
-    ) -> Cell<'static> {
-        let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
-        let link_text_color = if is_focused {
-            palette.base_0c // Cyan for links when focused
-        } else {
-            palette.base_03 // Dimmed for unfocused links
-        };
-
-        // Convert <br/> tags to newlines for display
-        let text = text.replace("<br/>", "\n");
-
-        // Parse for links
-        let mut spans = Vec::new();
-        let mut current_pos = 0;
-
-        // Find all markdown links in the text
-        for cap in LINK_REGEX.captures_iter(&text) {
-            if let (Some(link_match), Some(link_text), Some(_url)) =
-                (cap.get(0), cap.get(1), cap.get(2))
-            {
-                // Add text before the link
-                if link_match.start() > current_pos {
-                    spans.push(Span::styled(
-                        text[current_pos..link_match.start()].to_string(),
-                        Style::default().fg(normal_text_color),
-                    ));
-                }
-
-                // Add the link text with underline
-                spans.push(Span::styled(
-                    link_text.as_str().to_string(),
-                    Style::default()
-                        .fg(link_text_color)
-                        .add_modifier(Modifier::UNDERLINED),
-                ));
-
-                current_pos = link_match.end();
-            }
-        }
-
-        // Add remaining text
-        if current_pos < text.len() {
-            spans.push(Span::styled(
-                text[current_pos..].to_string(),
-                Style::default().fg(normal_text_color),
-            ));
-        }
-
-        // If no spans were created, just use the whole text
-        if spans.is_empty() {
-            spans.push(Span::styled(
-                text.to_string(),
-                Style::default().fg(normal_text_color),
-            ));
-        }
-
-        Cell::from(Line::from(spans))
     }
 
     /// Parse markdown heading and return styled line
@@ -2547,59 +2549,45 @@ impl TextReader {
                             .min(area_height - table_screen_start);
 
                         if visible_table_height > 0 {
-                            // Prepare table data
-                            let mut rows = Vec::new();
-
-                            // Add header if present and visible
-                            if let Some(ref header) = table.header_row {
-                                if table_top_clipped == 0 {
-                                    let header_cells: Vec<Cell> = header
-                                        .iter()
-                                        .map(|text| {
-                                            self.create_table_cell(text, palette, is_focused)
-                                        })
-                                        .collect();
-                                    rows.push(
-                                        Row::new(header_cells)
-                                            .style(Style::default().add_modifier(Modifier::BOLD)),
-                                    );
-                                }
-                            }
-
-                            // Add visible data rows
-                            let start_row = if table.has_header && table_top_clipped > 0 {
-                                table_top_clipped.saturating_sub(1) // -1 for header
-                            } else {
-                                table_top_clipped
-                            };
-
-                            for (i, row_data) in table.data_rows.iter().enumerate() {
-                                if i >= start_row && i < start_row + visible_table_height {
-                                    let cells: Vec<Cell> = row_data
-                                        .iter()
-                                        .map(|text| {
-                                            self.create_table_cell(text, palette, is_focused)
-                                        })
-                                        .collect();
-                                    rows.push(Row::new(cells));
-                                }
-                            }
-
                             // Create balanced column constraints based on content
                             let constraints = self.calculate_balanced_column_widths(
                                 table,
                                 margined_content_area[1].width,
                             );
 
-                            // Create and render table widget
-                            let table_widget = Table::new(rows, constraints)
-                                .style(Style::default().fg(text_color))
-                                .column_spacing(2) // Add spacing between columns
-                                .block(
-                                    Block::default()
-                                        .borders(Borders::ALL)
-                                        .border_style(Style::default().fg(border_color)),
-                                );
+                            // Create table config
+                            let table_config = TableConfig {
+                                border_color: border_color,
+                                header_color: if is_focused {
+                                    palette.base_0a
+                                } else {
+                                    palette.base_03
+                                },
+                                text_color,
+                                use_block: false,
+                            };
+
+                            // Create full table widget with all data
+                            let mut custom_table = CustomTable::new(table.data_rows.clone())
+                                .constraints(constraints)
+                                .config(table_config);
+
+                            // Add header if present
+                            if let Some(ref header) = table.header_row {
+                                custom_table = custom_table.header(header.clone());
+                            }
+
+                            // Render the table with offset and height limit for scrolling
+                            let table_lines = custom_table.render_to_lines_with_offset(
+                                margined_content_area[1].width,
+                                table_top_clipped,
+                                Some(visible_table_height),
+                            );
+
+                            // Create a paragraph from the rendered table lines
+                            let table_paragraph = ratatui::widgets::Paragraph::new(
+                                ratatui::text::Text::from(table_lines),
+                            );
 
                             let table_area = Rect {
                                 x: margined_content_area[1].x,
@@ -2610,7 +2598,7 @@ impl TextReader {
                                     as u16,
                             };
 
-                            f.render_widget(table_widget, table_area);
+                            f.render_widget(table_paragraph, table_area);
                         }
                     }
                 }

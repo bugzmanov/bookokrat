@@ -24,6 +24,7 @@ mod parsing;
 mod reading_history;
 mod simple_fake_books;
 mod system_command;
+mod table;
 mod table_of_contents;
 mod text_reader;
 mod text_selection;
