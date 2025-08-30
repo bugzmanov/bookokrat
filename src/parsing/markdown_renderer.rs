@@ -80,11 +80,11 @@ impl MarkdownRenderer {
                 self.render_list(kind, items, output, 0);
             }
             Block::Table {
-                header: _,
-                rows: _,
-                alignment: _,
+                header,
+                rows,
+                alignment,
             } => {
-                // Skip tables for now as per the plan
+                self.render_table(header, rows, alignment, output);
             }
             Block::ThematicBreak => {
                 output.push_str("---\n\n");
@@ -155,6 +155,120 @@ impl MarkdownRenderer {
         if depth == 0 {
             output.push('\n');
         }
+    }
+
+    fn render_table(
+        &self,
+        header: &Option<crate::markdown::TableRow>,
+        rows: &[crate::markdown::TableRow],
+        alignment: &[crate::markdown::TableAlignment],
+        output: &mut String,
+    ) {
+        // Calculate column widths for proper formatting
+        let mut column_widths = vec![];
+
+        // Consider header cells for width calculation
+        if let Some(header_row) = header {
+            for (i, cell) in header_row.cells.iter().enumerate() {
+                let width = self.render_text(&cell.content).len();
+                if i >= column_widths.len() {
+                    column_widths.push(width);
+                } else {
+                    column_widths[i] = column_widths[i].max(width);
+                }
+            }
+        }
+
+        // Consider body cells for width calculation
+        for row in rows {
+            for (i, cell) in row.cells.iter().enumerate() {
+                let width = self.render_text(&cell.content).len();
+                if i >= column_widths.len() {
+                    column_widths.push(width);
+                } else {
+                    column_widths[i] = column_widths[i].max(width);
+                }
+            }
+        }
+
+        // Ensure minimum width of 3 for each column (for alignment markers)
+        for width in &mut column_widths {
+            *width = (*width).max(3);
+        }
+
+        // Render header if present
+        if let Some(header_row) = header {
+            output.push('|');
+            for (i, cell) in header_row.cells.iter().enumerate() {
+                let content = self.render_text(&cell.content);
+                let width = if i < column_widths.len() {
+                    column_widths[i]
+                } else {
+                    content.len()
+                };
+                // Don't apply bold formatting to header row cells, even if they're marked as headers
+                output.push_str(&format!(" {:<width$} |", content, width = width));
+            }
+            output.push('\n');
+
+            // Render separator row with alignment
+            output.push_str("|");
+            for (i, width) in column_widths.iter().enumerate() {
+                let align = if i < alignment.len() {
+                    &alignment[i]
+                } else {
+                    &crate::markdown::TableAlignment::None
+                };
+
+                match align {
+                    crate::markdown::TableAlignment::Left => {
+                        output.push_str(&format!(" :{} |", "-".repeat(width - 1)));
+                    }
+                    crate::markdown::TableAlignment::Right => {
+                        output.push_str(&format!(" {}: |", "-".repeat(width - 1)));
+                    }
+                    crate::markdown::TableAlignment::Center => {
+                        output.push_str(&format!(" :{}: |", "-".repeat(width - 2)));
+                    }
+                    crate::markdown::TableAlignment::None => {
+                        output.push_str(&format!(" {} |", "-".repeat(*width)));
+                    }
+                }
+            }
+            output.push('\n');
+        } else if !rows.is_empty() {
+            // If no header but we have rows, create a separator based on first row
+            output.push_str("|");
+            for width in &column_widths {
+                output.push_str(&format!(" {} |", "-".repeat(*width)));
+            }
+            output.push('\n');
+        }
+
+        // Render body rows
+        for row in rows {
+            output.push('|');
+            for (i, cell) in row.cells.iter().enumerate() {
+                let content = self.render_text(&cell.content);
+                let width = if i < column_widths.len() {
+                    column_widths[i]
+                } else {
+                    content.len()
+                };
+
+                // Apply bold formatting for header cells in body rows
+                if cell.is_header {
+                    // Account for the ** markers when calculating width
+                    let bold_content = format!("**{}**", content.trim());
+                    output.push_str(&format!(" {:<width$} |", bold_content, width = width));
+                } else {
+                    output.push_str(&format!(" {:<width$} |", content, width = width));
+                }
+            }
+            output.push('\n');
+        }
+
+        output.push('\n');
     }
 
     fn render_list_item(

@@ -4,7 +4,7 @@ ideas to implement:
          [ ] Format html into readable
          [ ] Navigate to the position where rendering mode was showing
          [ ] Alow mouse selection & stuff
-     [ ] Math Formulas
+     [x] Math Formulas
      [ ] Markdown
          [.] links support 
              [ ] visited link tracking
@@ -16,9 +16,7 @@ ideas to implement:
          [ ] tables support
          [x] bold & italic 
            [ ] Bold needs some visual treatment
-         [ ] lists
-           [ ] Nested lists are buggy
-           [ ] Links inside lists get broken
+         [x] lists
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
          [ ] Code & "render as is"

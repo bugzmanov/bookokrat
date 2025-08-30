@@ -120,8 +120,9 @@ impl HtmlToMarkdownConverter {
                     self.visit_node(child, document);
                 }
             }
-            // Skip tables for now as per the plan
-            "table" => {}
+            "table" => {
+                self.handle_table(node, document);
+            }
             // Skip li at this level - they're handled within lists
             "li" => {}
             _ => {
@@ -207,6 +208,108 @@ impl HtmlToMarkdownConverter {
         };
 
         document.blocks.push(content);
+    }
+
+    fn handle_table(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
+        let mut header: Option<crate::markdown::TableRow> = None;
+        let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
+        let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
+        let mut max_columns = 0;
+
+        // Process table children to find thead and tbody
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "thead" => {
+                            // Process header rows
+                            for thead_child in child.children.borrow().iter() {
+                                if let NodeData::Element { name, .. } = &thead_child.data {
+                                    if name.local.as_ref() == "tr" {
+                                        let row = self.extract_table_row(thead_child);
+                                        max_columns = max_columns.max(row.cells.len());
+                                        header = Some(row);
+                                        break; // Only take the first header row
+                                    }
+                                }
+                            }
+                        }
+                        "tbody" => {
+                            // Process body rows
+                            for tbody_child in child.children.borrow().iter() {
+                                if let NodeData::Element { name, .. } = &tbody_child.data {
+                                    if name.local.as_ref() == "tr" {
+                                        let row = self.extract_table_row(tbody_child);
+                                        max_columns = max_columns.max(row.cells.len());
+                                        rows.push(row);
+                                    }
+                                }
+                            }
+                        }
+                        "tr" => {
+                            // Direct tr children (no tbody/thead)
+                            let row = self.extract_table_row(child);
+                            max_columns = max_columns.max(row.cells.len());
+
+                            // First row becomes header if we don't have one yet
+                            if header.is_none() && rows.is_empty() {
+                                header = Some(row);
+                            } else {
+                                rows.push(row);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Set default alignment for all columns
+        alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+
+        // Only create table if we have content
+        if header.is_some() || !rows.is_empty() {
+            let table_block = Block::Table {
+                header,
+                rows,
+                alignment,
+            };
+            let table_node = Node::new(table_block, 0..0);
+            document.blocks.push(table_node);
+        }
+    }
+
+    fn extract_table_row(
+        &mut self,
+        tr_node: &Rc<markup5ever_rcdom::Node>,
+    ) -> crate::markdown::TableRow {
+        let mut cells = Vec::new();
+
+        for child in tr_node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "th" => {
+                            let content = self.extract_formatted_content(child);
+                            let cell = crate::markdown::TableCell::new_header(content);
+                            cells.push(cell);
+                        }
+                        "td" => {
+                            let content = self.extract_formatted_content(child);
+                            let cell = crate::markdown::TableCell::new(content);
+                            cells.push(cell);
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        crate::markdown::TableRow::new(cells)
     }
 
     fn handle_list(
@@ -1151,6 +1254,152 @@ The protocol operates on multiple layers:
         let expected = r#"To compute perplexity, you need access to the probabilities (or logprobs) the language model assigns to each next token. Unfortunately, not all commercial models expose their models' logprobs, as discussed in [Chapter 2](ch02.html#ch02_understanding_foundation_models_1730147895571359) that is awesome.
 
 "#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_simple_table_with_header() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table>
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Age</th>
+                        <th>City</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Alice</td>
+                        <td>30</td>
+                        <td>New York</td>
+                    </tr>
+                    <tr>
+                        <td>Bob</td>
+                        <td>25</td>
+                        <td>San Francisco</td>
+                    </tr>
+                    <tr>
+                        <td>Charlie</td>
+                        <td>35</td>
+                        <td>Los Angeles</td>
+                    </tr>
+                </tbody>
+            </table>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"
+| Name    | Age | City          |
+| ------- | --- | ------------- |
+| Alice   | 30  | New York      |
+| Bob     | 25  | San Francisco |
+| Charlie | 35  | Los Angeles   |
+
+"#;
+
+        assert_eq!(rendered, expected.trim_start());
+    }
+
+    #[test]
+    fn test_table_with_mixed_header_cells() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table>
+                <tr>
+                    <th>Product</th>
+                    <th>Q1</th>
+                    <th>Q2</th>
+                    <th>Q3</th>
+                    <th>Q4</th>
+                </tr>
+                <tr>
+                    <th>Widgets</th>
+                    <td>100</td>
+                    <td>150</td>
+                    <td>200</td>
+                    <td>175</td>
+                </tr>
+                <tr>
+                    <th>Gadgets</th>
+                    <td>50</td>
+                    <td>75</td>
+                    <td>90</td>
+                    <td>85</td>
+                </tr>
+                <tr>
+                    <th>Total</th>
+                    <td>150</td>
+                    <td>225</td>
+                    <td>290</td>
+                    <td>260</td>
+                </tr>
+            </table>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"
+| ------- | --- | --- | --- | --- |
+| **Product** | **Q1** | **Q2** | **Q3** | **Q4** |
+| **Widgets** | 100 | 150 | 200 | 175 |
+| **Gadgets** | 50  | 75  | 90  | 85  |
+| **Total** | 150 | 225 | 290 | 260 |
+
+"#;
+
+        assert_eq!(rendered, expected.trim_start());
+    }
+
+    #[test]
+    fn test_table_with_formatting_in_cells() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Description</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Performance</strong></td>
+                        <td>Improved <em>response time</em> by 50%</td>
+                        <td><code>completed</code></td>
+                    </tr>
+                    <tr>
+                        <td><strong>Security</strong></td>
+                        <td>Added <a href="https://example.com">two-factor auth</a></td>
+                        <td><code>in-progress</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"
+| Feature         | Description                                  | Status            |
+| --------------- | -------------------------------------------- | ----------------- |
+| **Performance** | Improved _response time_ by 50%              | `  completed  `   |
+| **Security**    | Added [two-factor auth](https://example.com) | `  in-progress  ` |
+
+"#
+        .trim_start();
 
         assert_eq!(rendered, expected);
     }

@@ -114,6 +114,7 @@ pub struct TableRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
     pub content: Text,
+    pub is_header: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,7 +188,17 @@ impl TableRow {
 
 impl TableCell {
     pub fn new(content: Text) -> Self {
-        TableCell { content }
+        TableCell {
+            content,
+            is_header: false,
+        }
+    }
+
+    pub fn new_header(content: Text) -> Self {
+        TableCell {
+            content,
+            is_header: true,
+        }
     }
 }
 
