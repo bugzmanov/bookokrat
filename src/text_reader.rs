@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 use ratatui_image::{Resize, StatefulImage, picker::Picker, protocol::StatefulProtocol};
 use regex::Regex;
@@ -112,6 +112,17 @@ impl EmbeddedImage {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct EmbeddedTable {
+    pub lines_before_table: usize, // Line position where table starts
+    pub num_rows: usize,
+    pub num_cols: usize,
+    pub has_header: bool,
+    pub header_row: Option<Vec<String>>, // Header cells if present
+    pub data_rows: Vec<Vec<String>>,     // Data cells
+    pub height_cells: usize,             // Total height in terminal cells
+}
+
 pub struct TextReader {
     pub scroll_offset: usize,
     pub content_length: usize,
@@ -149,6 +160,8 @@ pub struct TextReader {
     raw_html_content: Option<String>,
     // Store link information for click handling
     links: Vec<LinkInfo>,
+    // Store table information for rendering
+    embedded_tables: RefCell<Vec<EmbeddedTable>>,
 }
 
 impl TextReader {
@@ -198,6 +211,7 @@ impl TextReader {
             show_raw_html: false,
             raw_html_content: None,
             links: Vec::new(),
+            embedded_tables: RefCell::new(Vec::new()),
         }
     }
 
@@ -357,17 +371,83 @@ impl TextReader {
         let mut lines = Vec::new();
         let mut raw_lines = Vec::new();
 
-        // Clear links for new content
+        // Clear links and tables for new content
         self.links.clear();
+        self.embedded_tables.borrow_mut().clear();
 
         // Calculate line count for image placement tracking
         let mut line_count = 0;
 
         // Process each line with manual wrapping
-        for (_i, line) in text.lines().enumerate() {
-            let is_image_placeholder = line.trim().starts_with("[image src=");
+        let text_lines: Vec<&str> = text.lines().collect();
+        let mut lines_to_skip = std::collections::HashSet::new();
 
-            if is_image_placeholder {
+        // First pass: identify table blocks (lines that should NOT be wrapped)
+        let mut i = 0;
+        while i < text_lines.len() {
+            let line = text_lines[i];
+            if line.trim().starts_with("[table ") {
+                // Found a table, determine how many lines it spans
+                if let Some((_, lines_consumed)) = self.parse_ascii_table(&text_lines, i, width) {
+                    // Mark all table lines (including the metadata line) to skip wrapping
+                    for j in 0..lines_consumed {
+                        lines_to_skip.insert(i + j);
+                    }
+                    i += lines_consumed;
+                } else {
+                    // Failed to parse, just skip the metadata line
+                    i += 1;
+                }
+            } else {
+                i += 1;
+            }
+        }
+
+        for (i, line) in text_lines.iter().enumerate() {
+            // Check if this line is part of a table block
+            let is_table_line = lines_to_skip.contains(&i);
+
+            let is_image_placeholder = line.trim().starts_with("[image src=");
+            let is_table_placeholder = line.trim().starts_with("[table ");
+
+            if is_table_line {
+                // This line is part of a table - don't wrap it, just pass it through
+                if is_table_placeholder {
+                    // This is the table metadata line, parse the table
+                    if let Some((table, _lines_consumed)) =
+                        self.parse_ascii_table(&text_lines, i, width)
+                    {
+                        // Add placeholder lines for the table
+                        let table_line_start = line_count;
+
+                        // Store table info
+                        let mut embedded_table = table;
+                        embedded_table.lines_before_table = table_line_start;
+
+                        // Add placeholder lines (just empty lines for now)
+                        for _ in 0..embedded_table.height_cells {
+                            raw_lines.push(String::new());
+                            lines.push(Line::from(String::new()));
+                            line_count += 1;
+                        }
+
+                        self.embedded_tables.borrow_mut().push(embedded_table);
+                    } else {
+                        // Failed to parse table, treat as normal line
+                        let line_str = line.to_string();
+                        raw_lines.push(line_str.clone());
+                        lines.push(Line::from(vec![Span::styled(
+                            format!("{} [Failed to parse table]", line_str),
+                            Style::default().fg(palette.base_08),
+                        )]));
+                        line_count += 1;
+                    }
+                } else {
+                    // This is a table data line (header, separator, or row) - skip it
+                    // It's already been processed as part of the table
+                    continue;
+                }
+            } else if is_image_placeholder {
                 if let Some(image_src) = extract_src(line.trim()) {
                     // Check if image exists in cache and if it was filtered out for being too small
                     // Only skip if we've attempted to load dimensions and the image was filtered
@@ -556,6 +636,292 @@ impl TextReader {
 
         // Return both styled content and raw lines
         (Text::from(lines), raw_lines)
+    }
+
+    /// Parse ASCII table from markdown renderer output - TEMPORARY
+    /// This will be removed when we switch to direct Markdown AST
+    fn parse_ascii_table(
+        &self,
+        lines: &[&str],
+        start_idx: usize,
+        _width: usize,
+    ) -> Option<(EmbeddedTable, usize)> {
+        // Parse the table metadata line: [table width="3" height="2" header="true"]
+        let metadata_line = lines.get(start_idx)?.trim();
+        if !metadata_line.starts_with("[table ") || !metadata_line.ends_with("]") {
+            return None;
+        }
+
+        // Extract metadata using regex
+        let width_regex = Regex::new(r#"width="(\d+)""#).ok()?;
+        let height_regex = Regex::new(r#"height="(\d+)""#).ok()?;
+        let header_regex = Regex::new(r#"header="(true|false)""#).ok()?;
+
+        let num_cols = width_regex
+            .captures(metadata_line)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<usize>().ok())?;
+
+        let num_rows = height_regex
+            .captures(metadata_line)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<usize>().ok())?;
+
+        let has_header = header_regex
+            .captures(metadata_line)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str() == "true")
+            .unwrap_or(false);
+
+        // Sanity check: tables must have at least 1 row
+        if num_rows == 0 || num_cols == 0 {
+            warn!("Invalid table with 0 rows or columns");
+            return None;
+        }
+
+        // Calculate how many lines to consume (excluding the metadata line)
+        // Tables ALWAYS have a separator line, even without header
+        // With header: header row + separator + data rows
+        // Without header: separator + data rows
+        let lines_to_read = if has_header {
+            1 + 1 + num_rows // header + separator + data rows
+        } else {
+            1 + num_rows // separator + data rows
+        };
+
+        let mut current_line = start_idx + 1;
+        let mut header_row = None;
+        let mut data_rows = Vec::new();
+
+        // Skip separator line if no header
+        if !has_header && current_line < lines.len() {
+            current_line += 1;
+        }
+
+        // Parse header if present
+        if has_header && current_line < lines.len() {
+            if let Some(cells) = self.parse_table_row(lines[current_line], num_cols) {
+                header_row = Some(cells);
+                current_line += 1;
+                // Skip separator line after header
+                if current_line < lines.len() {
+                    current_line += 1;
+                }
+            } else {
+                warn!("Failed to parse table header at line {}", current_line);
+                return None;
+            }
+        }
+
+        // Parse data rows
+        // num_rows is the count of DATA rows (from height attribute), not including header
+        for _ in 0..num_rows {
+            if current_line >= lines.len() {
+                warn!("Unexpected end of table at line {}", current_line);
+                return None;
+            }
+
+            if let Some(cells) = self.parse_table_row(lines[current_line], num_cols) {
+                data_rows.push(cells);
+                current_line += 1;
+            } else {
+                warn!("Failed to parse table row at line {}", current_line);
+                return None;
+            }
+        }
+
+        // Calculate height in cells (total lines including metadata)
+        let height_cells = lines_to_read + 1; // +1 for metadata line
+
+        Some((
+            EmbeddedTable {
+                lines_before_table: 0, // Will be set by caller
+                num_rows,
+                num_cols,
+                has_header,
+                header_row,
+                data_rows,
+                height_cells,
+            },
+            current_line - start_idx,
+        ))
+    }
+
+    /// Calculate balanced column widths based on content
+    fn calculate_balanced_column_widths(
+        &self,
+        table: &EmbeddedTable,
+        available_width: u16,
+    ) -> Vec<Constraint> {
+        let num_cols = table.num_cols;
+        let min_col_width = 8; // Minimum column width
+        // Account for borders and column spacing (1 space between each column)
+        let spacing_width = if num_cols > 1 { num_cols - 1 } else { 0 };
+        let total_available = available_width.saturating_sub(2 + spacing_width as u16); // 2 for left/right borders
+
+        // Calculate content-based widths by examining all rows
+        let mut max_content_widths = vec![0; num_cols];
+
+        // Check header row if present
+        if let Some(ref header) = table.header_row {
+            for (col_idx, cell) in header.iter().enumerate() {
+                if col_idx < max_content_widths.len() {
+                    let cell_width = cell.chars().count();
+                    max_content_widths[col_idx] = max_content_widths[col_idx].max(cell_width);
+                }
+            }
+        }
+
+        // Check all data rows
+        for row in &table.data_rows {
+            for (col_idx, cell) in row.iter().enumerate() {
+                if col_idx < max_content_widths.len() {
+                    let cell_width = cell.chars().count();
+                    max_content_widths[col_idx] = max_content_widths[col_idx].max(cell_width);
+                }
+            }
+        }
+
+        // Apply minimum width constraint and calculate total desired width
+        let mut desired_widths: Vec<usize> = max_content_widths
+            .into_iter()
+            .map(|w| w.max(min_col_width))
+            .collect();
+
+        let total_desired: usize = desired_widths.iter().sum();
+
+        // If total desired width exceeds available space, scale down proportionally
+        if total_desired > total_available as usize {
+            let scale = total_available as f32 / total_desired as f32;
+            for width in &mut desired_widths {
+                *width = (*width as f32 * scale).max(min_col_width as f32) as usize;
+            }
+
+            // Ensure we don't exceed available width after scaling
+            let scaled_total: usize = desired_widths.iter().sum();
+            if scaled_total > total_available as usize {
+                let excess = scaled_total - total_available as usize;
+                // Remove excess from the largest column
+                if let Some(max_idx) = desired_widths
+                    .iter()
+                    .position(|&w| w == *desired_widths.iter().max().unwrap())
+                {
+                    desired_widths[max_idx] = desired_widths[max_idx].saturating_sub(excess);
+                }
+            }
+        }
+
+        // Convert to ratatui constraints
+        desired_widths
+            .into_iter()
+            .map(|w| Constraint::Length(w as u16))
+            .collect()
+    }
+
+    /// Parse a single table row from ASCII representation
+    fn parse_table_row(&self, line: &str, expected_cols: usize) -> Option<Vec<String>> {
+        // Split by | and clean up
+        let parts: Vec<String> = line.split('|').map(|s| s.trim().to_string()).collect();
+
+        // First and last parts should be empty (from leading/trailing |)
+        if parts.len() < 2 {
+            return None;
+        }
+
+        // Extract actual cells (skip first and last empty parts)
+        let cells: Vec<String> = parts[1..parts.len() - 1].to_vec();
+
+        if cells.len() != expected_cols {
+            warn!(
+                "Table row has {} columns, expected {}",
+                cells.len(),
+                expected_cols
+            );
+            return None;
+        }
+
+        // Clean up cells - remove formatting markers for now
+        let cleaned_cells = cells
+            .into_iter()
+            .map(|cell| {
+                // Remove markdown formatting but preserve links
+                let mut cleaned = cell.clone();
+                // Remove bold markers
+                cleaned = cleaned.replace("**", "");
+                // Remove italic markers
+                cleaned = cleaned.replace("_", "");
+                // Remove code markers but keep spacing
+                cleaned = cleaned.replace("`  ", "").replace("  `", "");
+                cleaned.trim().to_string()
+            })
+            .collect();
+
+        Some(cleaned_cells)
+    }
+
+    /// Create a table cell with proper formatting and link support
+    fn create_table_cell(
+        &self,
+        text: &str,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) -> Cell<'static> {
+        let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+        let link_text_color = if is_focused {
+            palette.base_0c // Cyan for links when focused
+        } else {
+            palette.base_03 // Dimmed for unfocused links
+        };
+
+        // Convert <br/> tags to newlines for display
+        let text = text.replace("<br/>", "\n");
+
+        // Parse for links
+        let mut spans = Vec::new();
+        let mut current_pos = 0;
+
+        // Find all markdown links in the text
+        for cap in LINK_REGEX.captures_iter(&text) {
+            if let (Some(link_match), Some(link_text), Some(_url)) =
+                (cap.get(0), cap.get(1), cap.get(2))
+            {
+                // Add text before the link
+                if link_match.start() > current_pos {
+                    spans.push(Span::styled(
+                        text[current_pos..link_match.start()].to_string(),
+                        Style::default().fg(normal_text_color),
+                    ));
+                }
+
+                // Add the link text with underline
+                spans.push(Span::styled(
+                    link_text.as_str().to_string(),
+                    Style::default()
+                        .fg(link_text_color)
+                        .add_modifier(Modifier::UNDERLINED),
+                ));
+
+                current_pos = link_match.end();
+            }
+        }
+
+        // Add remaining text
+        if current_pos < text.len() {
+            spans.push(Span::styled(
+                text[current_pos..].to_string(),
+                Style::default().fg(normal_text_color),
+            ));
+        }
+
+        // If no spans were created, just use the whole text
+        if spans.is_empty() {
+            spans.push(Span::styled(
+                text.to_string(),
+                Style::default().fg(normal_text_color),
+            ));
+        }
+
+        Cell::from(Line::from(spans))
     }
 
     /// Parse markdown heading and return styled line
@@ -1235,8 +1601,9 @@ impl TextReader {
         self.cached_content_hash = 0;
         self.cached_chapter_title_hash = 0;
         self.cached_focus_state = false;
-        // Clear embedded images since they're parsed from content
+        // Clear embedded images and tables since they're parsed from content
         self.embedded_images.borrow_mut().clear();
+        self.embedded_tables.borrow_mut().clear();
         // Reset raw HTML view when changing chapters
         self.show_raw_html = false;
     }
@@ -2149,6 +2516,105 @@ impl TextReader {
                     }
                 }
             }
+
+            // Display all embedded tables (only if not showing raw HTML)
+            if !self.embedded_tables.borrow().is_empty() {
+                let area_height = margined_content_area[1].height as usize;
+
+                for table in self.embedded_tables.borrow().iter() {
+                    let table_start_line = table.lines_before_table;
+                    let table_end_line = table_start_line + table.height_cells;
+
+                    // Check if table is in viewport
+                    if scroll_offset < table_end_line
+                        && scroll_offset + area_height > table_start_line
+                    {
+                        // Calculate table position on screen
+                        let table_screen_start = if scroll_offset > table_start_line {
+                            0
+                        } else {
+                            table_start_line - scroll_offset
+                        };
+
+                        // Calculate visible portion
+                        let table_top_clipped = if scroll_offset > table_start_line {
+                            scroll_offset - table_start_line
+                        } else {
+                            0
+                        };
+
+                        let visible_table_height = (table.height_cells - table_top_clipped)
+                            .min(area_height - table_screen_start);
+
+                        if visible_table_height > 0 {
+                            // Prepare table data
+                            let mut rows = Vec::new();
+
+                            // Add header if present and visible
+                            if let Some(ref header) = table.header_row {
+                                if table_top_clipped == 0 {
+                                    let header_cells: Vec<Cell> = header
+                                        .iter()
+                                        .map(|text| {
+                                            self.create_table_cell(text, palette, is_focused)
+                                        })
+                                        .collect();
+                                    rows.push(
+                                        Row::new(header_cells)
+                                            .style(Style::default().add_modifier(Modifier::BOLD)),
+                                    );
+                                }
+                            }
+
+                            // Add visible data rows
+                            let start_row = if table.has_header && table_top_clipped > 0 {
+                                table_top_clipped.saturating_sub(1) // -1 for header
+                            } else {
+                                table_top_clipped
+                            };
+
+                            for (i, row_data) in table.data_rows.iter().enumerate() {
+                                if i >= start_row && i < start_row + visible_table_height {
+                                    let cells: Vec<Cell> = row_data
+                                        .iter()
+                                        .map(|text| {
+                                            self.create_table_cell(text, palette, is_focused)
+                                        })
+                                        .collect();
+                                    rows.push(Row::new(cells));
+                                }
+                            }
+
+                            // Create balanced column constraints based on content
+                            let constraints = self.calculate_balanced_column_widths(
+                                table,
+                                margined_content_area[1].width,
+                            );
+
+                            // Create and render table widget
+                            let table_widget = Table::new(rows, constraints)
+                                .style(Style::default().fg(text_color))
+                                .column_spacing(2) // Add spacing between columns
+                                .block(
+                                    Block::default()
+                                        .borders(Borders::ALL)
+                                        .border_style(Style::default().fg(border_color)),
+                                );
+
+                            let table_area = Rect {
+                                x: margined_content_area[1].x,
+                                y: margined_content_area[1].y + table_screen_start as u16,
+                                width: margined_content_area[1].width,
+                                height: visible_table_height
+                                    .min(margined_content_area[1].height as usize)
+                                    as u16,
+                            };
+
+                            f.render_widget(table_widget, table_area);
+                        }
+                    }
+                }
+            }
         }
 
         // Store the content area for mouse coordinate conversion
@@ -2186,9 +2652,10 @@ impl TextReader {
     pub fn handle_terminal_resize(&mut self) {
         debug!("Handling terminal resize in TextReader");
 
-        // Clear embedded images cache since text wrapping will change
+        // Clear embedded images and tables cache since text wrapping will change
         self.embedded_images.borrow_mut().clear();
-        debug!("Cleared embedded_images cache due to resize");
+        self.embedded_tables.borrow_mut().clear();
+        debug!("Cleared embedded_images and embedded_tables cache due to resize");
 
         // Clear the cached styled content to force re-wrapping
         self.cached_styled_content = None;

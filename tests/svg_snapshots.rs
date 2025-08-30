@@ -2351,19 +2351,19 @@ fn test_headings_h1_to_h6_rendering_svg() {
     <div id="book-content">
         <h1>Level 1: Main Chapter Title</h1>
         <p>This is content under the main heading.</p>
-        
+
         <h2>Level 2: Major Section</h2>
         <p>This is content under the major section.</p>
-        
+
         <h3>Level 3: Subsection</h3>
         <p>This is content under the subsection.</p>
-        
+
         <h4>Level 4: Minor Heading</h4>
         <p>This is content under the minor heading.</p>
-        
+
         <h5>Level 5: Sub-minor Heading</h5>
         <p>This is content under the sub-minor heading.</p>
-        
+
         <h6>Level 6: Smallest Heading</h6>
         <p>This is content under the smallest heading level. This test demonstrates the complete hierarchy of all heading levels from H1 through H6 and how they are visually distinguished in the terminal interface.</p>
     </div>
@@ -2402,5 +2402,109 @@ fn test_headings_h1_to_h6_rendering_svg() {
         &std::path::Path::new("tests/snapshots/headings_h1_to_h6_rendering.svg"),
         "test_headings_h1_to_h6_rendering_svg",
         create_test_failure_handler("test_headings_h1_to_h6_rendering_svg"),
+    );
+}
+
+#[test]
+fn test_table_with_links_and_linebreaks_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(140, 50);
+
+    let table_content = r#"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>Table with Links and Line Breaks Test</title>
+    <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+    <link rel="stylesheet" type="text/css" href="epub.css"/>
+</head>
+<body>
+    <div id="book-content">
+        <p class="pagebreak-before">When analyzing the use cases, I looked at both enterprise and consumer applications. To understand enterprise use cases, I interviewed 50 companies on their AI strategies and read over 100 case studies. To understand consumer applications, I examined 205 open source AI applications with at least 500 stars on GitHub.<sup><a data-type="noteref" id="id567-marker" href="ch01.html#id567">11</a></sup> I categorized applications into eight groups, as shown in <a data-type="xref" href="ch01_table_3_1730130814941550">Table 1-3</a>. The limited list here serves best as a reference. As you learn more about how to build foundation models in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a> and how to evaluate them in <a data-type="xref" href="ch03.html#ch03a_evaluation_methodology_1730150757064067">Chapter 3</a>, you'll also be able to form a better picture of what use cases foundation models can and should be used for.</p> <table id="ch01_table_3_1730130814941550"> <caption><span class="label">Table 1-3. </span>Common generative AI use cases across consumer and enterprise applications.</caption>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Examples of consumer use cases</th>
+              <th>Examples of enterprise use cases</th>
+            </tr>
+          </thead>
+          <tr>
+            <td>Coding</td>
+            <td>Coding</td>
+            <td>Coding</td>
+          </tr>
+          <tr>
+            <td>Image and video production</td>
+            <td>Photo and video editing<br/> Design</td>
+            <td>Presentation <br/> Ad generation</td>
+          </tr>
+          <tr>
+            <td>Writing</td>
+            <td>Email<br/> Social media and blog posts</td>
+            <td>Copywriting, search engine optimization (SEO)<br/> Reports, memos, design docs</td>
+          </tr>
+          <tr>
+            <td>Education</td>
+            <td>Tutoring<br/> Essay grading</td>
+            <td>Employee onboarding<br/> Employee upskill training</td>
+          </tr>
+          <tr>
+            <td>Conversational bots</td>
+            <td>General chatbot<br/> AI companion</td>
+            <td>Customer support<br/> Product copilots</td>
+          </tr>
+          <tr>
+            <td>Information aggregation</td>
+            <td>Summarization<br/> Talk-to-your-docs</td>
+            <td>Summarization<br/> Market research</td>
+          </tr>
+          <tr>
+            <td>Data organization</td>
+            <td>Image search<br/> <a class="orm:hideurl" href="https://en.wikipedia.org/wiki/Memex">Memex</a></td>
+            <td>Knowledge management<br/> Document processing</td>
+          </tr>
+          <tr>
+            <td>Workflow automation</td>
+            <td>Travel planning<br/> Event planning</td>
+            <td>Data extraction, entry, and annotation<br/> Lead generation</td>
+          </tr>
+        </table>
+
+        <p>Because foundation models are general, applications built on top of them can solve many problems. This means that an application can belong to more than one category. For example, a bot can provide companionship and aggregate information. An application can help you extract structured data from a PDF and answer questions about that PDF.</p>
+    </div>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("table_with_links_test.html");
+    std::fs::write(&temp_html_path, table_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_table_with_links_and_linebreaks.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/table_with_links_and_linebreaks.svg"),
+        "test_table_with_links_and_linebreaks_svg",
+        create_test_failure_handler("test_table_with_links_and_linebreaks_svg"),
     );
 }

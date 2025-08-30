@@ -164,6 +164,23 @@ impl MarkdownRenderer {
         alignment: &[crate::markdown::TableAlignment],
         output: &mut String,
     ) {
+        // Calculate table dimensions
+        let num_rows = rows.len();
+        let num_cols = if let Some(header_row) = header {
+            header_row.cells.len()
+        } else if !rows.is_empty() {
+            rows[0].cells.len()
+        } else {
+            0
+        };
+        let has_header = header.is_some();
+
+        // Add table metadata line
+        output.push_str(&format!(
+            "[table width=\"{}\" height=\"{}\" header=\"{}\"]\n",
+            num_cols, num_rows, has_header
+        ));
+
         // Calculate column widths for proper formatting
         let mut column_widths = vec![];
 
@@ -364,7 +381,7 @@ impl MarkdownRenderer {
         }
     }
 
-    fn render_text(&self, text: &Text) -> String {
+    pub fn render_text(&self, text: &Text) -> String {
         let mut output = String::new();
 
         for item in text.clone().into_iter() {

@@ -115,6 +115,7 @@ pub struct TableRow {
 pub struct TableCell {
     pub content: Text,
     pub is_header: bool,
+    pub rowspan: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -191,6 +192,7 @@ impl TableCell {
         TableCell {
             content,
             is_header: false,
+            rowspan: 1,
         }
     }
 
@@ -198,6 +200,23 @@ impl TableCell {
         TableCell {
             content,
             is_header: true,
+            rowspan: 1,
+        }
+    }
+
+    pub fn new_with_rowspan(content: Text, rowspan: u32) -> Self {
+        TableCell {
+            content,
+            is_header: false,
+            rowspan,
+        }
+    }
+
+    pub fn new_header_with_rowspan(content: Text, rowspan: u32) -> Self {
+        TableCell {
+            content,
+            is_header: true,
+            rowspan,
         }
     }
 }

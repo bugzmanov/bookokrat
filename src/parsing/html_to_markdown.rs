@@ -215,6 +215,7 @@ impl HtmlToMarkdownConverter {
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
         let mut max_columns = 0;
+        let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
 
         // Process table children to find thead and tbody
         for child in node.children.borrow().iter() {
@@ -227,7 +228,10 @@ impl HtmlToMarkdownConverter {
                             for thead_child in child.children.borrow().iter() {
                                 if let NodeData::Element { name, .. } = &thead_child.data {
                                     if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row(thead_child);
+                                        let row = self.extract_table_row_with_rowspan(
+                                            thead_child,
+                                            &mut rowspan_tracker,
+                                        );
                                         max_columns = max_columns.max(row.cells.len());
                                         header = Some(row);
                                         break; // Only take the first header row
@@ -240,7 +244,10 @@ impl HtmlToMarkdownConverter {
                             for tbody_child in child.children.borrow().iter() {
                                 if let NodeData::Element { name, .. } = &tbody_child.data {
                                     if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row(tbody_child);
+                                        let row = self.extract_table_row_with_rowspan(
+                                            tbody_child,
+                                            &mut rowspan_tracker,
+                                        );
                                         max_columns = max_columns.max(row.cells.len());
                                         rows.push(row);
                                     }
@@ -249,7 +256,8 @@ impl HtmlToMarkdownConverter {
                         }
                         "tr" => {
                             // Direct tr children (no tbody/thead)
-                            let row = self.extract_table_row(child);
+                            let row =
+                                self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
                             max_columns = max_columns.max(row.cells.len());
 
                             // First row becomes header if we don't have one yet
@@ -268,6 +276,22 @@ impl HtmlToMarkdownConverter {
 
         // Set default alignment for all columns
         alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+
+        // Pad all rows to have max_columns cells
+        if let Some(ref mut header_row) = header {
+            while header_row.cells.len() < max_columns {
+                header_row.cells.push(crate::markdown::TableCell::new(
+                    crate::markdown::Text::default(),
+                ));
+            }
+        }
+        for row in &mut rows {
+            while row.cells.len() < max_columns {
+                row.cells.push(crate::markdown::TableCell::new(
+                    crate::markdown::Text::default(),
+                ));
+            }
+        }
 
         // Only create table if we have content
         if header.is_some() || !rows.is_empty() {
@@ -289,17 +313,35 @@ impl HtmlToMarkdownConverter {
 
         for child in tr_node.children.borrow().iter() {
             match &child.data {
-                NodeData::Element { name, .. } => {
+                NodeData::Element { name, attrs, .. } => {
                     let tag_name = name.local.as_ref();
                     match tag_name {
                         "th" => {
-                            let content = self.extract_formatted_content(child);
-                            let cell = crate::markdown::TableCell::new_header(content);
+                            let content = self.extract_formatted_content_with_context(child, true);
+                            let rowspan = self
+                                .get_attr_value(attrs, "rowspan")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(1);
+                            let cell = if rowspan > 1 {
+                                crate::markdown::TableCell::new_header_with_rowspan(
+                                    content, rowspan,
+                                )
+                            } else {
+                                crate::markdown::TableCell::new_header(content)
+                            };
                             cells.push(cell);
                         }
                         "td" => {
-                            let content = self.extract_formatted_content(child);
-                            let cell = crate::markdown::TableCell::new(content);
+                            let content = self.extract_formatted_content_with_context(child, true);
+                            let rowspan = self
+                                .get_attr_value(attrs, "rowspan")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(1);
+                            let cell = if rowspan > 1 {
+                                crate::markdown::TableCell::new_with_rowspan(content, rowspan)
+                            } else {
+                                crate::markdown::TableCell::new(content)
+                            };
                             cells.push(cell);
                         }
                         _ => {}
@@ -307,6 +349,87 @@ impl HtmlToMarkdownConverter {
                 }
                 _ => {}
             }
+        }
+
+        crate::markdown::TableRow::new(cells)
+    }
+
+    fn extract_table_row_with_rowspan(
+        &mut self,
+        tr_node: &Rc<markup5ever_rcdom::Node>,
+        rowspan_tracker: &mut Vec<u32>,
+    ) -> crate::markdown::TableRow {
+        let mut cells = Vec::new();
+        let mut column_index = 0;
+
+        // Collect all actual td/th elements first
+        let mut actual_cells = Vec::new();
+        for child in tr_node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    if tag_name == "th" || tag_name == "td" {
+                        let content = self.extract_formatted_content_with_context(child, true);
+                        let rowspan = self
+                            .get_attr_value(attrs, "rowspan")
+                            .and_then(|s| s.parse::<u32>().ok())
+                            .unwrap_or(1);
+
+                        let cell = if tag_name == "th" {
+                            if rowspan > 1 {
+                                crate::markdown::TableCell::new_header_with_rowspan(
+                                    content, rowspan,
+                                )
+                            } else {
+                                crate::markdown::TableCell::new_header(content)
+                            }
+                        } else {
+                            if rowspan > 1 {
+                                crate::markdown::TableCell::new_with_rowspan(content, rowspan)
+                            } else {
+                                crate::markdown::TableCell::new(content)
+                            }
+                        };
+                        actual_cells.push((cell, rowspan));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Now build the row, skipping occupied columns
+        let mut actual_cell_index = 0;
+        while actual_cell_index < actual_cells.len() || column_index < rowspan_tracker.len() {
+            // Extend rowspan_tracker if needed
+            while rowspan_tracker.len() <= column_index {
+                rowspan_tracker.push(0);
+            }
+
+            if rowspan_tracker[column_index] > 0 {
+                // This column is occupied by a cell from previous row
+                cells.push(crate::markdown::TableCell::new(
+                    crate::markdown::Text::default(),
+                ));
+                rowspan_tracker[column_index] -= 1;
+            } else if actual_cell_index < actual_cells.len() {
+                // Place the next actual cell here
+                let (cell, rowspan) = actual_cells[actual_cell_index].clone();
+                cells.push(cell);
+
+                // Set up rowspan tracking for this cell (subtract 1 for current row)
+                if rowspan > 1 {
+                    rowspan_tracker[column_index] = rowspan - 1;
+                } else {
+                    rowspan_tracker[column_index] = 0;
+                }
+
+                actual_cell_index += 1;
+            } else {
+                // No more actual cells, but we still need to decrement remaining rowspans
+                rowspan_tracker[column_index] = 0;
+            }
+
+            column_index += 1;
         }
 
         crate::markdown::TableRow::new(cells)
@@ -452,19 +575,34 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         _ => {
-                            self.collect_formatted_content(child, &mut current_text, None);
+                            self.collect_formatted_content_with_context(
+                                child,
+                                &mut current_text,
+                                None,
+                                false,
+                            );
                         }
                     }
                 }
                 NodeData::Text { contents } => {
                     // Process text nodes through the normal formatted content collector
                     // This preserves proper spacing and formatting
-                    self.collect_formatted_content(child, &mut current_text, None);
+                    self.collect_formatted_content_with_context(
+                        child,
+                        &mut current_text,
+                        None,
+                        false,
+                    );
                 }
                 _ => {
                     // Process other node types
                     for grandchild in child.children.borrow().iter() {
-                        self.collect_formatted_content(grandchild, &mut current_text, None);
+                        self.collect_formatted_content_with_context(
+                            grandchild,
+                            &mut current_text,
+                            None,
+                            false,
+                        );
                     }
                 }
             }
@@ -494,8 +632,16 @@ impl HtmlToMarkdownConverter {
     }
 
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
+        self.extract_formatted_content_with_context(node, false)
+    }
+
+    fn extract_formatted_content_with_context(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        in_table: bool,
+    ) -> Text {
         let mut text = Text::default();
-        self.collect_formatted_content(node, &mut text, None);
+        self.collect_formatted_content_with_context(node, &mut text, None, in_table);
         text
     }
 
@@ -504,6 +650,16 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         text: &mut Text,
         current_style: Option<Style>,
+    ) {
+        self.collect_formatted_content_with_context(node, text, current_style, false);
+    }
+
+    fn collect_formatted_content_with_context(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        text: &mut Text,
+        current_style: Option<Style>,
+        in_table: bool,
     ) {
         match &node.data {
             NodeData::Text { contents } => {
@@ -551,10 +707,11 @@ impl HtmlToMarkdownConverter {
                         if let Some(href) = self.get_attr_value(attrs, "href") {
                             let mut link_text = Text::default();
                             for child in node.children.borrow().iter() {
-                                self.collect_formatted_content(
+                                self.collect_formatted_content_with_context(
                                     child,
                                     &mut link_text,
                                     current_style.clone(),
+                                    in_table,
                                 );
                             }
                             let title = self.get_attr_value(attrs, "title");
@@ -583,7 +740,12 @@ impl HtmlToMarkdownConverter {
                         return;
                     }
                     "br" => {
-                        text.push_inline(Inline::LineBreak);
+                        if in_table {
+                            // Preserve <br/> tags inside table cells as text
+                            text.push_text(TextNode::new("<br/>".to_string(), None));
+                        } else {
+                            text.push_inline(Inline::LineBreak);
+                        }
                         return;
                     }
                     _ => current_style.clone(),
@@ -591,13 +753,23 @@ impl HtmlToMarkdownConverter {
 
                 // Process children with the new or inherited style
                 for child in node.children.borrow().iter() {
-                    self.collect_formatted_content(child, text, style.clone());
+                    self.collect_formatted_content_with_context(
+                        child,
+                        text,
+                        style.clone(),
+                        in_table,
+                    );
                 }
             }
             _ => {
                 // For other node types, process children with inherited style
                 for child in node.children.borrow().iter() {
-                    self.collect_formatted_content(child, text, current_style.clone());
+                    self.collect_formatted_content_with_context(
+                        child,
+                        text,
+                        current_style.clone(),
+                        in_table,
+                    );
                 }
             }
         }
@@ -1296,6 +1468,7 @@ The protocol operates on multiple layers:
         let rendered = renderer.render(&doc);
 
         let expected = r#"
+[table width="3" height="3" header="true"]
 | Name    | Age | City          |
 | ------- | --- | ------------- |
 | Alice   | 30  | New York      |
@@ -1349,6 +1522,7 @@ The protocol operates on multiple layers:
         let rendered = renderer.render(&doc);
 
         let expected = r#"
+[table width="5" height="4" header="false"]
 | ------- | --- | --- | --- | --- |
 | **Product** | **Q1** | **Q2** | **Q3** | **Q4** |
 | **Widgets** | 100 | 150 | 200 | 175 |
@@ -1393,6 +1567,7 @@ The protocol operates on multiple layers:
         let rendered = renderer.render(&doc);
 
         let expected = r#"
+[table width="3" height="2" header="true"]
 | Feature         | Description                                  | Status            |
 | --------------- | -------------------------------------------- | ----------------- |
 | **Performance** | Improved _response time_ by 50%              | `  completed  `   |
@@ -1402,5 +1577,142 @@ The protocol operates on multiple layers:
         .trim_start();
 
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_table_without_header() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table>
+                <tr>
+                    <td>Row 1 Col 1</td>
+                    <td>Row 1 Col 2</td>
+                    <td>Row 1 Col 3</td>
+                </tr>
+                <tr>
+                    <td>Row 2 Col 1</td>
+                    <td>Row 2 Col 2</td>
+                    <td>Row 2 Col 3</td>
+                </tr>
+            </table>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"[table width="3" height="2" header="false"]
+| ----------- | ----------- | ----------- |
+| Row 1 Col 1 | Row 1 Col 2 | Row 1 Col 3 |
+| Row 2 Col 1 | Row 2 Col 2 | Row 2 Col 3 |
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_wide_table() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table>
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Examples of consumer use cases</th>
+                        <th>Examples of enterprise use cases</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Coding</td>
+                        <td>Coding</td>
+                        <td>Coding</td>
+                    </tr>
+                    <tr>
+                        <td>Image and video production</td>
+                        <td>Photo and video editing<br/>Design</td>
+                        <td>Presentation<br/>Ad generation</td>
+                    </tr>
+                    <tr>
+                        <td>Writing</td>
+                        <td>Email<br/>Social media and blog posts</td>
+                        <td>Copywriting, search engine optimization (SEO)<br/>Reports, memos, design docs</td>
+                    </tr>
+                </tbody>
+            </table>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        // The key test here is that the table should be parseable
+        // even though it's wider than typical terminal width
+        assert!(rendered.contains("[table width=\"3\" height=\"3\" header=\"true\"]"));
+    }
+
+    #[test]
+    fn test_very_wide_table_with_BR() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"
+            <table id="ch01_table_5_1730130814941611">
+              <caption><span class="label">Table 1-5. </span>Different prompts can cause models to perform very differently, as seen in Gemini’s technical report (December 2023).</caption>
+              <thead>
+                <tr>
+                  <th> </th>
+                  <th>Gemini Ultra</th>
+                  <th>Gemini Pro</th>
+                  <th>GPT-4</th>
+                  <th>GPT-3.5</th>
+                  <th>PaLM <span class="keep-together">2-L</span></th>
+                  <th>Claude 2</th>
+                  <th>Inflection-2</th>
+                  <th>Grok 1</th>
+                  <th>Llama-2</th>
+                </tr>
+              </thead>
+              <tr>
+                <td rowspan="2">MMLU performance</td>
+                <td>90.04%<br/> CoT@32</td>
+                <td>79.13%<br/> CoT@8</td>
+                <td>87.29%<br/> CoT@32<br/> (via API)</td>
+                <td>70%<br/> 5-shot</td>
+                <td>78.4%<br/> 5-shot</td>
+                <td>78.5%<br/> 5-shot CoT</td>
+                <td>79.6%<br/> 5-shot</td>
+                <td>73.0%<br/> 5-shot</td>
+                <td>68.0%</td>
+              </tr>
+              <tr>
+                <td>83.7%<br/> 5-shot</td>
+                <td>71.8%<br/> 5-shot</td>
+                <td>86.4%<br/> 5-shot (reported)</td>
+                <td> </td>
+                <td> </td>
+                <td> </td>
+                <td> </td>
+                <td> </td>
+                <td> </td>
+              </tr>
+            </table>
+            "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+        // The key test here is that the table should be parseable
+        // even though it's wider than typical terminal width
+        let expected = r#"[table width="10" height="2" header="true"]
+|                  | Gemini Ultra       | Gemini Pro        | GPT-4                             | GPT-3.5         | PaLM 2-L          | Claude 2              | Inflection-2      | Grok 1            | Llama-2 |
+| ---------------- | ------------------ | ----------------- | --------------------------------- | --------------- | ----------------- | --------------------- | ----------------- | ----------------- | ------- |
+| MMLU performance | 90.04%<br/> CoT@32 | 79.13%<br/> CoT@8 | 87.29%<br/> CoT@32<br/> (via API) | 70%<br/> 5-shot | 78.4%<br/> 5-shot | 78.5%<br/> 5-shot CoT | 79.6%<br/> 5-shot | 73.0%<br/> 5-shot | 68.0%   |
+|                  | 83.7%<br/> 5-shot  | 71.8%<br/> 5-shot | 86.4%<br/> 5-shot (reported)      |                 |                   |                       |                   |                   |         |
+
+            "#;
+        assert_eq!(rendered.trim_end(), expected.trim_end());
     }
 }
