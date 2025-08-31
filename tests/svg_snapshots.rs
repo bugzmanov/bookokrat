@@ -2419,21 +2419,20 @@ fn test_table_with_links_and_linebreaks_svg() {
 </head>
 <body>
     <div id="book-content">
-        <p class="pagebreak-before">When analyzing the use cases, I looked at both enterprise and consumer applications. To understand enterprise use cases, I interviewed 50 companies on their AI strategies and read over 100 case studies. To understand consumer applications, I examined 205 open source AI applications with at least 500 stars on GitHub.<sup><a data-type="noteref" id="id567-marker" href="ch01.html#id567">11</a></sup> I categorized applications into eight groups, as shown in <a data-type="xref" href="ch01_table_3_1730130814941550">Table 1-3</a>. The limited list here serves best as a reference. As you learn more about how to build foundation models in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a> and how to evaluate them in <a data-type="xref" href="ch03.html#ch03a_evaluation_methodology_1730150757064067">Chapter 3</a>, you'll also be able to form a better picture of what use cases foundation models can and should be used for.</p> <table id="ch01_table_3_1730130814941550"> <caption><span class="label">Table 1-3. </span>Common generative AI use cases across consumer and enterprise applications.</caption>
-          <thead>
+        <p class="pagebreak-before">When analyzing the use cases, I looked at both enterprise and consumer applications. To understand enterprise use cases, I interviewed 50 companies on their AI strategies and read over 100 case studies. To understand consumer applications, I examined 205 open source AI applications with at least 500 stars on GitHub.<sup><a data-type="noteref" id="id567-marker" href="ch01.html#id567">11</a></sup> I categorized applications into eight groups, as shown in <a data-type="xref" href="ch01_table_3_1730130814941550">Table 1-3</a>. The limited list here serves best as a reference. As you learn more about how to build foundation models in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a> and how to evaluate them in <a data-type="xref" href="ch03.html#ch03a_evaluation_methodology_1730150757064067">Chapter 3</a>, you'll also be able to form a better picture of what use cases foundation models can and should be used for.</p> <table id="ch01_table_3_1730130814941550"> <caption><span class="label">Table 1-3. </span>Common generative AI use cases across consumer and enterprise applications.</caption> <thead>
             <tr>
               <th>Category</th>
-              <th>Examples of **consumer** use cases</th>
-              <th>Examples of **enterprise** use cases</th>
+              <th>Examples of consumer use cases</th>
+              <th>Examples of enterprise use cases</th>
             </tr>
           </thead>
           <tr>
-            <td>Coding</td>
+            <td><strong>Coding</strong></td>
             <td>Coding on [localhost](http://localhost)</td>
-            <td>Coding _again!_</td>
+            <td>Coding <i>again!</i></td>
           </tr>
           <tr>
-            <td>Image and video production</td>
+            <td>Image and video <b>production</b></td>
             <td>Photo and video editing<br/> Design</td>
             <td>Presentation <br/> Ad generation</td>
           </tr>

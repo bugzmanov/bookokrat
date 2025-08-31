@@ -814,6 +814,39 @@ impl TextReader {
         rendered_height
     }
 
+    /// Calculate the display width of a cell, excluding markdown formatting markers
+    fn calculate_display_width(&self, cell: &str) -> usize {
+        // Strip markdown formatting markers for width calculation
+        let mut display_text = cell.to_string();
+
+        // Handle <br/> tags - each represents a line break, so find the longest line
+        if display_text.contains("<br/>") {
+            return display_text
+                .replace("<br/> ", "\n")
+                .replace("<br/>", "\n")
+                .lines()
+                .map(|line| {
+                    // Strip markdown from each line and get its width
+                    let stripped = line
+                        .replace("**", "")
+                        .replace("__", "")
+                        .replace("*", "")
+                        .replace("_", "");
+                    stripped.chars().count()
+                })
+                .max()
+                .unwrap_or(0);
+        }
+
+        // Strip markdown formatting markers
+        display_text = display_text.replace("**", "");
+        display_text = display_text.replace("__", "");
+        display_text = display_text.replace("*", "");
+        display_text = display_text.replace("_", "");
+
+        display_text.chars().count()
+    }
+
     /// Calculate balanced column widths based on content
     fn calculate_balanced_column_widths(
         &self,
@@ -833,8 +866,8 @@ impl TextReader {
         if let Some(ref header) = table.header_row {
             for (col_idx, cell) in header.iter().enumerate() {
                 if col_idx < max_content_widths.len() {
-                    let cell_width = cell.chars().count();
-                    max_content_widths[col_idx] = max_content_widths[col_idx].max(cell_width);
+                    let display_width = self.calculate_display_width(cell);
+                    max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
                 }
             }
         }
@@ -843,8 +876,8 @@ impl TextReader {
         for row in &table.data_rows {
             for (col_idx, cell) in row.iter().enumerate() {
                 if col_idx < max_content_widths.len() {
-                    let cell_width = cell.chars().count();
-                    max_content_widths[col_idx] = max_content_widths[col_idx].max(cell_width);
+                    let display_width = self.calculate_display_width(cell);
+                    max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
                 }
             }
         }
@@ -907,19 +940,12 @@ impl TextReader {
             return None;
         }
 
-        // Clean up cells - remove formatting markers for now
+        // Clean up cells - preserve markdown formatting for the Table widget to handle
         let cleaned_cells = cells
             .into_iter()
             .map(|cell| {
-                // Remove markdown formatting but preserve links
-                let mut cleaned = cell.clone();
-                // Remove bold markers
-                cleaned = cleaned.replace("**", "");
-                // Remove italic markers
-                cleaned = cleaned.replace("_", "");
-                // Remove code markers but keep spacing
-                cleaned = cleaned.replace("`  ", "").replace("  `", "");
-                cleaned.trim().to_string()
+                // Just trim whitespace, but preserve all markdown formatting
+                cell.trim().to_string()
             })
             .collect();
 

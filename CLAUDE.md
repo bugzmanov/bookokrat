@@ -564,3 +564,4 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Never log a guess of what might have happened - only actual errors
 - Use proper error context with anyhow for better debugging
 - Preserve error chains for proper error tracing
+- when introducing new regexes they should always be cached to avoid recompilation cycles

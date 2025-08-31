@@ -1,6 +1,6 @@
 use ratatui::{
     layout::{Constraint, Rect},
-    style::{Color, Style},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, StatefulWidget, Widget},
 };
@@ -188,6 +188,197 @@ impl Table {
         ))
     }
 
+    /// Wrap spans while preserving formatting
+    fn wrap_spans_with_formatting(
+        &self,
+        spans: &[Span<'static>],
+        width: usize,
+        base_color: Color,
+    ) -> Vec<Vec<Span<'static>>> {
+        let mut result = Vec::new();
+        let mut current_line = Vec::new();
+        let mut current_width = 0;
+
+        for span in spans {
+            let span_content = span.content.as_ref();
+            let span_width = span_content.len();
+
+            if current_width + span_width <= width {
+                // Span fits on current line
+                current_line.push(span.clone());
+                current_width += span_width;
+            } else if current_width == 0 && span_width > width {
+                // Single span that's too wide - need to break it
+                let chars: Vec<char> = span_content.chars().collect();
+                let mut start = 0;
+
+                while start < chars.len() {
+                    let end = (start + width).min(chars.len());
+                    let chunk: String = chars[start..end].iter().collect();
+
+                    current_line.push(Span::styled(chunk, span.style.clone()));
+
+                    if !current_line.is_empty() {
+                        result.push(current_line.clone());
+                        current_line.clear();
+                    }
+
+                    start = end;
+                }
+                current_width = 0;
+            } else {
+                // Current line is full, start new line
+                if !current_line.is_empty() {
+                    result.push(current_line.clone());
+                    current_line.clear();
+                }
+
+                // Add the span to the new line
+                if span_width <= width {
+                    current_line.push(span.clone());
+                    current_width = span_width;
+                } else {
+                    // Span is too wide, break it as above
+                    let chars: Vec<char> = span_content.chars().collect();
+                    let mut start = 0;
+
+                    while start < chars.len() {
+                        let end = (start + width).min(chars.len());
+                        let chunk: String = chars[start..end].iter().collect();
+
+                        let chunk_len = chunk.len();
+                        current_line.push(Span::styled(chunk, span.style.clone()));
+
+                        if start + width < chars.len() {
+                            // More content to come, finish this line
+                            result.push(current_line.clone());
+                            current_line.clear();
+                            current_width = 0;
+                        } else {
+                            // This is the last chunk
+                            current_width = chunk_len;
+                        }
+
+                        start = end;
+                    }
+                }
+            }
+        }
+
+        // Add any remaining content
+        if !current_line.is_empty() {
+            result.push(current_line);
+        }
+
+        // Ensure we have at least one line
+        if result.is_empty() {
+            result.push(vec![Span::styled(
+                String::new(),
+                Style::default().fg(base_color),
+            )]);
+        }
+
+        result
+    }
+
+    /// Parse markdown formatting in text and return styled spans
+    fn parse_markdown_formatting(&self, text: &str, base_color: Color) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+        let mut chars: Vec<char> = text.chars().collect();
+        let mut i = 0;
+        let mut current_text = String::new();
+
+        while i < chars.len() {
+            // Check for bold (**text** or __text__)
+            if i + 1 < chars.len()
+                && ((chars[i] == '*' && chars[i + 1] == '*')
+                    || (chars[i] == '_' && chars[i + 1] == '_'))
+            {
+                // Save any accumulated text
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(base_color),
+                    ));
+                    current_text.clear();
+                }
+
+                let marker = chars[i];
+                i += 2; // Skip opening markers
+
+                // Find closing markers
+                let mut j = i;
+                while j + 1 < chars.len() {
+                    if chars[j] == marker && chars[j + 1] == marker {
+                        // Found closing markers
+                        let bold_text: String = chars[i..j].iter().collect();
+                        spans.push(Span::styled(
+                            bold_text,
+                            Style::default().fg(base_color).bold(),
+                        ));
+                        i = j + 2;
+                        break;
+                    }
+                    j += 1;
+                }
+
+                if j + 1 >= chars.len() {
+                    // No closing markers found, treat as normal text
+                    current_text.push(marker);
+                    current_text.push(marker);
+                }
+            }
+            // Check for italic (*text* or _text_) - but not bold
+            else if (chars[i] == '*' || chars[i] == '_')
+                && (i == 0 || (i > 0 && chars[i - 1] != chars[i]))
+                && (i + 1 < chars.len() && chars[i + 1] != chars[i])
+            {
+                // Save any accumulated text
+                if !current_text.is_empty() {
+                    spans.push(Span::styled(
+                        current_text.clone(),
+                        Style::default().fg(base_color),
+                    ));
+                    current_text.clear();
+                }
+
+                let marker = chars[i];
+                i += 1; // Skip opening marker
+
+                // Find closing marker
+                let mut j = i;
+                while j < chars.len() {
+                    if chars[j] == marker && (j + 1 >= chars.len() || chars[j + 1] != marker) {
+                        // Found closing marker
+                        let italic_text: String = chars[i..j].iter().collect();
+                        spans.push(Span::styled(
+                            italic_text,
+                            Style::default().fg(base_color).italic(),
+                        ));
+                        i = j + 1;
+                        break;
+                    }
+                    j += 1;
+                }
+
+                if j >= chars.len() {
+                    // No closing marker found, treat as normal text
+                    current_text.push(marker);
+                }
+            } else {
+                current_text.push(chars[i]);
+                i += 1;
+            }
+        }
+
+        // Add any remaining text
+        if !current_text.is_empty() {
+            spans.push(Span::styled(current_text, Style::default().fg(base_color)));
+        }
+
+        spans
+    }
+
     /// Render a data row with proper cell formatting and wrapping
     fn render_row(&self, row: &[String], widths: &[u16], is_header: bool) -> Vec<Line<'static>> {
         if widths.is_empty() || row.is_empty() {
@@ -201,13 +392,13 @@ impl Table {
         };
 
         // Wrap each cell content and find the maximum height
-        let mut wrapped_cells: Vec<Vec<String>> = Vec::new();
+        let mut wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
         let mut max_height = 1;
 
         for (i, cell) in row.iter().enumerate() {
             let width = widths.get(i).copied().unwrap_or(0) as usize;
             if width == 0 {
-                wrapped_cells.push(vec![String::new()]);
+                wrapped_cells.push(vec![vec![]]);
                 continue;
             }
 
@@ -215,18 +406,33 @@ impl Table {
             let cell_with_newlines = cell.replace("<br/> ", "\n").replace("<br/>", "\n");
             let cell_lines_from_br: Vec<&str> = cell_with_newlines.split('\n').collect();
 
-            // Then wrap each line separately
+            // Then wrap each line separately and parse markdown
             let mut all_wrapped_lines = Vec::new();
             for br_line in cell_lines_from_br {
-                let wrapped = textwrap::wrap(br_line, width);
-                for wrapped_line in wrapped {
-                    all_wrapped_lines.push(wrapped_line.to_string());
+                // Parse markdown formatting first
+                let spans = self.parse_markdown_formatting(br_line, text_color);
+
+                // Calculate the actual display width of the parsed spans
+                let display_width: usize = spans.iter().map(|s| s.content.len()).sum();
+
+                if display_width <= width {
+                    // Fits in one line, use the parsed spans directly
+                    all_wrapped_lines.push(spans);
+                } else {
+                    // Need to wrap - use the new method that preserves formatting
+                    let wrapped_spans = self.wrap_spans_with_formatting(&spans, width, text_color);
+                    for line_spans in wrapped_spans {
+                        all_wrapped_lines.push(line_spans);
+                    }
                 }
             }
 
             // If we had no content, ensure at least one empty line
             if all_wrapped_lines.is_empty() {
-                all_wrapped_lines.push(String::new());
+                all_wrapped_lines.push(vec![Span::styled(
+                    String::new(),
+                    Style::default().fg(text_color),
+                )]);
             }
 
             max_height = max(max_height, all_wrapped_lines.len());
@@ -236,33 +442,76 @@ impl Table {
         // Render each line of the row
         let mut lines = Vec::new();
         for line_idx in 0..max_height {
-            let mut line_content = String::new();
-            line_content.push('│'); // Left border
+            let mut line_spans = Vec::new();
+
+            // Left border
+            line_spans.push(Span::styled(
+                "│".to_string(),
+                Style::default().fg(self.config.border_color),
+            ));
 
             for (col_idx, cell_lines) in wrapped_cells.iter().enumerate() {
                 let width = widths[col_idx] as usize;
-                let cell_text = cell_lines.get(line_idx).cloned().unwrap_or_default();
+                let cell_spans = cell_lines.get(line_idx).cloned().unwrap_or_default();
 
-                // Pad or truncate to exact width
-                let formatted_cell = if cell_text.len() > width {
-                    cell_text[..width].to_string()
+                // Calculate the actual width of the spans
+                let spans_width: usize = cell_spans.iter().map(|s| s.content.len()).sum();
+
+                // Ensure we don't exceed the column width
+                if spans_width <= width {
+                    // Add the cell spans
+                    for span in cell_spans {
+                        line_spans.push(span);
+                    }
+                    
+                    // Pad to fill the column width
+                    if spans_width < width {
+                        line_spans.push(Span::styled(
+                            " ".repeat(width - spans_width),
+                            Style::default().fg(text_color),
+                        ));
+                    }
                 } else {
-                    format!("{:<width$}", cell_text, width = width)
-                };
+                    // Spans exceed width - truncate to fit exactly
+                    let mut remaining_width = width;
+                    
+                    for span in cell_spans {
+                        if remaining_width == 0 {
+                            break;
+                        }
+                        
+                        let span_len = span.content.len();
+                        if span_len <= remaining_width {
+                            line_spans.push(span);
+                            remaining_width -= span_len;
+                        } else if remaining_width > 0 {
+                            // Truncate this span to fit
+                            let truncated_content: String = span.content.chars().take(remaining_width).collect();
+                            line_spans.push(Span::styled(
+                                truncated_content,
+                                span.style.clone(),
+                            ));
+                            remaining_width = 0;
+                        }
+                    }
+                }
 
-                line_content.push_str(&formatted_cell);
-
+                // Column separator
                 if col_idx < wrapped_cells.len() - 1 {
-                    line_content.push('│'); // Column separator
+                    line_spans.push(Span::styled(
+                        "│".to_string(),
+                        Style::default().fg(self.config.border_color),
+                    ));
                 }
             }
 
-            line_content.push('│'); // Right border
+            // Right border
+            line_spans.push(Span::styled(
+                "│".to_string(),
+                Style::default().fg(self.config.border_color),
+            ));
 
-            lines.push(Line::from(Span::styled(
-                line_content,
-                Style::default().fg(text_color),
-            )));
+            lines.push(Line::from(line_spans));
         }
 
         lines
@@ -575,6 +824,93 @@ mod tests {
         assert!(full_content.contains("Cell with"));
         assert!(full_content.contains("actual newline"));
         assert!(full_content.contains("multi"));
+    }
+
+    #[test]
+    fn test_table_with_markdown_formatting_and_wrapping() {
+        let rows = vec![
+            vec![
+                "**This is a very long bold text that should wrap across multiple lines**"
+                    .to_string(),
+                "_This is a very long italic text that should also wrap_".to_string(),
+            ],
+            vec![
+                "Mixed **bold** and _italic_ in a very long line that needs wrapping".to_string(),
+                "Normal text that is also quite long and should wrap properly".to_string(),
+            ],
+        ];
+
+        let table = Table::new(rows).constraints(vec![
+            Constraint::Length(25), // Force wrapping
+            Constraint::Length(20), // Force wrapping
+        ]);
+
+        let lines = table.render_to_lines(50);
+
+        // Verify that the table renders without panic
+        assert!(lines.len() >= 4); // At least some content
+
+        // Check that wrapped lines still contain styled spans
+        let mut found_bold_spans = 0;
+        let mut found_italic_spans = 0;
+
+        for line in &lines {
+            for span in &line.spans {
+                if span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+                {
+                    found_bold_spans += 1;
+                }
+                if span
+                    .style
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::ITALIC)
+                {
+                    found_italic_spans += 1;
+                }
+            }
+        }
+
+        // Should find bold and italic formatting even after wrapping
+        assert!(
+            found_bold_spans > 0,
+            "Bold formatting should be preserved after wrapping"
+        );
+        assert!(
+            found_italic_spans > 0,
+            "Italic formatting should be preserved after wrapping"
+        );
+    }
+
+    #[test]
+    fn test_table_with_markdown_formatting() {
+        let rows = vec![
+            vec!["**Bold text**".to_string(), "_Italic text_".to_string()],
+            vec!["*Also italic*".to_string(), "__Also bold__".to_string()],
+            vec![
+                "Mixed **bold** and _italic_".to_string(),
+                "Normal text".to_string(),
+            ],
+        ];
+
+        let table =
+            Table::new(rows).constraints(vec![Constraint::Length(25), Constraint::Length(15)]);
+
+        let lines = table.render_to_lines(45);
+
+        // Verify that the table renders without panic
+        assert!(lines.len() >= 5); // Top border + 3 data rows + bottom border
+
+        // Check that lines contain styled spans
+        for line in &lines[1..lines.len() - 1] {
+            // Skip borders
+            if line.spans.len() > 1 {
+                // Data rows should have multiple spans due to formatting
+                assert!(line.spans.len() >= 3); // At least border spans + content
+            }
+        }
     }
 
     #[test]
