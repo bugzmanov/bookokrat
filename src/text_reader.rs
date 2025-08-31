@@ -2602,6 +2602,13 @@ impl TextReader {
                             if let Some(ref header) = table.header_row {
                                 custom_table = custom_table.header(header.clone());
                             }
+                            // Populate links with table position information
+                            custom_table.populate_links(
+                                table.lines_before_table,
+                                margined_content_area[1].width,
+                            );
+                            // Collect links from the table and add them to text_reader's links
+                            self.links.extend(custom_table.get_links().clone());
 
                             // Render the table with offset and height limit for scrolling
                             let table_lines = custom_table.render_to_lines_with_offset(

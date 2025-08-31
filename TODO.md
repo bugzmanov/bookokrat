@@ -4,7 +4,8 @@ ideas to implement:
          [ ] Format html into readable
          [ ] Navigate to the position where rendering mode was showing
          [ ] Alow mouse selection & stuff
-     [x] Math Formulas
+     [x] Math Formulas 
+        [ ] BUG when simple formulat become multiline
      [ ] Markdown
          [.] links support 
              [ ] visited link tracking
@@ -13,7 +14,7 @@ ideas to implement:
          [ ] Horizontal rule
          [x] Headers
          [ ] Blockquote
-         [ ] tables support
+         [x] tables support
          [x] bold & italic 
            [ ] Bold needs some visual treatment
          [x] lists
