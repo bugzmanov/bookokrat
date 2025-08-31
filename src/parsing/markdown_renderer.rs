@@ -67,11 +67,8 @@ impl MarkdownRenderer {
             Block::Paragraph { content } => {
                 self.render_paragraph(content, output);
             }
-            Block::CodeBlock {
-                language: _,
-                content,
-            } => {
-                self.render_code_block(content, output);
+            Block::CodeBlock { language, content } => {
+                self.render_code_block(content, language, output);
             }
             Block::Quote { content } => {
                 self.render_quote(content, output);
@@ -126,8 +123,12 @@ impl MarkdownRenderer {
         }
     }
 
-    fn render_code_block(&self, content: &str, output: &mut String) {
-        output.push_str("```\n");
+    fn render_code_block(&self, content: &str, language: &Option<String>, output: &mut String) {
+        output.push_str("```");
+        if let Some(lang) = language {
+            output.push_str(lang);
+        }
+        output.push('\n');
         output.push_str(content);
         output.push_str("\n```\n\n");
     }
@@ -343,14 +344,21 @@ impl MarkdownRenderer {
                     // Render nested list with increased depth
                     self.render_list(nested_kind, nested_items, output, depth + 1);
                 }
-                Block::CodeBlock {
-                    language: _,
-                    content,
-                } => {
+                Block::CodeBlock { language, content } => {
                     // Code blocks in lists need proper indentation
                     if !first_block {
                         output.push('\n');
                     }
+                    // Add indented opening fence with language
+                    //todo: this is BS as it doesn't take consideration nested lists.
+                    output.push_str(&indent);
+                    output.push_str("    ```");
+                    if let Some(lang) = language {
+                        output.push_str(lang);
+                    }
+                    output.push('\n');
+
+                    // Add indented content lines
                     let lines: Vec<&str> = content.lines().collect();
                     for line in lines {
                         output.push_str(&indent);
@@ -358,6 +366,10 @@ impl MarkdownRenderer {
                         output.push_str(line);
                         output.push('\n');
                     }
+
+                    // Add indented closing fence
+                    output.push_str(&indent);
+                    output.push_str("    ```\n");
                 }
                 _ => {
                     // Other block types - render with indentation

@@ -1238,39 +1238,48 @@ impl TextReader {
                     current_text.push_str(&bold_text);
                 }
             } else if chars[i] == '`' {
-                // Handle inline code
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(normal_color),
-                    ));
-                    current_text.clear();
-                }
-
-                i += 1; // Skip opening `
-                let mut code_text = String::new();
-                let mut found_closing = false;
-
-                while i < chars.len() {
-                    if chars[i] == '`' {
-                        found_closing = true;
-                        i += 1; // Skip closing `
-                        break;
-                    } else {
-                        code_text.push(chars[i]);
-                        i += 1;
-                    }
-                }
-
-                if found_closing && !code_text.is_empty() {
-                    // Use base_07 (gray) as background and base_00 (black) as foreground for inline code
-                    spans.push(Span::styled(
-                        code_text,
-                        Style::default().fg(Color::Black).bg(Color::Gray),
-                    ));
+                // Check for triple backticks (code block markers) first
+                if i + 2 < chars.len() && chars[i + 1] == '`' && chars[i + 2] == '`' {
+                    // This is a code block marker - treat all three as literal text, don't format
+                    current_text.push(chars[i]);     // First `
+                    current_text.push(chars[i + 1]); // Second `  
+                    current_text.push(chars[i + 2]); // Third `
+                    i += 3; // Skip all three backticks
                 } else {
-                    current_text.push('`');
-                    current_text.push_str(&code_text);
+                    // Handle inline code (single backtick)
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(
+                            current_text.clone(),
+                            Style::default().fg(normal_color),
+                        ));
+                        current_text.clear();
+                    }
+
+                    i += 1; // Skip opening `
+                    let mut code_text = String::new();
+                    let mut found_closing = false;
+
+                    while i < chars.len() {
+                        if chars[i] == '`' {
+                            found_closing = true;
+                            i += 1; // Skip closing `
+                            break;
+                        } else {
+                            code_text.push(chars[i]);
+                            i += 1;
+                        }
+                    }
+
+                    if found_closing && !code_text.is_empty() {
+                        // Use base_07 (gray) as background and base_00 (black) as foreground for inline code
+                        spans.push(Span::styled(
+                            code_text,
+                            Style::default().fg(Color::Black).bg(Color::Gray),
+                        ));
+                    } else {
+                        current_text.push('`');
+                        current_text.push_str(&code_text);
+                    }
                 }
             } else if chars[i] == '_' {
                 // Handle italic text (single underscore)

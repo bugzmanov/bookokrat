@@ -7,6 +7,78 @@ use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
 use std::rc::Rc;
 
+/// Strategy for content collection mode
+#[derive(Debug, Clone)]
+enum ContentCollectionMode {
+    /// Collect as flat text (for headings, simple content)
+    FlatText { in_table: bool },
+    /// Collect as structured blocks (for complex content with math)
+    StructuredBlocks { in_table: bool },
+}
+
+/// Result of content collection
+enum ContentResult {
+    Text(Text),
+    Blocks(Vec<Node>),
+}
+
+impl ContentResult {
+    fn into_text(self) -> Text {
+        match self {
+            ContentResult::Text(text) => text,
+            ContentResult::Blocks(blocks) => {
+                let mut text = Text::default();
+                for block_node in blocks {
+                    match block_node.block {
+                        Block::Paragraph { content } => {
+                            for item in content.into_iter() {
+                                text.push(item);
+                            }
+                        }
+                        Block::CodeBlock { content, .. } => {
+                            text.push_text(TextNode::new(content, Some(Style::Code)));
+                        }
+                        _ => {} // Skip other block types for now
+                    }
+                }
+                text
+            }
+        }
+    }
+
+    fn into_blocks(self) -> Vec<Node> {
+        match self {
+            ContentResult::Blocks(blocks) => blocks,
+            ContentResult::Text(text) => {
+                if text.is_empty() {
+                    vec![Node::new(
+                        Block::Paragraph {
+                            content: Text::default(),
+                        },
+                        0..0,
+                    )]
+                } else {
+                    vec![Node::new(Block::Paragraph { content: text }, 0..0)]
+                }
+            }
+        }
+    }
+}
+
+/// Math content handling result
+enum MathContent {
+    Inline(String),
+    Block(String),
+    Error(String),
+}
+
+/// Processing context for content collection
+#[derive(Debug, Clone)]
+struct ProcessingContext {
+    in_table: bool,
+    current_style: Option<Style>,
+}
+
 /// Converts HTML content to clean Markdown AST with text formatting and cleanup.
 ///
 /// This converter is responsible for the first phase of the HTML→Markdown→Text pipeline.
@@ -36,6 +108,127 @@ pub struct HtmlToMarkdownConverter {
 impl HtmlToMarkdownConverter {
     pub fn new() -> Self {
         HtmlToMarkdownConverter {}
+    }
+
+    /// Unified content collection method that handles both text and block modes
+    fn collect_content(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        mode: ContentCollectionMode,
+        context: ProcessingContext,
+    ) -> ContentResult {
+        match mode {
+            ContentCollectionMode::FlatText { .. } => {
+                let mut text = Text::default();
+                self.collect_as_text(node, &mut text, context);
+                ContentResult::Text(text)
+            }
+            ContentCollectionMode::StructuredBlocks { .. } => {
+                let mut blocks = Vec::new();
+                let mut current_text = Text::default();
+                self.collect_as_blocks(node, &mut blocks, &mut current_text, context);
+
+                // Flush any remaining text
+                if !current_text.is_empty() {
+                    blocks.push(Node::new(
+                        Block::Paragraph {
+                            content: current_text,
+                        },
+                        0..0,
+                    ));
+                }
+
+                // Ensure we always have at least one block
+                if blocks.is_empty() {
+                    blocks.push(Node::new(
+                        Block::Paragraph {
+                            content: Text::default(),
+                        },
+                        0..0,
+                    ));
+                }
+
+                ContentResult::Blocks(blocks)
+            }
+        }
+    }
+
+    /// Handle math elements with appropriate mode-specific logic
+    fn handle_math_element(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        mode: &ContentCollectionMode,
+    ) -> MathContent {
+        let math_html = self.serialize_node_to_html(node);
+        match mathml_to_ascii(&math_html, true) {
+            Ok(ascii_math) => match mode {
+                ContentCollectionMode::StructuredBlocks { .. } if ascii_math.contains('\n') => {
+                    MathContent::Block(ascii_math)
+                }
+                _ => MathContent::Inline(ascii_math),
+            },
+            Err(e) => MathContent::Error(format!("Failed to parse math: {:?}", e)),
+        }
+    }
+
+    /// Handle link elements consistently
+    fn handle_link_element(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        context: ProcessingContext,
+    ) -> Option<Inline> {
+        if let Some(href) = self.get_attr_value(attrs, "href") {
+            let mut link_text = Text::default();
+            for child in node.children.borrow().iter() {
+                self.collect_as_text(child, &mut link_text, context.clone());
+            }
+            let title = self.get_attr_value(attrs, "title");
+            Some(Inline::Link {
+                text: link_text,
+                url: href,
+                title,
+            })
+        } else {
+            None
+        }
+    }
+
+    /// Normalize text content with proper whitespace handling
+    fn normalize_text_content(
+        &self,
+        content: &str,
+        current_text: &Text,
+        current_style: Option<Style>,
+    ) -> Option<String> {
+        if content.trim().is_empty() {
+            return None;
+        }
+
+        let mut normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
+
+        // Preserve leading space if original had it and we already have content
+        if !current_text.is_empty() && content.chars().next().map_or(false, |c| c.is_whitespace()) {
+            normalized = format!(" {}", normalized);
+        }
+
+        // Preserve trailing space if original had it
+        if content.chars().last().map_or(false, |c| c.is_whitespace()) {
+            normalized.push(' ');
+        }
+
+        if normalized.trim().is_empty() {
+            return None;
+        }
+
+        // Add spacing around inline code elements
+        let adjusted_content = if current_style == Some(Style::Code) {
+            self.add_code_spacing(&normalized)
+        } else {
+            normalized
+        };
+
+        Some(adjusted_content)
     }
 
     pub fn convert(&mut self, html: &str) -> Document {
@@ -157,11 +350,19 @@ impl HtmlToMarkdownConverter {
     }
 
     fn handle_paragraph(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
-        let content = self.extract_formatted_content(node);
-        if !content.is_empty() {
-            let paragraph_block = Block::Paragraph { content };
-            let paragraph_node = Node::new(paragraph_block, 0..0); // TODO: proper source range
-            document.blocks.push(paragraph_node);
+        let blocks = self.extract_formatted_content_as_blocks(node, false);
+
+        // Filter out empty paragraph blocks
+        for block_node in blocks {
+            let should_add = match &block_node.block {
+                Block::Paragraph { content } => !content.is_empty(),
+                Block::CodeBlock { content, .. } => !content.trim().is_empty(),
+                _ => true,
+            };
+
+            if should_add {
+                document.blocks.push(block_node);
+            }
         }
     }
 
@@ -194,9 +395,20 @@ impl HtmlToMarkdownConverter {
 
         let content = match mathml_to_ascii(&mathml_html, true) {
             Ok(ascii_math) => {
-                let content = Text::from(ascii_math);
-                let paragraph_block = Block::Paragraph { content };
-                Node::new(paragraph_block, 0..0)
+                // Check if the math expression is single-line or multi-line
+                if ascii_math.contains('\n') {
+                    // Multi-line math: use CodeBlock with language "math"
+                    let code_block = Block::CodeBlock {
+                        language: Some("math".to_string()),
+                        content: ascii_math,
+                    };
+                    Node::new(code_block, 0..0)
+                } else {
+                    // Single-line math: use as regular paragraph text
+                    let content = Text::from(ascii_math);
+                    let paragraph_block = Block::Paragraph { content };
+                    Node::new(paragraph_block, 0..0)
+                }
             }
             Err(e) => {
                 let paragraph_block = Block::CodeBlock {
@@ -575,34 +787,31 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         _ => {
-                            self.collect_formatted_content_with_context(
-                                child,
-                                &mut current_text,
-                                None,
-                                false,
-                            );
+                            let context = ProcessingContext {
+                                in_table: false,
+                                current_style: None,
+                            };
+                            self.collect_as_text(child, &mut current_text, context);
                         }
                     }
                 }
                 NodeData::Text { contents } => {
                     // Process text nodes through the normal formatted content collector
                     // This preserves proper spacing and formatting
-                    self.collect_formatted_content_with_context(
-                        child,
-                        &mut current_text,
-                        None,
-                        false,
-                    );
+                    let context = ProcessingContext {
+                        in_table: false,
+                        current_style: None,
+                    };
+                    self.collect_as_text(child, &mut current_text, context);
                 }
                 _ => {
                     // Process other node types
                     for grandchild in child.children.borrow().iter() {
-                        self.collect_formatted_content_with_context(
-                            grandchild,
-                            &mut current_text,
-                            None,
-                            false,
-                        );
+                        let context = ProcessingContext {
+                            in_table: false,
+                            current_style: None,
+                        };
+                        self.collect_as_text(grandchild, &mut current_text, context);
                     }
                 }
             }
@@ -632,7 +841,12 @@ impl HtmlToMarkdownConverter {
     }
 
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
-        self.extract_formatted_content_with_context(node, false)
+        let mode = ContentCollectionMode::FlatText { in_table: false };
+        let context = ProcessingContext {
+            in_table: false,
+            current_style: None,
+        };
+        self.collect_content(node, mode, context).into_text()
     }
 
     fn extract_formatted_content_with_context(
@@ -640,20 +854,226 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         in_table: bool,
     ) -> Text {
-        let mut text = Text::default();
-        self.collect_formatted_content_with_context(node, &mut text, None, in_table);
-        text
+        let mode = ContentCollectionMode::FlatText { in_table };
+        let context = ProcessingContext {
+            in_table,
+            current_style: None,
+        };
+        self.collect_content(node, mode, context).into_text()
     }
 
-    fn collect_formatted_content(
+    fn extract_formatted_content_as_blocks(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        in_table: bool,
+    ) -> Vec<Node> {
+        let mode = ContentCollectionMode::StructuredBlocks { in_table };
+        let context = ProcessingContext {
+            in_table,
+            current_style: None,
+        };
+        self.collect_content(node, mode, context).into_blocks()
+    }
+
+    /// Collect content as text (unified implementation)
+    fn collect_as_text(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
         text: &mut Text,
-        current_style: Option<Style>,
+        context: ProcessingContext,
     ) {
-        self.collect_formatted_content_with_context(node, text, current_style, false);
+        match &node.data {
+            NodeData::Text { contents } => {
+                let content = contents.borrow().to_string();
+                if let Some(normalized) =
+                    self.normalize_text_content(&content, text, context.current_style.clone())
+                {
+                    let text_node = TextNode::new(normalized, context.current_style.clone());
+                    text.push_text(text_node);
+                }
+            }
+            NodeData::Element { name, attrs, .. } => {
+                let tag_name = name.local.as_ref();
+                self.handle_element_for_text(node, tag_name, attrs, text, context);
+            }
+            _ => {
+                // For other node types, process children with inherited context
+                for child in node.children.borrow().iter() {
+                    self.collect_as_text(child, text, context.clone());
+                }
+            }
+        }
     }
 
+    /// Collect content as blocks (unified implementation)
+    fn collect_as_blocks(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        blocks: &mut Vec<Node>,
+        current_text: &mut Text,
+        context: ProcessingContext,
+    ) {
+        match &node.data {
+            NodeData::Text { contents } => {
+                let content = contents.borrow().to_string();
+                if let Some(normalized) = self.normalize_text_content(
+                    &content,
+                    current_text,
+                    context.current_style.clone(),
+                ) {
+                    let text_node = TextNode::new(normalized, context.current_style.clone());
+                    current_text.push_text(text_node);
+                }
+            }
+            NodeData::Element { name, attrs, .. } => {
+                let tag_name = name.local.as_ref();
+                self.handle_element_for_blocks(
+                    node,
+                    tag_name,
+                    attrs,
+                    blocks,
+                    current_text,
+                    context,
+                );
+            }
+            _ => {
+                // For other node types, process children with inherited context
+                for child in node.children.borrow().iter() {
+                    self.collect_as_blocks(child, blocks, current_text, context.clone());
+                }
+            }
+        }
+    }
+
+    /// Handle element processing for text collection
+    fn handle_element_for_text(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        tag_name: &str,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        text: &mut Text,
+        context: ProcessingContext,
+    ) {
+        let new_context = self.get_element_context(tag_name, context.clone());
+
+        match tag_name {
+            "a" => {
+                if let Some(link) = self.handle_link_element(node, attrs, context) {
+                    text.push_inline(link);
+                }
+            }
+            "math" => {
+                let mode = ContentCollectionMode::FlatText {
+                    in_table: context.in_table,
+                };
+                match self.handle_math_element(node, &mode) {
+                    MathContent::Inline(math_text) | MathContent::Block(math_text) => {
+                        text.push_text(TextNode::new(math_text, None));
+                    }
+                    MathContent::Error(error_text) => {
+                        text.push_text(TextNode::new(error_text, None));
+                    }
+                }
+            }
+            "br" => {
+                if context.in_table {
+                    text.push_text(TextNode::new("<br/>".to_string(), None));
+                } else {
+                    text.push_inline(Inline::LineBreak);
+                }
+            }
+            _ => {
+                // Process children with the new context
+                for child in node.children.borrow().iter() {
+                    self.collect_as_text(child, text, new_context.clone());
+                }
+            }
+        }
+    }
+
+    /// Handle element processing for block collection
+    fn handle_element_for_blocks(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        tag_name: &str,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        blocks: &mut Vec<Node>,
+        current_text: &mut Text,
+        context: ProcessingContext,
+    ) {
+        let new_context = self.get_element_context(tag_name, context.clone());
+
+        match tag_name {
+            "a" => {
+                if let Some(link) = self.handle_link_element(node, attrs, context) {
+                    current_text.push_inline(link);
+                }
+            }
+            "math" => {
+                let mode = ContentCollectionMode::StructuredBlocks {
+                    in_table: context.in_table,
+                };
+                match self.handle_math_element(node, &mode) {
+                    MathContent::Block(math_text) => {
+                        // Flush current text and create CodeBlock
+                        if !current_text.is_empty() {
+                            blocks.push(Node::new(
+                                Block::Paragraph {
+                                    content: current_text.clone(),
+                                },
+                                0..0,
+                            ));
+                            *current_text = Text::default();
+                        }
+                        blocks.push(Node::new(
+                            Block::CodeBlock {
+                                language: Some("math".to_string()),
+                                content: math_text,
+                            },
+                            0..0,
+                        ));
+                    }
+                    MathContent::Inline(math_text) => {
+                        current_text.push_text(TextNode::new(math_text, None));
+                    }
+                    MathContent::Error(error_text) => {
+                        current_text.push_text(TextNode::new(error_text, None));
+                    }
+                }
+            }
+            "br" => {
+                if context.in_table {
+                    current_text.push_text(TextNode::new("<br/>".to_string(), None));
+                } else {
+                    current_text.push_inline(Inline::LineBreak);
+                }
+            }
+            _ => {
+                // Process children with the new context
+                for child in node.children.borrow().iter() {
+                    self.collect_as_blocks(child, blocks, current_text, new_context.clone());
+                }
+            }
+        }
+    }
+
+    /// Get appropriate context for element based on tag name
+    fn get_element_context(
+        &self,
+        tag_name: &str,
+        mut context: ProcessingContext,
+    ) -> ProcessingContext {
+        context.current_style = match tag_name {
+            "strong" | "b" => Some(Style::Strong),
+            "em" | "i" => Some(Style::Emphasis),
+            "code" => Some(Style::Code),
+            "del" | "s" | "strike" => Some(Style::Strikethrough),
+            _ => context.current_style,
+        };
+        context
+    }
+
+    // Legacy method kept for compatibility - delegates to new unified system
     fn collect_formatted_content_with_context(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -661,118 +1081,11 @@ impl HtmlToMarkdownConverter {
         current_style: Option<Style>,
         in_table: bool,
     ) {
-        match &node.data {
-            NodeData::Text { contents } => {
-                let content = contents.borrow().to_string();
-                if !content.trim().is_empty() {
-                    // Normalize whitespace while preserving meaningful leading/trailing spaces
-                    let mut normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
-
-                    // Preserve leading space if original had it and we already have content
-                    if !text.is_empty()
-                        && content.chars().next().map_or(false, |c| c.is_whitespace())
-                    {
-                        normalized = format!(" {}", normalized);
-                    }
-
-                    // Preserve trailing space if original had it
-                    if content.chars().last().map_or(false, |c| c.is_whitespace()) {
-                        normalized.push(' ');
-                    }
-
-                    if normalized.trim().is_empty() {
-                        return;
-                    }
-
-                    // Add spacing around inline code elements at the AST level
-                    let adjusted_content = if current_style == Some(Style::Code) {
-                        self.add_code_spacing(&normalized)
-                    } else {
-                        normalized
-                    };
-                    let text_node = TextNode::new(adjusted_content, current_style.clone());
-                    text.push_text(text_node);
-                }
-            }
-            NodeData::Element { name, attrs, .. } => {
-                let tag_name = name.local.as_ref();
-
-                let style = match tag_name {
-                    "strong" | "b" => Some(Style::Strong),
-                    "em" | "i" => Some(Style::Emphasis),
-                    "code" => Some(Style::Code),
-                    "del" | "s" | "strike" => Some(Style::Strikethrough),
-                    "a" => {
-                        // Handle links as inline elements
-                        if let Some(href) = self.get_attr_value(attrs, "href") {
-                            let mut link_text = Text::default();
-                            for child in node.children.borrow().iter() {
-                                self.collect_formatted_content_with_context(
-                                    child,
-                                    &mut link_text,
-                                    current_style.clone(),
-                                    in_table,
-                                );
-                            }
-                            let title = self.get_attr_value(attrs, "title");
-                            let link_inline = Inline::Link {
-                                text: link_text,
-                                url: href,
-                                title,
-                            };
-                            text.push_inline(link_inline);
-                        }
-                        return; // Don't process children again
-                    }
-                    "math" => {
-                        let math_html = self.serialize_node_to_html(node);
-                        match mathml_to_ascii(&math_html, true) {
-                            Ok(math_ascii) => {
-                                text.push_text(TextNode::new(math_ascii, None));
-                            }
-                            Err(e) => {
-                                text.push_text(TextNode::new(
-                                    format!("<fail to parse math: {:?}", e),
-                                    None,
-                                ));
-                            }
-                        }
-                        return;
-                    }
-                    "br" => {
-                        if in_table {
-                            // Preserve <br/> tags inside table cells as text
-                            text.push_text(TextNode::new("<br/>".to_string(), None));
-                        } else {
-                            text.push_inline(Inline::LineBreak);
-                        }
-                        return;
-                    }
-                    _ => current_style.clone(),
-                };
-
-                // Process children with the new or inherited style
-                for child in node.children.borrow().iter() {
-                    self.collect_formatted_content_with_context(
-                        child,
-                        text,
-                        style.clone(),
-                        in_table,
-                    );
-                }
-            }
-            _ => {
-                // For other node types, process children with inherited style
-                for child in node.children.borrow().iter() {
-                    self.collect_formatted_content_with_context(
-                        child,
-                        text,
-                        current_style.clone(),
-                        in_table,
-                    );
-                }
-            }
-        }
+        let context = ProcessingContext {
+            in_table,
+            current_style,
+        };
+        self.collect_as_text(node, text, context);
     }
 
     fn get_attr_value(
@@ -863,37 +1176,6 @@ impl HtmlToMarkdownConverter {
         for item in new_items {
             text.push(item);
         }
-    }
-
-    fn normalize_text_whitespace(&self, content: &str, text: &Text) -> String {
-        // If the text is all whitespace, check if we need to preserve a space
-        if content.chars().all(|c| c.is_whitespace()) {
-            // If we already have content in the Text, and this is whitespace between elements,
-            // preserve a single space
-            if !text.is_empty() {
-                return " ".to_string();
-            } else {
-                return String::new();
-            }
-        }
-
-        // For actual text content, normalize whitespace
-        let mut result = String::new();
-
-        // Check if we need a leading space (text doesn't start with whitespace-only beginning)
-        if !text.is_empty() && content.starts_with(|c: char| c.is_whitespace()) {
-            result.push(' ');
-        }
-
-        // Add the trimmed content
-        result.push_str(content.trim());
-
-        // Check if we need a trailing space
-        if content.ends_with(|c: char| c.is_whitespace()) && !content.trim().is_empty() {
-            result.push(' ');
-        }
-
-        result
     }
 
     //todo: this should be done on a parsing/convertion phase
