@@ -2088,14 +2088,95 @@ impl TextReader {
         }
     }
 
+    /// Reconstruct content with embedded tables using their rendered format
+    fn reconstruct_content_with_tables(&self) -> String {
+        let embedded_tables = self.embedded_tables.borrow();
+
+        if embedded_tables.is_empty() {
+            // No tables, just return raw text lines
+            return self.raw_text_lines.join("\n");
+        }
+
+        let mut result_lines = Vec::new();
+        let mut current_line = 0;
+
+        // Create a sorted list of tables by their position
+        let mut tables_by_position: Vec<_> = embedded_tables.iter().enumerate().collect();
+        tables_by_position.sort_by_key(|(_, table)| table.lines_before_table);
+
+        let mut table_iter = tables_by_position.iter();
+        let mut next_table = table_iter.next();
+
+        while current_line < self.raw_text_lines.len() {
+            // Check if we're at a table position
+            if let Some((_, table)) = next_table {
+                if current_line == table.lines_before_table {
+                    // Add the table using its rendered format
+                    self.add_table_as_rendered(&mut result_lines, table);
+
+                    // Skip the empty placeholder lines for this table
+                    current_line += table.height_cells;
+                    next_table = table_iter.next();
+                    continue;
+                }
+            }
+
+            // Add regular line
+            if current_line < self.raw_text_lines.len() {
+                result_lines.push(self.raw_text_lines[current_line].clone());
+                current_line += 1;
+            }
+        }
+
+        result_lines.join("\n")
+    }
+
+    /// Add a table to the result lines using the rendered format
+    fn add_table_as_rendered(&self, result_lines: &mut Vec<String>, table: &EmbeddedTable) {
+        // Create a temporary table widget to render it
+        let mut table_rows = Vec::new();
+
+        // Add all data rows
+        for row_data in &table.data_rows {
+            table_rows.push(row_data.clone());
+        }
+
+        // Create table widget with appropriate configuration
+        let constraints = self.calculate_balanced_column_widths(table, 120); // Use reasonable width for text copy
+        let mut custom_table = CustomTable::new(table_rows).constraints(constraints);
+
+        // Add header if present
+        if let Some(ref header) = table.header_row {
+            custom_table = custom_table.header(header.clone());
+        }
+
+        // Render the table to lines and convert to plain text
+        let rendered_lines = custom_table.render_to_lines(120);
+        for line in rendered_lines {
+            let plain_text = self.line_to_plain_text(&line);
+            result_lines.push(plain_text);
+        }
+
+        // Add empty line after table
+        result_lines.push(String::new());
+    }
+
+    /// Convert a ratatui Line to plain text by extracting content from all spans
+    fn line_to_plain_text(&self, line: &Line) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
+
     /// Copy entire chapter content to clipboard
     pub fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
         let content_to_copy = if self.show_raw_html {
             // If in raw HTML mode, copy the raw HTML content
             self.raw_html_content.clone().unwrap_or_default()
         } else {
-            // In normal mode, copy the rendered text lines
-            self.raw_text_lines.join("\n")
+            // In normal mode, copy the rendered text lines with tables reconstructed
+            self.reconstruct_content_with_tables()
         };
 
         if content_to_copy.is_empty() {
