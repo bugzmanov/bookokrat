@@ -30,6 +30,12 @@ static NUMBERED_LIST_CAPTURE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(\d+\.) (.*)").unwrap());
 static IMAGE_SRC_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"(?i)\[\s*image\s+src\s*=\s*"([^"]+)"\s*\]"#).unwrap());
+static TABLE_WIDTH_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"width="(\d+)""#).unwrap());
+static TABLE_HEIGHT_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"height="(\d+)""#).unwrap());
+static TABLE_HEADER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"header="(true|false)""#).unwrap());
 
 /// Height for regular images in terminal cells
 const IMAGE_HEIGHT_REGULAR: u16 = 15;
@@ -163,6 +169,8 @@ pub struct TextReader {
     links: Vec<LinkInfo>,
     // Store table information for rendering
     embedded_tables: RefCell<Vec<EmbeddedTable>>,
+    // Code block state tracking
+    in_code_block: bool,
 }
 
 impl TextReader {
@@ -213,6 +221,7 @@ impl TextReader {
             raw_html_content: None,
             links: Vec::new(),
             embedded_tables: RefCell::new(Vec::new()),
+            in_code_block: false,
         }
     }
 
@@ -285,8 +294,7 @@ impl TextReader {
                 total_lines += 1;
             } else {
                 // Process markdown links before wrapping (remove URL part for accurate line counting)
-                let link_re = Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap();
-                let line_for_wrapping = link_re.replace_all(line, "$1").to_string();
+                let line_for_wrapping = LINK_REGEX.replace_all(line, "$1").to_string();
 
                 let wrapped_lines = textwrap::wrap(&line_for_wrapping, width);
                 total_lines += wrapped_lines.len();
@@ -395,6 +403,9 @@ impl TextReader {
         // Clear links and tables for new content
         self.links.clear();
         self.embedded_tables.borrow_mut().clear();
+
+        // Reset code block state for new content
+        self.in_code_block = false;
 
         // Calculate line count for image placement tracking
         let mut line_count = 0;
@@ -569,6 +580,32 @@ impl TextReader {
                 lines.push(Line::from(String::new()));
                 line_count += 1;
             } else {
+                // Check for code block boundaries (triple backticks)
+                if line.trim().starts_with("```") {
+                    self.in_code_block = !self.in_code_block;
+                    // Render the code block delimiter as-is without any formatting
+                    raw_lines.push(line.to_string());
+                    let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+                    lines.push(Line::from(vec![Span::styled(
+                        line.to_string(),
+                        Style::default().fg(Color::Gray), // Use gray color for code block delimiters
+                    )]));
+                    line_count += 1;
+                    continue; // Skip all other processing for code block delimiters
+                }
+
+                // If we're inside a code block, render the line as-is without any formatting
+                if self.in_code_block {
+                    raw_lines.push(line.to_string());
+                    let (normal_text_color, _, _) = palette.get_panel_colors(is_focused);
+                    lines.push(Line::from(vec![Span::styled(
+                        line.to_string(),
+                        Style::default().fg(normal_text_color), // Use normal text color, no special styling
+                    )]));
+                    line_count += 1;
+                    continue; // Skip all other processing for code block content
+                }
+
                 // Check if this is a markdown heading
                 let is_heading = line.starts_with('#');
                 let heading_level = if is_heading {
@@ -678,22 +715,18 @@ impl TextReader {
             return None;
         }
 
-        // Extract metadata using regex
-        let width_regex = Regex::new(r#"width="(\d+)""#).ok()?;
-        let height_regex = Regex::new(r#"height="(\d+)""#).ok()?;
-        let header_regex = Regex::new(r#"header="(true|false)""#).ok()?;
-
-        let num_cols = width_regex
+        // Extract metadata using cached regex patterns
+        let num_cols = TABLE_WIDTH_REGEX
             .captures(metadata_line)
             .and_then(|c| c.get(1))
             .and_then(|m| m.as_str().parse::<usize>().ok())?;
 
-        let num_rows = height_regex
+        let num_rows = TABLE_HEIGHT_REGEX
             .captures(metadata_line)
             .and_then(|c| c.get(1))
             .and_then(|m| m.as_str().parse::<usize>().ok())?;
 
-        let has_header = header_regex
+        let has_header = TABLE_HEADER_REGEX
             .captures(metadata_line)
             .and_then(|c| c.get(1))
             .map(|m| m.as_str() == "true")
@@ -1241,7 +1274,7 @@ impl TextReader {
                 // Check for triple backticks (code block markers) first
                 if i + 2 < chars.len() && chars[i + 1] == '`' && chars[i + 2] == '`' {
                     // This is a code block marker - treat all three as literal text, don't format
-                    current_text.push(chars[i]);     // First `
+                    current_text.push(chars[i]); // First `
                     current_text.push(chars[i + 1]); // Second `  
                     current_text.push(chars[i + 2]); // Third `
                     i += 3; // Skip all three backticks
@@ -1643,6 +1676,8 @@ impl TextReader {
         self.embedded_tables.borrow_mut().clear();
         // Reset raw HTML view when changing chapters
         self.show_raw_html = false;
+        // Reset code block state
+        self.in_code_block = false;
     }
 
     /// Toggle raw HTML viewing mode
