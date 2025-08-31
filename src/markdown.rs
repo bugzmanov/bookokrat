@@ -36,6 +36,9 @@ pub enum Block {
         rows: Vec<TableRow>,
         alignment: Vec<TableAlignment>,
     },
+    DefinitionList {
+        items: Vec<DefinitionListItem>,
+    },
     ThematicBreak,
 }
 
@@ -126,6 +129,12 @@ pub enum TableAlignment {
     Right,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefinitionListItem {
+    pub term: Text,
+    pub definitions: Vec<Text>,
+}
+
 impl HeadingLevel {
     pub fn from_u8(level: u8) -> Option<Self> {
         match level {
@@ -184,6 +193,19 @@ impl ListItem {
 impl TableRow {
     pub fn new(cells: Vec<TableCell>) -> Self {
         TableRow { cells }
+    }
+}
+
+impl DefinitionListItem {
+    pub fn new(term: Text, definitions: Vec<Text>) -> Self {
+        DefinitionListItem { term, definitions }
+    }
+
+    pub fn new_single(term: Text, definition: Text) -> Self {
+        DefinitionListItem {
+            term,
+            definitions: vec![definition],
+        }
     }
 }
 

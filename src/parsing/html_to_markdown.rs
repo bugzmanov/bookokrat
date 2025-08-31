@@ -1,5 +1,6 @@
 use crate::markdown::{
-    Block, Document, HeadingLevel, Inline, Node, Style, Text, TextNode, TextOrInline,
+    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Style, Text, TextNode,
+    TextOrInline,
 };
 use crate::mathml_renderer::mathml_to_ascii;
 use html5ever::parse_document;
@@ -848,7 +849,9 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
+        let mut definition_items = Vec::new();
         let mut current_term: Option<Text> = None;
+        let mut current_definitions: Vec<Text> = Vec::new();
 
         for child in node.children.borrow().iter() {
             match &child.data {
@@ -856,37 +859,26 @@ impl HtmlToMarkdownConverter {
                     let tag_name = name.local.as_ref();
                     match tag_name {
                         "dt" => {
-                            // Definition term - extract as heading
+                            // If we have a previous term with definitions, save it
+                            if let Some(term) = current_term.take() {
+                                if !current_definitions.is_empty() {
+                                    definition_items
+                                        .push(DefinitionListItem::new(term, current_definitions));
+                                    current_definitions = Vec::new();
+                                }
+                            }
+
+                            // Extract new term
                             let term_content = self.extract_formatted_content(child);
                             if !term_content.is_empty() {
                                 current_term = Some(term_content);
                             }
                         }
                         "dd" => {
-                            // Definition description - extract as paragraph(s)
-                            let blocks = self.extract_formatted_content_as_blocks(child, false);
-
-                            // If we have a current term, add it as a heading first
-                            if let Some(term) = current_term.take() {
-                                let heading_block = Block::Heading {
-                                    level: HeadingLevel::H4, // Use H4 for definition terms
-                                    content: term,
-                                };
-                                let heading_node = Node::new(heading_block, 0..0);
-                                document.blocks.push(heading_node);
-                            }
-
-                            // Add the definition description blocks
-                            for block_node in blocks {
-                                let should_add = match &block_node.block {
-                                    Block::Paragraph { content } => !content.is_empty(),
-                                    Block::CodeBlock { content, .. } => !content.trim().is_empty(),
-                                    _ => true,
-                                };
-
-                                if should_add {
-                                    document.blocks.push(block_node);
-                                }
+                            // Extract definition content as flat text
+                            let definition_content = self.extract_formatted_content(child);
+                            if !definition_content.is_empty() {
+                                current_definitions.push(definition_content);
                             }
                         }
                         _ => {}
@@ -894,6 +886,22 @@ impl HtmlToMarkdownConverter {
                 }
                 _ => {}
             }
+        }
+
+        // Don't forget the last term
+        if let Some(term) = current_term {
+            if !current_definitions.is_empty() {
+                definition_items.push(DefinitionListItem::new(term, current_definitions));
+            }
+        }
+
+        // Create the definition list block if we have items
+        if !definition_items.is_empty() {
+            let definition_list_block = Block::DefinitionList {
+                items: definition_items,
+            };
+            let definition_list_node = Node::new(definition_list_block, 0..0);
+            document.blocks.push(definition_list_node);
         }
     }
 

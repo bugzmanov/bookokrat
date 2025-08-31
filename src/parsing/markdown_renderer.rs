@@ -1,4 +1,6 @@
-use crate::markdown::{Block, Document, HeadingLevel, Inline, Node, Text, TextNode, TextOrInline};
+use crate::markdown::{
+    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Text, TextNode, TextOrInline,
+};
 
 /// Simple Markdown AST to string renderer with no cleanup logic.
 ///
@@ -83,6 +85,9 @@ impl MarkdownRenderer {
             } => {
                 self.render_table(header, rows, alignment, output);
             }
+            Block::DefinitionList { items } => {
+                self.render_definition_list(items, output);
+            }
             Block::ThematicBreak => {
                 output.push_str("---\n\n");
             }
@@ -139,6 +144,26 @@ impl MarkdownRenderer {
             self.render_node(node, output);
         }
         output.push('\n');
+    }
+
+    fn render_definition_list(&self, items: &[DefinitionListItem], output: &mut String) {
+        for item in items {
+            // Render term as H6 heading
+            output.push_str("###### ");
+            let term_str = self.render_text(&item.term);
+            output.push_str(&term_str);
+            output.push_str("\n");
+
+            // Render each definition with : prefix
+            for definition in &item.definitions {
+                output.push_str(": ");
+                let definition_str = self.render_text(definition);
+                output.push_str(&definition_str);
+                output.push_str("\n");
+            }
+
+            output.push_str("\n");
+        }
     }
 
     fn render_list(
