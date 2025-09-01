@@ -497,8 +497,15 @@ impl MarkdownTextReader {
             }
 
             DefinitionList { items: def_items } => {
-                // TODO: Implement definition list rendering
-                // For now, just skip
+                self.render_definition_list(
+                    def_items,
+                    node_ref,
+                    lines,
+                    total_height,
+                    width,
+                    palette,
+                    is_focused,
+                );
             }
         }
     }
@@ -1337,6 +1344,102 @@ impl MarkdownTextReader {
         *total_height += 1;
     }
 
+    fn render_definition_list(
+        &mut self,
+        items: &[crate::markdown::DefinitionListItem],
+        node_ref: NodeReference,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) {
+        // Render each term-definition pair
+        for item in items {
+            // Render the term (dt) - bold and possibly colored
+            let term_text = self.text_to_string(&item.term);
+            let term_color = if is_focused {
+                palette.base_0c // Yellow for focused
+            } else {
+                palette.base_03 // Dimmed when not focused
+            };
+
+            // Wrap the term text if needed
+            let wrapped_term = textwrap::wrap(&term_text, width);
+            for wrapped_line in wrapped_term {
+                lines.push(RenderedLine {
+                    spans: vec![Span::styled(
+                        wrapped_line.to_string(),
+                        RatatuiStyle::default()
+                            .fg(term_color)
+                            .add_modifier(Modifier::BOLD),
+                    )],
+                    raw_text: wrapped_line.to_string(),
+                    line_type: LineType::Text,
+                    source_node: node_ref.clone(),
+                    visual_height: 1,
+                });
+                self.raw_text_lines.push(wrapped_line.to_string());
+                *total_height += 1;
+            }
+
+            // Render each definition (dd) - indented
+            for definition in &item.definitions {
+                let def_text = self.text_to_string(definition);
+
+                // Wrap the definition text first, then add indentation to each line
+                // This ensures all lines of wrapped text get the indentation
+                let indent_str = "    "; // 4 spaces for definition indentation
+                let available_width = width.saturating_sub(indent_str.len());
+                let wrapped_def = textwrap::wrap(&def_text, available_width);
+
+                let (normal_color, _, _) = palette.get_panel_colors(is_focused);
+
+                for wrapped_line in wrapped_def {
+                    // Add indentation to each wrapped line
+                    let indented_line = format!("{}{}", indent_str, wrapped_line);
+
+                    lines.push(RenderedLine {
+                        spans: vec![Span::styled(
+                            indented_line.clone(),
+                            RatatuiStyle::default().fg(normal_color),
+                        )],
+                        raw_text: indented_line.clone(),
+                        line_type: LineType::Text,
+                        source_node: node_ref.clone(),
+                        visual_height: 1,
+                    });
+                    self.raw_text_lines.push(indented_line);
+                    *total_height += 1;
+                }
+            }
+
+            // Add a small spacing between definition items (but not after the last one)
+            if item != items.last().unwrap() {
+                lines.push(RenderedLine {
+                    spans: vec![Span::raw("")],
+                    raw_text: String::new(),
+                    line_type: LineType::Empty,
+                    source_node: node_ref.clone(),
+                    visual_height: 1,
+                });
+                self.raw_text_lines.push(String::new());
+                *total_height += 1;
+            }
+        }
+
+        // Add empty line after the entire definition list
+        lines.push(RenderedLine {
+            spans: vec![Span::raw("")],
+            raw_text: String::new(),
+            line_type: LineType::Empty,
+            source_node: node_ref,
+            visual_height: 1,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+    }
+
     fn render_text_spans(
         &mut self,
         spans: &[Span<'static>],
@@ -1475,23 +1578,21 @@ impl MarkdownTextReader {
                 remaining_line = "";
             } else {
                 // Look for partial matches within the span content
-                let mut common_prefix_len = 0;
-                for (i, char) in remaining_line.chars().enumerate() {
-                    if let Some(span_char) = span_content.chars().nth(i) {
-                        if char == span_char {
-                            common_prefix_len = i + 1;
-                        } else {
-                            break;
-                        }
+                let mut common_prefix_byte_len = 0;
+                let mut char_count = 0;
+                for (char, span_char) in remaining_line.chars().zip(span_content.chars()) {
+                    if char == span_char {
+                        common_prefix_byte_len += char.len_utf8();
+                        char_count += 1;
                     } else {
                         break;
                     }
                 }
 
-                if common_prefix_len > 0 {
-                    let matched_part = &remaining_line[..common_prefix_len];
+                if common_prefix_byte_len > 0 {
+                    let matched_part = &remaining_line[..common_prefix_byte_len];
                     result_spans.push(Span::styled(matched_part.to_string(), original_span.style));
-                    remaining_line = &remaining_line[common_prefix_len..];
+                    remaining_line = &remaining_line[common_prefix_byte_len..];
                 }
             }
         }
@@ -1874,7 +1975,7 @@ impl TextReaderTrait for MarkdownTextReader {
         // Always check for link clicks first, regardless of selection state
         if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
             debug!("Mouse up at: {}x{} : {:?}", line, column, self.links);
-            
+
             // Check if click is on a link
             if let Some(link) = self.get_link_at_position(line, column) {
                 let url = link.url.clone();
@@ -1951,7 +2052,20 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
-        if !self.raw_text_lines.is_empty() {
+        if self.show_raw_html {
+            use arboard::Clipboard;
+            let mut clipboard =
+                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+            clipboard
+                .set_text(
+                    self.raw_html_content
+                        .as_ref()
+                        .unwrap_or(&"<failed to get raw html>".to_string()),
+                )
+                .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+            debug!("Copied entire chapter to clipboard");
+            Ok(())
+        } else if !self.raw_text_lines.is_empty() {
             let chapter_text = self.raw_text_lines.join("\n");
             use arboard::Clipboard;
             let mut clipboard =
@@ -2220,7 +2334,6 @@ impl TextReaderTrait for MarkdownTextReader {
         //
         // First pass: Collect non-image lines and render text
         let mut visible_lines = Vec::new();
-        let mut image_positions = Vec::new();
         let end_offset =
             (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
 
@@ -2235,16 +2348,27 @@ impl TextReaderTrait for MarkdownTextReader {
             if let Some(rendered_line) = self.rendered_content.lines.get(line_idx) {
                 let visual_line_idx = line_idx - self.scroll_offset;
 
-                // Check if this is an image placeholder
-                if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
-                    // Store image position for later rendering
-                    if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
-                        if let crate::text_reader::ImageLoadState::Loaded { image, .. } =
-                            &embedded_image.state
-                        {
-                            image_positions.push((visual_line_idx, src.clone(), image.clone()));
+                // Check if this is an image placeholder with a loaded image
+                let skip_placeholder =
+                    if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
+                        // Check if image is loaded
+                        if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
+                            matches!(
+                                embedded_image.state,
+                                crate::text_reader::ImageLoadState::Loaded { .. }
+                            )
+                        } else {
+                            false
                         }
-                    }
+                    } else {
+                        false
+                    };
+
+                // Skip rendering placeholder lines if the actual image is loaded
+                if skip_placeholder {
+                    // Add empty line instead of placeholder
+                    visible_lines.push(Line::from(""));
+                    continue;
                 }
 
                 // Apply highlight if needed
@@ -2414,30 +2538,6 @@ impl TextReaderTrait for MarkdownTextReader {
                 }
             }
         }
-
-        // if let Some(picker) = &self.image_picker {
-        //     for (visual_line_idx, _src, image) in image_positions {
-        //         if let Some(embedded_image) = self.embedded_images.borrow().get(&_src) {
-        //             let image_y = inner_area.y + visual_line_idx as u16;
-        //             let image_height = embedded_image
-        //                 .height_cells
-        //                 .min(inner_area.height.saturating_sub(visual_line_idx as u16));
-
-        //             if image_height > 0 {
-        //                 let image_area = Rect {
-        //                     x: inner_area.x + 2, // Small padding from left
-        //                     y: image_y,
-        //                     width: inner_area.width.saturating_sub(4), // Padding on both sides
-        //                     height: image_height,
-        //                 };
-
-        //                 let mut protocol = picker.new_resize_protocol((*image).clone());
-        //                 let mut image_widget = StatefulImage::default();
-        //                 frame.render_stateful_widget(image_widget, image_area, &mut protocol);
-        //             }
-        //         }
-        //     }
-        // }
 
         // Text selection is already handled via apply_selection_highlighting in the visible_lines loop
     }

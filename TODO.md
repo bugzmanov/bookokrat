@@ -10,6 +10,7 @@ ideas to implement:
          [.] links support 
              [ ] visited link tracking
              [x] external links
+                [ ] bug: link in tables is not clickable
              [ ] internal links
          [ ] Horizontal rule
          [x] Headers
