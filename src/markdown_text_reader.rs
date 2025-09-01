@@ -375,6 +375,9 @@ impl MarkdownTextReader {
             );
         }
 
+        // Fix link coordinates after all text wrapping is complete
+        self.fix_link_coordinates(&lines);
+
         RenderedContent {
             lines,
             total_height,
@@ -716,7 +719,7 @@ impl MarkdownTextReader {
         item: &TextOrInline,
         palette: &Base16Palette,
         is_focused: bool,
-        line_num: usize,
+        _line_num: usize, // Not used anymore - we'll fix links after wrapping
     ) -> Vec<Span<'static>> {
         let mut spans = Vec::new();
 
@@ -733,14 +736,14 @@ impl MarkdownTextReader {
                         url,
                         ..
                     } => {
-                        // Store link info for click detection
+                        // Store link info with temporary coordinates - we'll fix them after wrapping
                         let start_col = self.calculate_column_from_spans(&spans);
                         let link_text_str = self.text_to_string(link_text);
 
                         self.links.push(LinkInfo {
                             text: link_text_str.clone(),
                             url: url.clone(),
-                            line: line_num,
+                            line: 0, // Temporary - will be updated after wrapping
                             start_col,
                             end_col: start_col + link_text_str.len(),
                         });
@@ -1358,8 +1361,10 @@ impl MarkdownTextReader {
                 // Single line - use the styled spans without indentation
                 spans.to_vec()
             } else {
-                // Multi-line or not first line - use plain text
-                vec![Span::raw(wrapped_line.to_string())]
+                // Multi-line content: we need to preserve styling across wrapped lines
+                // This is a complex problem - for now, we'll map each wrapped line
+                // back to the original spans that contributed to it
+                self.map_wrapped_line_to_styled_spans(wrapped_line, spans)
             };
 
             lines.push(RenderedLine {
@@ -1385,6 +1390,122 @@ impl MarkdownTextReader {
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
+        }
+    }
+
+    /// Fix link coordinates to match the final rendered line positions after text wrapping
+    fn fix_link_coordinates(&mut self, rendered_lines: &[RenderedLine]) {
+        // Build a map of link text to URLs for efficient lookup
+        let mut link_map = std::collections::HashMap::new();
+        for link in &self.links {
+            link_map.insert(link.text.clone(), link.url.clone());
+        }
+
+        // Clear existing links and rebuild them with correct coordinates
+        self.links.clear();
+
+        // Scan through all rendered lines to find links
+        for (line_idx, rendered_line) in rendered_lines.iter().enumerate() {
+            let line_text = &rendered_line.raw_text;
+
+            // Look for link text in each line
+            for (link_text, url) in &link_map {
+                if let Some(start_pos) = line_text.find(link_text) {
+                    let end_pos = start_pos + link_text.len();
+
+                    // Create new link info with correct coordinates
+                    self.links.push(LinkInfo {
+                        text: link_text.clone(),
+                        url: url.clone(),
+                        line: line_idx,
+                        start_col: start_pos,
+                        end_col: end_pos,
+                    });
+                }
+            }
+        }
+
+        debug!("Fixed {} link coordinates", self.links.len());
+    }
+
+    /// Convert screen coordinates to logical text coordinates (like TextReader does)
+    fn screen_to_text_coords(
+        &self,
+        screen_x: u16,
+        screen_y: u16,
+        content_area: Rect,
+    ) -> Option<(usize, usize)> {
+        self.text_selection.screen_to_text_coords(
+            screen_x,
+            screen_y,
+            self.scroll_offset,
+            content_area.x,
+            content_area.y,
+        )
+    }
+
+    /// Map a wrapped line back to its styled spans, preserving formatting like links
+    fn map_wrapped_line_to_styled_spans(
+        &self,
+        wrapped_line: &str,
+        original_spans: &[Span<'static>],
+    ) -> Vec<Span<'static>> {
+        // This is a simplified approach: we'll try to match the wrapped line content
+        // back to the original spans and preserve their styling
+        let mut result_spans = Vec::new();
+        let mut remaining_line = wrapped_line;
+
+        for original_span in original_spans {
+            let span_content = original_span.content.as_ref();
+
+            if remaining_line.is_empty() {
+                break;
+            }
+
+            if remaining_line.starts_with(span_content) {
+                // This span fits entirely in the remaining line
+                result_spans.push(original_span.clone());
+                remaining_line = &remaining_line[span_content.len()..];
+            } else if span_content.starts_with(remaining_line) {
+                // The remaining line is a prefix of this span
+                result_spans.push(Span::styled(
+                    remaining_line.to_string(),
+                    original_span.style,
+                ));
+                remaining_line = "";
+            } else {
+                // Look for partial matches within the span content
+                let mut common_prefix_len = 0;
+                for (i, char) in remaining_line.chars().enumerate() {
+                    if let Some(span_char) = span_content.chars().nth(i) {
+                        if char == span_char {
+                            common_prefix_len = i + 1;
+                        } else {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                if common_prefix_len > 0 {
+                    let matched_part = &remaining_line[..common_prefix_len];
+                    result_spans.push(Span::styled(matched_part.to_string(), original_span.style));
+                    remaining_line = &remaining_line[common_prefix_len..];
+                }
+            }
+        }
+
+        // If there's still remaining content, add it as unstyled
+        if !remaining_line.is_empty() {
+            result_spans.push(Span::raw(remaining_line.to_string()));
+        }
+
+        // If we couldn't map properly, fall back to the original approach
+        if result_spans.is_empty() {
+            vec![Span::raw(wrapped_line.to_string())]
+        } else {
+            result_spans
         }
     }
 
@@ -1706,13 +1827,14 @@ impl TextReaderTrait for MarkdownTextReader {
         // Use the inner text area if available, otherwise fall back to the provided area
         let text_area = self.last_inner_text_area.unwrap_or(area);
 
-        if x >= text_area.x
-            && x < text_area.x + text_area.width
-            && y >= text_area.y
-            && y < text_area.y + text_area.height
-        {
-            let line = self.scroll_offset + (y - text_area.y) as usize;
-            let column = (x - text_area.x) as usize;
+        // Use proper coordinate conversion like TextReader does
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+            // Check if click is on a link first
+            if self.get_link_at_position(line, column).is_some() {
+                // Don't start text selection if clicking on a link
+                debug!("Mouse down on link, skipping text selection");
+                return;
+            }
 
             self.text_selection.start_selection(line, column);
             debug!("Started text selection at line {}, column {}", line, column);
@@ -1724,10 +1846,10 @@ impl TextReaderTrait for MarkdownTextReader {
             // Use the inner text area if available, otherwise fall back to the provided area
             let text_area = self.last_inner_text_area.unwrap_or(area);
 
-            let line = self.scroll_offset + (y.saturating_sub(text_area.y)) as usize;
-            let column = (x.saturating_sub(text_area.x)) as usize;
-
-            self.text_selection.update_selection(line, column);
+            // Use proper coordinate conversion like TextReader does
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                self.text_selection.update_selection(line, column);
+            }
 
             // Auto-scroll if dragging near edges (use the text area bounds)
             const SCROLL_MARGIN: u16 = 3;
@@ -1749,12 +1871,23 @@ impl TextReaderTrait for MarkdownTextReader {
         // Use the inner text area if available, otherwise fall back to the provided area
         let text_area = self.last_inner_text_area.unwrap_or(area);
 
+        // Always check for link clicks first, regardless of selection state
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+            debug!("Mouse up at: {}x{} : {:?}", line, column, self.links);
+            
+            // Check if click is on a link
+            if let Some(link) = self.get_link_at_position(line, column) {
+                let url = link.url.clone();
+                debug!("Link clicked: {}", url);
+                // Clear any selection and return the link
+                self.text_selection.clear_selection();
+                return Some(url);
+            }
+        }
+
+        // Handle text selection if we were selecting
         if self.text_selection.is_selecting {
-            let line = self.scroll_offset + (y.saturating_sub(text_area.y)) as usize;
-            let column = (x.saturating_sub(text_area.x)) as usize;
-
             self.text_selection.end_selection();
-
             if self.text_selection.has_selection() {
                 debug!("Text selection completed");
             }
@@ -1768,14 +1901,8 @@ impl TextReaderTrait for MarkdownTextReader {
         // Use the inner text area if available, otherwise fall back to the provided area
         let text_area = self.last_inner_text_area.unwrap_or(area);
 
-        if x >= text_area.x
-            && x < text_area.x + text_area.width
-            && y >= text_area.y
-            && y < text_area.y + text_area.height
-        {
-            let line = self.scroll_offset + (y - text_area.y) as usize;
-            let column = (x - text_area.x) as usize;
-
+        // Use proper coordinate conversion like TextReader does
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
             // Select word at position
             if line < self.raw_text_lines.len() {
                 self.text_selection
@@ -1789,18 +1916,13 @@ impl TextReaderTrait for MarkdownTextReader {
         // Use the inner text area if available, otherwise fall back to the provided area
         let text_area = self.last_inner_text_area.unwrap_or(area);
 
-        if x >= text_area.x
-            && x < text_area.x + text_area.width
-            && y >= text_area.y
-            && y < text_area.y + text_area.height
-        {
-            let line = self.scroll_offset + (y - text_area.y) as usize;
-
+        // Use proper coordinate conversion like TextReader does
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
             // Select entire paragraph/line
             if line < self.raw_text_lines.len() {
-                // For paragraph selection, we don't need column position
+                // For paragraph selection, we use the calculated column
                 self.text_selection
-                    .select_paragraph_at(line, 0, &self.raw_text_lines);
+                    .select_paragraph_at(line, column, &self.raw_text_lines);
                 debug!("Selected paragraph at line {}", line);
             }
         }

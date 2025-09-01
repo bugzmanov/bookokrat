@@ -2507,3 +2507,46 @@ fn test_table_with_links_and_linebreaks_svg() {
         create_test_failure_handler("test_table_with_links_and_linebreaks_svg"),
     );
 }
+
+#[test]
+fn test_simple_link_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    // Use the default test books directory where we have link_test.html
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    // Find and load the link_test.html book specifically
+    let link_test_path = "tests/testdata/link_test.html";
+    let _ = app.open_book_for_reading_by_path(&link_test_path.to_string());
+
+    // Switch to content view (Tab key)
+    app.press_key(crossterm::event::KeyCode::Tab);
+
+    // Scroll down a bit to see more content
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_simple_link_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/simple_link_rendering.svg"),
+        "test_simple_link_rendering_svg",
+        create_test_failure_handler("test_simple_link_rendering_svg"),
+    );
+}
