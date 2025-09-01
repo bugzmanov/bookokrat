@@ -2,7 +2,9 @@ use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::images::book_images::BookImages;
 use crate::images::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
 use crate::main_app::VimNavMotions;
+use crate::markdown::Document;
 use crate::table::{Table as CustomTable, TableConfig};
+use crate::text_reader_trait::TextReaderTrait;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
@@ -2879,6 +2881,180 @@ impl VimNavMotions for TextReader {
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = max_offset;
         debug!("Scrolled to bottom of document: offset {}", max_offset);
+    }
+}
+
+impl TextReaderTrait for TextReader {
+    fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
+        // For string-based reader, we just store the content
+        // The actual parsing happens during render via parse_styled_text_cached
+        // This matches the current behavior where content is stored in App
+        // and passed to render() method
+    }
+
+    fn set_content_from_ast(&mut self, _doc: Document, _chapter_title: Option<String>) {
+        // String-based reader doesn't use AST
+        // This is a no-op for backward compatibility
+        error!("set_content_from_ast called on string-based TextReader");
+    }
+
+    fn content_updated(&mut self, content_length: usize) {
+        self.content_updated(content_length);
+    }
+
+    fn update_wrapped_lines_if_needed(&mut self, content: &str, area: Rect) {
+        self.update_wrapped_lines_if_needed(content, area);
+    }
+
+    fn scroll_up(&mut self) {
+        self.scroll_up();
+    }
+
+    fn scroll_down(&mut self) {
+        self.scroll_down();
+    }
+
+    fn scroll_half_screen_up(&mut self, content: &str, screen_height: usize) {
+        self.scroll_half_screen_up(content, screen_height);
+    }
+
+    fn scroll_half_screen_down(&mut self, content: &str, screen_height: usize) {
+        self.scroll_half_screen_down(content, screen_height);
+    }
+
+    fn get_scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    fn restore_scroll_position(&mut self, offset: usize) {
+        self.restore_scroll_position(offset);
+    }
+
+    fn get_max_scroll_offset(&self) -> usize {
+        self.get_max_scroll_offset()
+    }
+
+    fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect) {
+        self.handle_mouse_down(x, y, area);
+    }
+
+    fn handle_mouse_drag(&mut self, x: u16, y: u16, area: Rect) {
+        self.handle_mouse_drag(x, y, area);
+    }
+
+    fn handle_mouse_up(&mut self, x: u16, y: u16, area: Rect) -> Option<String> {
+        self.handle_mouse_up(x, y, area)
+    }
+
+    fn handle_double_click(&mut self, x: u16, y: u16, area: Rect) {
+        self.handle_double_click(x, y, area);
+    }
+
+    fn handle_triple_click(&mut self, x: u16, y: u16, area: Rect) {
+        self.handle_triple_click(x, y, area);
+    }
+
+    fn clear_selection(&mut self) {
+        self.clear_selection();
+    }
+
+    fn copy_selection_to_clipboard(&self) -> Result<(), String> {
+        self.copy_selection_to_clipboard()
+    }
+
+    fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
+        self.copy_chapter_to_clipboard()
+    }
+
+    fn has_text_selection(&self) -> bool {
+        self.has_text_selection()
+    }
+
+    fn preload_image_dimensions(&mut self, content: &str, book_images: &BookImages) {
+        self.preload_image_dimensions(content, book_images);
+    }
+
+    fn check_for_loaded_images(&mut self) -> bool {
+        self.check_for_loaded_images()
+    }
+
+    fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String> {
+        self.check_image_click(x, y, area)
+    }
+
+    fn get_embedded_image(&self, src: &str) -> Option<&EmbeddedImage> {
+        self.get_embedded_image(src)
+    }
+
+    fn get_image_picker(&self) -> Option<&Picker> {
+        self.get_image_picker()
+    }
+
+    fn get_loaded_image(&self, image_src: &str) -> Option<Arc<DynamicImage>> {
+        self.get_loaded_image(image_src)
+    }
+
+    fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo> {
+        self.get_link_at_position(line, column)
+    }
+
+    fn update_highlight(&mut self) -> bool {
+        self.update_highlight()
+    }
+
+    fn update_auto_scroll(&mut self) -> bool {
+        self.update_auto_scroll()
+    }
+
+    fn toggle_raw_html(&mut self) {
+        self.toggle_raw_html();
+    }
+
+    fn set_raw_html(&mut self, html: String) {
+        self.set_raw_html(html);
+    }
+
+    fn calculate_progress(&self, content: &str, width: usize, height: usize) -> u32 {
+        self.calculate_progress(content, width, height)
+    }
+
+    fn handle_terminal_resize(&mut self) {
+        self.handle_terminal_resize();
+    }
+
+    fn render(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        content: &str,
+        chapter_title: &Option<String>,
+        current_chapter: usize,
+        total_chapters: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) {
+        self.render(
+            frame,
+            area,
+            content,
+            chapter_title,
+            current_chapter,
+            total_chapters,
+            palette,
+            is_focused,
+        );
+    }
+
+    fn get_total_wrapped_lines(&self) -> usize {
+        self.total_wrapped_lines
+    }
+
+    fn get_visible_height(&self) -> usize {
+        self.visible_height
+    }
+
+    fn get_last_content_area(&self) -> Option<Rect> {
+        self.last_content_area
     }
 }
 

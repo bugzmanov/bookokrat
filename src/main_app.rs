@@ -4,6 +4,7 @@ use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
+use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator_wrapper::TextGeneratorWrapper;
 use crate::reading_history::ReadingHistory;
@@ -12,6 +13,7 @@ use crate::system_command::{
 };
 use crate::table_of_contents::{SelectedTocItem, TocItem};
 use crate::text_reader::TextReader;
+use crate::text_reader_trait::TextReaderTrait;
 use crate::theme::OCEANIC_NEXT;
 use image::GenericImageView;
 use log::warn;
@@ -39,11 +41,19 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+/// Enum to choose which text reader implementation to use
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TextReaderImplementation {
+    StringBased, // Legacy TextReader
+    AstBased,    // New MarkdownTextReader
+}
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
     text_generator: TextGeneratorWrapper,
-    text_reader: TextReader,
+    text_reader: Box<dyn TextReaderTrait>,
+    text_reader_impl: TextReaderImplementation,
     bookmarks: Bookmarks,
     image_storage: Arc<ImageStorage>,
     book_images: BookImages,
@@ -147,7 +157,23 @@ impl App {
 
         let navigation_panel = NavigationPanel::new(&book_manager);
         let text_generator = TextGeneratorWrapper::new_html5ever();
-        let text_reader = TextReader::new();
+
+        // Choose text reader implementation based on environment variable
+        // Hardcoded choice - change USE_AST_READER to true to use the new implementation
+        const USE_AST_READER: bool = true; // Set to true to use MarkdownTextReader
+
+        let (text_reader, text_reader_impl): (Box<dyn TextReaderTrait>, TextReaderImplementation) =
+            if USE_AST_READER {
+                (
+                    Box::new(MarkdownTextReader::new()),
+                    TextReaderImplementation::AstBased,
+                )
+            } else {
+                (
+                    Box::new(TextReader::new()),
+                    TextReaderImplementation::StringBased,
+                )
+            };
 
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
@@ -172,6 +198,7 @@ impl App {
             navigation_panel,
             text_generator,
             text_reader,
+            text_reader_impl,
             bookmarks,
             image_storage,
             book_images,
@@ -654,7 +681,7 @@ impl App {
             self.bookmarks.update_bookmark(
                 path,
                 self.current_chapter,
-                self.text_reader.scroll_offset,
+                self.text_reader.get_scroll_offset(),
                 self.total_chapters,
             );
 
@@ -682,57 +709,81 @@ impl App {
 
         if let Some(doc) = &mut self.current_epub {
             let process_start = std::time::Instant::now();
-            match self.text_generator.process_chapter_content(doc) {
-                Ok((content, title)) => {
-                    let process_time = process_start.elapsed();
-                    debug!("    - Process chapter content: {:?}", process_time);
 
-                    self.current_chapter_title = title.clone();
-                    let content_length = content.len();
-
-                    // Count images in content for stats
-                    let image_count = content.matches("[image src=").count();
-                    if image_count > 0 {
-                        debug!("    - Found {} images in chapter", image_count);
-                    }
-
-                    self.current_content = Some(content);
-
-                    // First update content (this will clear caches)
-                    let update_start = std::time::Instant::now();
-                    self.text_reader.content_updated(content_length);
-                    let update_time = update_start.elapsed();
-                    debug!("    - Content updated: {:?}", update_time);
-
-                    if self.current_file.is_some() {
-                        if let Some(ref content) = self.current_content {
-                            if image_count > 0 {
-                                let preload_start = std::time::Instant::now();
-                                self.text_reader
-                                    .preload_image_dimensions(content, &self.book_images);
-                                let preload_time = preload_start.elapsed();
-                                info!(
-                                    "    - Preloaded {} images in {:?}",
-                                    image_count, preload_time
-                                );
-                            }
+            // For AST-based reader, we need raw HTML instead of processed text
+            let (content, title) =
+                if matches!(self.text_reader_impl, TextReaderImplementation::AstBased) {
+                    // Get raw HTML for MarkdownTextReader
+                    match doc.get_current_str() {
+                        Ok(raw_html) => {
+                            debug!("Got raw HTML for AST reader, {} bytes", raw_html.len());
+                            // Extract title from raw HTML (we still need this)
+                            let title = self.text_generator.extract_chapter_title(&raw_html);
+                            (raw_html, title)
+                        }
+                        Err(e) => {
+                            error!("Failed to get raw HTML: {}", e);
+                            ("Error reading chapter content.".to_string(), None)
                         }
                     }
-
-                    let total_update_time = overall_start.elapsed();
-                    debug!("    - Total update_content time: {:?}", total_update_time);
-
-                    if let Some(ref title) = self.current_chapter_title {
-                        info!("    - Chapter title: \"{}\"", title);
+                } else {
+                    // Use processed text for legacy TextReader
+                    match self.text_generator.process_chapter_content(doc) {
+                        Ok((content, title)) => (content, title),
+                        Err(e) => {
+                            error!("Failed to process chapter: {}", e);
+                            ("Error reading chapter content.".to_string(), None)
+                        }
                     }
-                    info!("    - Content length: {} chars", content_length);
-                }
-                Err(e) => {
-                    error!("Failed to process chapter: {}", e);
-                    self.current_content = Some("Error reading chapter content.".to_string());
-                    self.text_reader.content_updated(0);
+                };
+
+            let process_time = process_start.elapsed();
+            debug!("    - Process chapter content: {:?}", process_time);
+
+            self.current_chapter_title = title.clone();
+            let content_length = content.len();
+
+            // Count images in content for stats (adjust for raw HTML)
+            let image_count = if matches!(self.text_reader_impl, TextReaderImplementation::AstBased)
+            {
+                content.matches("<img ").count()
+            } else {
+                content.matches("[image src=").count()
+            };
+            if image_count > 0 {
+                debug!("    - Found {} images in chapter", image_count);
+            }
+
+            self.current_content = Some(content);
+
+            // First update content (this will clear caches)
+            let update_start = std::time::Instant::now();
+            self.text_reader.content_updated(content_length);
+            let update_time = update_start.elapsed();
+            debug!("    - Content updated: {:?}", update_time);
+
+            if self.current_file.is_some() {
+                if let Some(ref content) = self.current_content {
+                    if image_count > 0 {
+                        let preload_start = std::time::Instant::now();
+                        self.text_reader
+                            .preload_image_dimensions(content, &self.book_images);
+                        let preload_time = preload_start.elapsed();
+                        info!(
+                            "    - Preloaded {} images in {:?}",
+                            image_count, preload_time
+                        );
+                    }
                 }
             }
+
+            let total_update_time = overall_start.elapsed();
+            debug!("    - Total update_content time: {:?}", total_update_time);
+
+            if let Some(ref title) = self.current_chapter_title {
+                info!("    - Chapter title: \"{}\"", title);
+            }
+            info!("    - Content length: {} chars", content_length);
         } else {
             error!("No EPUB document loaded");
             self.current_content = Some("No EPUB document loaded.".to_string());
@@ -1099,13 +1150,13 @@ impl App {
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column >= nav_panel_width {
                     let content_area = self.get_content_area_rect();
-                    let old_scroll_offset = self.text_reader.scroll_offset;
+                    let old_scroll_offset = self.text_reader.get_scroll_offset();
                     self.text_reader.handle_mouse_drag(
                         mouse_event.column,
                         mouse_event.row,
                         content_area,
                     );
-                    if self.text_reader.scroll_offset != old_scroll_offset {
+                    if self.text_reader.get_scroll_offset() != old_scroll_offset {
                         self.save_bookmark();
                     }
                 }
@@ -1315,7 +1366,7 @@ impl App {
     /// Calculate the content area rectangle for coordinate conversion
     fn get_content_area_rect(&self) -> Rect {
         // Use the stored content area from the last render
-        if let Some(area) = self.text_reader.last_content_area {
+        if let Some(area) = self.text_reader.get_last_content_area() {
             area
         } else {
             // Fallback to a reasonable default
@@ -1351,7 +1402,7 @@ impl App {
     }
 
     pub fn get_scroll_offset(&self) -> usize {
-        self.text_reader.scroll_offset
+        self.text_reader.get_scroll_offset()
     }
 
     /// Calculate the navigation panel width based on stored terminal width
@@ -1659,7 +1710,7 @@ impl App {
                     self.navigation_panel.handle_gg();
                 } else {
                     // For content, reset scroll to top
-                    self.text_reader.scroll_offset = 0;
+                    self.text_reader.restore_scroll_position(0);
                     self.save_bookmark();
                 }
                 self.key_sequence.clear();
@@ -1959,9 +2010,12 @@ impl App {
                 } else if let Some(_content) = &self.current_content {
                     // For content, scroll to bottom
                     // Calculate the maximum scroll offset
-                    if self.text_reader.total_wrapped_lines > self.text_reader.visible_height {
-                        self.text_reader.scroll_offset =
-                            self.text_reader.total_wrapped_lines - self.text_reader.visible_height;
+                    if self.text_reader.get_total_wrapped_lines()
+                        > self.text_reader.get_visible_height()
+                    {
+                        let offset = self.text_reader.get_total_wrapped_lines()
+                            - self.text_reader.get_visible_height();
+                        self.text_reader.restore_scroll_position(offset);
                         self.save_bookmark();
                     }
                 }

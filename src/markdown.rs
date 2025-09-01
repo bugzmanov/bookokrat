@@ -318,6 +318,10 @@ impl Text {
         self.0.len()
     }
 
+    pub fn iter(&self) -> std::slice::Iter<TextOrInline> {
+        self.0.iter()
+    }
+
     pub fn iter_mut(&mut self) -> std::slice::IterMut<TextOrInline> {
         self.0.iter_mut()
     }
