@@ -765,6 +765,9 @@ impl App {
             if self.current_file.is_some() {
                 if let Some(ref content) = self.current_content {
                     if image_count > 0 {
+                        if matches!(self.text_reader_impl, TextReaderImplementation::AstBased) {
+                            self.text_reader.set_content_from_string(content, title);
+                        }
                         let preload_start = std::time::Instant::now();
                         self.text_reader
                             .preload_image_dimensions(content, &self.book_images);

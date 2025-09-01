@@ -6,12 +6,13 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::text_reader::{EmbeddedImage, EmbeddedTable, LinkInfo};
+use crate::text_reader::{EmbeddedImage, EmbeddedTable, ImageLoadState, LinkInfo};
 use crate::text_reader_trait::TextReaderTrait;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
 use log::{debug, error, warn};
+use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -72,7 +73,6 @@ struct NodeReference {
 
 /// AST-based text reader that directly processes Markdown Document
 pub struct MarkdownTextReader {
-    // The AST document - NO STRING!
     markdown_document: Option<Document>,
 
     // Rendering cache - built from AST
@@ -120,9 +120,6 @@ pub struct MarkdownTextReader {
 
     // Tables extracted from AST
     embedded_tables: RefCell<Vec<EmbeddedTable>>,
-
-    // Code blocks
-    in_code_block: bool,
 }
 
 impl MarkdownTextReader {
@@ -168,28 +165,39 @@ impl MarkdownTextReader {
         node: &Node,
         book_images: &BookImages,
         images_processed: &mut usize,
-    ) {
+    ) -> Vec<(String, u16)> {
         use MarkdownBlock::*;
-
         match &node.block {
             Paragraph { content } => {
-                self.extract_images_from_text(content, book_images, images_processed);
+                return self.extract_images_from_text(content, book_images, images_processed);
             }
             Quote {
                 content: quote_content,
             } => {
+                let mut vec = Vec::new();
                 for inner_node in quote_content {
-                    self.extract_images_from_node(inner_node, book_images, images_processed);
+                    vec.append(&mut self.extract_images_from_node(
+                        inner_node,
+                        book_images,
+                        images_processed,
+                    ));
                 }
+                vec
             }
             List { items, .. } => {
+                let mut vec = Vec::new();
                 for item in items {
                     for inner_node in &item.content {
-                        self.extract_images_from_node(inner_node, book_images, images_processed);
+                        vec.append(&mut self.extract_images_from_node(
+                            inner_node,
+                            book_images,
+                            images_processed,
+                        ));
                     }
                 }
+                vec
             }
-            _ => {}
+            _ => Vec::new(),
         }
     }
 
@@ -198,7 +206,7 @@ impl MarkdownTextReader {
         text: &MarkdownText,
         book_images: &BookImages,
         images_processed: &mut usize,
-    ) {
+    ) -> Vec<(String, u16)> {
         let mut images_to_load: Vec<(String, u16)> = Vec::new();
 
         for item in text.iter() {
@@ -245,28 +253,7 @@ impl MarkdownTextReader {
                 }
             }
         }
-
-        // Start background loading if we have images and a picker
-        if !images_to_load.is_empty() {
-            if let Some(ref picker) = self.image_picker {
-                let font_size = picker.font_size();
-                let (cell_width, cell_height) = (font_size.0, font_size.1);
-                self.background_loader.start_loading(
-                    images_to_load,
-                    book_images,
-                    cell_width,
-                    cell_height,
-                );
-            } else {
-                for (img, _) in images_to_load.iter() {
-                    if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
-                        img_state.state = crate::text_reader::ImageLoadState::Failed {
-                            reason: "terminal doesn't support images".to_string(),
-                        };
-                    }
-                }
-            }
-        }
+        images_to_load
     }
 
     pub fn new() -> Self {
@@ -322,7 +309,6 @@ impl MarkdownTextReader {
             show_raw_html: false,
             links: Vec::new(),
             embedded_tables: RefCell::new(Vec::new()),
-            in_code_block: false,
         }
     }
 
@@ -722,24 +708,6 @@ impl MarkdownTextReader {
             self.raw_text_lines.push(String::new());
             *total_height += 1;
         }
-    }
-
-    fn render_text_content(
-        &mut self,
-        text: &MarkdownText,
-        palette: &Base16Palette,
-        is_focused: bool,
-        line_num: usize,
-    ) -> Vec<Span<'static>> {
-        let mut spans = Vec::new();
-
-        // Iterate through Text's TextOrInline items
-        for item in text.iter() {
-            let item_spans = self.render_text_or_inline(item, palette, is_focused, line_num);
-            spans.extend(item_spans);
-        }
-
-        spans
     }
 
     fn render_text_or_inline(
@@ -1615,6 +1583,7 @@ impl TextReaderTrait for MarkdownTextReader {
             total_height: 0,
             generation: 0,
         };
+        self.embedded_images.borrow_mut().clear();
 
         debug!("content_updated: cleared markdown_document and all state");
     }
@@ -1852,11 +1821,36 @@ impl TextReaderTrait for MarkdownTextReader {
             self.background_loader.cancel_loading();
             let mut images_processed = 0;
 
-            for node in &doc.blocks {
-                self.extract_images_from_node(node, book_images, &mut images_processed);
-            }
+            let mut images_to_load = vec![];
 
-            if images_processed > 0 {
+            for node in &doc.blocks {
+                images_to_load.append(&mut self.extract_images_from_node(
+                    node,
+                    book_images,
+                    &mut images_processed,
+                ));
+            }
+            //
+            // Start background loading if we have images and a picker
+            if !images_to_load.is_empty() {
+                if let Some(ref picker) = self.image_picker {
+                    let font_size = picker.font_size();
+                    let (cell_width, cell_height) = (font_size.0, font_size.1);
+                    self.background_loader.start_loading(
+                        images_to_load,
+                        book_images,
+                        cell_width,
+                        cell_height,
+                    );
+                } else {
+                    for (img, _) in images_to_load.iter() {
+                        if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
+                            img_state.state = crate::text_reader::ImageLoadState::Failed {
+                                reason: "terminal doesn't support images".to_string(),
+                            };
+                        }
+                    }
+                }
                 debug!("Preloaded dimensions for {} images", images_processed);
             }
         }
@@ -1922,14 +1916,6 @@ impl TextReaderTrait for MarkdownTextReader {
             }
         }
 
-        None
-    }
-
-    fn get_embedded_image(&self, src: &str) -> Option<&EmbeddedImage> {
-        // Due to RefCell's borrowing rules, we cannot return a reference from inside the borrow.
-        // This is a fundamental API design issue that exists in the original TextReader as well.
-        // For now, return None as the method is not actually used anywhere in the codebase.
-        // TODO: Consider refactoring the trait to return owned data or use a different pattern.
         None
     }
 
@@ -2020,18 +2006,6 @@ impl TextReaderTrait for MarkdownTextReader {
         // Store the content area for mouse events
         self.last_content_area = Some(area);
         self.visible_height = area.height.saturating_sub(3) as usize; // Account for borders and margin
-
-        // Parse content if we don't have AST yet or if content has changed
-        if !_content.is_empty() {
-            // Check if we need to parse new content
-            let needs_parsing =
-                self.markdown_document.is_none() || self.content_length != _content.len();
-
-            if needs_parsing {
-                self.set_content_from_string(_content, chapter_title.clone());
-                self.content_length = _content.len();
-            }
-        }
 
         if self.show_raw_html {
             self.render_raw_html(
@@ -2160,29 +2134,155 @@ impl TextReaderTrait for MarkdownTextReader {
         frame.render_widget(inner_text_paragraph, inner_area);
 
         // Second pass: Render images on top
-        if let Some(picker) = &self.image_picker {
-            for (visual_line_idx, _src, image) in image_positions {
-                if let Some(embedded_image) = self.embedded_images.borrow().get(&_src) {
-                    let image_y = inner_area.y + visual_line_idx as u16;
-                    let image_height = embedded_image
-                        .height_cells
-                        .min(inner_area.height.saturating_sub(visual_line_idx as u16));
+        // Create vertical margins
 
-                    if image_height > 0 {
-                        let image_area = Rect {
-                            x: inner_area.x + 2, // Small padding from left
-                            y: image_y,
-                            width: inner_area.width.saturating_sub(4), // Padding on both sides
-                            height: image_height,
-                        };
+        let scroll_offset = self.scroll_offset;
+        // Display all embedded images from the chapter (only if not showing raw HTML)
+        if !self.show_raw_html {
+            self.check_for_loaded_images();
+            if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
+                let area_height = inner_area.height as usize;
 
-                        let mut protocol = picker.new_resize_protocol((*image).clone());
-                        let mut image_widget = StatefulImage::default();
-                        frame.render_stateful_widget(image_widget, image_area, &mut protocol);
+                // Iterate through all embedded images
+                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+                    let image_height_cells = embedded_image.height_cells as usize;
+                    let image_start_line = embedded_image.lines_before_image;
+                    let image_end_line = image_start_line + image_height_cells;
+
+                    // Check if image is in viewport
+                    if scroll_offset < image_end_line
+                        && scroll_offset + area_height > image_start_line
+                    {
+                        // Check if image is loaded
+                        if let ImageLoadState::Loaded {
+                            ref image,
+                            ref mut protocol,
+                        } = embedded_image.state
+                        {
+                            let scaled_image = image;
+
+                            if let Some(ref picker) = self.image_picker {
+                                let image_screen_start = if scroll_offset > image_start_line {
+                                    0
+                                } else {
+                                    image_start_line - scroll_offset
+                                };
+
+                                // Calculate visible portion
+                                let image_top_clipped = if scroll_offset > image_start_line {
+                                    scroll_offset - image_start_line
+                                } else {
+                                    0
+                                };
+
+                                let visible_image_height = (image_height_cells - image_top_clipped)
+                                    .min(area_height - image_screen_start);
+
+                                if visible_image_height > 0 {
+                                    debug!(
+                                        "here3 - visible_image_height: {}, image_screen_start: {}, image_top_clipped: {}",
+                                        visible_image_height, image_screen_start, image_top_clipped
+                                    );
+                                    // Don't center the image - use full width like the placeholder
+
+                                    // Get the actual image height for this specific image
+                                    let image_height_cells =
+                                        calculate_image_height_in_cells(scaled_image);
+
+                                    let (render_y, render_height) = if image_top_clipped > 0 {
+                                        (
+                                            inner_area.y,
+                                            ((image_height_cells as usize)
+                                                .saturating_sub(image_top_clipped))
+                                            .min(area_height)
+                                                as u16,
+                                        )
+                                    } else {
+                                        (
+                                            inner_area.y + image_screen_start as u16,
+                                            (image_height_cells as usize)
+                                                .min(area_height.saturating_sub(image_screen_start))
+                                                as u16,
+                                        )
+                                    };
+
+                                    // Calculate actual image width in terminal cells based on aspect ratio
+                                    let (image_width_pixels, image_height_pixels) =
+                                        scaled_image.dimensions();
+                                    let font_size = picker.font_size();
+                                    let image_width_cells =
+                                        (image_width_pixels as f32 / font_size.0 as f32).ceil()
+                                            as u16;
+
+                                    // Center the image horizontally within the text area
+                                    let text_area_width = inner_area.width;
+                                    let image_display_width =
+                                        image_width_cells.min(text_area_width);
+                                    let x_offset =
+                                        (text_area_width.saturating_sub(image_display_width)) / 2;
+
+                                    let image_area = Rect {
+                                        x: inner_area.x + x_offset,
+                                        y: render_y,
+                                        width: image_display_width,
+                                        height: render_height,
+                                    };
+
+                                    // Render using the stateful widget
+                                    // Use Viewport mode for efficient scrolling
+                                    let current_font_size = picker.font_size();
+                                    let y_offset_pixels = (image_top_clipped as f32
+                                        * current_font_size.1 as f32)
+                                        as u32;
+
+                                    let viewport_options = ratatui_image::ViewportOptions {
+                                        y_offset: y_offset_pixels,
+                                        x_offset: 0, // No horizontal scrolling for now
+                                    };
+
+                                    // Use protocol directly for rendering
+                                    let image_widget = StatefulImage::new()
+                                        .resize(Resize::Viewport(viewport_options));
+                                    debug!(
+                                        "Rendering image at area: {:?}, scroll_offset: {}, image_start_line: {}",
+                                        image_area, scroll_offset, image_start_line
+                                    );
+                                    frame.render_stateful_widget(
+                                        image_widget,
+                                        image_area,
+                                        protocol,
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        // if let Some(picker) = &self.image_picker {
+        //     for (visual_line_idx, _src, image) in image_positions {
+        //         if let Some(embedded_image) = self.embedded_images.borrow().get(&_src) {
+        //             let image_y = inner_area.y + visual_line_idx as u16;
+        //             let image_height = embedded_image
+        //                 .height_cells
+        //                 .min(inner_area.height.saturating_sub(visual_line_idx as u16));
+
+        //             if image_height > 0 {
+        //                 let image_area = Rect {
+        //                     x: inner_area.x + 2, // Small padding from left
+        //                     y: image_y,
+        //                     width: inner_area.width.saturating_sub(4), // Padding on both sides
+        //                     height: image_height,
+        //                 };
+
+        //                 let mut protocol = picker.new_resize_protocol((*image).clone());
+        //                 let mut image_widget = StatefulImage::default();
+        //                 frame.render_stateful_widget(image_widget, image_area, &mut protocol);
+        //             }
+        //         }
+        //     }
+        // }
 
         // Text selection is already handled via apply_selection_highlighting in the visible_lines loop
     }
@@ -2198,4 +2298,9 @@ impl TextReaderTrait for MarkdownTextReader {
     fn get_last_content_area(&self) -> Option<Rect> {
         self.last_content_area
     }
+}
+
+fn calculate_image_height_in_cells(image: &DynamicImage) -> u16 {
+    let (width, height) = image.dimensions();
+    EmbeddedImage::height_in_cells(width, height)
 }

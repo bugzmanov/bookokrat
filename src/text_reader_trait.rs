@@ -44,7 +44,6 @@ pub trait TextReaderTrait: VimNavMotions {
     fn preload_image_dimensions(&mut self, content: &str, book_images: &BookImages);
     fn check_for_loaded_images(&mut self) -> bool;
     fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String>;
-    fn get_embedded_image(&self, src: &str) -> Option<&EmbeddedImage>;
     fn get_image_picker(&self) -> Option<&Picker>;
     fn get_loaded_image(&self, image_src: &str) -> Option<Arc<DynamicImage>>;
 

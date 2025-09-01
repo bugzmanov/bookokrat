@@ -1277,7 +1277,7 @@ impl TextReader {
                 if i + 2 < chars.len() && chars[i + 1] == '`' && chars[i + 2] == '`' {
                     // This is a code block marker - treat all three as literal text, don't format
                     current_text.push(chars[i]); // First `
-                    current_text.push(chars[i + 1]); // Second `  
+                    current_text.push(chars[i + 1]); // Second `
                     current_text.push(chars[i + 2]); // Third `
                     i += 3; // Skip all three backticks
                 } else {
@@ -2277,13 +2277,6 @@ impl TextReader {
         self.image_picker.as_ref()
     }
 
-    /// Get an embedded image by source path
-    pub fn get_embedded_image(&self, image_src: &str) -> Option<&EmbeddedImage> {
-        // Since we can't return a reference from the borrow, we'll need a different approach
-        // For now, let's just check if the image exists and is loaded
-        None // Placeholder - we'll implement this differently
-    }
-
     /// Check if an embedded image is loaded and return the image if it is
     pub fn get_loaded_image(&self, image_src: &str) -> Option<Arc<DynamicImage>> {
         if let Some(embedded_image) = self.embedded_images.borrow().get(image_src) {
@@ -2980,10 +2973,6 @@ impl TextReaderTrait for TextReader {
 
     fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String> {
         self.check_image_click(x, y, area)
-    }
-
-    fn get_embedded_image(&self, src: &str) -> Option<&EmbeddedImage> {
-        self.get_embedded_image(src)
     }
 
     fn get_image_picker(&self) -> Option<&Picker> {
