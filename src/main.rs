@@ -8,7 +8,7 @@ use crossterm::{
 };
 use log::{error, info};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use simplelog::{Config, LevelFilter, WriteLogger};
+use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 
 mod book_list;
 mod book_manager;
@@ -43,10 +43,13 @@ fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
     panic_handler::initialize_panic_handler();
 
-    // Initialize logging
+    // Initialize logging with html5ever DEBUG logs filtered out
     WriteLogger::init(
         LevelFilter::Debug,
-        Config::default(),
+        simplelog::ConfigBuilder::new()
+            .set_max_level(LevelFilter::Debug)
+            .add_filter_ignore_str("html5ever")
+            .build(),
         File::create("bookrat.log")?,
     )?;
 

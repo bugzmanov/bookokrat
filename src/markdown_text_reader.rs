@@ -102,6 +102,7 @@ pub struct MarkdownTextReader {
     text_selection: TextSelection,
     raw_text_lines: Vec<String>, // Still needed for clipboard
     last_content_area: Option<Rect>,
+    last_inner_text_area: Option<Rect>, // Track the actual text rendering area
     auto_scroll_active: bool,
     auto_scroll_speed: f32,
 
@@ -146,7 +147,7 @@ impl MarkdownTextReader {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
-            .style(RatatuiStyle::default().fg(palette.base_08)); // Red border for raw mode
+            .style(RatatuiStyle::default().fg(palette.base_09)); // Red border for raw mode
 
         let raw_content = if let Some(html) = &self.raw_html_content {
             html.clone()
@@ -311,6 +312,7 @@ impl MarkdownTextReader {
             text_selection: TextSelection::new(),
             raw_text_lines: Vec::new(),
             last_content_area: None,
+            last_inner_text_area: None,
             auto_scroll_active: false,
             auto_scroll_speed: 1.0,
             image_picker,
@@ -1344,29 +1346,16 @@ impl MarkdownTextReader {
         // Convert spans to plain text for wrapping
         let plain_text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
 
-        // Apply indentation for first line
-        let indented_text = if indent == 0 && !plain_text.trim().is_empty() {
-            format!("    {}", plain_text) // 4-space indent for paragraphs
-        } else {
-            plain_text
-        };
-
-        // Wrap the text
-        let wrapped = textwrap::wrap(&indented_text, width);
+        // Wrap the text without any automatic indentation
+        let wrapped = textwrap::wrap(&plain_text, width);
 
         // Create lines from wrapped text
         for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
             // For the first line, use the styled spans if possible
             // For subsequent lines, use plain text
             let line_spans = if line_idx == 0 && wrapped.len() == 1 {
-                // Single line - use the styled spans with indentation
-                if indent == 0 && !spans.is_empty() {
-                    let mut indented_spans = vec![Span::raw("    ")];
-                    indented_spans.extend(spans.iter().cloned());
-                    indented_spans
-                } else {
-                    spans.to_vec()
-                }
+                // Single line - use the styled spans without indentation
+                spans.to_vec()
             } else {
                 // Multi-line or not first line - use plain text
                 vec![Span::raw(wrapped_line.to_string())]
@@ -1555,13 +1544,19 @@ impl TextReaderTrait for MarkdownTextReader {
     fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
         // Parse HTML string to Markdown AST
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-        
-        debug!("set_content_from_string called with {} bytes of content", content.len());
-        debug!("First 500 chars of content: {}", &content.chars().take(500).collect::<String>());
-        
+
+        debug!(
+            "set_content_from_string called with {} bytes of content",
+            content.len()
+        );
+        debug!(
+            "First 500 chars of content: {}",
+            &content.chars().take(500).collect::<String>()
+        );
+
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(content);
-        
+
         debug!("Converted to AST with {} blocks", doc.blocks.len());
         for (i, block) in doc.blocks.iter().take(3).enumerate() {
             debug!("Block {}: {:?}", i, block);
@@ -1604,13 +1599,13 @@ impl TextReaderTrait for MarkdownTextReader {
         self.content_length = content_length;
         self.scroll_offset = 0;
         self.text_selection.clear_selection();
-        
+
         // IMPORTANT: Clear the markdown document so new content can be parsed
         self.markdown_document = None;
-        
+
         // Clear caches
         self.cache_generation += 1;
-        
+
         // Clear other state
         self.links.clear();
         self.embedded_tables.borrow_mut().clear();
@@ -1620,7 +1615,7 @@ impl TextReaderTrait for MarkdownTextReader {
             total_height: 0,
             generation: 0,
         };
-        
+
         debug!("content_updated: cleared markdown_document and all state");
     }
 
@@ -1635,18 +1630,24 @@ impl TextReaderTrait for MarkdownTextReader {
             // Parse HTML content to Markdown AST if we don't have it yet
             if self.markdown_document.is_none() && !content.is_empty() {
                 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-                
-                debug!("update_wrapped_lines_if_needed: parsing {} bytes of content", content.len());
-                debug!("First 500 chars: {}", &content.chars().take(500).collect::<String>());
-                
+
+                debug!(
+                    "update_wrapped_lines_if_needed: parsing {} bytes of content",
+                    content.len()
+                );
+                debug!(
+                    "First 500 chars: {}",
+                    &content.chars().take(500).collect::<String>()
+                );
+
                 let mut converter = HtmlToMarkdownConverter::new();
                 let doc = converter.convert(content);
-                
+
                 debug!("Converted to {} blocks", doc.blocks.len());
                 for (i, block) in doc.blocks.iter().take(3).enumerate() {
                     debug!("Block {}: {:?}", i, block);
                 }
-                
+
                 self.markdown_document = Some(doc);
 
                 // Mark cache as invalid to force re-rendering
@@ -1700,9 +1701,16 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect) {
-        if x > area.x && x < area.x + area.width && y > area.y && y < area.y + area.height {
-            let line = self.scroll_offset + (y - area.y - 1) as usize;
-            let column = (x - area.x - 1) as usize;
+        // Use the inner text area if available, otherwise fall back to the provided area
+        let text_area = self.last_inner_text_area.unwrap_or(area);
+
+        if x >= text_area.x
+            && x < text_area.x + text_area.width
+            && y >= text_area.y
+            && y < text_area.y + text_area.height
+        {
+            let line = self.scroll_offset + (y - text_area.y) as usize;
+            let column = (x - text_area.x) as usize;
 
             self.text_selection.start_selection(line, column);
             debug!("Started text selection at line {}, column {}", line, column);
@@ -1711,17 +1719,20 @@ impl TextReaderTrait for MarkdownTextReader {
 
     fn handle_mouse_drag(&mut self, x: u16, y: u16, area: Rect) {
         if self.text_selection.is_selecting {
-            let line = self.scroll_offset + (y.saturating_sub(area.y + 1)) as usize;
-            let column = (x.saturating_sub(area.x + 1)) as usize;
+            // Use the inner text area if available, otherwise fall back to the provided area
+            let text_area = self.last_inner_text_area.unwrap_or(area);
+
+            let line = self.scroll_offset + (y.saturating_sub(text_area.y)) as usize;
+            let column = (x.saturating_sub(text_area.x)) as usize;
 
             self.text_selection.update_selection(line, column);
 
-            // Auto-scroll if dragging near edges
+            // Auto-scroll if dragging near edges (use the text area bounds)
             const SCROLL_MARGIN: u16 = 3;
-            if y <= area.y + SCROLL_MARGIN && self.scroll_offset > 0 {
+            if y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0 {
                 self.auto_scroll_active = true;
                 self.auto_scroll_speed = -1.0;
-            } else if y >= area.y + area.height - SCROLL_MARGIN {
+            } else if y >= text_area.y + text_area.height - SCROLL_MARGIN {
                 self.auto_scroll_active = true;
                 self.auto_scroll_speed = 1.0;
             } else {
@@ -1733,9 +1744,12 @@ impl TextReaderTrait for MarkdownTextReader {
     fn handle_mouse_up(&mut self, x: u16, y: u16, area: Rect) -> Option<String> {
         self.auto_scroll_active = false;
 
+        // Use the inner text area if available, otherwise fall back to the provided area
+        let text_area = self.last_inner_text_area.unwrap_or(area);
+
         if self.text_selection.is_selecting {
-            let line = self.scroll_offset + (y.saturating_sub(area.y + 1)) as usize;
-            let column = (x.saturating_sub(area.x + 1)) as usize;
+            let line = self.scroll_offset + (y.saturating_sub(text_area.y)) as usize;
+            let column = (x.saturating_sub(text_area.x)) as usize;
 
             self.text_selection.end_selection();
 
@@ -1744,14 +1758,21 @@ impl TextReaderTrait for MarkdownTextReader {
             }
         }
 
-        // Check for image click
+        // Check for image click (pass the original area as it uses inner text area internally)
         self.check_image_click(x, y, area)
     }
 
     fn handle_double_click(&mut self, x: u16, y: u16, area: Rect) {
-        if x > area.x && x < area.x + area.width && y > area.y && y < area.y + area.height {
-            let line = self.scroll_offset + (y - area.y - 1) as usize;
-            let column = (x - area.x - 1) as usize;
+        // Use the inner text area if available, otherwise fall back to the provided area
+        let text_area = self.last_inner_text_area.unwrap_or(area);
+
+        if x >= text_area.x
+            && x < text_area.x + text_area.width
+            && y >= text_area.y
+            && y < text_area.y + text_area.height
+        {
+            let line = self.scroll_offset + (y - text_area.y) as usize;
+            let column = (x - text_area.x) as usize;
 
             // Select word at position
             if line < self.raw_text_lines.len() {
@@ -1763,8 +1784,15 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn handle_triple_click(&mut self, x: u16, y: u16, area: Rect) {
-        if x > area.x && x < area.x + area.width && y > area.y && y < area.y + area.height {
-            let line = self.scroll_offset + (y - area.y - 1) as usize;
+        // Use the inner text area if available, otherwise fall back to the provided area
+        let text_area = self.last_inner_text_area.unwrap_or(area);
+
+        if x >= text_area.x
+            && x < text_area.x + text_area.width
+            && y >= text_area.y
+            && y < text_area.y + text_area.height
+        {
+            let line = self.scroll_offset + (y - text_area.y) as usize;
 
             // Select entire paragraph/line
             if line < self.raw_text_lines.len() {
@@ -1867,9 +1895,21 @@ impl TextReaderTrait for MarkdownTextReader {
         any_loaded
     }
 
-    fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String> {
-        // Calculate the line number that was clicked
-        let clicked_line = self.scroll_offset + (y.saturating_sub(area.y + 1)) as usize;
+    fn check_image_click(&self, x: u16, y: u16, _area: Rect) -> Option<String> {
+        // Use the inner text area if available
+        let text_area = self.last_inner_text_area?;
+
+        // Check if click is within the text area
+        if x < text_area.x
+            || x >= text_area.x + text_area.width
+            || y < text_area.y
+            || y >= text_area.y + text_area.height
+        {
+            return None;
+        }
+
+        // Calculate the line number that was clicked within the text area
+        let clicked_line = self.scroll_offset + (y - text_area.y) as usize;
 
         // Check each embedded image to see if the click is within its bounds
         for (src, embedded_image) in self.embedded_images.borrow().iter() {
@@ -1979,30 +2019,20 @@ impl TextReaderTrait for MarkdownTextReader {
     ) {
         // Store the content area for mouse events
         self.last_content_area = Some(area);
-        self.visible_height = area.height.saturating_sub(2) as usize; // Account for borders
+        self.visible_height = area.height.saturating_sub(3) as usize; // Account for borders and margin
 
         // Parse content if we don't have AST yet or if content has changed
         if !_content.is_empty() {
             // Check if we need to parse new content
-            let needs_parsing = self.markdown_document.is_none() || 
-                                self.content_length != _content.len();
-            
+            let needs_parsing =
+                self.markdown_document.is_none() || self.content_length != _content.len();
+
             if needs_parsing {
-                debug!("Parsing content to AST, content length: {}", _content.len());
                 self.set_content_from_string(_content, chapter_title.clone());
                 self.content_length = _content.len();
             }
         }
-        
-        debug!("Has markdown_document: {}, content_length: {}", 
-               self.markdown_document.is_some(), 
-               self.content_length);
-        
-        if let Some(ref doc) = self.markdown_document {
-            debug!("Document has {} blocks", doc.blocks.len());
-        }
-        
-        // Check if we should display raw HTML
+
         if self.show_raw_html {
             self.render_raw_html(
                 frame,
@@ -2016,19 +2046,13 @@ impl TextReaderTrait for MarkdownTextReader {
         }
 
         // Re-render if width changed, focus changed, or content changed (cache invalidated)
-        let width = area.width.saturating_sub(2) as usize; // Account for borders
-        
-        debug!("Render check: width {} vs {}, focus {} vs {}, generation {} vs {}", 
-               width, self.last_width,
-               is_focused, self.last_focus_state,
-               self.rendered_content.generation, self.cache_generation);
-        
+        let width = area.width.saturating_sub(4) as usize; // Account for borders and margins
+
         if self.last_width != width
             || self.last_focus_state != is_focused
             || self.rendered_content.generation != self.cache_generation
         {
             if self.markdown_document.is_some() {
-                debug!("Re-rendering document to lines");
                 // Clone the document to avoid borrow checker issues
                 let doc = self.markdown_document.as_ref().unwrap().clone();
                 self.rendered_content =
@@ -2036,16 +2060,10 @@ impl TextReaderTrait for MarkdownTextReader {
                 self.total_wrapped_lines = self.rendered_content.total_height;
                 self.last_width = width;
                 self.last_focus_state = is_focused;
-                debug!("Rendered {} lines, total height: {}", 
-                       self.rendered_content.lines.len(), 
-                       self.rendered_content.total_height);
             } else {
                 debug!("No markdown_document to render!");
             }
-        } else {
-            debug!("Skipping render - no changes detected");
         }
-
         // Build the title
         let title_text = if let Some(title) = chapter_title {
             format!("[{}/{}] {}", current_chapter, total_chapters, title)
@@ -2060,11 +2078,17 @@ impl TextReaderTrait for MarkdownTextReader {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
-            .title_bottom(format!(" {}% ", progress));
+            .title_bottom(Line::from(format!(" {}% ", progress)).right_aligned());
 
         // Calculate the inner area after borders
-        let inner_area = block.inner(area);
+        let mut inner_area = block.inner(area);
+        inner_area.y = inner_area.y.saturating_add(1);
+        inner_area.height = inner_area.height.saturating_sub(1);
+        inner_area.x = inner_area.x.saturating_add(1);
 
+        // Store the inner text area for mouse event handling
+        self.last_inner_text_area = Some(inner_area);
+        //
         // First pass: Collect non-image lines and render text
         let mut visible_lines = Vec::new();
         let mut image_positions = Vec::new();
@@ -2123,11 +2147,17 @@ impl TextReaderTrait for MarkdownTextReader {
         }
 
         // Create the paragraph widget
-        let paragraph = Paragraph::new(visible_lines)
+        let paragraph = Paragraph::new(vec![])
             .block(block.clone())
             .wrap(ratatui::widgets::Wrap { trim: false });
 
         frame.render_widget(paragraph, area);
+
+        let inner_text_paragraph = Paragraph::new(visible_lines)
+            .block(Block::default().borders(Borders::NONE))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+
+        frame.render_widget(inner_text_paragraph, inner_area);
 
         // Second pass: Render images on top
         if let Some(picker) = &self.image_picker {
