@@ -6,16 +6,16 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
+use crate::table::{Table as CustomTable, TableConfig};
 use crate::text_reader::{EmbeddedImage, EmbeddedTable, ImageLoadState, LinkInfo};
 use crate::text_reader_trait::TextReaderTrait;
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
-use log::{debug, error, warn};
-use ratatui::layout::{Constraint, Direction, Layout};
+use log::{debug, warn};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Rect},
     style::{Color, Modifier, Style as RatatuiStyle},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -33,6 +33,7 @@ struct RenderedContent {
     generation: u64, // For cache validation
 }
 
+#[derive(Clone)]
 struct RenderedLine {
     spans: Vec<Span<'static>>,
     raw_text: String, // For text selection
@@ -981,9 +982,9 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
     ) {
-        // Create table data structure
-        let mut table_headers = Vec::new();
+        // Convert markdown table to String format for Table widget
         let mut table_rows = Vec::new();
+        let mut table_headers = Vec::new();
 
         // Process header
         if let Some(header_row) = header {
@@ -1004,11 +1005,7 @@ impl MarkdownTextReader {
             table_rows.push(row_data);
         }
 
-        // Store table position
-        let table_start_line = *total_height;
-
-        // Create a simple ASCII table representation
-        // Calculate column widths
+        // Get dimensions for embedded table tracking
         let num_cols = table_headers
             .len()
             .max(table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
@@ -1017,147 +1014,65 @@ impl MarkdownTextReader {
             return; // Empty table
         }
 
-        let mut col_widths = vec![0; num_cols];
+        // Store table position
+        let table_start_line = *total_height;
 
-        // Consider headers for width
-        for (i, header) in table_headers.iter().enumerate() {
-            if i < num_cols {
-                col_widths[i] = col_widths[i].max(header.len());
-            }
-        }
+        // Create balanced column constraints based on content
+        let constraints = self.calculate_balanced_column_widths(&table_headers, &table_rows, width);
 
-        // Consider data rows for width
-        for row in &table_rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < num_cols {
-                    col_widths[i] = col_widths[i].max(cell.len());
-                }
-            }
-        }
+        // Create table widget configuration
+        let table_config = TableConfig {
+            border_color: palette.base_03,
+            header_color: if is_focused {
+                palette.base_0a
+            } else {
+                palette.base_03
+            },
+            text_color: if is_focused {
+                palette.base_05
+            } else {
+                palette.base_04
+            },
+            use_block: false,
+        };
 
-        // Ensure minimum column width
-        for width in &mut col_widths {
-            *width = (*width).max(3);
-        }
+        // Create the table widget
+        let mut custom_table = CustomTable::new(table_rows.clone())
+            .constraints(constraints)
+            .config(table_config);
 
-        // Calculate total table width
-        let table_width = col_widths.iter().sum::<usize>() + (num_cols - 1) * 3 + 4; // 3 for " | ", 4 for borders
-        let table_width = table_width.min(width);
-
-        // Render top border
-        let top_border = format!("┌{}┐", "─".repeat(table_width.saturating_sub(2)));
-        lines.push(RenderedLine {
-            spans: vec![Span::styled(
-                top_border.clone(),
-                RatatuiStyle::default().fg(palette.base_03),
-            )],
-            raw_text: top_border.clone(),
-            line_type: LineType::Text,
-            source_node: node_ref.clone(),
-            visual_height: 1,
-        });
-        self.raw_text_lines.push(top_border);
-        *total_height += 1;
-
-        // Render header if present
         if !table_headers.is_empty() {
-            let mut header_line = String::from("│ ");
-            for (i, header) in table_headers.iter().enumerate() {
-                if i > 0 {
-                    header_line.push_str(" │ ");
-                }
-                let padded = format!(
-                    "{:width$}",
-                    header,
-                    width = col_widths.get(i).copied().unwrap_or(10)
-                );
-                header_line.push_str(&padded);
-            }
-            header_line.push_str(" │");
+            custom_table = custom_table.header(table_headers.clone());
+        }
 
-            lines.push(RenderedLine {
-                spans: vec![Span::styled(
-                    header_line.clone(),
-                    RatatuiStyle::default()
-                        .fg(if is_focused {
-                            palette.base_0a
-                        } else {
-                            palette.base_03
-                        })
-                        .add_modifier(Modifier::BOLD),
-                )],
-                raw_text: header_line.clone(),
-                line_type: LineType::TableRow { is_header: true },
+        // Set base line for link tracking
+        custom_table = custom_table.base_line(table_start_line);
+
+        // Render the table to lines
+        let rendered_lines = custom_table.render_to_lines(width as u16);
+
+        // Convert ratatui Lines to RenderedLines
+        for line in rendered_lines {
+            // Get raw text before moving spans
+            let raw_text = self.line_to_plain_text(&line);
+
+            // Convert line spans to our format
+            let rendered_line = RenderedLine {
+                spans: line.spans,
+                raw_text: raw_text.clone(),
+                line_type: LineType::Text, // Table widget handles its own styling
                 source_node: node_ref.clone(),
                 visual_height: 1,
-            });
-            self.raw_text_lines.push(header_line);
-            *total_height += 1;
+            };
 
-            // Render separator
-            let separator = format!("├{}┤", "─".repeat(table_width.saturating_sub(2)));
-            lines.push(RenderedLine {
-                spans: vec![Span::styled(
-                    separator.clone(),
-                    RatatuiStyle::default().fg(palette.base_03),
-                )],
-                raw_text: separator.clone(),
-                line_type: LineType::Text,
-                source_node: node_ref.clone(),
-                visual_height: 1,
-            });
-            self.raw_text_lines.push(separator);
+            lines.push(rendered_line);
+            self.raw_text_lines.push(raw_text);
             *total_height += 1;
         }
 
-        // Render data rows
-        for row in &table_rows {
-            let mut row_line = String::from("│ ");
-            for (i, cell) in row.iter().enumerate() {
-                if i > 0 {
-                    row_line.push_str(" │ ");
-                }
-                let padded = format!(
-                    "{:width$}",
-                    cell,
-                    width = col_widths.get(i).copied().unwrap_or(10)
-                );
-                row_line.push_str(&padded);
-            }
-            // Pad remaining columns if row is shorter
-            for i in row.len()..num_cols {
-                if i > 0 {
-                    row_line.push_str(" │ ");
-                }
-                row_line.push_str(&" ".repeat(col_widths.get(i).copied().unwrap_or(10)));
-            }
-            row_line.push_str(" │");
-
-            lines.push(RenderedLine {
-                spans: vec![Span::raw(row_line.clone())],
-                raw_text: row_line.clone(),
-                line_type: LineType::TableRow { is_header: false },
-                source_node: node_ref.clone(),
-                visual_height: 1,
-            });
-            self.raw_text_lines.push(row_line);
-            *total_height += 1;
-        }
-
-        // Render bottom border
-        let bottom_border = format!("└{}┘", "─".repeat(table_width.saturating_sub(2)));
-        lines.push(RenderedLine {
-            spans: vec![Span::styled(
-                bottom_border.clone(),
-                RatatuiStyle::default().fg(palette.base_03),
-            )],
-            raw_text: bottom_border.clone(),
-            line_type: LineType::Text,
-            source_node: node_ref.clone(),
-            visual_height: 1,
-        });
-        self.raw_text_lines.push(bottom_border);
-        *total_height += 1;
+        // Extract and store links from the table
+        let table_links = custom_table.get_links();
+        self.links.extend(table_links.clone());
 
         // Store table info for click detection
         let table_height = *total_height - table_start_line;
@@ -1186,6 +1101,124 @@ impl MarkdownTextReader {
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
+    }
+
+    /// Calculate balanced column constraints for table rendering
+    fn calculate_balanced_column_widths(
+        &self,
+        headers: &[String],
+        data_rows: &[Vec<String>],
+        available_width: usize,
+    ) -> Vec<Constraint> {
+        let num_cols = headers
+            .len()
+            .max(data_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+
+        if num_cols == 0 {
+            return Vec::new();
+        }
+
+        let min_col_width = 8; // Minimum column width
+        // Account for borders and column spacing
+        let spacing_width = if num_cols > 1 { num_cols - 1 } else { 0 };
+        let total_available = available_width.saturating_sub(2 + spacing_width); // 2 for left/right borders
+
+        // Calculate content-based widths by examining all rows
+        let mut max_content_widths = vec![0; num_cols];
+
+        // Check header row
+        for (col_idx, cell) in headers.iter().enumerate() {
+            if col_idx < max_content_widths.len() {
+                let display_width = self.calculate_display_width(cell);
+                max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
+            }
+        }
+
+        // Check all data rows
+        for row in data_rows {
+            for (col_idx, cell) in row.iter().enumerate() {
+                if col_idx < max_content_widths.len() {
+                    let display_width = self.calculate_display_width(cell);
+                    max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
+                }
+            }
+        }
+
+        // Apply minimum width constraint and calculate total desired width
+        let mut desired_widths: Vec<usize> = max_content_widths
+            .into_iter()
+            .map(|w| w.max(min_col_width))
+            .collect();
+
+        let total_desired: usize = desired_widths.iter().sum();
+
+        // If total desired width exceeds available space, scale down proportionally
+        if total_desired > total_available {
+            let scale = total_available as f32 / total_desired as f32;
+            for width in &mut desired_widths {
+                *width = (*width as f32 * scale).max(min_col_width as f32) as usize;
+            }
+
+            // Ensure we don't exceed available width after scaling
+            let scaled_total: usize = desired_widths.iter().sum();
+            if scaled_total > total_available {
+                let excess = scaled_total - total_available;
+                // Remove excess from the largest column
+                if let Some(max_idx) = desired_widths
+                    .iter()
+                    .position(|&w| w == *desired_widths.iter().max().unwrap())
+                {
+                    desired_widths[max_idx] = desired_widths[max_idx].saturating_sub(excess);
+                }
+            }
+        }
+
+        // Convert to ratatui constraints
+        desired_widths
+            .into_iter()
+            .map(|w| Constraint::Length(w as u16))
+            .collect()
+    }
+
+    /// Calculate display width of text, excluding markdown formatting markers
+    fn calculate_display_width(&self, text: &str) -> usize {
+        // Strip markdown formatting markers for width calculation
+        let mut display_text = text.to_string();
+
+        // Handle <br/> tags - each represents a line break, so find the longest line
+        if display_text.contains("<br/>") {
+            return display_text
+                .replace("<br/> ", "\n")
+                .replace("<br/>", "\n")
+                .lines()
+                .map(|line| {
+                    // Strip markdown from each line and get its width
+                    let stripped = line
+                        .replace("**", "")
+                        .replace("__", "")
+                        .replace("*", "")
+                        .replace("_", "");
+                    stripped.chars().count()
+                })
+                .max()
+                .unwrap_or(0);
+        }
+
+        // Strip markdown formatting markers
+        display_text = display_text.replace("**", "");
+        display_text = display_text.replace("__", "");
+        display_text = display_text.replace("*", "");
+        display_text = display_text.replace("_", "");
+
+        display_text.chars().count()
+    }
+
+    /// Convert ratatui Line to plain text string
+    fn line_to_plain_text(&self, line: &Line) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     }
 
     fn render_quote(
