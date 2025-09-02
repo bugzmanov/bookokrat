@@ -663,6 +663,7 @@ impl MarkdownTextReader {
                     if !current_spans.is_empty() {
                         self.render_text_spans(
                             &current_spans,
+                            None, // no prefix
                             node_ref.clone(),
                             lines,
                             total_height,
@@ -700,6 +701,7 @@ impl MarkdownTextReader {
         if !current_spans.is_empty() {
             self.render_text_spans(
                 &current_spans,
+                None, // no prefix
                 node_ref.clone(),
                 lines,
                 total_height,
@@ -910,35 +912,32 @@ impl MarkdownTextReader {
                     // First block gets the bullet/number prefix
                     match &block_node.block {
                         MarkdownBlock::Paragraph { content } => {
-                            // Get the text content
-                            let text_str = self.text_to_string(content);
-                            let prefixed_text = format!("{}{}", prefix, text_str);
+                            // Render the rich text content with prefix and indentation
+                            let mut content_spans = Vec::new();
+                            for item in content.iter() {
+                                content_spans.extend(self.render_text_or_inline(item, palette, is_focused, *total_height));
+                            }
 
-                            // Wrap with proper indentation
-                            let indent_str = " ".repeat(indent * 2);
-                            let wrapped = textwrap::wrap(&prefixed_text, width - indent * 2);
+                            // Store original line count to update line types after
+                            let lines_before = lines.len();
 
-                            for wrapped_line in wrapped {
-                                // Get the appropriate text color from palette
-                                let (normal_color, _, _) = palette.get_panel_colors(is_focused);
+                            self.render_text_spans(
+                                &content_spans,
+                                Some(&prefix), // add bullet/number prefix
+                                node_ref.clone(),
+                                lines,
+                                total_height,
+                                width,
+                                indent, // proper indentation
+                                false, // don't add empty line after
+                            );
 
-                                lines.push(RenderedLine {
-                                    spans: vec![Span::styled(
-                                        format!("{}{}", indent_str, wrapped_line),
-                                        RatatuiStyle::default().fg(normal_color),
-                                    )],
-                                    raw_text: format!("{}{}", indent_str, wrapped_line),
-                                    line_type: LineType::ListItem {
-                                        kind: kind.clone(),
-                                        indent,
-                                    },
-                                    source_node: node_ref.clone(),
-                                    visual_height: 1,
-                                });
-
-                                self.raw_text_lines
-                                    .push(format!("{}{}", indent_str, wrapped_line));
-                                *total_height += 1;
+                            // Update line types for all newly added lines
+                            for line in &mut lines[lines_before..] {
+                                line.line_type = LineType::ListItem {
+                                    kind: kind.clone(),
+                                    indent,
+                                };
                             }
                         }
                         _ => {
@@ -1251,32 +1250,39 @@ impl MarkdownTextReader {
                 MarkdownBlock::Paragraph {
                     content: para_content,
                 } => {
-                    let text_str = self.text_to_string(para_content);
-                    let prefixed_text = format!("> {}", text_str);
-
-                    let wrapped = textwrap::wrap(&prefixed_text, width);
-
-                    for wrapped_line in wrapped {
-                        lines.push(RenderedLine {
-                            spans: vec![Span::styled(
-                                wrapped_line.to_string(),
-                                RatatuiStyle::default()
-                                    .fg(if is_focused {
-                                        palette.base_03
-                                    } else {
-                                        palette.base_02
-                                    })
-                                    .add_modifier(Modifier::ITALIC),
-                            )],
-                            raw_text: wrapped_line.to_string(),
-                            line_type: LineType::Text,
-                            source_node: node_ref.clone(),
-                            visual_height: 1,
-                        });
-
-                        self.raw_text_lines.push(wrapped_line.to_string());
-                        *total_height += 1;
+                    // Render the rich text content with "> " prefix
+                    let mut content_spans = Vec::new();
+                    for item in para_content.iter() {
+                        content_spans.extend(self.render_text_or_inline(item, palette, is_focused, *total_height));
                     }
+
+                    // Apply quote styling to all spans
+                    let quote_color = if is_focused {
+                        palette.base_03
+                    } else {
+                        palette.base_02
+                    };
+
+                    let styled_spans: Vec<Span<'static>> = content_spans
+                        .into_iter()
+                        .map(|span| {
+                            Span::styled(
+                                span.content.clone(),
+                                span.style.fg(quote_color).add_modifier(Modifier::ITALIC),
+                            )
+                        })
+                        .collect();
+
+                    self.render_text_spans(
+                        &styled_spans,
+                        Some("> "), // quote prefix
+                        node_ref.clone(),
+                        lines,
+                        total_height,
+                        width,
+                        indent,
+                        false, // don't add empty line after
+                    );
                 }
                 _ => {
                     // Render other block types within quotes
@@ -1360,61 +1366,56 @@ impl MarkdownTextReader {
         // Render each term-definition pair
         for item in items {
             // Render the term (dt) - bold and possibly colored
-            let term_text = self.text_to_string(&item.term);
             let term_color = if is_focused {
                 palette.base_0c // Yellow for focused
             } else {
                 palette.base_03 // Dimmed when not focused
             };
 
-            // Wrap the term text if needed
-            let wrapped_term = textwrap::wrap(&term_text, width);
-            for wrapped_line in wrapped_term {
-                lines.push(RenderedLine {
-                    spans: vec![Span::styled(
-                        wrapped_line.to_string(),
-                        RatatuiStyle::default()
-                            .fg(term_color)
-                            .add_modifier(Modifier::BOLD),
-                    )],
-                    raw_text: wrapped_line.to_string(),
-                    line_type: LineType::Text,
-                    source_node: node_ref.clone(),
-                    visual_height: 1,
-                });
-                self.raw_text_lines.push(wrapped_line.to_string());
-                *total_height += 1;
+            let mut term_spans = Vec::new();
+            for term_item in item.term.iter() {
+                term_spans.extend(self.render_text_or_inline(term_item, palette, is_focused, *total_height));
             }
+
+            // Apply bold styling to all term spans
+            let styled_term_spans: Vec<Span<'static>> = term_spans
+                .into_iter()
+                .map(|span| {
+                    Span::styled(
+                        span.content.clone(),
+                        span.style.fg(term_color).add_modifier(Modifier::BOLD),
+                    )
+                })
+                .collect();
+
+            self.render_text_spans(
+                &styled_term_spans,
+                None, // no prefix for terms
+                node_ref.clone(),
+                lines,
+                total_height,
+                width,
+                0, // no indentation for terms
+                false, // don't add empty line after
+            );
 
             // Render each definition (dd) - indented
             for definition in &item.definitions {
-                let def_text = self.text_to_string(definition);
-
-                // Wrap the definition text first, then add indentation to each line
-                // This ensures all lines of wrapped text get the indentation
-                let indent_str = "    "; // 4 spaces for definition indentation
-                let available_width = width.saturating_sub(indent_str.len());
-                let wrapped_def = textwrap::wrap(&def_text, available_width);
-
-                let (normal_color, _, _) = palette.get_panel_colors(is_focused);
-
-                for wrapped_line in wrapped_def {
-                    // Add indentation to each wrapped line
-                    let indented_line = format!("{}{}", indent_str, wrapped_line);
-
-                    lines.push(RenderedLine {
-                        spans: vec![Span::styled(
-                            indented_line.clone(),
-                            RatatuiStyle::default().fg(normal_color),
-                        )],
-                        raw_text: indented_line.clone(),
-                        line_type: LineType::Text,
-                        source_node: node_ref.clone(),
-                        visual_height: 1,
-                    });
-                    self.raw_text_lines.push(indented_line);
-                    *total_height += 1;
+                let mut def_spans = Vec::new();
+                for def_item in definition.iter() {
+                    def_spans.extend(self.render_text_or_inline(def_item, palette, is_focused, *total_height));
                 }
+
+                self.render_text_spans(
+                    &def_spans,
+                    None, // no prefix for definitions
+                    node_ref.clone(),
+                    lines,
+                    total_height,
+                    width,
+                    2, // 2 levels of indentation (4 spaces)
+                    false, // don't add empty line after
+                );
             }
 
             // Add a small spacing between definition items (but not after the last one)
@@ -1446,6 +1447,7 @@ impl MarkdownTextReader {
     fn render_text_spans(
         &mut self,
         spans: &[Span<'static>],
+        prefix: Option<&str>,
         node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
@@ -1453,35 +1455,56 @@ impl MarkdownTextReader {
         indent: usize,
         add_empty_line_after: bool,
     ) {
-        // Convert spans to plain text for wrapping
-        let plain_text = spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        // Build the complete spans with prefix
+        let mut complete_spans = Vec::new();
+        if let Some(prefix_str) = prefix {
+            complete_spans.push(Span::raw(prefix_str.to_string()));
+        }
+        complete_spans.extend_from_slice(spans);
 
-        // Wrap the text without any automatic indentation
-        let wrapped = textwrap::wrap(&plain_text, width);
+        // Convert complete spans to plain text for wrapping
+        let plain_text = complete_spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+
+        // Calculate available width after accounting for indentation
+        let indent_str = "  ".repeat(indent);
+        let available_width = width.saturating_sub(indent_str.len());
+        
+        // Wrap the text
+        let wrapped = textwrap::wrap(&plain_text, available_width);
 
         // Create lines from wrapped text
         for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
             // For the first line, use the styled spans if possible
             // For subsequent lines, use plain text
-            let line_spans = if line_idx == 0 && wrapped.len() == 1 {
-                // Single line - use the styled spans without indentation
-                spans.to_vec()
+            let mut line_spans = if line_idx == 0 && wrapped.len() == 1 {
+                // Single line - use the styled spans
+                complete_spans.clone()
             } else {
-                // Multi-line content: we need to preserve styling across wrapped lines
-                // This is a complex problem - for now, we'll map each wrapped line
-                // back to the original spans that contributed to it
-                self.map_wrapped_line_to_styled_spans(wrapped_line, spans)
+                // Multi-line content: map each wrapped line back to styled spans
+                self.map_wrapped_line_to_styled_spans(wrapped_line, &complete_spans)
+            };
+
+            // Apply indentation by prepending indent span
+            if indent > 0 {
+                line_spans.insert(0, Span::raw(indent_str.clone()));
+            }
+
+            // Build the final raw text with indentation
+            let final_raw_text = if indent > 0 {
+                format!("{}{}", indent_str, wrapped_line)
+            } else {
+                wrapped_line.to_string()
             };
 
             lines.push(RenderedLine {
                 spans: line_spans,
-                raw_text: wrapped_line.to_string(),
+                raw_text: final_raw_text.clone(),
                 line_type: LineType::Text,
                 source_node: node_ref.clone(),
                 visual_height: 1,
             });
 
-            self.raw_text_lines.push(wrapped_line.to_string());
+            self.raw_text_lines.push(final_raw_text);
             *total_height += 1;
         }
 

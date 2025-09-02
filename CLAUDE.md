@@ -566,3 +566,73 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Preserve error chains for proper error tracing
 - when introducing new regexes they should always be cached to avoid recompilation cycles
 - rendering of items in markdown_text_reader.rs should always use Base16Palette and should avoid relying on default ratatui style
+
+## Rich Text Rendering Architecture (MarkdownTextReader)
+
+### Core Design Principle
+All markdown elements (lists, quotes, definition lists, tables, etc.) must preserve rich text formatting (bold, italic, links, etc.) rather than converting to plain text. This ensures consistent formatting behavior across all content types.
+
+### render_text_spans API
+The central method for rendering rich text content is `render_text_spans()`:
+
+```rust
+fn render_text_spans(
+    &mut self,
+    spans: &[Span<'static>],          // Pre-styled spans with formatting
+    prefix: Option<&str>,             // Optional prefix (bullets, "> ", etc.)
+    node_ref: NodeReference,
+    lines: &mut Vec<RenderedLine>,
+    total_height: &mut usize,
+    width: usize,
+    indent: usize,                    // Proper indentation support
+    add_empty_line_after: bool,
+) 
+```
+
+**Key Features:**
+- **Prefix Support**: Automatically adds prefixes like "• ", "> ", or numbered bullets
+- **Indentation**: Properly handles indentation levels (2 spaces per level)
+- **Rich Text Preservation**: Maintains all styling from `render_text_or_inline()`
+- **Text Wrapping**: Handles text wrapping while preserving formatting
+- **Link Coordinates**: Automatically fixes link coordinates after wrapping
+
+### Standard Rendering Pattern
+For any markdown element containing text:
+
+1. **Generate styled spans** using `render_text_or_inline()`
+2. **Apply element-specific styling** (e.g., quote color, bold for definitions)
+3. **Call render_text_spans** with appropriate prefix and indentation
+4. **Update line types** if needed for specific elements
+
+```rust
+// Example: List item rendering
+let mut content_spans = Vec::new();
+for item in content.iter() {
+    content_spans.extend(self.render_text_or_inline(item, palette, is_focused, *total_height));
+}
+
+self.render_text_spans(
+    &content_spans,
+    Some(&prefix),           // "• " or "1. "
+    node_ref.clone(),
+    lines,
+    total_height,
+    width,
+    indent,                  // Proper indentation
+    false,                   // Don't add empty line
+);
+```
+
+### CRITICAL: Avoid text_to_string()
+**NEVER** use `text_to_string()` for rendering content as it strips all formatting:
+- ❌ `let text_str = self.text_to_string(content);` (loses bold, italic, links)
+- ✅ `content_spans.extend(self.render_text_or_inline(item, ...)` (preserves formatting)
+
+### Updated Elements
+The following elements now properly support rich text:
+- **Lists**: Bullets/numbers + rich text content with proper indentation
+- **Quotes**: "> " prefix + italic styling + rich text content  
+- **Definition Lists**: Bold terms + indented definitions with rich text
+- **Future elements**: Should follow the same pattern
+
+This architecture ensures that bold text, italic text, links, and other formatting work consistently across all markdown elements without hardcoding support for each element type.

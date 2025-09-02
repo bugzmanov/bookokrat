@@ -2445,3 +2445,165 @@ fn test_table_with_links_and_linebreaks_svg() {
         create_test_failure_handler("test_table_with_links_and_linebreaks_svg"),
     );
 }
+
+#[test]
+fn test_basic_markdown_elements_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 80);
+
+    let basic_elements_content = r##"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>Basic Markdown Elements Test</title>
+    <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+    <link rel="stylesheet" type="text/css" href="epub.css"/>
+</head>
+<body>
+    <div id="book-content">
+        <h1>Supported Markdown Elements</h1>
+        <p>This test demonstrates the basic markdown elements supported by BookRat.</p>
+
+        <h2>Lists</h2>
+
+        <h3>Unordered List</h3>
+        <ul>
+            <li>First item in unordered list</li>
+            <li>Second item with <strong>bold text</strong></li>
+            <li>Third item with <em>italic text</em>
+                <ul>
+                    <li>Nested list item one</li>
+                    <li>Nested list item two with <code>inline code</code></li>
+                    <li>Nested list item three
+                        <ul>
+                            <li>Deep nested item</li>
+                            <li>Another deep nested item</li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+            <li>Fourth item with a <a href="https://example.com">link</a></li>
+        </ul>
+
+        <h3>Ordered List</h3>
+        <ol>
+            <li>First numbered item</li>
+            <li>Second numbered item with formatting
+                <ol>
+                    <li>Nested numbered item</li>
+                    <li>Another nested numbered item</li>
+                </ol>
+            </li>
+            <li>Third numbered item</li>
+        </ol>
+
+        <h2>Definition Lists</h2>
+        <dl>
+            <dt>Term One</dt>
+            <dd>Definition of term one with detailed explanation.</dd>
+
+            <dt>Term Two</dt>
+            <dd>Definition of term two with <strong>bold formatting</strong>.</dd>
+
+            <dt>Technical Term</dt>
+            <dd>A technical definition that includes <code>code snippets</code> and references to other concepts.</dd>
+        </dl>
+
+        <h2>Links</h2>
+        <p>Various types of links are supported:</p>
+        <ul>
+            <li>External link: <a href="https://www.example.com">Visit Example.com</a></li>
+            <li><strong>Internal reference</strong>: <a href="#section1">Go to Section 1</a></li>
+            <li><i>Email link</i>: <a href="mailto:user@example.org">Contact Us</a></li>
+            <li>Link with title: <a href="https://github.com" title="GitHub Homepage">GitHub</a></li>
+        </ul>
+
+        <!--
+        <h2>Code Blocks</h2>
+        <p>Code blocks with syntax highlighting:</p>
+
+        <h3>Python Code</h3>
+        <pre><code class="language-python">
+def calculate_fibonacci(n):
+    """Calculate the nth Fibonacci number."""
+    if n <= 1:
+        return n
+    return calculate_fibonacci(n-1) + calculate_fibonacci(n-2)
+
+# Example usage
+result = calculate_fibonacci(10)
+print("The 10th Fibonacci number is:", result)
+        </code></pre>
+
+        <h3>Rust Code</h3>
+        <pre><code class="language-rust">
+fn main() {
+    let numbers = vec![1, 2, 3, 4, 5];
+
+    let sum: i32 = numbers
+        .iter()
+        .filter(|&x| x % 2 == 0)
+        .sum();
+
+    println!("Sum of even numbers: {}", sum);
+}
+        </code></pre>
+
+        <h3>JavaScript Code</h3>
+        <pre><code class="language-javascript">
+const fetchData = async (url) => {
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error("Error fetching data:", error);
+        throw error;
+    }
+};
+
+// Usage example
+fetchData('https://api.example.com/data')
+    .then(data => console.log(data))
+    .catch(err => console.error(err));
+        </code></pre>
+
+        <p>This demonstrates BookRat's comprehensive markdown support including nested lists, definition lists, various link types, and syntax-highlighted code blocks.</p>
+       -->
+        </div>
+</body>
+</html>
+"##;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("basic_markdown_test.html");
+    std::fs::write(&temp_html_path, basic_elements_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_basic_markdown_elements.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/basic_markdown_elements.svg"),
+        "test_basic_markdown_elements_svg",
+        create_test_failure_handler("test_basic_markdown_elements_svg"),
+    );
+}
