@@ -1553,60 +1553,90 @@ impl MarkdownTextReader {
         wrapped_line: &str,
         original_spans: &[Span<'static>],
     ) -> Vec<Span<'static>> {
-        // This is a simplified approach: we'll try to match the wrapped line content
-        // back to the original spans and preserve their styling
-        let mut result_spans = Vec::new();
-        let mut remaining_line = wrapped_line;
+        // Build a flattened representation of the original content with style info
+        struct CharWithStyle {
+            ch: char,
+            style: RatatuiStyle,
+        }
 
-        for original_span in original_spans {
-            let span_content = original_span.content.as_ref();
+        let mut chars_with_style = Vec::new();
+        for span in original_spans {
+            for ch in span.content.chars() {
+                chars_with_style.push(CharWithStyle {
+                    ch,
+                    style: span.style,
+                });
+            }
+        }
 
-            if remaining_line.is_empty() {
+        // Find where this wrapped line starts in the original content
+        let wrapped_chars: Vec<char> = wrapped_line.chars().collect();
+        if wrapped_chars.is_empty() {
+            return vec![Span::raw("")];
+        }
+
+        // Find the starting position of wrapped_line in the original content
+        let mut start_pos = None;
+        for i in 0..=chars_with_style.len().saturating_sub(wrapped_chars.len()) {
+            let mut matches = true;
+            for (j, &wrapped_ch) in wrapped_chars.iter().enumerate() {
+                if i + j >= chars_with_style.len() || chars_with_style[i + j].ch != wrapped_ch {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches {
+                start_pos = Some(i);
                 break;
             }
+        }
 
-            if remaining_line.starts_with(span_content) {
-                // This span fits entirely in the remaining line
-                result_spans.push(original_span.clone());
-                remaining_line = &remaining_line[span_content.len()..];
-            } else if span_content.starts_with(remaining_line) {
-                // The remaining line is a prefix of this span
-                result_spans.push(Span::styled(
-                    remaining_line.to_string(),
-                    original_span.style,
-                ));
-                remaining_line = "";
-            } else {
-                // Look for partial matches within the span content
-                let mut common_prefix_byte_len = 0;
-                let mut char_count = 0;
-                for (char, span_char) in remaining_line.chars().zip(span_content.chars()) {
-                    if char == span_char {
-                        common_prefix_byte_len += char.len_utf8();
-                        char_count += 1;
-                    } else {
-                        break;
-                    }
+        // If we found the position, reconstruct the spans with proper styling
+        if let Some(pos) = start_pos {
+            let mut result_spans = Vec::new();
+            let mut current_style = None;
+            let mut current_text = String::new();
+
+            for i in pos..pos + wrapped_chars.len() {
+                if i >= chars_with_style.len() {
+                    break;
                 }
 
-                if common_prefix_byte_len > 0 {
-                    let matched_part = &remaining_line[..common_prefix_byte_len];
-                    result_spans.push(Span::styled(matched_part.to_string(), original_span.style));
-                    remaining_line = &remaining_line[common_prefix_byte_len..];
+                let char_style = &chars_with_style[i];
+
+                if current_style.as_ref() != Some(&char_style.style) {
+                    // Style changed, push the accumulated span
+                    if !current_text.is_empty() {
+                        if let Some(style) = current_style {
+                            result_spans.push(Span::styled(current_text.clone(), style));
+                        } else {
+                            result_spans.push(Span::raw(current_text.clone()));
+                        }
+                        current_text.clear();
+                    }
+                    current_style = Some(char_style.style);
+                }
+
+                current_text.push(char_style.ch);
+            }
+
+            // Push the final accumulated span
+            if !current_text.is_empty() {
+                if let Some(style) = current_style {
+                    result_spans.push(Span::styled(current_text, style));
+                } else {
+                    result_spans.push(Span::raw(current_text));
                 }
             }
-        }
 
-        // If there's still remaining content, add it as unstyled
-        if !remaining_line.is_empty() {
-            result_spans.push(Span::raw(remaining_line.to_string()));
-        }
-
-        // If we couldn't map properly, fall back to the original approach
-        if result_spans.is_empty() {
-            vec![Span::raw(wrapped_line.to_string())]
+            if result_spans.is_empty() {
+                vec![Span::raw(wrapped_line.to_string())]
+            } else {
+                result_spans
+            }
         } else {
-            result_spans
+            // Fallback: return as unstyled if we can't find the position
+            vec![Span::raw(wrapped_line.to_string())]
         }
     }
 
