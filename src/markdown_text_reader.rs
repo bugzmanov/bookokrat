@@ -919,11 +919,14 @@ impl MarkdownTextReader {
                             let wrapped = textwrap::wrap(&prefixed_text, width - indent * 2);
 
                             for wrapped_line in wrapped {
+                                // Get the appropriate text color from palette
+                                let (normal_color, _, _) = palette.get_panel_colors(is_focused);
+
                                 lines.push(RenderedLine {
-                                    spans: vec![Span::raw(format!(
-                                        "{}{}",
-                                        indent_str, wrapped_line
-                                    ))],
+                                    spans: vec![Span::styled(
+                                        format!("{}{}", indent_str, wrapped_line),
+                                        RatatuiStyle::default().fg(normal_color),
+                                    )],
                                     raw_text: format!("{}{}", indent_str, wrapped_line),
                                     line_type: LineType::ListItem {
                                         kind: kind.clone(),

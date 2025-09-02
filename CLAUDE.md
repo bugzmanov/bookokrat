@@ -565,3 +565,4 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Use proper error context with anyhow for better debugging
 - Preserve error chains for proper error tracing
 - when introducing new regexes they should always be cached to avoid recompilation cycles
+- rendering of items in markdown_text_reader.rs should always use Base16Palette and should avoid relying on default ratatui style

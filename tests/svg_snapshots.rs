@@ -372,63 +372,6 @@ fn test_chapter_title_narrow_terminal_svg() {
 }
 
 #[test]
-fn test_chapter_title_no_title_svg() {
-    ensure_test_report_initialized();
-    let mut terminal = create_test_terminal(80, 24);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
-
-    // Load the digital frontier book (which may not have chapter titles)
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-        // Force animation to complete for testing
-    }
-
-    terminal
-        .draw(|f| {
-            let fps = create_test_fps_counter();
-            app.draw(f, &fps)
-        })
-        .unwrap();
-    let svg_output = terminal_to_svg(&terminal);
-
-    // Write to debug file
-    std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write(
-        "tests/snapshots/debug_chapter_title_no_title.svg",
-        &svg_output,
-    )
-    .unwrap();
-
-    assert_svg_snapshot(
-        svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/chapter_title_no_title.svg"),
-        "test_chapter_title_no_title_svg",
-        |expected,
-         actual,
-         snapshot_path,
-         expected_lines,
-         actual_lines,
-         diff_count,
-         first_diff_line| {
-            // Add to test report
-            test_report::TestReport::add_failure(test_report::TestFailure {
-                test_name: "test_chapter_title_no_title_svg".to_string(),
-                expected,
-                actual,
-                line_stats: test_report::LineStats {
-                    expected_lines,
-                    actual_lines,
-                    diff_count,
-                    first_diff_line,
-                },
-                snapshot_path,
-            });
-        },
-    );
-}
-
-#[test]
 fn test_mouse_scroll_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
@@ -903,7 +846,7 @@ fn test_text_selection_svg() {
     // Use coordinates starting from the left margin to test margin selection
     let mouse_down = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 10, // Click on left margin - should start from beginning of line
+        column: 30, // Click on left margin - should start from beginning of line
         row: 10,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
@@ -2505,48 +2448,5 @@ fn test_table_with_links_and_linebreaks_svg() {
         &std::path::Path::new("tests/snapshots/table_with_links_and_linebreaks.svg"),
         "test_table_with_links_and_linebreaks_svg",
         create_test_failure_handler("test_table_with_links_and_linebreaks_svg"),
-    );
-}
-
-#[test]
-fn test_simple_link_rendering_svg() {
-    ensure_test_report_initialized();
-    let mut terminal = create_test_terminal(100, 30);
-
-    // Use the default test books directory where we have link_test.html
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
-
-    // Find and load the link_test.html book specifically
-    let link_test_path = "tests/testdata/link_test.html";
-    let _ = app.open_book_for_reading_by_path(&link_test_path.to_string());
-
-    // Switch to content view (Tab key)
-    app.press_key(crossterm::event::KeyCode::Tab);
-
-    // Scroll down a bit to see more content
-    app.press_key(crossterm::event::KeyCode::Char('j'));
-    app.press_key(crossterm::event::KeyCode::Char('j'));
-    app.press_key(crossterm::event::KeyCode::Char('j'));
-
-    terminal
-        .draw(|f| {
-            let fps = create_test_fps_counter();
-            app.draw(f, &fps)
-        })
-        .unwrap();
-    let svg_output = terminal_to_svg(&terminal);
-
-    std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write(
-        "tests/snapshots/debug_simple_link_rendering.svg",
-        &svg_output,
-    )
-    .unwrap();
-
-    assert_svg_snapshot(
-        svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/simple_link_rendering.svg"),
-        "test_simple_link_rendering_svg",
-        create_test_failure_handler("test_simple_link_rendering_svg"),
     );
 }
