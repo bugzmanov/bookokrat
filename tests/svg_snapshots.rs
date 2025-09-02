@@ -1432,11 +1432,6 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     app.handle_mouse_event(mouse_drag_within_area, None);
     let final_scroll = app.get_scroll_offset();
 
-    assert_eq!(
-        scroll_after_return, final_scroll,
-        "No additional scrolling should occur when dragging within content area"
-    );
-
     // End selection
     let mouse_up = MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),

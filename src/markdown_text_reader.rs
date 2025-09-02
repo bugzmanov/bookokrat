@@ -1751,6 +1751,22 @@ impl MarkdownTextReader {
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
+
+    /// Perform immediate auto-scroll when dragging starts outside content area
+    pub fn perform_auto_scroll(&mut self) {
+        if self.auto_scroll_active {
+            let scroll_amount = self.auto_scroll_speed.abs() as usize;
+
+            if self.auto_scroll_speed < 0.0 && self.scroll_offset > 0 {
+                self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+            } else if self.auto_scroll_speed > 0.0 {
+                let max_offset = self.get_max_scroll_offset();
+                if self.scroll_offset < max_offset {
+                    self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
+                }
+            }
+        }
+    }
 }
 
 impl VimNavMotions for MarkdownTextReader {
@@ -1979,20 +1995,27 @@ impl TextReaderTrait for MarkdownTextReader {
         if self.text_selection.is_selecting {
             // Use the inner text area if available, otherwise fall back to the provided area
             let text_area = self.last_inner_text_area.unwrap_or(area);
-
-            // Use proper coordinate conversion like TextReader does
+            
+            // Always try to update text selection first, regardless of auto-scroll
             if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
                 self.text_selection.update_selection(line, column);
             }
-
-            // Auto-scroll if dragging near edges (use the text area bounds)
+            
+            // Check if we need to auto-scroll due to dragging outside the visible area
             const SCROLL_MARGIN: u16 = 3;
-            if y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0 {
+            let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
+            let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
+            
+            if needs_scroll_up {
                 self.auto_scroll_active = true;
                 self.auto_scroll_speed = -1.0;
-            } else if y >= text_area.y + text_area.height - SCROLL_MARGIN {
+                // Perform immediate scroll like text_reader.rs does
+                self.perform_auto_scroll();
+            } else if needs_scroll_down {
                 self.auto_scroll_active = true;
                 self.auto_scroll_speed = 1.0;
+                // Perform immediate scroll like text_reader.rs does
+                self.perform_auto_scroll();
             } else {
                 self.auto_scroll_active = false;
             }
