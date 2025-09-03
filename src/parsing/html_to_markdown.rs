@@ -283,6 +283,12 @@ impl HtmlToMarkdownConverter {
     ) {
         let tag_name = name.local.as_ref();
 
+        // Check for epub:type attribute first
+        if let Some(epub_type) = self.get_epub_type_attr(attrs) {
+            self.handle_epub_block(tag_name, epub_type, node, document);
+            return;
+        }
+
         match tag_name {
             "html" | "body" => {
                 for child in node.children.borrow().iter() {
@@ -905,6 +911,25 @@ impl HtmlToMarkdownConverter {
         }
     }
 
+    fn handle_epub_block(
+        &mut self,
+        element_name: &str,
+        epub_type: String,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        let content = self.extract_formatted_content_as_blocks(node, false);
+        
+        let epub_block = Block::EpubBlock {
+            epub_type,
+            element_name: element_name.to_string(),
+            content,
+        };
+        
+        let epub_node = Node::new(epub_block, 0..0);
+        document.blocks.push(epub_node);
+    }
+
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
         let mode = ContentCollectionMode::FlatText { in_table: false };
         let context = ProcessingContext {
@@ -1136,6 +1161,38 @@ impl HtmlToMarkdownConverter {
             _ => context.current_style,
         };
         context
+    }
+
+    /// Check if an element has an epub:type attribute and return its value
+    /// Only returns Some for epub:type values that should be rendered as special blocks
+    fn get_epub_type_attr(
+        &self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+    ) -> Option<String> {
+        let epub_type = attrs
+            .borrow()
+            .iter()
+            .find(|attr| attr.name.local.as_ref() == "epub:type")
+            .map(|attr| attr.value.to_string())?;
+        
+        // Only process specific epub:type values that represent content blocks
+        // Exclude structural/navigational types that shouldn't be rendered specially
+        match epub_type.as_str() {
+            // Content blocks we want to highlight
+            "footnote" | "endnote" | "note" | "sidebar" | "pullquote" | 
+            "tip" | "warning" | "caution" | "important" | "example" |
+            "definition" | "glossary" | "bibliography" | "appendix" |
+            "preface" | "foreword" | "introduction" | "conclusion" |
+            "epigraph" | "dedication" => Some(epub_type),
+            
+            // Structural types we ignore (let them be processed normally)
+            "chapter" | "part" | "section" | "subsection" | 
+            "titlepage" | "toc" | "bodymatter" | "frontmatter" | "backmatter" |
+            "cover" | "acknowledgments" | "copyright-page" => None,
+            
+            // For unknown types, be conservative and render them specially
+            _ => Some(epub_type),
+        }
     }
 
     // Legacy method kept for compatibility - delegates to new unified system

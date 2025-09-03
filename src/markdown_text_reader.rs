@@ -6,6 +6,7 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
+use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::table::{Table as CustomTable, TableConfig};
 use crate::text_reader::{EmbeddedImage, EmbeddedTable, ImageLoadState, LinkInfo};
 use crate::text_reader_trait::TextReaderTrait;
@@ -499,6 +500,20 @@ impl MarkdownTextReader {
             DefinitionList { items: def_items } => {
                 self.render_definition_list(
                     def_items,
+                    node_ref,
+                    lines,
+                    total_height,
+                    width,
+                    palette,
+                    is_focused,
+                );
+            }
+
+            EpubBlock { epub_type, element_name, content } => {
+                self.render_epub_block(
+                    epub_type,
+                    element_name,
+                    content,
                     node_ref,
                     lines,
                     total_height,
@@ -1433,6 +1448,91 @@ impl MarkdownTextReader {
         }
 
         // Add empty line after the entire definition list
+        lines.push(RenderedLine {
+            spans: vec![Span::raw("")],
+            raw_text: String::new(),
+            line_type: LineType::Empty,
+            source_node: node_ref,
+            visual_height: 1,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+    }
+
+    fn render_epub_block(
+        &mut self,
+        epub_type: &str,
+        _element_name: &str,
+        content: &[crate::markdown::Node],
+        node_ref: NodeReference,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+    ) {
+        // Create a table with 1 column, 1 header (type), and content as body
+        let header = vec![format!("epub:type=\"{}\"", epub_type)];
+        
+        // Render the content into a string using MarkdownRenderer
+        let renderer = MarkdownRenderer::new();
+        let mut content_doc = Document::new();
+        for node in content {
+            content_doc.blocks.push(node.clone());
+        }
+        let content_text = renderer.render(&content_doc).trim().to_string();
+
+        // Create table rows - just one row with the content
+        let rows = vec![vec![content_text]];
+        
+        // Create table configuration
+        let table_config = crate::table::TableConfig {
+            border_color: palette.base_03,
+            header_color: if is_focused { palette.base_0c } else { palette.base_05 },
+            text_color: palette.base_05,
+            use_block: false,
+        };
+
+        let constraints = vec![ratatui::layout::Constraint::Percentage(100)];
+        
+        let mut table = crate::table::Table::new(rows)
+            .header(header)
+            .constraints(constraints)
+            .config(table_config)
+            .base_line(*total_height);
+
+        // Populate links if any exist in the table content
+        table.populate_links(*total_height, width as u16);
+        
+        // Store table links in our links collection
+        for link in table.get_links() {
+            self.links.push(link.clone());
+        }
+        
+        // Render the table to lines
+        let table_lines = table.render_to_lines(width as u16);
+        let table_height = table_lines.len();
+        
+        // Convert table lines to RenderedLine format
+        for (i, line) in table_lines.into_iter().enumerate() {
+            let raw_text = line.spans.iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            
+            lines.push(RenderedLine {
+                spans: line.spans,
+                raw_text: raw_text.clone(),
+                line_type: LineType::Text,
+                source_node: node_ref.clone(),
+                visual_height: 1,
+            });
+            
+            self.raw_text_lines.push(raw_text);
+        }
+        
+        *total_height += table_height;
+        
+        // Add empty line after the table
         lines.push(RenderedLine {
             spans: vec![Span::raw("")],
             raw_text: String::new(),

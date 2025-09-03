@@ -39,6 +39,11 @@ pub enum Block {
     DefinitionList {
         items: Vec<DefinitionListItem>,
     },
+    EpubBlock {
+        epub_type: String,
+        element_name: String,
+        content: Vec<Node>,
+    },
     ThematicBreak,
 }
 

@@ -11,6 +11,7 @@ ideas to implement:
              [ ] visited link tracking
              [x] external links
                 [ ] bug: link in tables is not clickable
+                [ ] bug: links that cross multiple lines are not clickable
              [ ] internal links
          [ ] Horizontal rule
          [x] Headers
@@ -19,10 +20,9 @@ ideas to implement:
          [x] bold & italic 
            [ ] Bold needs some visual treatment
          [x] lists
-            [ ] BUG: _ Olo _  insid list is not rendered but shown as Is
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
-         [ ] Code & "render as is"
+         [ ] Code 
  - AI integreration
      - Embeded validation for correct rendering (and markdown parsing) 
      - Smart reading: 
