@@ -160,6 +160,25 @@ impl HeadingLevel {
 
 impl Node {
     pub fn new(block: Block, source_range: Range<usize>) -> Self {
+        // Validate block to prevent empty garbage from being created
+        match &block {
+            Block::Paragraph { content } => {
+                if content.is_empty() {
+                    panic!(
+                        "DEVELOPER ERROR: Attempted to create empty Paragraph block! You forgot to filter out garbage before calling Node::new(). Check your parsing code and add proper validation."
+                    );
+                }
+            }
+            Block::CodeBlock { content, .. } => {
+                if content.trim().is_empty() {
+                    panic!(
+                        "DEVELOPER ERROR: Attempted to create empty CodeBlock! You forgot to filter out garbage before calling Node::new(). Check your parsing code and add proper validation."
+                    );
+                }
+            }
+            _ => {} // Other block types are allowed to be empty
+        }
+
         Self {
             block,
             source_range,

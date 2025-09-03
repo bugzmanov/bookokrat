@@ -139,15 +139,15 @@ impl HtmlToMarkdownConverter {
                     ));
                 }
 
-                // Ensure we always have at least one block
-                if blocks.is_empty() {
-                    blocks.push(Node::new(
-                        Block::Paragraph {
-                            content: Text::default(),
-                        },
-                        0..0,
-                    ));
-                }
+                // // Ensure we always have at least one block
+                // if blocks.is_empty() {
+                //     blocks.push(Node::new(
+                //         Block::Paragraph {
+                //             content: Text::from("<fallback ERROR>"), //Text::default(),
+                //         },
+                //         0..0,
+                //     ));
+                // }
 
                 ContentResult::Blocks(blocks)
             }
@@ -918,14 +918,97 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
-        let content = self.extract_formatted_content_as_blocks(node, false);
-        
+        let mut content = Vec::new();
+
+        // Process children directly to properly handle block elements
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                            let level = match tag_name {
+                                "h1" => HeadingLevel::H1,
+                                "h2" => HeadingLevel::H2,
+                                "h3" => HeadingLevel::H3,
+                                "h4" => HeadingLevel::H4,
+                                "h5" => HeadingLevel::H5,
+                                "h6" => HeadingLevel::H6,
+                                _ => HeadingLevel::H1,
+                            };
+
+                            let heading_content = self.extract_formatted_content(child);
+                            let heading_block = Block::Heading {
+                                level,
+                                content: heading_content,
+                            };
+                            content.push(Node::new(heading_block, 0..0));
+                        }
+                        "p" => {
+                            let para_content = self.extract_formatted_content(child);
+                            if !para_content.is_empty() {
+                                let paragraph_block = Block::Paragraph {
+                                    content: para_content,
+                                };
+                                content.push(Node::new(paragraph_block, 0..0));
+                            }
+                        }
+                        "ul" | "ol" => {
+                            let kind = if tag_name == "ol" {
+                                let start = self
+                                    .get_attr_value(attrs, "start")
+                                    .and_then(|s| s.parse::<u32>().ok())
+                                    .unwrap_or(1);
+                                crate::markdown::ListKind::Ordered { start }
+                            } else {
+                                crate::markdown::ListKind::Unordered
+                            };
+
+                            let items = self.extract_list_items(child);
+                            if !items.is_empty() {
+                                let list_block = Block::List { kind, items };
+                                content.push(Node::new(list_block, 0..0));
+                            }
+                        }
+                        "div" | "section" | "article" => {
+                            // For wrapper elements like div, recursively process their children
+                            let mut temp_doc = Document::new();
+                            for grandchild in child.children.borrow().iter() {
+                                self.visit_node(grandchild, &mut temp_doc);
+                            }
+                            content.extend(temp_doc.blocks);
+                        }
+                        _ => {
+                            // For other elements, process as blocks
+                            let blocks = self.extract_formatted_content_as_blocks(child, false);
+                            content.extend(blocks);
+                        }
+                    }
+                }
+                _ => {
+                    // For text nodes and other non-element nodes, process as blocks
+                    let blocks = self.extract_formatted_content_as_blocks(child, false);
+                    content.extend(blocks);
+                }
+            }
+        }
+
+        // If no content was extracted, create a default empty paragraph
+        if content.is_empty() {
+            content.push(Node::new(
+                Block::Paragraph {
+                    content: Text::default(),
+                },
+                0..0,
+            ));
+        }
+
         let epub_block = Block::EpubBlock {
             epub_type,
             element_name: element_name.to_string(),
             content,
         };
-        
+
         let epub_node = Node::new(epub_block, 0..0);
         document.blocks.push(epub_node);
     }
@@ -1174,22 +1257,20 @@ impl HtmlToMarkdownConverter {
             .iter()
             .find(|attr| attr.name.local.as_ref() == "epub:type")
             .map(|attr| attr.value.to_string())?;
-        
+
         // Only process specific epub:type values that represent content blocks
         // Exclude structural/navigational types that shouldn't be rendered specially
         match epub_type.as_str() {
             // Content blocks we want to highlight
-            "footnote" | "endnote" | "note" | "sidebar" | "pullquote" | 
-            "tip" | "warning" | "caution" | "important" | "example" |
-            "definition" | "glossary" | "bibliography" | "appendix" |
-            "preface" | "foreword" | "introduction" | "conclusion" |
-            "epigraph" | "dedication" => Some(epub_type),
-            
+            "footnote" | "endnote" | "note" | "sidebar" | "pullquote" | "tip" | "warning"
+            | "caution" | "important" | "example" | "definition" | "glossary" | "bibliography"
+            | "appendix" | "preface" | "foreword" | "introduction" | "conclusion" | "epigraph"
+            | "dedication" => Some(epub_type),
+
             // Structural types we ignore (let them be processed normally)
-            "chapter" | "part" | "section" | "subsection" | 
-            "titlepage" | "toc" | "bodymatter" | "frontmatter" | "backmatter" |
-            "cover" | "acknowledgments" | "copyright-page" => None,
-            
+            "chapter" | "part" | "section" | "subsection" | "titlepage" | "toc" | "bodymatter"
+            | "frontmatter" | "backmatter" | "cover" | "acknowledgments" | "copyright-page" => None,
+
             // For unknown types, be conservative and render them specially
             _ => Some(epub_type),
         }

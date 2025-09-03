@@ -1946,7 +1946,6 @@ fn test_mathml_content_rendering_svg() {
 </head>
 <body>
     <div id="book-content">
-        <aside data-type="sidebar" epub:type="sidebar">
             <div class="sidebar" id="id902">
                 <h1>How to Use a Language Model to Compute a Text's Perplexity</h1>
 
@@ -2007,7 +2006,7 @@ fn test_mathml_content_rendering_svg() {
         </math>.</p>
 
         <p>To compute perplexity, you need access to the probabilities (or logprobs) the language model assigns to each next token. Unfortunately, not all commercial models expose their models’ logprobs, as discussed in <a data-type="xref" href="ch02.html#ch02_understanding_foundation_models_1730147895571359">Chapter 2</a>.</p>
-                  </div></aside>
+                  </div>
         </body>
         </html>
 
@@ -2605,5 +2604,72 @@ fetchData('https://api.example.com/data')
         &std::path::Path::new("tests/snapshots/basic_markdown_elements.svg"),
         "test_basic_markdown_elements_svg",
         create_test_failure_handler("test_basic_markdown_elements_svg"),
+    );
+}
+
+#[test]
+fn test_epub_type_attributes_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let epub_content = r##"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>EPUB Type Attributes Test</title>
+</head>
+<body>
+    <section epub:type="chapter">
+        <h1>Chapter 1: Introduction</h1>
+
+        <p>This is a regular paragraph in the chapter.</p>
+
+        <aside epub:type="sidebar">
+            <h2>Important Note</h2>
+            <p>This is a sidebar with additional information that supplements the main content.</p>
+        </aside>
+
+        <section epub:type="bibliography">
+            <h2>References</h2>
+            <ol>
+                <li>Smith, J. (2023). <cite>Digital Publishing Standards</cite>. Tech Press.</li>
+                <li>Doe, A. (2022). "EPUB Structure Guidelines". <cite>Journal of Digital Media</cite>, 15(3), 45-62.</li>
+            </ol>
+        </section>
+
+    </section>
+</body>
+</html>"##;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("epub_types_test.html");
+    std::fs::write(&temp_html_path, epub_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_type_attributes.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/epub_type_attributes.svg"),
+        "test_epub_type_attributes_svg",
+        create_test_failure_handler("test_epub_type_attributes_svg"),
     );
 }

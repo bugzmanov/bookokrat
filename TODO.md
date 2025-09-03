@@ -1,13 +1,15 @@
 ideas to implement:
+ - Dimming should probably just use math instead of sticking to fixed palette
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
          [ ] Navigate to the position where rendering mode was showing
          [ ] Alow mouse selection & stuff
      [x] Math Formulas 
-        [ ] BUG when simple formulat become multiline
+        [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
          [.] links support 
+             [ ] superscript links (footnotes)
              [ ] visited link tracking
              [x] external links
                 [ ] bug: link in tables is not clickable
@@ -23,6 +25,7 @@ ideas to implement:
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
          [ ] Code 
+         [x] epub:type blocks
  - AI integreration
      - Embeded validation for correct rendering (and markdown parsing) 
      - Smart reading: 

@@ -43,7 +43,7 @@ struct RenderedLine {
     visual_height: usize,       // 1 for text, IMAGE_HEIGHT for images, etc.
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum LineType {
     Text,
     Heading {
@@ -104,6 +104,7 @@ pub struct MarkdownTextReader {
     text_selection: TextSelection,
     raw_text_lines: Vec<String>, // Still needed for clipboard
     last_content_area: Option<Rect>,
+
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
     auto_scroll_active: bool,
     auto_scroll_speed: f32,
@@ -509,7 +510,11 @@ impl MarkdownTextReader {
                 );
             }
 
-            EpubBlock { epub_type, element_name, content } => {
+            EpubBlock {
+                epub_type,
+                element_name,
+                content,
+            } => {
                 self.render_epub_block(
                     epub_type,
                     element_name,
@@ -930,7 +935,12 @@ impl MarkdownTextReader {
                             // Render the rich text content with prefix and indentation
                             let mut content_spans = Vec::new();
                             for item in content.iter() {
-                                content_spans.extend(self.render_text_or_inline(item, palette, is_focused, *total_height));
+                                content_spans.extend(self.render_text_or_inline(
+                                    item,
+                                    palette,
+                                    is_focused,
+                                    *total_height,
+                                ));
                             }
 
                             // Store original line count to update line types after
@@ -944,7 +954,7 @@ impl MarkdownTextReader {
                                 total_height,
                                 width,
                                 indent, // proper indentation
-                                false, // don't add empty line after
+                                false,  // don't add empty line after
                             );
 
                             // Update line types for all newly added lines
@@ -1268,7 +1278,12 @@ impl MarkdownTextReader {
                     // Render the rich text content with "> " prefix
                     let mut content_spans = Vec::new();
                     for item in para_content.iter() {
-                        content_spans.extend(self.render_text_or_inline(item, palette, is_focused, *total_height));
+                        content_spans.extend(self.render_text_or_inline(
+                            item,
+                            palette,
+                            is_focused,
+                            *total_height,
+                        ));
                     }
 
                     // Apply quote styling to all spans
@@ -1389,7 +1404,12 @@ impl MarkdownTextReader {
 
             let mut term_spans = Vec::new();
             for term_item in item.term.iter() {
-                term_spans.extend(self.render_text_or_inline(term_item, palette, is_focused, *total_height));
+                term_spans.extend(self.render_text_or_inline(
+                    term_item,
+                    palette,
+                    is_focused,
+                    *total_height,
+                ));
             }
 
             // Apply bold styling to all term spans
@@ -1410,7 +1430,7 @@ impl MarkdownTextReader {
                 lines,
                 total_height,
                 width,
-                0, // no indentation for terms
+                0,     // no indentation for terms
                 false, // don't add empty line after
             );
 
@@ -1418,7 +1438,12 @@ impl MarkdownTextReader {
             for definition in &item.definitions {
                 let mut def_spans = Vec::new();
                 for def_item in definition.iter() {
-                    def_spans.extend(self.render_text_or_inline(def_item, palette, is_focused, *total_height));
+                    def_spans.extend(self.render_text_or_inline(
+                        def_item,
+                        palette,
+                        is_focused,
+                        *total_height,
+                    ));
                 }
 
                 self.render_text_spans(
@@ -1428,7 +1453,7 @@ impl MarkdownTextReader {
                     lines,
                     total_height,
                     width,
-                    2, // 2 levels of indentation (4 spaces)
+                    2,     // 2 levels of indentation (4 spaces)
                     false, // don't add empty line after
                 );
             }
@@ -1461,7 +1486,7 @@ impl MarkdownTextReader {
 
     fn render_epub_block(
         &mut self,
-        epub_type: &str,
+        _epub_type: &str,
         _element_name: &str,
         content: &[crate::markdown::Node],
         node_ref: NodeReference,
@@ -1471,68 +1496,88 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
     ) {
-        // Create a table with 1 column, 1 header (type), and content as body
-        let header = vec![format!("epub:type=\"{}\"", epub_type)];
-        
-        // Render the content into a string using MarkdownRenderer
-        let renderer = MarkdownRenderer::new();
-        let mut content_doc = Document::new();
-        for node in content {
-            content_doc.blocks.push(node.clone());
-        }
-        let content_text = renderer.render(&content_doc).trim().to_string();
+        // Add line separator before the block
+        let separator_line = "─".repeat(width);
+        lines.push(RenderedLine {
+            spans: vec![Span::styled(
+                separator_line.clone(),
+                RatatuiStyle::default().fg(if is_focused {
+                    palette.base_03
+                } else {
+                    palette.base_02
+                }),
+            )],
+            raw_text: separator_line.clone(),
+            line_type: LineType::HorizontalRule,
+            source_node: node_ref.clone(),
+            visual_height: 1,
+        });
+        self.raw_text_lines.push(separator_line);
+        *total_height += 1;
+        //
+        // Add empty line before the block
+        lines.push(RenderedLine {
+            spans: vec![Span::raw("")],
+            raw_text: String::new(),
+            line_type: LineType::Empty,
+            source_node: node_ref.clone(),
+            visual_height: 1,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
 
-        // Create table rows - just one row with the content
-        let rows = vec![vec![content_text]];
-        
-        // Create table configuration
-        let table_config = crate::table::TableConfig {
-            border_color: palette.base_03,
-            header_color: if is_focused { palette.base_0c } else { palette.base_05 },
-            text_color: palette.base_05,
-            use_block: false,
-        };
-
-        let constraints = vec![ratatui::layout::Constraint::Percentage(100)];
-        
-        let mut table = crate::table::Table::new(rows)
-            .header(header)
-            .constraints(constraints)
-            .config(table_config)
-            .base_line(*total_height);
-
-        // Populate links if any exist in the table content
-        table.populate_links(*total_height, width as u16);
-        
-        // Store table links in our links collection
-        for link in table.get_links() {
-            self.links.push(link.clone());
+        debug!("EpubBlock: {:?}", content);
+        // Render the content blocks with controlled spacing
+        for (i, content_node) in content.iter().enumerate() {
+            // Render the content node normally
+            match &content_node.block {
+                MarkdownBlock::Heading { level, content } => {
+                    self.render_heading(
+                        HeadingLevel::H5, // remap to always same time of heading to avoid visual hierarchy issues
+                        content,
+                        node_ref.clone(),
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        is_focused,
+                    );
+                }
+                _ => {
+                    self.render_node(
+                        content_node,
+                        node_ref.clone(),
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        is_focused,
+                        0, // no indentation
+                    );
+                }
+            }
         }
-        
-        // Render the table to lines
-        let table_lines = table.render_to_lines(width as u16);
-        let table_height = table_lines.len();
-        
-        // Convert table lines to RenderedLine format
-        for (i, line) in table_lines.into_iter().enumerate() {
-            let raw_text = line.spans.iter()
-                .map(|span| span.content.as_ref())
-                .collect::<String>();
-            
-            lines.push(RenderedLine {
-                spans: line.spans,
-                raw_text: raw_text.clone(),
-                line_type: LineType::Text,
-                source_node: node_ref.clone(),
-                visual_height: 1,
-            });
-            
-            self.raw_text_lines.push(raw_text);
-        }
-        
-        *total_height += table_height;
-        
-        // Add empty line after the table
+
+        // Add line separator after the block
+        let separator_line = "─".repeat(width);
+        lines.push(RenderedLine {
+            spans: vec![Span::styled(
+                separator_line.clone(),
+                RatatuiStyle::default().fg(if is_focused {
+                    palette.base_03
+                } else {
+                    palette.base_02
+                }),
+            )],
+            raw_text: separator_line.clone(),
+            line_type: LineType::HorizontalRule,
+            source_node: node_ref.clone(),
+            visual_height: 1,
+        });
+        self.raw_text_lines.push(separator_line);
+        *total_height += 1;
+
+        // Add empty line after the block
         lines.push(RenderedLine {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
@@ -1563,12 +1608,15 @@ impl MarkdownTextReader {
         complete_spans.extend_from_slice(spans);
 
         // Convert complete spans to plain text for wrapping
-        let plain_text = complete_spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let plain_text = complete_spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
 
         // Calculate available width after accounting for indentation
         let indent_str = "  ".repeat(indent);
         let available_width = width.saturating_sub(indent_str.len());
-        
+
         // Wrap the text
         let wrapped = textwrap::wrap(&plain_text, available_width);
 
@@ -2118,17 +2166,17 @@ impl TextReaderTrait for MarkdownTextReader {
         if self.text_selection.is_selecting {
             // Use the inner text area if available, otherwise fall back to the provided area
             let text_area = self.last_inner_text_area.unwrap_or(area);
-            
+
             // Always try to update text selection first, regardless of auto-scroll
             if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
                 self.text_selection.update_selection(line, column);
             }
-            
+
             // Check if we need to auto-scroll due to dragging outside the visible area
             const SCROLL_MARGIN: u16 = 3;
             let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
             let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
-            
+
             if needs_scroll_up {
                 self.auto_scroll_active = true;
                 self.auto_scroll_speed = -1.0;

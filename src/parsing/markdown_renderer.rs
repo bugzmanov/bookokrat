@@ -88,7 +88,11 @@ impl MarkdownRenderer {
             Block::DefinitionList { items } => {
                 self.render_definition_list(items, output);
             }
-            Block::EpubBlock { epub_type, element_name, content } => {
+            Block::EpubBlock {
+                epub_type,
+                element_name,
+                content,
+            } => {
                 self.render_epub_block(epub_type, element_name, content, output);
             }
             Block::ThematicBreak => {
@@ -169,15 +173,21 @@ impl MarkdownRenderer {
         }
     }
 
-    fn render_epub_block(&self, epub_type: &str, element_name: &str, content: &[Node], output: &mut String) {
+    fn render_epub_block(
+        &self,
+        epub_type: &str,
+        element_name: &str,
+        content: &[Node],
+        output: &mut String,
+    ) {
         // Render as a special block with type annotation
         output.push_str(&format!("[{} epub:type=\"{}\"]\n", element_name, epub_type));
-        
+
         // Render nested content
         for node in content {
             self.render_node(node, output);
         }
-        
+
         output.push_str(&format!("[/{}]\n\n", element_name));
     }
 
