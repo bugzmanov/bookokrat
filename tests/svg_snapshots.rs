@@ -2623,6 +2623,8 @@ fn test_epub_type_attributes_svg() {
 
         <p>This is a regular paragraph in the chapter.</p>
 
+        <pre data-type="programlisting">p(I love food) = p(I) × p(I | love) × p(food | I, love)</pre>
+
         <aside epub:type="sidebar">
             <h2>Important Note</h2>
             <p>This is a sidebar with additional information that supplements the main content.</p>
@@ -2671,5 +2673,89 @@ fn test_epub_type_attributes_svg() {
         &std::path::Path::new("tests/snapshots/epub_type_attributes.svg"),
         "test_epub_type_attributes_svg",
         create_test_failure_handler("test_epub_type_attributes_svg"),
+    );
+}
+
+#[test]
+fn test_complex_table_with_code_and_linebreaks_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(140, 50);
+
+    let table_content = r#"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+    <title>Complex Table with Code and Line Breaks Test</title>
+    <link rel="stylesheet" type="text/css" href="override_v1.css"/>
+    <link rel="stylesheet" type="text/css" href="epub.css"/>
+</head>
+<body>
+    <div id="book-content">
+        <table id="ch02_table_6_1730147895537582">
+            <caption><span class="label">Table 2-6. </span>Examples of demonstration data used for <a href="https://arxiv.org/abs/2203.02155">InstructGPT</a>.</caption>
+            <thead>
+                <tr>
+                    <th>Prompt</th>
+                    <th>Labeler's response</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>Serendipity means the occurrence and development of events by chance in a happy or beneficial way. Use the word in a sentence.</code></td>
+                    <td><code>Running into Margaret and being introduced to Tom was a fortunate stroke of</code><br/><code>serendipity.</code></td>
+                </tr>
+                <tr>
+                    <td><code>Read the following text and answer the three questions at the end.</code><br/>
+                    <br/>
+                    <code>[OMITTED FOR LENGTH - Article about Justice Ruth Bader Ginsburg,</code><br/><code>Champion Of Gender Equality, Dies At 87]</code><br/>
+                    <br/>
+                    <code>1. …</code><br/>
+                    <code>2. …</code><br/>
+                    <code>3. Why will Ginsburg's death have</code><br/><code>profound consequences for the court and the country?</code></td>
+                    <td><code>1. …</code><br/>
+                    <code>2. …</code><br/>
+                    <code>3. Ruth Bader Ginsburg was the leader of the liberal wing, and because the court is about to open a new term, the chief</code><br/><code>justice no longer holds the controlling vote in contested cases.</code></td>
+                </tr>
+                <tr>
+                    <td><code>ELI5: What's the cause of the</code><br/><code>"anxiety lump" in our chest during stressful or disheartening</code><br/><code>experiences?</code></td>
+                    <td><code>The anxiety lump in your throat is caused by muscular tension keeping your glottis dilated to maximize airflow. The clenched chest or heartache feeling is caused by the vagus nerve which tells the organs to pump blood faster, stop digesting, and</code><br/><code>produce adrenaline and cortisol.</code></td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("complex_table_test.html");
+    std::fs::write(&temp_html_path, table_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_complex_table_with_code_and_linebreaks.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/complex_table_with_code_and_linebreaks.svg"),
+        "test_complex_table_with_code_and_linebreaks_svg",
+        create_test_failure_handler("test_complex_table_with_code_and_linebreaks_svg"),
     );
 }

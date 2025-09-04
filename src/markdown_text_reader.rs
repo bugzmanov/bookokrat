@@ -25,7 +25,7 @@ use ratatui_image::{Resize, StatefulImage, picker::Picker};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Pre-processed rendering structure
 struct RenderedContent {
@@ -39,8 +39,8 @@ struct RenderedLine {
     spans: Vec<Span<'static>>,
     raw_text: String, // For text selection
     line_type: LineType,
-    source_node: NodeReference, // Links back to AST
-    visual_height: usize,       // 1 for text, IMAGE_HEIGHT for images, etc.
+    link_nodes: Vec<LinkInfo>, // Links that are visible on this line
+    visual_height: usize,      // 1 for text, IMAGE_HEIGHT for images, etc.
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -67,10 +67,29 @@ enum LineType {
     Empty,
 }
 
+/// Span that may contain link information
 #[derive(Clone)]
-struct NodeReference {
-    node_index: usize,
-    block_path: Vec<usize>, // Path through nested blocks
+enum RichSpan {
+    Text(Span<'static>),
+    Link { span: Span<'static>, info: LinkInfo },
+}
+
+impl RichSpan {
+    /// Extract the underlying ratatui Span
+    fn into_span(self) -> Span<'static> {
+        match self {
+            RichSpan::Text(span) => span,
+            RichSpan::Link { span, .. } => span,
+        }
+    }
+
+    /// Get link info if this is a link
+    fn link_info(&self) -> Option<&LinkInfo> {
+        match self {
+            RichSpan::Text(_) => None,
+            RichSpan::Link { info, .. } => Some(info),
+        }
+    }
 }
 
 /// AST-based text reader that directly processes Markdown Document
@@ -123,6 +142,15 @@ pub struct MarkdownTextReader {
 
     // Tables extracted from AST
     embedded_tables: RefCell<Vec<EmbeddedTable>>,
+
+    /// Map of anchor IDs to their line positions in rendered content
+    anchor_positions: HashMap<String, usize>,
+
+    /// Current chapter filename (for resolving relative links)
+    current_chapter_file: Option<String>,
+
+    /// Pending anchor scroll after chapter navigation
+    pending_anchor_scroll: Option<String>,
 }
 
 impl MarkdownTextReader {
@@ -312,6 +340,9 @@ impl MarkdownTextReader {
             show_raw_html: false,
             links: Vec::new(),
             embedded_tables: RefCell::new(Vec::new()),
+            anchor_positions: HashMap::new(),
+            current_chapter_file: None,
+            pending_anchor_scroll: None,
         }
     }
 
@@ -358,16 +389,16 @@ impl MarkdownTextReader {
         let mut lines = Vec::new();
         let mut total_height = 0;
 
+        // Clear previous anchor positions
+        self.anchor_positions.clear();
+
         // Iterate through all blocks in the document
         for (node_idx, node) in doc.blocks.iter().enumerate() {
-            let node_ref = NodeReference {
-                node_index: node_idx,
-                block_path: vec![],
-            };
+            // Track anchors before rendering each block
+            self.extract_and_track_anchors_from_node(node, total_height);
 
             self.render_node(
                 node,
-                node_ref,
                 &mut lines,
                 &mut total_height,
                 width,
@@ -377,8 +408,11 @@ impl MarkdownTextReader {
             );
         }
 
-        // Fix link coordinates after all text wrapping is complete
-        self.fix_link_coordinates(&lines);
+        // Collect all links from rendered lines
+        self.links.clear();
+        for rendered_line in &lines {
+            self.links.extend(rendered_line.link_nodes.clone());
+        }
 
         RenderedContent {
             lines,
@@ -387,10 +421,68 @@ impl MarkdownTextReader {
         }
     }
 
+    /// Extract and track anchors from a node before rendering
+    fn extract_and_track_anchors_from_node(&mut self, node: &Node, current_line: usize) {
+        // First, check if this node has an HTML ID attribute stored
+        if let Some(html_id) = &node.id {
+            self.anchor_positions.insert(html_id.clone(), current_line);
+        }
+
+        // For headings, also generate the text-based anchor as fallback for compatibility
+        match &node.block {
+            MarkdownBlock::Heading { content, .. } => {
+                // Only generate text-based anchor if no HTML ID was present
+                if node.id.is_none() {
+                    let heading_text = self.text_to_string(content);
+                    let anchor_id = self.generate_heading_anchor(&heading_text);
+                    self.anchor_positions.insert(anchor_id, current_line);
+                }
+                // Also extract inline anchors from heading content
+                self.extract_inline_anchors_from_text(content, current_line);
+            }
+            MarkdownBlock::Paragraph { content } => {
+                // Extract inline anchors from paragraph content
+                self.extract_inline_anchors_from_text(content, current_line);
+            }
+            _ => {}
+        }
+    }
+
+    /// Generate anchor ID from heading text (simplified version)
+    fn generate_heading_anchor(&self, heading_text: &str) -> String {
+        heading_text
+            .to_lowercase()
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '-')
+            .collect::<String>()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join("-")
+    }
+
+    /// Extract anchors from text content (look for id attributes or anchor patterns)
+    fn extract_anchors_from_text(&mut self, text: &MarkdownText, current_line: usize) {
+        // This is a placeholder for future enhancement
+        // In a full implementation, we might extract anchors from HTML id attributes
+        // or other anchor markers embedded in the text
+        let _ = (text, current_line); // Avoid unused parameter warning
+    }
+
+    /// Extract inline anchors from text content
+    fn extract_inline_anchors_from_text(&mut self, text: &MarkdownText, current_line: usize) {
+        for item in text.iter() {
+            match item {
+                TextOrInline::Inline(Inline::Anchor { id }) => {
+                    self.anchor_positions.insert(id.clone(), current_line);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn render_node(
         &mut self,
         node: &Node,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -405,7 +497,6 @@ impl MarkdownTextReader {
                 self.render_heading(
                     *level,
                     content,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -417,7 +508,6 @@ impl MarkdownTextReader {
             Paragraph { content } => {
                 self.render_paragraph(
                     content,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -431,7 +521,6 @@ impl MarkdownTextReader {
                 self.render_code_block(
                     language.as_deref(),
                     content,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -444,7 +533,6 @@ impl MarkdownTextReader {
                 self.render_list(
                     kind,
                     items,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -463,7 +551,6 @@ impl MarkdownTextReader {
                     header,
                     rows,
                     alignment,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -477,7 +564,6 @@ impl MarkdownTextReader {
             } => {
                 self.render_quote(
                     quote_content,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -488,20 +574,12 @@ impl MarkdownTextReader {
             }
 
             ThematicBreak => {
-                self.render_thematic_break(
-                    node_ref,
-                    lines,
-                    total_height,
-                    width,
-                    palette,
-                    is_focused,
-                );
+                self.render_thematic_break(lines, total_height, width, palette, is_focused);
             }
 
             DefinitionList { items: def_items } => {
                 self.render_definition_list(
                     def_items,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -519,7 +597,6 @@ impl MarkdownTextReader {
                     epub_type,
                     element_name,
                     content,
-                    node_ref,
                     lines,
                     total_height,
                     width,
@@ -547,6 +624,9 @@ impl MarkdownTextReader {
                     Inline::Image { alt_text, .. } => {
                         result.push_str(alt_text);
                     }
+                    Inline::Anchor { .. } => {
+                        // Anchors don't contribute to text content
+                    }
                     Inline::LineBreak => {
                         result.push('\n');
                     }
@@ -563,7 +643,6 @@ impl MarkdownTextReader {
         &mut self,
         level: HeadingLevel,
         content: &MarkdownText,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -611,7 +690,7 @@ impl MarkdownTextReader {
                     level: level.as_u8(),
                     needs_decoration: false,
                 },
-                source_node: node_ref.clone(),
+                link_nodes: vec![],
                 visual_height: 1,
             });
 
@@ -641,7 +720,7 @@ impl MarkdownTextReader {
                     level: level.as_u8(),
                     needs_decoration: true,
                 },
-                source_node: node_ref.clone(),
+                link_nodes: vec![],
                 visual_height: 1,
             });
 
@@ -654,7 +733,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -664,7 +743,6 @@ impl MarkdownTextReader {
     fn render_paragraph(
         &mut self,
         content: &MarkdownText,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -673,25 +751,24 @@ impl MarkdownTextReader {
         indent: usize,
     ) {
         // First, check if this paragraph contains any images and separate them
-        let mut current_spans = Vec::new();
+        let mut current_rich_spans = Vec::new();
         let mut has_content = false;
 
         for item in content.iter() {
             match item {
                 TextOrInline::Inline(Inline::Image { url, alt_text, .. }) => {
                     // If we have accumulated text before the image, render it first
-                    if !current_spans.is_empty() {
+                    if !current_rich_spans.is_empty() {
                         self.render_text_spans(
-                            &current_spans,
+                            &current_rich_spans,
                             None, // no prefix
-                            node_ref.clone(),
                             lines,
                             total_height,
                             width,
                             indent,
                             false, // don't add empty line after
                         );
-                        current_spans.clear();
+                        current_rich_spans.clear();
                         has_content = true;
                     }
 
@@ -699,7 +776,6 @@ impl MarkdownTextReader {
                     self.render_image_placeholder(
                         url,
                         alt_text,
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -710,19 +786,17 @@ impl MarkdownTextReader {
                 }
                 _ => {
                     // Accumulate non-image content
-                    let styled_spans =
-                        self.render_text_or_inline(item, palette, is_focused, *total_height);
-                    current_spans.extend(styled_spans);
+                    let rich_spans = self.render_text_or_inline(item, palette, is_focused);
+                    current_rich_spans.extend(rich_spans);
                 }
             }
         }
 
         // Render any remaining text spans
-        if !current_spans.is_empty() {
+        if !current_rich_spans.is_empty() {
             self.render_text_spans(
-                &current_spans,
+                &current_rich_spans,
                 None, // no prefix
-                node_ref.clone(),
                 lines,
                 total_height,
                 width,
@@ -735,7 +809,7 @@ impl MarkdownTextReader {
                 spans: vec![Span::raw("")],
                 raw_text: String::new(),
                 line_type: LineType::Empty,
-                source_node: node_ref,
+                link_nodes: vec![],
                 visual_height: 1,
             });
             self.raw_text_lines.push(String::new());
@@ -748,14 +822,13 @@ impl MarkdownTextReader {
         item: &TextOrInline,
         palette: &Base16Palette,
         is_focused: bool,
-        _line_num: usize, // Not used anymore - we'll fix links after wrapping
-    ) -> Vec<Span<'static>> {
-        let mut spans = Vec::new();
+    ) -> Vec<RichSpan> {
+        let mut rich_spans = Vec::new();
 
         match item {
             TextOrInline::Text(text_node) => {
                 let styled_span = self.style_text_node(text_node, palette, is_focused);
-                spans.push(styled_span);
+                rich_spans.push(RichSpan::Text(styled_span));
             }
 
             TextOrInline::Inline(inline) => {
@@ -763,55 +836,95 @@ impl MarkdownTextReader {
                     Inline::Link {
                         text: link_text,
                         url,
+                        link_type,
+                        target_chapter,
+                        target_anchor,
                         ..
                     } => {
-                        // Store link info with temporary coordinates - we'll fix them after wrapping
-                        let start_col = self.calculate_column_from_spans(&spans);
                         let link_text_str = self.text_to_string(link_text);
 
-                        self.links.push(LinkInfo {
+                        // Create link info (line and columns will be set during line creation)
+                        let link_info = LinkInfo {
                             text: link_text_str.clone(),
                             url: url.clone(),
-                            line: 0, // Temporary - will be updated after wrapping
-                            start_col,
-                            end_col: start_col + link_text_str.len(),
-                        });
-
-                        // Create underlined span
-                        let link_color = if is_focused {
-                            palette.base_0c
-                        } else {
-                            palette.base_03
+                            line: 0,      // Will be set when added to RenderedLine
+                            start_col: 0, // Will be calculated when added to line
+                            end_col: 0,   // Will be calculated when added to line
+                            link_type: link_type.clone(),
+                            target_chapter: target_chapter.clone(),
+                            target_anchor: target_anchor.clone(),
                         };
 
-                        spans.push(Span::styled(
+                        // Determine styling based on link type
+                        let (link_color, link_modifier) = if is_focused {
+                            match link_type {
+                                Some(crate::markdown::LinkType::External) => {
+                                    (palette.base_0c, Modifier::UNDERLINED) // Cyan + underlined
+                                }
+                                Some(crate::markdown::LinkType::InternalChapter) => {
+                                    (palette.base_0b, Modifier::UNDERLINED | Modifier::BOLD) // Green + bold underlined
+                                }
+                                Some(crate::markdown::LinkType::InternalAnchor) => {
+                                    (palette.base_0a, Modifier::UNDERLINED | Modifier::ITALIC) // Yellow + italic underlined
+                                }
+                                None => {
+                                    (palette.base_0c, Modifier::UNDERLINED) // Default to external style
+                                }
+                            }
+                        } else {
+                            // Unfocused state - use muted colors but maintain differentiation
+                            match link_type {
+                                Some(crate::markdown::LinkType::External) => {
+                                    (palette.base_03, Modifier::UNDERLINED)
+                                }
+                                Some(crate::markdown::LinkType::InternalChapter) => {
+                                    (palette.base_03, Modifier::UNDERLINED | Modifier::BOLD)
+                                }
+                                Some(crate::markdown::LinkType::InternalAnchor) => {
+                                    (palette.base_03, Modifier::UNDERLINED | Modifier::ITALIC)
+                                }
+                                None => (palette.base_03, Modifier::UNDERLINED),
+                            }
+                        };
+
+                        let styled_span = Span::styled(
                             link_text_str,
                             RatatuiStyle::default()
                                 .fg(link_color)
-                                .add_modifier(Modifier::UNDERLINED),
-                        ));
+                                .add_modifier(link_modifier),
+                        );
+
+                        rich_spans.push(RichSpan::Link {
+                            span: styled_span,
+                            info: link_info,
+                        });
                     }
 
                     Inline::Image { url, alt_text, .. } => {
                         // Images in inline context just show placeholder text
                         // They should be rendered as blocks in render_paragraph
-                        spans.push(Span::raw(format!("[image: {}]", alt_text)));
+                        rich_spans
+                            .push(RichSpan::Text(Span::raw(format!("[image: {}]", alt_text))));
+                    }
+
+                    Inline::Anchor { .. } => {
+                        // Anchors don't produce visible content - position tracking is handled elsewhere
                     }
 
                     Inline::LineBreak => {
                         // Force a line break
-                        spans.push(Span::raw("\n"));
+                        rich_spans.push(RichSpan::Text(Span::raw("\n")));
                     }
 
                     Inline::SoftBreak => {
                         // Space for soft break
-                        spans.push(Span::raw(" "));
+                        rich_spans.push(RichSpan::Text(Span::raw(" ")));
                     }
                 }
             }
         }
 
-        spans
+        rich_spans
     }
 
     fn style_text_node(
@@ -845,15 +958,10 @@ impl MarkdownTextReader {
         Span::styled(node.content.clone(), styled)
     }
 
-    fn calculate_column_from_spans(&self, spans: &[Span]) -> usize {
-        spans.iter().map(|s| s.content.len()).sum()
-    }
-
     fn render_code_block(
         &mut self,
         language: Option<&str>,
         content: &str,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -881,7 +989,7 @@ impl MarkdownTextReader {
                 line_type: LineType::CodeBlock {
                     language: language.map(String::from),
                 },
-                source_node: node_ref.clone(),
+                link_nodes: vec![],
                 visual_height: 1,
             });
 
@@ -894,7 +1002,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -905,7 +1013,6 @@ impl MarkdownTextReader {
         &mut self,
         kind: &crate::markdown::ListKind,
         items: &[crate::markdown::ListItem],
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -933,23 +1040,18 @@ impl MarkdownTextReader {
                     match &block_node.block {
                         MarkdownBlock::Paragraph { content } => {
                             // Render the rich text content with prefix and indentation
-                            let mut content_spans = Vec::new();
+                            let mut content_rich_spans = Vec::new();
                             for item in content.iter() {
-                                content_spans.extend(self.render_text_or_inline(
-                                    item,
-                                    palette,
-                                    is_focused,
-                                    *total_height,
-                                ));
+                                content_rich_spans
+                                    .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
 
                             // Store original line count to update line types after
                             let lines_before = lines.len();
 
                             self.render_text_spans(
-                                &content_spans,
+                                &content_rich_spans,
                                 Some(&prefix), // add bullet/number prefix
-                                node_ref.clone(),
                                 lines,
                                 total_height,
                                 width,
@@ -969,7 +1071,6 @@ impl MarkdownTextReader {
                             // For other block types in list items, render them with increased indent
                             self.render_node(
                                 block_node,
-                                node_ref.clone(),
                                 lines,
                                 total_height,
                                 width,
@@ -983,7 +1084,6 @@ impl MarkdownTextReader {
                     // Subsequent blocks are rendered with increased indent
                     self.render_node(
                         block_node,
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -1000,7 +1100,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1012,7 +1112,6 @@ impl MarkdownTextReader {
         header: &Option<crate::markdown::TableRow>,
         rows: &[crate::markdown::TableRow],
         _alignment: &[crate::markdown::TableAlignment],
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1098,7 +1197,7 @@ impl MarkdownTextReader {
                 spans: line.spans,
                 raw_text: raw_text.clone(),
                 line_type: LineType::Text, // Table widget handles its own styling
-                source_node: node_ref.clone(),
+                link_nodes: vec![],
                 visual_height: 1,
             };
 
@@ -1133,7 +1232,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1261,7 +1360,6 @@ impl MarkdownTextReader {
     fn render_quote(
         &mut self,
         content: &[Node],
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1276,37 +1374,39 @@ impl MarkdownTextReader {
                     content: para_content,
                 } => {
                     // Render the rich text content with "> " prefix
-                    let mut content_spans = Vec::new();
+                    let mut content_rich_spans = Vec::new();
                     for item in para_content.iter() {
-                        content_spans.extend(self.render_text_or_inline(
-                            item,
-                            palette,
-                            is_focused,
-                            *total_height,
-                        ));
+                        content_rich_spans
+                            .extend(self.render_text_or_inline(item, palette, is_focused));
                     }
 
-                    // Apply quote styling to all spans
+                    // Apply quote styling to all rich spans
                     let quote_color = if is_focused {
                         palette.base_03
                     } else {
                         palette.base_02
                     };
 
-                    let styled_spans: Vec<Span<'static>> = content_spans
+                    let styled_rich_spans: Vec<RichSpan> = content_rich_spans
                         .into_iter()
-                        .map(|span| {
-                            Span::styled(
+                        .map(|rich_span| match rich_span {
+                            RichSpan::Text(span) => RichSpan::Text(Span::styled(
                                 span.content.clone(),
                                 span.style.fg(quote_color).add_modifier(Modifier::ITALIC),
-                            )
+                            )),
+                            RichSpan::Link { span, info } => RichSpan::Link {
+                                span: Span::styled(
+                                    span.content.clone(),
+                                    span.style.fg(quote_color).add_modifier(Modifier::ITALIC),
+                                ),
+                                info,
+                            },
                         })
                         .collect();
 
                     self.render_text_spans(
-                        &styled_spans,
+                        &styled_rich_spans,
                         Some("> "), // quote prefix
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -1318,7 +1418,6 @@ impl MarkdownTextReader {
                     // Render other block types within quotes
                     self.render_node(
                         node,
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -1335,7 +1434,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1344,7 +1443,6 @@ impl MarkdownTextReader {
 
     fn render_thematic_break(
         &mut self,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1364,7 +1462,7 @@ impl MarkdownTextReader {
             )],
             raw_text: hr_line.clone(),
             line_type: LineType::HorizontalRule,
-            source_node: node_ref.clone(),
+            link_nodes: vec![],
             visual_height: 1,
         });
 
@@ -1376,7 +1474,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1386,7 +1484,6 @@ impl MarkdownTextReader {
     fn render_definition_list(
         &mut self,
         items: &[crate::markdown::DefinitionListItem],
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1402,31 +1499,32 @@ impl MarkdownTextReader {
                 palette.base_03 // Dimmed when not focused
             };
 
-            let mut term_spans = Vec::new();
+            let mut term_rich_spans = Vec::new();
             for term_item in item.term.iter() {
-                term_spans.extend(self.render_text_or_inline(
-                    term_item,
-                    palette,
-                    is_focused,
-                    *total_height,
-                ));
+                term_rich_spans.extend(self.render_text_or_inline(term_item, palette, is_focused));
             }
 
-            // Apply bold styling to all term spans
-            let styled_term_spans: Vec<Span<'static>> = term_spans
+            // Apply bold styling to all term rich spans
+            let styled_term_rich_spans: Vec<RichSpan> = term_rich_spans
                 .into_iter()
-                .map(|span| {
-                    Span::styled(
+                .map(|rich_span| match rich_span {
+                    RichSpan::Text(span) => RichSpan::Text(Span::styled(
                         span.content.clone(),
                         span.style.fg(term_color).add_modifier(Modifier::BOLD),
-                    )
+                    )),
+                    RichSpan::Link { span, info } => RichSpan::Link {
+                        span: Span::styled(
+                            span.content.clone(),
+                            span.style.fg(term_color).add_modifier(Modifier::BOLD),
+                        ),
+                        info,
+                    },
                 })
                 .collect();
 
             self.render_text_spans(
-                &styled_term_spans,
+                &styled_term_rich_spans,
                 None, // no prefix for terms
-                node_ref.clone(),
                 lines,
                 total_height,
                 width,
@@ -1436,20 +1534,15 @@ impl MarkdownTextReader {
 
             // Render each definition (dd) - indented
             for definition in &item.definitions {
-                let mut def_spans = Vec::new();
+                let mut def_rich_spans = Vec::new();
                 for def_item in definition.iter() {
-                    def_spans.extend(self.render_text_or_inline(
-                        def_item,
-                        palette,
-                        is_focused,
-                        *total_height,
-                    ));
+                    def_rich_spans
+                        .extend(self.render_text_or_inline(def_item, palette, is_focused));
                 }
 
                 self.render_text_spans(
-                    &def_spans,
+                    &def_rich_spans,
                     None, // no prefix for definitions
-                    node_ref.clone(),
                     lines,
                     total_height,
                     width,
@@ -1464,7 +1557,7 @@ impl MarkdownTextReader {
                     spans: vec![Span::raw("")],
                     raw_text: String::new(),
                     line_type: LineType::Empty,
-                    source_node: node_ref.clone(),
+                    link_nodes: vec![],
                     visual_height: 1,
                 });
                 self.raw_text_lines.push(String::new());
@@ -1477,7 +1570,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1489,7 +1582,6 @@ impl MarkdownTextReader {
         _epub_type: &str,
         _element_name: &str,
         content: &[crate::markdown::Node],
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1509,7 +1601,7 @@ impl MarkdownTextReader {
             )],
             raw_text: separator_line.clone(),
             line_type: LineType::HorizontalRule,
-            source_node: node_ref.clone(),
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(separator_line);
@@ -1520,7 +1612,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref.clone(),
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1535,7 +1627,6 @@ impl MarkdownTextReader {
                     self.render_heading(
                         HeadingLevel::H5, // remap to always same time of heading to avoid visual hierarchy issues
                         content,
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -1546,7 +1637,6 @@ impl MarkdownTextReader {
                 _ => {
                     self.render_node(
                         content_node,
-                        node_ref.clone(),
                         lines,
                         total_height,
                         width,
@@ -1571,7 +1661,7 @@ impl MarkdownTextReader {
             )],
             raw_text: separator_line.clone(),
             line_type: LineType::HorizontalRule,
-            source_node: node_ref.clone(),
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(separator_line);
@@ -1582,7 +1672,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1591,26 +1681,28 @@ impl MarkdownTextReader {
 
     fn render_text_spans(
         &mut self,
-        spans: &[Span<'static>],
+        rich_spans: &[RichSpan],
         prefix: Option<&str>,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
         indent: usize,
         add_empty_line_after: bool,
     ) {
-        // Build the complete spans with prefix
-        let mut complete_spans = Vec::new();
+        // Build complete rich spans with prefix
+        let mut complete_rich_spans = Vec::new();
         if let Some(prefix_str) = prefix {
-            complete_spans.push(Span::raw(prefix_str.to_string()));
+            complete_rich_spans.push(RichSpan::Text(Span::raw(prefix_str.to_string())));
         }
-        complete_spans.extend_from_slice(spans);
+        complete_rich_spans.extend_from_slice(rich_spans);
 
-        // Convert complete spans to plain text for wrapping
-        let plain_text = complete_spans
+        // Convert rich spans to plain text for wrapping
+        let plain_text = complete_rich_spans
             .iter()
-            .map(|s| s.content.as_ref())
+            .map(|rs| match rs {
+                RichSpan::Text(span) => span.content.as_ref(),
+                RichSpan::Link { span, .. } => span.content.as_ref(),
+            })
             .collect::<String>();
 
         // Calculate available width after accounting for indentation
@@ -1622,19 +1714,48 @@ impl MarkdownTextReader {
 
         // Create lines from wrapped text
         for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
-            // For the first line, use the styled spans if possible
-            // For subsequent lines, use plain text
-            let mut line_spans = if line_idx == 0 && wrapped.len() == 1 {
-                // Single line - use the styled spans
-                complete_spans.clone()
+            let mut line_spans = Vec::new();
+            let mut line_links = Vec::new();
+
+            // Map wrapped line back to rich spans
+            let rich_spans_for_line = if line_idx == 0 && wrapped.len() == 1 {
+                // Single line - use all rich spans
+                complete_rich_spans.clone()
             } else {
-                // Multi-line content: map each wrapped line back to styled spans
-                self.map_wrapped_line_to_styled_spans(wrapped_line, &complete_spans)
+                // Multi-line content: map wrapped line back to rich spans
+                self.map_wrapped_line_to_rich_spans(wrapped_line, &complete_rich_spans)
             };
+
+            // Extract spans and links, calculating positions
+            let mut current_col = 0;
+            for rich_span in rich_spans_for_line {
+                match rich_span {
+                    RichSpan::Text(span) => {
+                        let len = span.content.len();
+                        line_spans.push(span);
+                        current_col += len;
+                    }
+                    RichSpan::Link { span, mut info } => {
+                        let len = span.content.len();
+                        info.line = lines.len(); // Set to current line being created
+                        info.start_col = current_col;
+                        info.end_col = current_col + len;
+
+                        line_links.push(info);
+                        line_spans.push(span);
+                        current_col += len;
+                    }
+                }
+            }
 
             // Apply indentation by prepending indent span
             if indent > 0 {
                 line_spans.insert(0, Span::raw(indent_str.clone()));
+                // Adjust link positions for indentation
+                for link in &mut line_links {
+                    link.start_col += indent_str.len();
+                    link.end_col += indent_str.len();
+                }
             }
 
             // Build the final raw text with indentation
@@ -1648,7 +1769,7 @@ impl MarkdownTextReader {
                 spans: line_spans,
                 raw_text: final_raw_text.clone(),
                 line_type: LineType::Text,
-                source_node: node_ref.clone(),
+                link_nodes: line_links, // Captured links!
                 visual_height: 1,
             });
 
@@ -1662,47 +1783,12 @@ impl MarkdownTextReader {
                 spans: vec![Span::raw("")],
                 raw_text: String::new(),
                 line_type: LineType::Empty,
-                source_node: node_ref,
+                link_nodes: vec![],
                 visual_height: 1,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
         }
-    }
-
-    /// Fix link coordinates to match the final rendered line positions after text wrapping
-    fn fix_link_coordinates(&mut self, rendered_lines: &[RenderedLine]) {
-        // Build a map of link text to URLs for efficient lookup
-        let mut link_map = std::collections::HashMap::new();
-        for link in &self.links {
-            link_map.insert(link.text.clone(), link.url.clone());
-        }
-
-        // Clear existing links and rebuild them with correct coordinates
-        self.links.clear();
-
-        // Scan through all rendered lines to find links
-        for (line_idx, rendered_line) in rendered_lines.iter().enumerate() {
-            let line_text = &rendered_line.raw_text;
-
-            // Look for link text in each line
-            for (link_text, url) in &link_map {
-                if let Some(start_pos) = line_text.find(link_text) {
-                    let end_pos = start_pos + link_text.len();
-
-                    // Create new link info with correct coordinates
-                    self.links.push(LinkInfo {
-                        text: link_text.clone(),
-                        url: url.clone(),
-                        line: line_idx,
-                        start_col: start_pos,
-                        end_col: end_pos,
-                    });
-                }
-            }
-        }
-
-        debug!("Fixed {} link coordinates", self.links.len());
     }
 
     /// Convert screen coordinates to logical text coordinates (like TextReader does)
@@ -1719,6 +1805,128 @@ impl MarkdownTextReader {
             content_area.x,
             content_area.y,
         )
+    }
+
+    /// Map a wrapped line back to its rich spans, preserving links
+    fn map_wrapped_line_to_rich_spans(
+        &self,
+        wrapped_line: &str,
+        original_rich_spans: &[RichSpan],
+    ) -> Vec<RichSpan> {
+        // Build a flattened representation with rich span info
+        #[derive(Clone)]
+        struct CharWithRichSpan {
+            ch: char,
+            rich_span_idx: usize,    // Index into original_rich_spans
+            char_idx_in_span: usize, // Position within the span's text
+        }
+
+        let mut chars_with_rich = Vec::new();
+        for (span_idx, rich_span) in original_rich_spans.iter().enumerate() {
+            let span_text = match rich_span {
+                RichSpan::Text(span) => &span.content,
+                RichSpan::Link { span, .. } => &span.content,
+            };
+            for (char_idx, ch) in span_text.chars().enumerate() {
+                chars_with_rich.push(CharWithRichSpan {
+                    ch,
+                    rich_span_idx: span_idx,
+                    char_idx_in_span: char_idx,
+                });
+            }
+        }
+
+        // Find where this wrapped line starts in the original content
+        let wrapped_chars: Vec<char> = wrapped_line.chars().collect();
+        if wrapped_chars.is_empty() {
+            return vec![RichSpan::Text(Span::raw(""))];
+        }
+
+        // Find the starting position
+        let mut start_pos = None;
+        for i in 0..=chars_with_rich.len().saturating_sub(wrapped_chars.len()) {
+            let mut matches = true;
+            for (j, &wrapped_ch) in wrapped_chars.iter().enumerate() {
+                if i + j >= chars_with_rich.len() || chars_with_rich[i + j].ch != wrapped_ch {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches {
+                start_pos = Some(i);
+                break;
+            }
+        }
+
+        // If we found the position, reconstruct the rich spans
+        if let Some(pos) = start_pos {
+            let mut result_spans = Vec::new();
+            let mut current_span_idx = None;
+            let mut current_text = String::new();
+
+            for i in pos..pos + wrapped_chars.len() {
+                if i >= chars_with_rich.len() {
+                    break;
+                }
+
+                let char_info = &chars_with_rich[i];
+
+                if current_span_idx != Some(char_info.rich_span_idx) {
+                    // Span changed, push accumulated span
+                    if !current_text.is_empty() {
+                        if let Some(idx) = current_span_idx {
+                            // Clone the original rich span but with new text
+                            let new_rich_span = match &original_rich_spans[idx] {
+                                RichSpan::Text(original_span) => RichSpan::Text(Span::styled(
+                                    current_text.clone(),
+                                    original_span.style,
+                                )),
+                                RichSpan::Link {
+                                    span: original_span,
+                                    info,
+                                } => RichSpan::Link {
+                                    span: Span::styled(current_text.clone(), original_span.style),
+                                    info: info.clone(),
+                                },
+                            };
+                            result_spans.push(new_rich_span);
+                        }
+                        current_text.clear();
+                    }
+                    current_span_idx = Some(char_info.rich_span_idx);
+                }
+
+                current_text.push(char_info.ch);
+            }
+
+            // Push final accumulated span
+            if !current_text.is_empty() {
+                if let Some(idx) = current_span_idx {
+                    let new_rich_span = match &original_rich_spans[idx] {
+                        RichSpan::Text(original_span) => {
+                            RichSpan::Text(Span::styled(current_text, original_span.style))
+                        }
+                        RichSpan::Link {
+                            span: original_span,
+                            info,
+                        } => RichSpan::Link {
+                            span: Span::styled(current_text, original_span.style),
+                            info: info.clone(),
+                        },
+                    };
+                    result_spans.push(new_rich_span);
+                }
+            }
+
+            if result_spans.is_empty() {
+                vec![RichSpan::Text(Span::raw(wrapped_line.to_string()))]
+            } else {
+                result_spans
+            }
+        } else {
+            // Fallback if we can't find the position
+            vec![RichSpan::Text(Span::raw(wrapped_line.to_string()))]
+        }
     }
 
     /// Map a wrapped line back to its styled spans, preserving formatting like links
@@ -1818,7 +2026,6 @@ impl MarkdownTextReader {
         &mut self,
         url: &str,
         alt_text: &str,
-        node_ref: NodeReference,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1835,7 +2042,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref.clone(),
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -1903,7 +2110,7 @@ impl MarkdownTextReader {
                 line_type: LineType::ImagePlaceholder {
                     src: url.to_string(),
                 },
-                source_node: node_ref.clone(),
+                link_nodes: vec![],
                 visual_height: 1,
             });
 
@@ -1916,7 +2123,7 @@ impl MarkdownTextReader {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
             line_type: LineType::Empty,
-            source_node: node_ref,
+            link_nodes: vec![],
             visual_height: 1,
         });
         self.raw_text_lines.push(String::new());
@@ -2201,8 +2408,6 @@ impl TextReaderTrait for MarkdownTextReader {
 
         // Always check for link clicks first, regardless of selection state
         if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            debug!("Mouse up at: {}x{} : {:?}", line, column, self.links);
-
             // Check if click is on a link
             if let Some(link) = self.get_link_at_position(line, column) {
                 let url = link.url.clone();
@@ -2210,6 +2415,8 @@ impl TextReaderTrait for MarkdownTextReader {
                 // Clear any selection and return the link
                 self.text_selection.clear_selection();
                 return Some(url);
+            } else {
+                debug!("links not found");
             }
         }
 
@@ -2779,6 +2986,64 @@ impl TextReaderTrait for MarkdownTextReader {
 
     fn get_last_content_area(&self) -> Option<Rect> {
         self.last_content_area
+    }
+
+    // Internal link navigation methods (from trait)
+    fn get_anchor_position(&self, anchor_id: &str) -> Option<usize> {
+        debug!(
+            "Looking for anchor '{}' in {} available anchors",
+            anchor_id,
+            self.anchor_positions.len()
+        );
+
+        // Print ALL available anchors for debugging
+        let all_anchors: Vec<&String> = self.anchor_positions.keys().collect();
+        self.anchor_positions.get(anchor_id).copied()
+    }
+
+    fn scroll_to_line(&mut self, target_line: usize) {
+        // Center target line in viewport if possible
+        let desired_offset = if target_line > self.visible_height / 2 {
+            target_line - self.visible_height / 2
+        } else {
+            0
+        };
+
+        self.scroll_offset = desired_offset.min(self.get_max_scroll_offset());
+    }
+
+    fn highlight_line_temporarily(&mut self, line: usize, duration: std::time::Duration) {
+        if line >= self.scroll_offset && line < self.scroll_offset + self.visible_height {
+            let visible_line = line - self.scroll_offset;
+            self.highlight_visual_line = Some(visible_line);
+            self.highlight_end_time = Instant::now() + duration;
+        }
+    }
+
+    fn set_current_chapter_file(&mut self, chapter_file: Option<String>) {
+        self.current_chapter_file = chapter_file;
+    }
+
+    fn get_current_chapter_file(&self) -> &Option<String> {
+        &self.current_chapter_file
+    }
+
+    fn handle_pending_anchor_scroll(&mut self, pending_anchor: Option<String>) {
+        if let Some(anchor_id) = pending_anchor {
+            if let Some(target_line) = self.get_anchor_position(&anchor_id) {
+                self.scroll_to_line(target_line);
+                self.highlight_line_temporarily(target_line, Duration::from_secs(2));
+                debug!(
+                    "Scrolled to pending anchor '{}' at line {}",
+                    anchor_id, target_line
+                );
+            } else {
+                debug!(
+                    "Pending anchor '{}' not found in current chapter",
+                    anchor_id
+                );
+            }
+        }
     }
 }
 

@@ -743,6 +743,15 @@ impl App {
             self.current_chapter_title = title.clone();
             let content_length = content.len();
 
+            // Set the current chapter file for link handling
+            if let Some(chapter_file) = Self::get_chapter_href(doc, self.current_chapter) {
+                debug!("Setting current chapter file to: {}", chapter_file);
+                self.text_reader
+                    .set_current_chapter_file(Some(chapter_file));
+            } else {
+                self.text_reader.set_current_chapter_file(None);
+            }
+
             // Count images in content for stats (adjust for raw HTML)
             let image_count = if matches!(self.text_reader_impl, TextReaderImplementation::AstBased)
             {
@@ -1134,12 +1143,33 @@ impl App {
                         mouse_event.row,
                         content_area,
                     ) {
-                        // Check if it's an external link (not internal to the book)
+                        // Directly handle the URL-based link without trying to find LinkInfo again
                         if url.starts_with("http://") || url.starts_with("https://") {
                             self.open_external_link(&url);
                         } else {
-                            // Internal link - will be implemented later
-                            debug!("Internal link clicked (not yet implemented): {}", url);
+                            // Handle internal link by classifying the URL directly
+                            let (link_type, target_chapter, target_anchor) =
+                                crate::markdown::classify_link_href(&url);
+                            debug!(
+                                "Internal link clicked: url='{}', link_type={:?}, target_chapter={:?}, target_anchor={:?}",
+                                url, link_type, target_chapter, target_anchor
+                            );
+
+                            // Create a temporary LinkInfo for the link handling system
+                            let temp_link_info = crate::text_reader::LinkInfo {
+                                text: "".to_string(), // We don't need the text for navigation
+                                url: url.clone(),
+                                line: 0, // Not needed for navigation
+                                start_col: 0,
+                                end_col: 0,
+                                link_type: Some(link_type),
+                                target_chapter,
+                                target_anchor,
+                            };
+
+                            if let Err(e) = self.handle_link_click(&temp_link_info) {
+                                error!("Failed to handle link click: {}", e);
+                            }
                         }
                     }
                 }
@@ -1171,8 +1201,128 @@ impl App {
     }
 
     /// Handle image click by creating or showing the image popup
-    fn handle_link_click(&mut self, url: &str) {
-        debug!("Handling link click for: {}", url);
+    fn handle_link_click(
+        &mut self,
+        link_info: &crate::text_reader::LinkInfo,
+    ) -> std::io::Result<bool> {
+        match &link_info.link_type {
+            Some(crate::markdown::LinkType::External) => self.handle_external_link(&link_info.url),
+            Some(crate::markdown::LinkType::InternalAnchor) => {
+                if let Some(anchor_id) = &link_info.target_anchor {
+                    self.scroll_to_anchor(anchor_id)
+                } else {
+                    Ok(false)
+                }
+            }
+            Some(crate::markdown::LinkType::InternalChapter) => {
+                if let Some(chapter_file) = &link_info.target_chapter {
+                    // Check if we're already in the target chapter
+                    if let Some(current_chapter_file) = self.text_reader.get_current_chapter_file()
+                    {
+                        // Normalize paths by extracting just the filename for comparison
+                        let current_filename = std::path::Path::new(current_chapter_file)
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or(current_chapter_file);
+                        let target_filename = std::path::Path::new(chapter_file)
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or(chapter_file);
+
+                        debug!(
+                            "Comparing current chapter '{}' (filename: '{}') with target chapter '{}' (filename: '{}')",
+                            current_chapter_file, current_filename, chapter_file, target_filename
+                        );
+                        if current_filename == target_filename {
+                            // Same chapter - just scroll to anchor if provided
+                            if let Some(anchor_id) = &link_info.target_anchor {
+                                debug!(
+                                    "Same-chapter link: scrolling to anchor '{}' in current chapter",
+                                    anchor_id
+                                );
+                                self.scroll_to_anchor(anchor_id)
+                            } else {
+                                // No anchor - nothing to do (already in the right chapter)
+                                Ok(true)
+                            }
+                        } else {
+                            // Different chapter - navigate to it
+                            self.navigate_to_chapter_by_file(
+                                chapter_file,
+                                link_info.target_anchor.as_ref(),
+                            )
+                        }
+                    } else {
+                        // No current chapter file info - try to navigate anyway
+                        debug!(
+                            "No current chapter file set - trying to navigate to '{}'",
+                            chapter_file
+                        );
+                        self.navigate_to_chapter_by_file(
+                            chapter_file,
+                            link_info.target_anchor.as_ref(),
+                        )
+                    }
+                } else {
+                    Ok(false)
+                }
+            }
+            None => {
+                // Legacy link handling - fallback for old LinkInfo without classification
+                self.handle_legacy_link_click(&link_info.url)
+            }
+        }
+    }
+
+    fn handle_external_link(&mut self, url: &str) -> std::io::Result<bool> {
+        debug!("Opening external link: {}", url);
+        if let Err(e) = open::that(url) {
+            error!("Failed to open external link: {}", e);
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+
+    fn scroll_to_anchor(&mut self, anchor_id: &str) -> std::io::Result<bool> {
+        debug!("Searching for anchor: '{}'", anchor_id);
+        if let Some(target_line) = self.text_reader.get_anchor_position(anchor_id) {
+            self.text_reader.scroll_to_line(target_line);
+            self.text_reader
+                .highlight_line_temporarily(target_line, Duration::from_secs(2));
+            debug!("Scrolled to anchor '{}' at line {}", anchor_id, target_line);
+            Ok(true)
+        } else {
+            debug!("Anchor '{}' not found in current chapter", anchor_id);
+            Ok(false)
+        }
+    }
+
+    fn navigate_to_chapter_by_file(
+        &mut self,
+        chapter_file: &str,
+        anchor_id: Option<&String>,
+    ) -> std::io::Result<bool> {
+        if let Some(chapter_index) = self.find_chapter_by_filename(chapter_file) {
+            if let Err(_) = self.navigate_to_chapter(chapter_index) {
+                return Ok(false);
+            }
+
+            // Store pending anchor scroll for after content loads
+            if let Some(anchor) = anchor_id {
+                self.text_reader
+                    .handle_pending_anchor_scroll(Some(anchor.clone()));
+            }
+
+            Ok(true)
+        } else {
+            debug!("Chapter file '{}' not found in TOC", chapter_file);
+            Ok(false)
+        }
+    }
+
+    fn handle_legacy_link_click(&mut self, url: &str) -> std::io::Result<bool> {
+        debug!("Handling legacy link click for: {}", url);
 
         // Check if it's an internal link (within the EPUB)
         if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -1188,8 +1338,9 @@ impl App {
                             // Navigate to this chapter using existing navigation method
                             if let Err(e) = self.navigate_to_chapter(i) {
                                 error!("Failed to navigate to chapter {}: {}", url, e);
+                                return Ok(false);
                             }
-                            return;
+                            return Ok(true);
                         }
                     }
                 }
@@ -1197,12 +1348,70 @@ impl App {
                 // If not found in spine, might be a fragment/anchor in current chapter
                 info!("Internal link not found in spine: {}", url);
             }
+            Ok(false)
         } else {
             // External link - open in browser
-            if let Err(e) = open::that(url) {
-                error!("Failed to open link in browser: {}", e);
+            self.handle_external_link(url)
+        }
+    }
+
+    /// Find chapter index by filename
+    fn find_chapter_by_filename(&self, chapter_file: &str) -> Option<usize> {
+        // Get the current book's TOC items
+        if let Some(current_book_info) = &self
+            .navigation_panel
+            .table_of_contents
+            .get_current_book_info()
+        {
+            self.find_chapter_recursive(&current_book_info.toc_items, chapter_file)
+        } else {
+            None
+        }
+    }
+
+    /// Recursively search for a chapter by filename in TOC items
+    fn find_chapter_recursive(&self, items: &[TocItem], filename: &str) -> Option<usize> {
+        for item in items {
+            match item {
+                TocItem::Chapter { href, index, .. } => {
+                    let href_without_anchor = href.split('#').next().unwrap_or(href);
+
+                    if href_without_anchor == filename
+                        || href_without_anchor.ends_with(&format!("/{}", filename))
+                        || (filename.contains('/') && href_without_anchor.ends_with(filename))
+                    {
+                        return Some(*index);
+                    }
+                }
+                TocItem::Section {
+                    href,
+                    index,
+                    children,
+                    ..
+                } => {
+                    // Check if this section matches
+                    if let Some(section_href) = href {
+                        // Strip any anchor from the href for comparison
+                        let href_without_anchor =
+                            section_href.split('#').next().unwrap_or(section_href);
+
+                        if href_without_anchor == filename
+                            || href_without_anchor.ends_with(&format!("/{}", filename))
+                            || (filename.contains('/') && href_without_anchor.ends_with(filename))
+                        {
+                            if let Some(section_index) = index {
+                                return Some(*section_index);
+                            }
+                        }
+                    }
+                    // Recursively search children
+                    if let Some(found) = self.find_chapter_recursive(children, filename) {
+                        return Some(found);
+                    }
+                }
             }
         }
+        None
     }
 
     fn open_external_link(&mut self, url: &str) {

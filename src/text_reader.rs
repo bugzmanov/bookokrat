@@ -53,6 +53,9 @@ pub struct LinkInfo {
     pub line: usize,
     pub start_col: usize,
     pub end_col: usize,
+    pub link_type: Option<crate::markdown::LinkType>,
+    pub target_chapter: Option<String>,
+    pub target_anchor: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1194,6 +1197,9 @@ impl TextReader {
                 line: line_num,
                 start_col: link_pos,
                 end_col: link_pos + link_text.len(),
+                link_type: None, // Legacy text reader doesn't classify links
+                target_chapter: None,
+                target_anchor: None,
             });
 
             // Add the link with styling
@@ -1469,6 +1475,9 @@ impl TextReader {
                             line: line_num,
                             start_col,
                             end_col,
+                            link_type: None, // Legacy text reader doesn't classify links
+                            target_chapter: None,
+                            target_anchor: None,
                         });
 
                         // Add link with underline styling
@@ -3044,6 +3053,34 @@ impl TextReaderTrait for TextReader {
 
     fn get_last_content_area(&self) -> Option<Rect> {
         self.last_content_area
+    }
+
+    // Internal link navigation methods (stubs for legacy reader)
+    fn get_anchor_position(&self, _anchor_id: &str) -> Option<usize> {
+        // Legacy text reader doesn't support anchor navigation
+        None
+    }
+
+    fn scroll_to_line(&mut self, _target_line: usize) {
+        // Legacy text reader doesn't support line-based scrolling
+    }
+
+    fn highlight_line_temporarily(&mut self, _line: usize, _duration: std::time::Duration) {
+        // Legacy text reader doesn't support line highlighting
+    }
+
+    fn set_current_chapter_file(&mut self, _chapter_file: Option<String>) {
+        // Legacy text reader doesn't need chapter file tracking
+    }
+
+    fn get_current_chapter_file(&self) -> &Option<String> {
+        // Legacy text reader doesn't track chapter files
+        static NONE_CHAPTER: Option<String> = None;
+        &NONE_CHAPTER
+    }
+
+    fn handle_pending_anchor_scroll(&mut self, _pending_anchor: Option<String>) {
+        // Legacy text reader doesn't support pending anchor scrolls
     }
 }
 

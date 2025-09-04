@@ -1,3 +1,4 @@
+use crate::markdown::{LinkType, classify_link_href};
 use crate::text_reader::LinkInfo;
 use ratatui::{
     layout::{Constraint, Rect},
@@ -347,12 +348,18 @@ impl Table {
                         let link_start_col = current_col;
                         let link_end_col = link_start_col + link_text.chars().count();
 
+                        // Classify the link
+                        let (link_type, target_chapter, target_anchor) = classify_link_href(&url);
+
                         self.links.push(LinkInfo {
                             text: link_text.clone(),
                             url: url.clone(),
                             line: self.base_line + line_num,
                             start_col: link_start_col,
                             end_col: link_end_col,
+                            link_type: Some(link_type),
+                            target_chapter,
+                            target_anchor,
                         });
 
                         // Add link with underline styling (cyan color like text_reader)
@@ -954,12 +961,18 @@ impl Table {
                         let link_start_col = current_col;
                         let link_end_col = link_start_col + link_text.chars().count();
 
+                        // Classify the link
+                        let (link_type, target_chapter, target_anchor) = classify_link_href(&url);
+
                         self.links.push(LinkInfo {
                             text: link_text.clone(),
                             url: url.clone(),
                             line: line_num,
                             start_col: link_start_col,
                             end_col: link_end_col,
+                            link_type: Some(link_type),
+                            target_chapter,
+                            target_anchor,
                         });
 
                         current_col += link_text.chars().count();

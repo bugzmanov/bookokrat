@@ -279,6 +279,11 @@ impl TableOfContents {
         None
     }
 
+    /// Get the current book info for filename searches
+    pub fn get_current_book_info(&self) -> Option<&CurrentBookInfo> {
+        self.current_book_info.as_ref()
+    }
+
     pub fn render(
         &mut self,
         f: &mut Frame,

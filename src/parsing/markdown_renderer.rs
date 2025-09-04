@@ -516,6 +516,7 @@ impl MarkdownRenderer {
                 text,
                 url,
                 title: _,
+                ..
             } => {
                 output.push('[');
                 output.push_str(&self.render_text(text));
@@ -528,6 +529,9 @@ impl MarkdownRenderer {
             }
             Inline::SoftBreak => {
                 output.push('\n');
+            }
+            Inline::Anchor { .. } => {
+                // Anchors don't contribute to rendered text output
             }
         }
     }

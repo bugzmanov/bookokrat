@@ -1,6 +1,6 @@
 use crate::markdown::{
-    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Style, Text, TextNode,
-    TextOrInline,
+    Block, DefinitionListItem, Document, HeadingLevel, Inline, LinkType, Node, Style, Text,
+    TextNode, TextOrInline,
 };
 use crate::mathml_renderer::mathml_to_ascii;
 use html5ever::parse_document;
@@ -185,10 +185,18 @@ impl HtmlToMarkdownConverter {
                 self.collect_as_text(child, &mut link_text, context.clone());
             }
             let title = self.get_attr_value(attrs, "title");
+
+            // Classify the link and extract target information
+            let (link_type, target_chapter, target_anchor) =
+                crate::markdown::classify_link_href(&href);
+
             Some(Inline::Link {
                 text: link_text,
                 url: href,
                 title,
+                link_type: Some(link_type),
+                target_chapter,
+                target_anchor,
             })
         } else {
             None
@@ -285,7 +293,7 @@ impl HtmlToMarkdownConverter {
 
         // Check for epub:type attribute first
         if let Some(epub_type) = self.get_epub_type_attr(attrs) {
-            self.handle_epub_block(tag_name, epub_type, node, document);
+            self.handle_epub_block(tag_name, epub_type, attrs, node, document);
             return;
         }
 
@@ -296,16 +304,16 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
-                self.handle_heading(tag_name, node, document);
+                self.handle_heading(tag_name, attrs, node, document);
             }
             "p" => {
-                self.handle_paragraph(node, document);
+                self.handle_paragraph(attrs, node, document);
             }
             "img" => {
                 self.handle_image(attrs, document);
             }
             "math" => {
-                self.handle_mathml(node, document);
+                self.handle_mathml(attrs, node, document);
             }
             "ul" | "ol" => {
                 self.handle_list(tag_name, attrs, node, document);
@@ -321,10 +329,10 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "table" => {
-                self.handle_table(node, document);
+                self.handle_table(attrs, node, document);
             }
             "dl" => {
-                self.handle_definition_list(node, document);
+                self.handle_definition_list(attrs, node, document);
             }
             // Skip li, dt, dd at this level - they're handled within their containers
             "li" | "dt" | "dd" => {}
@@ -339,6 +347,7 @@ impl HtmlToMarkdownConverter {
     fn handle_heading(
         &mut self,
         tag_name: &str,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
@@ -354,16 +363,27 @@ impl HtmlToMarkdownConverter {
 
         let content = self.extract_formatted_content(node);
 
+        // Extract the id attribute from the HTML element
+        let id = self.get_attr_value(attrs, "id");
+
         let heading_block = Block::Heading { level, content };
-        let heading_node = Node::new(heading_block, 0..0); // TODO: proper source range
+        let heading_node = Node::new_with_id(heading_block, 0..0, id); // Store HTML id for anchor resolution
         document.blocks.push(heading_node);
     }
 
-    fn handle_paragraph(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
+    fn handle_paragraph(
+        &mut self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
         let blocks = self.extract_formatted_content_as_blocks(node, false);
 
-        // Filter out empty paragraph blocks
-        for block_node in blocks {
+        // Extract the id attribute from the HTML paragraph element
+        let paragraph_id = self.get_attr_value(attrs, "id");
+
+        // Filter out empty paragraph blocks and apply ID to paragraph blocks
+        for mut block_node in blocks {
             let should_add = match &block_node.block {
                 Block::Paragraph { content } => !content.is_empty(),
                 Block::CodeBlock { content, .. } => !content.trim().is_empty(),
@@ -371,6 +391,10 @@ impl HtmlToMarkdownConverter {
             };
 
             if should_add {
+                // Apply the paragraph ID only to paragraph blocks
+                if matches!(block_node.block, Block::Paragraph { .. }) {
+                    block_node.id = paragraph_id.clone();
+                }
                 document.blocks.push(block_node);
             }
         }
@@ -385,6 +409,9 @@ impl HtmlToMarkdownConverter {
             let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
             let title = self.get_attr_value(attrs, "title");
 
+            // Extract the id attribute from the HTML img element
+            let id = self.get_attr_value(attrs, "id");
+
             // Create an Inline::Image
             let image_inline = Inline::Image {
                 alt_text,
@@ -395,13 +422,21 @@ impl HtmlToMarkdownConverter {
             let mut content = Text::default();
             content.push_inline(image_inline);
             let paragraph_block = Block::Paragraph { content };
-            let paragraph_node = Node::new(paragraph_block, 0..0);
+            let paragraph_node = Node::new_with_id(paragraph_block, 0..0, id);
             document.blocks.push(paragraph_node);
         }
     }
 
-    fn handle_mathml(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
+    fn handle_mathml(
+        &mut self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
         let mathml_html = self.serialize_node_to_html(node);
+
+        // Extract the id attribute from the HTML mathml element
+        let id = self.get_attr_value(attrs, "id");
 
         let content = match mathml_to_ascii(&mathml_html, true) {
             Ok(ascii_math) => {
@@ -412,12 +447,12 @@ impl HtmlToMarkdownConverter {
                         language: Some("math".to_string()),
                         content: ascii_math,
                     };
-                    Node::new(code_block, 0..0)
+                    Node::new_with_id(code_block, 0..0, id)
                 } else {
                     // Single-line math: use as regular paragraph text
                     let content = Text::from(ascii_math);
                     let paragraph_block = Block::Paragraph { content };
-                    Node::new(paragraph_block, 0..0)
+                    Node::new_with_id(paragraph_block, 0..0, id)
                 }
             }
             Err(e) => {
@@ -425,14 +460,19 @@ impl HtmlToMarkdownConverter {
                     language: Some(format!("failed to extract mathml: {:?}", e)),
                     content: mathml_html,
                 };
-                Node::new(paragraph_block, 0..0)
+                Node::new_with_id(paragraph_block, 0..0, id)
             }
         };
 
         document.blocks.push(content);
     }
 
-    fn handle_table(&mut self, node: &Rc<markup5ever_rcdom::Node>, document: &mut Document) {
+    fn handle_table(
+        &mut self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
@@ -517,12 +557,15 @@ impl HtmlToMarkdownConverter {
 
         // Only create table if we have content
         if header.is_some() || !rows.is_empty() {
+            // Extract the id attribute from the HTML table element
+            let id = self.get_attr_value(attrs, "id");
+
             let table_block = Block::Table {
                 header,
                 rows,
                 alignment,
             };
-            let table_node = Node::new(table_block, 0..0);
+            let table_node = Node::new_with_id(table_block, 0..0, id);
             document.blocks.push(table_node);
         }
     }
@@ -678,8 +721,11 @@ impl HtmlToMarkdownConverter {
         let items = self.extract_list_items(node);
 
         if !items.is_empty() {
+            // Extract the id attribute from the HTML list element (ul/ol)
+            let id = self.get_attr_value(attrs, "id");
+
             let list_block = Block::List { kind, items };
-            let list_node = Node::new(list_block, 0..0); // TODO: proper source range
+            let list_node = Node::new_with_id(list_block, 0..0, id); // Store HTML id for anchor resolution
             document.blocks.push(list_node);
         }
     }
@@ -852,6 +898,7 @@ impl HtmlToMarkdownConverter {
 
     fn handle_definition_list(
         &mut self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
@@ -903,10 +950,13 @@ impl HtmlToMarkdownConverter {
 
         // Create the definition list block if we have items
         if !definition_items.is_empty() {
+            // Extract the id attribute from the HTML dl element
+            let id = self.get_attr_value(attrs, "id");
+
             let definition_list_block = Block::DefinitionList {
                 items: definition_items,
             };
-            let definition_list_node = Node::new(definition_list_block, 0..0);
+            let definition_list_node = Node::new_with_id(definition_list_block, 0..0, id);
             document.blocks.push(definition_list_node);
         }
     }
@@ -915,6 +965,7 @@ impl HtmlToMarkdownConverter {
         &mut self,
         element_name: &str,
         epub_type: String,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
@@ -1003,13 +1054,16 @@ impl HtmlToMarkdownConverter {
             ));
         }
 
+        // Extract the id attribute from the HTML element with epub:type
+        let id = self.get_attr_value(attrs, "id");
+
         let epub_block = Block::EpubBlock {
             epub_type,
             element_name: element_name.to_string(),
             content,
         };
 
-        let epub_node = Node::new(epub_block, 0..0);
+        let epub_node = Node::new_with_id(epub_block, 0..0, id);
         document.blocks.push(epub_node);
     }
 
@@ -1131,6 +1185,12 @@ impl HtmlToMarkdownConverter {
 
         match tag_name {
             "a" => {
+                // Check if this <a> element has an ID attribute - if so, create an anchor marker
+                if let Some(id) = self.get_attr_value(attrs, "id") {
+                    text.push_inline(Inline::Anchor { id });
+                }
+
+                // Also handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     text.push_inline(link);
                 }
@@ -1156,6 +1216,11 @@ impl HtmlToMarkdownConverter {
                 }
             }
             _ => {
+                // Check if this element has an ID attribute - if so, create an anchor marker
+                if let Some(id) = self.get_attr_value(attrs, "id") {
+                    text.push_inline(Inline::Anchor { id });
+                }
+
                 // Process children with the new context
                 for child in node.children.borrow().iter() {
                     self.collect_as_text(child, text, new_context.clone());
@@ -1178,6 +1243,12 @@ impl HtmlToMarkdownConverter {
 
         match tag_name {
             "a" => {
+                // Check if this <a> element has an ID attribute - if so, create an anchor marker
+                if let Some(id) = self.get_attr_value(attrs, "id") {
+                    current_text.push_inline(Inline::Anchor { id });
+                }
+
+                // Also handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     current_text.push_inline(link);
                 }
@@ -1222,6 +1293,11 @@ impl HtmlToMarkdownConverter {
                 }
             }
             _ => {
+                // Check if this element has an ID attribute - if so, create an anchor marker
+                if let Some(id) = self.get_attr_value(attrs, "id") {
+                    current_text.push_inline(Inline::Anchor { id });
+                }
+
                 // Process children with the new context
                 for child in node.children.borrow().iter() {
                     self.collect_as_blocks(child, blocks, current_text, new_context.clone());
@@ -2229,4 +2305,455 @@ The protocol operates on multiple layers:
 
     //         assert_eq!(rendered.trim_end(), expected.trim_end());
     //     }
+
+    #[test]
+    fn test_paragraph_with_superscript_and_external_links() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<p>Google's largest PaLM-2 model, for example, was trained using <code>10</code><sup>22</sup> FLOPs (<a href="https://arxiv.org/abs/2204.02311">Chowdhery et al., 2022</a>). GPT-3-175B was trained using <code>3.14 × 10</code><sup>23</sup> FLOPs (<a href="https://arxiv.org/abs/2005.14165">Brown et al., 2020</a>).</p>"#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"Google's largest PaLM-2 model, for example, was trained using `  10  `²² FLOPs ([Chowdhery et al., 2022](https://arxiv.org/abs/2204.02311)). GPT-3-175B was trained using `  3.14 × 10  `²³ FLOPs ([Brown et al., 2020](https://arxiv.org/abs/2005.14165)).
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_inline_anchor_extraction_with_sup_and_a_tags() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<p><a contenteditable="false" data-primary="foundation models" data-secondary="modeling" data-type="indexterm" id="ch02.html10"></a><a contenteditable="false" data-primary="modeling" data-type="indexterm" id="ch02.html11"></a>Before training a model, developers need to decide what the model should look like. What architecture should it follow? How many parameters should it have? These decisions impact not only the model's capabilities but also its usability for <span class="keep-together">downstream</span> applications.<sup><a data-type="noteref" id="id715-marker" href="ch02.html#id715">5</a></sup> For example, a 7B-parameter model will be vastly easier to deploy than a 175B-parameter model. Similarly, optimizing a transformer model for latency is very different from optimizing another architecture. Let's explore the factors behind these decisions.</p>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(
+            doc.blocks.len(),
+            1,
+            "Should have exactly one paragraph block"
+        );
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Convert content to vector to inspect inline anchors
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            // Count anchor markers
+            let anchor_count = items
+                .iter()
+                .filter(|item| matches!(item, TextOrInline::Inline(Inline::Anchor { .. })))
+                .count();
+
+            assert_eq!(
+                anchor_count, 3,
+                "Should have exactly 3 inline anchor markers"
+            );
+
+            // Check that specific anchor IDs are present
+            let anchor_ids: Vec<String> = items
+                .iter()
+                .filter_map(|item| {
+                    if let TextOrInline::Inline(Inline::Anchor { id }) = item {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            assert!(
+                anchor_ids.contains(&"ch02.html10".to_string()),
+                "Should contain anchor 'ch02.html10'"
+            );
+            assert!(
+                anchor_ids.contains(&"ch02.html11".to_string()),
+                "Should contain anchor 'ch02.html11'"
+            );
+            assert!(
+                anchor_ids.contains(&"id715-marker".to_string()),
+                "Should contain anchor 'id715-marker'"
+            );
+
+            // Verify the anchors are in the expected order
+            let mut anchor_iter = items.iter().filter_map(|item| {
+                if let TextOrInline::Inline(Inline::Anchor { id }) = item {
+                    Some(id.as_str())
+                } else {
+                    None
+                }
+            });
+
+            assert_eq!(
+                anchor_iter.next(),
+                Some("ch02.html10"),
+                "First anchor should be 'ch02.html10'"
+            );
+            assert_eq!(
+                anchor_iter.next(),
+                Some("ch02.html11"),
+                "Second anchor should be 'ch02.html11'"
+            );
+            assert_eq!(
+                anchor_iter.next(),
+                Some("id715-marker"),
+                "Third anchor should be 'id715-marker'"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_paragraph_with_pagebreak_class_and_anchor() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<p class="pagebreak-before"><a href="https://oreil.ly/LcBfx">NewsGuard</a> <sup><a data-type="noteref" id="id699-marker" href="ch02.html#id699">2</a></sup></p>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(
+            doc.blocks.len(),
+            1,
+            "Should have exactly one paragraph block"
+        );
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Convert content to vector to inspect inline elements
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            // Count anchor markers (should have one from the <a> with id="id699-marker")
+            let anchor_count = items
+                .iter()
+                .filter(|item| matches!(item, TextOrInline::Inline(Inline::Anchor { .. })))
+                .count();
+
+            assert_eq!(
+                anchor_count, 1,
+                "Should have exactly 1 inline anchor marker"
+            );
+
+            // Count links (should have two: external NewsGuard link and internal ch02.html#id699 link)
+            let link_count = items
+                .iter()
+                .filter(|item| matches!(item, TextOrInline::Inline(Inline::Link { .. })))
+                .count();
+
+            assert_eq!(link_count, 2, "Should have exactly 2 links");
+
+            // Check that the specific anchor ID is present
+            let anchor_ids: Vec<String> = items
+                .iter()
+                .filter_map(|item| {
+                    if let TextOrInline::Inline(Inline::Anchor { id }) = item {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            assert!(
+                anchor_ids.contains(&"id699-marker".to_string()),
+                "Should contain anchor 'id699-marker'"
+            );
+
+            // Verify link navigation information
+            let links: Vec<&Inline> = items
+                .iter()
+                .filter_map(|item| {
+                    if let TextOrInline::Inline(link @ Inline::Link { .. }) = item {
+                        Some(link)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Check external NewsGuard link
+            let external_link = links
+                .iter()
+                .find(|link| {
+                    if let Inline::Link { url, .. } = link {
+                        url == "https://oreil.ly/LcBfx"
+                    } else {
+                        false
+                    }
+                })
+                .expect("Should have external NewsGuard link");
+
+            if let Inline::Link {
+                link_type,
+                target_chapter,
+                target_anchor,
+                ..
+            } = external_link
+            {
+                assert_eq!(
+                    *link_type,
+                    Some(crate::markdown::LinkType::External),
+                    "NewsGuard link should be classified as External"
+                );
+                assert_eq!(
+                    *target_chapter, None,
+                    "External link should have no target chapter"
+                );
+                assert_eq!(
+                    *target_anchor, None,
+                    "External link should have no target anchor"
+                );
+            }
+
+            // Check internal chapter link with anchor
+            let internal_link = links
+                .iter()
+                .find(|link| {
+                    if let Inline::Link { url, .. } = link {
+                        url == "ch02.html#id699"
+                    } else {
+                        false
+                    }
+                })
+                .expect("Should have internal chapter link");
+
+            if let Inline::Link {
+                link_type,
+                target_chapter,
+                target_anchor,
+                ..
+            } = internal_link
+            {
+                assert_eq!(
+                    *link_type,
+                    Some(crate::markdown::LinkType::InternalChapter),
+                    "Chapter link should be classified as InternalChapter"
+                );
+                assert_eq!(
+                    *target_chapter,
+                    Some("ch02.html".to_string()),
+                    "Chapter link should have correct target chapter"
+                );
+                assert_eq!(
+                    *target_anchor,
+                    Some("id699".to_string()),
+                    "Chapter link should have correct target anchor"
+                );
+            }
+        } else {
+            panic!("Expected paragraph block");
+        }
+
+        // Also test the rendered output
+        let rendered = renderer.render(&doc);
+        let expected = r#"[NewsGuard](https://oreil.ly/LcBfx)[2](ch02.html#id699)
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_debug_newsguard_link_issue() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        // This is the exact HTML causing the issue from the user's log
+        let html = r#"<p class="pagebreak-before">Models can also have unexpected performance challenges in non-English languages. <a contenteditable="false" data-type="indexterm" data-primary="ChatGPT" data-secondary="and languages other than English" data-secondary-sortas="languages other" id="id698"></a>For example, <a href="https://oreil.ly/LcBfx">NewsGuard</a> found that ChatGPT is more willing to produce misinformation in Chinese than in English. In April 2023, NewsGuard asked ChatGPT-3.5 to produce misinformation articles about China in English, simplified Chinese, and traditional Chinese. For English, ChatGPT declined to produce false claims for six out of seven prompts. However, it produced false claims in simplified Chinese and traditional Chinese all seven times. It's unclear what causes this difference in behavior.<sup><a data-type="noteref" id="id699-marker" href="ch02.html#id699">2</a></sup></p>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(
+            doc.blocks.len(),
+            1,
+            "Should have exactly one paragraph block"
+        );
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            // Debug: Print all items to understand the structure
+            println!("All items in paragraph:");
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    TextOrInline::Inline(Inline::Link { url, text, .. }) => {
+                        let text_str = renderer.render_text(text);
+                        println!("  Item {}: Link: text='{}', url='{}'", i, text_str, url);
+                    }
+                    TextOrInline::Inline(Inline::Anchor { id }) => {
+                        println!("  Item {}: Anchor: id='{}'", i, id);
+                    }
+                    TextOrInline::Text(text_node) => {
+                        if text_node.content.len() > 20 {
+                            println!("  Item {}: Text: '{}'...", i, &text_node.content[..20]);
+                        } else {
+                            println!("  Item {}: Text: '{}'", i, text_node.content);
+                        }
+                    }
+                    _ => {
+                        println!("  Item {}: Other inline element", i);
+                    }
+                }
+            }
+
+            // Find the problematic link
+            let links: Vec<&Inline> = items
+                .iter()
+                .filter_map(|item| {
+                    if let TextOrInline::Inline(link @ Inline::Link { .. }) = item {
+                        Some(link)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            println!("\nFound {} links", links.len());
+
+            // Check the link that should go to ch02.html#id699
+            let problematic_link = links
+                .iter()
+                .find(|link| {
+                    if let Inline::Link { text, .. } = link {
+                        let text_str = renderer.render_text(text);
+                        text_str.trim() == "2"
+                    } else {
+                        false
+                    }
+                })
+                .expect("Should find the footnote link with text '2'");
+
+            if let Inline::Link {
+                url,
+                target_chapter,
+                target_anchor,
+                ..
+            } = problematic_link
+            {
+                println!("\nProblematic link analysis:");
+                println!("  URL: '{}'", url);
+                println!("  Target chapter: {:?}", target_chapter);
+                println!("  Target anchor: {:?}", target_anchor);
+
+                // This should be ch02.html#id699, NOT ch02.html#id699-marker
+                assert_eq!(url, "ch02.html#id699", "URL should be ch02.html#id699");
+                assert_eq!(
+                    target_chapter,
+                    &Some("ch02.html".to_string()),
+                    "Target chapter should be ch02.html"
+                );
+                assert_eq!(
+                    target_anchor,
+                    &Some("id699".to_string()),
+                    "Target anchor should be id699"
+                );
+            }
+
+            // Also check that we have the anchor marker
+            let anchor_count = items
+                .iter()
+                .filter(|item| matches!(item, TextOrInline::Inline(Inline::Anchor { .. })))
+                .count();
+
+            assert_eq!(
+                anchor_count, 2,
+                "Should have 2 anchor markers (id698 and id699-marker)"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_check_for_malformed_url_bug() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Test to see if there's any way the URL could get malformed to ch02.html#id699-marker
+        let html = r#"<p><sup><a data-type="noteref" id="id699-marker" href="ch02.html#id699">2</a></sup></p>"#;
+
+        let doc = converter.convert(html);
+
+        assert!(
+            !doc.blocks.is_empty(),
+            "Document should have at least one block"
+        );
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            println!("Malformed URL test items:");
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    TextOrInline::Inline(Inline::Link { url, .. }) => {
+                        println!("  Item {}: Link URL: '{}'", i, url);
+                        // This should be ch02.html#id699, NOT ch02.html#id699-marker
+                        assert_eq!(
+                            url, "ch02.html#id699",
+                            "URL should be exactly ch02.html#id699"
+                        );
+                    }
+                    TextOrInline::Inline(Inline::Anchor { id }) => {
+                        println!("  Item {}: Anchor ID: '{}'", i, id);
+                        assert_eq!(id, "id699-marker", "Anchor should be id699-marker");
+                    }
+                    _ => {
+                        println!("  Item {}: Other", i);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_footnote_with_internal_link() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"<p data-type="footnote" id="id699"><sup><a href="ch02.html#id699-marker">2</a></sup> It might be because of some biases in pre-training data or alignment data. Perhaps OpenAI just didn't include as much data in the Chinese language or China-centric narratives to train their models.</p>"#;
+
+        let doc = converter.convert(html);
+
+        assert!(
+            !doc.blocks.is_empty(),
+            "Document should have at least one block"
+        );
+
+        // Verify the paragraph has the correct ID
+        assert_eq!(
+            doc.blocks[0].id,
+            Some("id699".to_string()),
+            "Paragraph should have id='id699'"
+        );
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            // Find the link
+            let mut found_link = false;
+            for item in &items {
+                if let TextOrInline::Inline(Inline::Link { text, url, .. }) = item {
+                    let text_str = renderer.render_text(text);
+                    println!("Found link: text='{}', url='{}'", text_str, url);
+
+                    // Validate the link text and URL
+                    assert_eq!(text_str, "2", "Link text should be '2'");
+                    assert_eq!(
+                        url, "ch02.html#id699-marker",
+                        "Link URL should be 'ch02.html#id699-marker'"
+                    );
+                    found_link = true;
+                    break;
+                }
+            }
+
+            assert!(
+                found_link,
+                "Should find internal link with href='ch02.html#id699-marker'"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
 }

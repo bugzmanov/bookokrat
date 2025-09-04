@@ -9,6 +9,7 @@ pub struct Document {
 pub struct Node {
     pub block: Block,
     pub source_range: Range<usize>,
+    pub id: Option<String>, // HTML id attribute for anchor resolution
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,16 +72,29 @@ pub enum TextOrInline {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum LinkType {
+    External,        // https://example.com
+    InternalChapter, // ch08.html or ch08.html#anchor
+    InternalAnchor,  // #anchor (same chapter)
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Inline {
     Link {
         text: Text,
         url: String,
         title: Option<String>,
+        link_type: Option<LinkType>,    // NEW
+        target_chapter: Option<String>, // NEW
+        target_anchor: Option<String>,  // NEW
     },
     Image {
         alt_text: String,
         url: String,
         title: Option<String>,
+    },
+    Anchor {
+        id: String,
     },
     LineBreak,
     SoftBreak,
@@ -160,6 +174,10 @@ impl HeadingLevel {
 
 impl Node {
     pub fn new(block: Block, source_range: Range<usize>) -> Self {
+        Self::new_with_id(block, source_range, None)
+    }
+
+    pub fn new_with_id(block: Block, source_range: Range<usize>, id: Option<String>) -> Self {
         // Validate block to prevent empty garbage from being created
         match &block {
             Block::Paragraph { content } => {
@@ -182,6 +200,7 @@ impl Node {
         Self {
             block,
             source_range,
+            id,
         }
     }
 }
@@ -358,5 +377,27 @@ impl IntoIterator for Text {
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
+    }
+}
+
+/// Utility function to classify link href and extract target information
+/// This is used by both the HTML parser and table rendering code
+pub fn classify_link_href(href: &str) -> (LinkType, Option<String>, Option<String>) {
+    if href.starts_with("http://") || href.starts_with("https://") {
+        (LinkType::External, None, None)
+    } else if href.starts_with("#") {
+        (LinkType::InternalAnchor, None, Some(href[1..].to_string()))
+    } else if href.contains(".html") {
+        // Extract chapter and anchor for chapter links
+        if let Some(hash_pos) = href.find('#') {
+            let chapter = href[..hash_pos].to_string();
+            let anchor = href[hash_pos + 1..].to_string();
+            (LinkType::InternalChapter, Some(chapter), Some(anchor))
+        } else {
+            (LinkType::InternalChapter, Some(href.to_string()), None)
+        }
+    } else {
+        // Treat unknown links as external for safety
+        (LinkType::External, None, None)
     }
 }

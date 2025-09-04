@@ -8,6 +8,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::picker::Picker;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Trait defining the interface for text readers
 /// This abstracts over the string-based and AST-based implementations
@@ -49,6 +50,14 @@ pub trait TextReaderTrait: VimNavMotions {
 
     // Link handling
     fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo>;
+
+    // Internal link navigation (only supported by AST-based reader)
+    fn get_anchor_position(&self, anchor_id: &str) -> Option<usize>;
+    fn scroll_to_line(&mut self, target_line: usize);
+    fn highlight_line_temporarily(&mut self, line: usize, duration: std::time::Duration);
+    fn set_current_chapter_file(&mut self, chapter_file: Option<String>);
+    fn get_current_chapter_file(&self) -> &Option<String>;
+    fn handle_pending_anchor_scroll(&mut self, pending_anchor: Option<String>);
 
     // Updates
     fn update_highlight(&mut self) -> bool;
