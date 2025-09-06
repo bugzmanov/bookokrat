@@ -312,6 +312,9 @@ impl HtmlToMarkdownConverter {
             "img" => {
                 self.handle_image(attrs, document);
             }
+            "pre" => {
+                self.handle_pre(attrs, node, document);
+            }
             "math" => {
                 self.handle_mathml(attrs, node, document);
             }
@@ -424,6 +427,38 @@ impl HtmlToMarkdownConverter {
             let paragraph_block = Block::Paragraph { content };
             let paragraph_node = Node::new_with_id(paragraph_block, 0..0, id);
             document.blocks.push(paragraph_node);
+        }
+    }
+
+    fn handle_pre(
+        &mut self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        // TODO: In the future, we should handle inline formatting like <sub> within <pre>
+        let mut content = String::new();
+        self.collect_text_from_node(node, &mut content);
+
+        let id = self.get_attr_value(attrs, "id");
+
+        let language = self.get_attr_value(attrs, "data-type");
+
+        let code_block = Block::CodeBlock { language, content };
+        let code_node = Node::new_with_id(code_block, 0..0, id);
+        document.blocks.push(code_node);
+    }
+
+    fn collect_text_from_node(&self, node: &Rc<markup5ever_rcdom::Node>, output: &mut String) {
+        match &node.data {
+            NodeData::Text { contents } => {
+                output.push_str(&contents.borrow());
+            }
+            _ => {
+                for child in node.children.borrow().iter() {
+                    self.collect_text_from_node(child, output);
+                }
+            }
         }
     }
 
