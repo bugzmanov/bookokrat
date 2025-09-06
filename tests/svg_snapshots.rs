@@ -2759,3 +2759,66 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
         create_test_failure_handler("test_complex_table_with_code_and_linebreaks_svg"),
     );
 }
+
+#[test]
+fn test_html_subscript_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+
+    let subscript_content = r#"<!DOCTYPE html>
+<html xml:lang="en" lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Subscript Rendering Test</title>
+</head>
+<body>
+    <div id="book-content">
+        <h1>Attention Function Mathematics</h1>
+        
+        <p>Let's look into how the attention function works. Given an input <code>x</code>, the key, value, and query vectors are computed by applying key, value, and query matrices to the input. Let <code>W</code><sub>K</sub><code>, W</code><sub>V</sub><code>, and W</code><sub>Q</sub> be the key, value, and query matrices. The key, value, and query vectors are computed as follows:</p>
+
+        <pre data-type="programlisting">
+K = xW<sub>K</sub>
+V = xW<sub>V</sub>
+Q = xW<sub>Q</sub></pre>
+
+        <p>The query, key, and value matrices have dimensions corresponding to the model's hidden dimension. <a contenteditable="false" data-type="indexterm" data-primary="Llama" data-secondary="attention function" id="id726"></a>For example, in Llama 2-7B (<a href="https://arxiv.org/abs/2307.09288">Touvron et al., 2023</a>), the model's hidden dimension size is 4096, meaning that each of these matrices has a <code>4096 </code>×<code> 4096</code> dimension. Each resulting <code>K</code>, <code>V</code>, <code>Q</code> vector has the dimension of <code>4096</code>.<sup><a data-type="noteref" id="id727-marker" href="ch02.html#id727">8</a></sup></p>
+        
+        <p>Additional subscript examples: H<sub>2</sub>O, CO<sub>2</sub>, x<sub>i</sub>, x<sub>i-1</sub>, W<sub>key</sub></p>
+    </div>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("subscript_test.html");
+    std::fs::write(&temp_html_path, subscript_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_html_subscript_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/html_subscript_rendering.svg"),
+        "test_html_subscript_rendering_svg",
+        create_test_failure_handler("test_html_subscript_rendering_svg"),
+    );
+}

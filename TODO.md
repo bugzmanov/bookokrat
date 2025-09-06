@@ -13,8 +13,7 @@ ideas to implement:
              [ ] visited link tracking
              [x] external links
                 [ ] bug: link in tables is not clickable
-                [ ] bug: links that cross multiple lines are not clickable
-             [ ] internal links
+             [x] internal links
          [ ] Horizontal rule
          [x] Headers
          [ ] Blockquote
@@ -24,6 +23,7 @@ ideas to implement:
          [x] lists
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
+            [ ] according to logs kitty compression hapens too many times (maybe..)
          [ ] Code 
          [x] epub:type blocks
  - AI integreration

@@ -460,14 +460,6 @@ impl MarkdownTextReader {
             .join("-")
     }
 
-    /// Extract anchors from text content (look for id attributes or anchor patterns)
-    fn extract_anchors_from_text(&mut self, text: &MarkdownText, current_line: usize) {
-        // This is a placeholder for future enhancement
-        // In a full implementation, we might extract anchors from HTML id attributes
-        // or other anchor markers embedded in the text
-        let _ = (text, current_line); // Avoid unused parameter warning
-    }
-
     /// Extract inline anchors from text content
     fn extract_inline_anchors_from_text(&mut self, text: &MarkdownText, current_line: usize) {
         for item in text.iter() {
@@ -769,7 +761,6 @@ impl MarkdownTextReader {
                             false, // don't add empty line after
                         );
                         current_rich_spans.clear();
-                        has_content = true;
                     }
 
                     // Render the image as a separate block
@@ -2892,12 +2883,6 @@ impl TextReaderTrait for MarkdownTextReader {
                                     .min(area_height - image_screen_start);
 
                                 if visible_image_height > 0 {
-                                    debug!(
-                                        "here3 - visible_image_height: {}, image_screen_start: {}, image_top_clipped: {}",
-                                        visible_image_height, image_screen_start, image_top_clipped
-                                    );
-                                    // Don't center the image - use full width like the placeholder
-
                                     // Get the actual image height for this specific image
                                     let image_height_cells =
                                         calculate_image_height_in_cells(scaled_image);

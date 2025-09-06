@@ -1423,7 +1423,7 @@ impl HtmlToMarkdownConverter {
     }
 
     fn add_code_spacing(&self, content: &str) -> String {
-        format!("  {}  ", content)
+        format!("{}", content)
     }
 
     fn trim_text_trailing_whitespace(&self, text: &mut Text) {
