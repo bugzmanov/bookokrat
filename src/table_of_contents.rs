@@ -16,12 +16,14 @@ pub enum TocItem {
         title: String,
         href: String,
         index: usize,
+        anchor: Option<String>, // Optional anchor/fragment within the chapter
     },
     /// A section that may have its own content and contains child items
     Section {
         title: String,
         href: Option<String>, // Some sections are readable, others are just containers
         index: Option<usize>, // Chapter index if this section is also readable
+        anchor: Option<String>, // Optional anchor/fragment within the chapter
         children: Vec<TocItem>,
         is_expanded: bool,
     },
@@ -41,6 +43,14 @@ impl TocItem {
         match self {
             TocItem::Chapter { index, .. } => Some(*index),
             TocItem::Section { index, .. } => *index,
+        }
+    }
+
+    /// Get the anchor/fragment for this item
+    pub fn anchor(&self) -> Option<&String> {
+        match self {
+            TocItem::Chapter { anchor, .. } => anchor.as_ref(),
+            TocItem::Section { anchor, .. } => anchor.as_ref(),
         }
     }
 

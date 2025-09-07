@@ -1656,13 +1656,23 @@ impl App {
             SelectedActionOwned::TocItem(toc_item) => {
                 // Check if this is a section or a chapter
                 match toc_item {
-                    TocItem::Chapter { index, .. } => {
+                    TocItem::Chapter { index, anchor, .. } => {
                         let _ = self.navigate_to_chapter(index);
+                        // If there's an anchor, scroll to it after navigation
+                        if let Some(anchor_id) = anchor {
+                            self.text_reader
+                                .handle_pending_anchor_scroll(Some(anchor_id));
+                        }
                         self.focused_panel = FocusedPanel::Content;
                     }
-                    TocItem::Section { index, .. } => {
+                    TocItem::Section { index, anchor, .. } => {
                         if let Some(chapter_index) = index {
                             let _ = self.navigate_to_chapter(chapter_index);
+                            // If there's an anchor, scroll to it after navigation
+                            if let Some(anchor_id) = anchor {
+                                self.text_reader
+                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                            }
                             self.focused_panel = FocusedPanel::Content;
                         } else {
                             self.navigation_panel
@@ -2103,15 +2113,30 @@ impl App {
                                 Some(SelectedTocItem::TocItem(toc_item)) => {
                                     // Check if this is a section or a chapter
                                     match toc_item {
-                                        TocItem::Chapter { index, .. } => {
+                                        TocItem::Chapter { index, anchor, .. } => {
+                                            let chapter_index = *index;
+                                            let anchor_id = anchor.clone();
                                             // Navigate to the chapter
-                                            let _ = self.navigate_to_chapter(*index);
+                                            let _ = self.navigate_to_chapter(chapter_index);
+                                            // If there's an anchor, scroll to it after navigation
+                                            if let Some(anchor_id) = anchor_id {
+                                                self.text_reader
+                                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                                            }
                                             self.focused_panel = FocusedPanel::Content;
                                         }
-                                        TocItem::Section { index, .. } => {
+                                        TocItem::Section { index, anchor, .. } => {
                                             if let Some(chapter_index) = index {
+                                                let chapter_index = *chapter_index;
+                                                let anchor_id = anchor.clone();
                                                 // This section has content - navigate to it
-                                                let _ = self.navigate_to_chapter(*chapter_index);
+                                                let _ = self.navigate_to_chapter(chapter_index);
+                                                // If there's an anchor, scroll to it after navigation
+                                                if let Some(anchor_id) = anchor_id {
+                                                    self.text_reader.handle_pending_anchor_scroll(
+                                                        Some(anchor_id),
+                                                    );
+                                                }
                                                 self.focused_panel = FocusedPanel::Content;
                                             } else {
                                                 // This section has no content - just toggle expansion

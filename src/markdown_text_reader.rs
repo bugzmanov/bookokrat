@@ -377,6 +377,23 @@ impl MarkdownTextReader {
         self.cache_generation += 1;
         self.last_width = width;
         self.last_focus_state = is_focused;
+
+        // Check if we have a pending anchor scroll after anchors are collected
+        if let Some(anchor_id) = self.pending_anchor_scroll.take() {
+            if let Some(target_line) = self.get_anchor_position(&anchor_id) {
+                self.scroll_to_line(target_line);
+                self.highlight_line_temporarily(target_line, Duration::from_secs(2));
+                debug!(
+                    "Scrolled to pending anchor '{}' at line {} after content load",
+                    anchor_id, target_line
+                );
+            } else {
+                debug!(
+                    "Pending anchor '{}' not found in current chapter after content load",
+                    anchor_id
+                );
+            }
+        }
     }
 
     fn render_document_to_lines(
@@ -393,7 +410,7 @@ impl MarkdownTextReader {
         self.anchor_positions.clear();
 
         // Iterate through all blocks in the document
-        for (node_idx, node) in doc.blocks.iter().enumerate() {
+        for (_node_idx, node) in doc.blocks.iter().enumerate() {
             // Track anchors before rendering each block
             self.extract_and_track_anchors_from_node(node, total_height);
 
@@ -2728,6 +2745,20 @@ impl TextReaderTrait for MarkdownTextReader {
                 self.total_wrapped_lines = self.rendered_content.total_height;
                 self.last_width = width;
                 self.last_focus_state = is_focused;
+
+                // Check if we have a pending anchor scroll after re-render
+                if let Some(anchor_id) = self.pending_anchor_scroll.take() {
+                    if let Some(target_line) = self.get_anchor_position(&anchor_id) {
+                        self.scroll_to_line(target_line);
+                        self.highlight_line_temporarily(target_line, Duration::from_secs(2));
+                        debug!(
+                            "Scrolled to pending anchor '{}' at line {} after re-render",
+                            anchor_id, target_line
+                        );
+                    } else {
+                        debug!("Pending anchor '{}' not found after re-render", anchor_id);
+                    }
+                }
             } else {
                 debug!("No markdown_document to render!");
             }
@@ -2989,7 +3020,7 @@ impl TextReaderTrait for MarkdownTextReader {
     fn scroll_to_line(&mut self, target_line: usize) {
         // Center target line in viewport if possible
         let desired_offset = if target_line > self.visible_height / 2 {
-            target_line - self.visible_height / 2
+            target_line // - self.visible_height  / 2
         } else {
             0
         };
@@ -3014,20 +3045,10 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn handle_pending_anchor_scroll(&mut self, pending_anchor: Option<String>) {
-        if let Some(anchor_id) = pending_anchor {
-            if let Some(target_line) = self.get_anchor_position(&anchor_id) {
-                self.scroll_to_line(target_line);
-                self.highlight_line_temporarily(target_line, Duration::from_secs(2));
-                debug!(
-                    "Scrolled to pending anchor '{}' at line {}",
-                    anchor_id, target_line
-                );
-            } else {
-                debug!(
-                    "Pending anchor '{}' not found in current chapter",
-                    anchor_id
-                );
-            }
+        // Store the pending anchor to be processed after anchors are collected
+        self.pending_anchor_scroll = pending_anchor;
+        if let Some(ref anchor_id) = self.pending_anchor_scroll {
+            debug!("Stored pending anchor scroll for '{}'", anchor_id);
         }
     }
 }

@@ -314,6 +314,71 @@ impl HtmlToMarkdownConverter {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 self.handle_heading(tag_name, attrs, node, document);
             }
+            "div" | "section" | "article" => {
+                // Check if this div/section has an ID and contains a heading
+                let div_id = self.get_attr_value(attrs, "id");
+
+                // Check if the first significant child is a heading
+                let mut has_immediate_heading = false;
+                for child in node.children.borrow().iter() {
+                    if let NodeData::Element { ref name, .. } = child.data {
+                        let child_tag = name.local.as_ref();
+                        if matches!(child_tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                            has_immediate_heading = true;
+                            break;
+                        }
+                        // Don't break on whitespace-only text nodes
+                        if child_tag != "style" && child_tag != "script" {
+                            // If we hit a non-heading element, stop looking
+                            break;
+                        }
+                    } else if let NodeData::Text { ref contents } = child.data {
+                        // Skip whitespace-only text nodes
+                        if !contents.borrow().trim().is_empty() {
+                            break;
+                        }
+                    }
+                }
+
+                if has_immediate_heading && div_id.is_some() {
+                    // Process children but pass the div's ID to any heading
+                    for child in node.children.borrow().iter() {
+                        if let NodeData::Element {
+                            ref name,
+                            ref attrs,
+                            ..
+                        } = child.data
+                        {
+                            let child_tag = name.local.as_ref();
+                            if matches!(child_tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                                // Handle the heading with the div's ID if the heading doesn't have its own
+                                let heading_id = self.get_attr_value(attrs, "id");
+                                if heading_id.is_none() {
+                                    // Use the div's ID for this heading
+                                    self.handle_heading_with_id(
+                                        child_tag,
+                                        child,
+                                        document,
+                                        div_id.clone(),
+                                    );
+                                } else {
+                                    // Heading has its own ID, use that
+                                    self.handle_heading(child_tag, attrs, child, document);
+                                }
+                            } else {
+                                self.visit_node(child, document);
+                            }
+                        } else {
+                            self.visit_node(child, document);
+                        }
+                    }
+                } else {
+                    // Normal div without special heading handling
+                    for child in node.children.borrow().iter() {
+                        self.visit_node(child, document);
+                    }
+                }
+            }
             "p" => {
                 self.handle_paragraph(attrs, node, document);
             }
@@ -380,6 +445,30 @@ impl HtmlToMarkdownConverter {
 
         let heading_block = Block::Heading { level, content };
         let heading_node = Node::new_with_id(heading_block, 0..0, id); // Store HTML id for anchor resolution
+        document.blocks.push(heading_node);
+    }
+
+    fn handle_heading_with_id(
+        &mut self,
+        tag_name: &str,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+        provided_id: Option<String>,
+    ) {
+        let level = match tag_name {
+            "h1" => HeadingLevel::H1,
+            "h2" => HeadingLevel::H2,
+            "h3" => HeadingLevel::H3,
+            "h4" => HeadingLevel::H4,
+            "h5" => HeadingLevel::H5,
+            "h6" => HeadingLevel::H6,
+            _ => HeadingLevel::H1,
+        };
+
+        let content = self.extract_formatted_content(node);
+
+        let heading_block = Block::Heading { level, content };
+        let heading_node = Node::new_with_id(heading_block, 0..0, provided_id); // Use the provided ID from parent div
         document.blocks.push(heading_node);
     }
 

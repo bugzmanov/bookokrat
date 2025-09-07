@@ -11,6 +11,17 @@ impl TocParser {
         Self
     }
 
+    /// Split href into path and anchor components
+    fn split_href_and_anchor(&self, href: &str) -> (String, Option<String>) {
+        if let Some(hash_pos) = href.find('#') {
+            let path = href[..hash_pos].to_string();
+            let anchor = href[hash_pos + 1..].to_string();
+            (path, Some(anchor))
+        } else {
+            (href.to_string(), None)
+        }
+    }
+
     /// Parse EPUB table of contents to get hierarchical structure
     pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
         // Try NCX document first (EPUB2 style) - more reliable parsing
@@ -188,28 +199,35 @@ impl TocParser {
                 {
                     if i != j && child_start > start && child_end < end {
                         // This is a child of the current entry
+                        // Extract anchor from href if present
+                        let (clean_href, anchor) = self.split_href_and_anchor(child_href);
                         // For nav documents, we'll create chapters without index (will be assigned later)
                         children.push(TocItem::Chapter {
                             title: child_title.clone(),
-                            href: child_href.clone(),
+                            href: clean_href,
                             index: 0, // Will be mapped later when converting
+                            anchor,
                         });
                     }
                 }
 
                 if children.is_empty() {
                     // No children, create a Chapter
+                    let (clean_href, anchor) = self.split_href_and_anchor(href);
                     entries.push(TocItem::Chapter {
                         title: title.clone(),
-                        href: href.clone(),
+                        href: clean_href,
                         index: 0, // Will be mapped later
+                        anchor,
                     });
                 } else {
                     // Has children, create a Section
+                    let (clean_href, anchor) = self.split_href_and_anchor(href);
                     entries.push(TocItem::Section {
                         title: title.clone(),
-                        href: Some(href.clone()),
+                        href: Some(clean_href),
                         index: None, // Will be mapped later
+                        anchor,
                         children,
                         is_expanded: true,
                     });
@@ -350,17 +368,21 @@ impl TocParser {
 
         if children.is_empty() {
             // No children, create a Chapter
+            let (clean_href, anchor) = self.split_href_and_anchor(&href);
             Some(TocItem::Chapter {
                 title,
-                href,
+                href: clean_href,
                 index: 0, // Will be mapped later
+                anchor,
             })
         } else {
             // Has children, create a Section
+            let (clean_href, anchor) = self.split_href_and_anchor(&href);
             Some(TocItem::Section {
                 title,
-                href: Some(href),
+                href: Some(clean_href),
                 index: None, // Will be mapped later
+                anchor,
                 children,
                 is_expanded: true,
             })
