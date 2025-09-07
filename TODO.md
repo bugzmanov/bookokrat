@@ -9,8 +9,9 @@ ideas to implement:
         [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
          [.] links support 
-             [ ] superscript links (footnotes)
-             [ ] visited link tracking
+             [x] superscript links (footnotes)
+             [ ] visited link tracking & styling
+             [ ] Internal links jumps history (to jump back)
              [x] external links
                 [ ] bug: link in tables is not clickable
              [x] internal links
@@ -19,7 +20,6 @@ ideas to implement:
          [ ] Blockquote
          [x] tables support
          [x] bold & italic 
-           [ ] Bold needs some visual treatment
          [x] lists
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
@@ -37,6 +37,9 @@ ideas to implement:
          - "Find passages about X across all my books"
          - "Show me similar concepts in other books"
          - Cross-reference technical books automatically
+
+Intermittent issues
+    [ ] BUG: copy-paste copies wrong block & word selection(double click) and paragraph selection(triple click) got broken
     
  - Search
      - Local to the chapter

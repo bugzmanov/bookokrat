@@ -216,6 +216,40 @@ impl MathMLParser {
         Self { use_unicode }
     }
 
+    /// Try to convert text to Unicode subscripts (public associated function)
+    pub fn try_unicode_subscript(text: &str, use_unicode: bool) -> Option<String> {
+        if !use_unicode || text.is_empty() {
+            return None;
+        }
+
+        text.chars()
+            .map(|c| {
+                // Handle spaces in subscripts
+                if c == ' ' {
+                    Some(' ')
+                } else {
+                    UNICODE_SUBSCRIPTS.get(&c).copied()
+                }
+            })
+            .collect::<Option<String>>()
+    }
+
+    /// Try to convert text to Unicode superscripts (public associated function)
+    pub fn try_unicode_superscript(text: &str, use_unicode: bool) -> Option<String> {
+        if !use_unicode || text.is_empty() {
+            return None;
+        }
+
+        // Special heuristic: for single-character common notation, use inline
+        if text.len() == 1 && matches!(text.chars().next(), Some('\'') | Some('"') | Some('*')) {
+            return Some(text.to_string());
+        }
+
+        text.chars()
+            .map(|c| UNICODE_SUPERSCRIPTS.get(&c).copied())
+            .collect::<Option<String>>()
+    }
+
     /// Parse MathML string and return rendered ASCII box
     pub fn parse(&self, mathml: &str) -> Result<MathBox, MathMLError> {
         let mathml = mathml.trim();
@@ -423,40 +457,6 @@ impl MathMLParser {
         Ok(result)
     }
 
-    /// Try to convert text to Unicode subscripts, return None if not possible
-    fn try_unicode_subscript(&self, text: &str) -> Option<String> {
-        if !self.use_unicode || text.is_empty() {
-            return None;
-        }
-
-        text.chars()
-            .map(|c| {
-                // Handle spaces in subscripts
-                if c == ' ' {
-                    Some(' ')
-                } else {
-                    UNICODE_SUBSCRIPTS.get(&c).copied()
-                }
-            })
-            .collect::<Option<String>>()
-    }
-
-    /// Try to convert text to Unicode superscripts, return None if not possible
-    fn try_unicode_superscript(&self, text: &str) -> Option<String> {
-        if !self.use_unicode || text.is_empty() {
-            return None;
-        }
-
-        // Special heuristic: for single-character common notation, use inline
-        if text.len() == 1 && matches!(text.chars().next(), Some('\'') | Some('"') | Some('*')) {
-            return Some(text.to_string());
-        }
-
-        text.chars()
-            .map(|c| UNICODE_SUPERSCRIPTS.get(&c).copied())
-            .collect::<Option<String>>()
-    }
-
     /// Process a subscript element
     fn process_subscript(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
         let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
@@ -502,7 +502,9 @@ impl MathMLParser {
 
             // Try Unicode subscript if we have reasonable text
             if !subscript_text.is_empty() {
-                if let Some(unicode_sub) = self.try_unicode_subscript(&subscript_text) {
+                if let Some(unicode_sub) =
+                    Self::try_unicode_subscript(&subscript_text, self.use_unicode)
+                {
                     let base_text = base.content[0]
                         .iter()
                         .collect::<String>()
@@ -580,7 +582,9 @@ impl MathMLParser {
                 .collect::<String>()
                 .trim()
                 .to_string();
-            if let Some(unicode_sup) = self.try_unicode_superscript(&superscript_text) {
+            if let Some(unicode_sup) =
+                Self::try_unicode_superscript(&superscript_text, self.use_unicode)
+            {
                 let base_text = base.content[0]
                     .iter()
                     .collect::<String>()
@@ -698,8 +702,8 @@ impl MathMLParser {
             // Try Unicode if both are simple
             if !subscript_text.is_empty() && !superscript_text.is_empty() {
                 if let (Some(unicode_sub), Some(unicode_sup)) = (
-                    self.try_unicode_subscript(&subscript_text),
-                    self.try_unicode_superscript(&superscript_text),
+                    Self::try_unicode_subscript(&subscript_text, self.use_unicode),
+                    Self::try_unicode_superscript(&superscript_text, self.use_unicode),
                 ) {
                     let base_text = base.content[0]
                         .iter()

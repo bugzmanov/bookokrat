@@ -2,7 +2,7 @@ use crate::markdown::{
     Block, DefinitionListItem, Document, HeadingLevel, Inline, LinkType, Node, Style, Text,
     TextNode, TextOrInline,
 };
-use crate::mathml_renderer::mathml_to_ascii;
+use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
@@ -73,11 +73,19 @@ enum MathContent {
     Error(String),
 }
 
+/// Text transformation to apply during processing
+#[derive(Debug, Clone, PartialEq)]
+enum TextTransform {
+    Subscript,
+    Superscript,
+}
+
 /// Processing context for content collection
 #[derive(Debug, Clone)]
 struct ProcessingContext {
     in_table: bool,
     current_style: Option<Style>,
+    text_transform: Option<TextTransform>,
 }
 
 /// Converts HTML content to clean Markdown AST with text formatting and cleanup.
@@ -325,7 +333,8 @@ impl HtmlToMarkdownConverter {
                 // Do nothing
             }
             // Handle inline formatting elements within other content
-            "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" => {
+            "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" | "sub"
+            | "sup" => {
                 // These are handled within extract_formatted_content, skip at block level
                 for child in node.children.borrow().iter() {
                     self.visit_node(child, document);
@@ -881,6 +890,7 @@ impl HtmlToMarkdownConverter {
                             let context = ProcessingContext {
                                 in_table: false,
                                 current_style: None,
+                                text_transform: None,
                             };
                             self.collect_as_text(child, &mut current_text, context);
                         }
@@ -892,6 +902,7 @@ impl HtmlToMarkdownConverter {
                     let context = ProcessingContext {
                         in_table: false,
                         current_style: None,
+                        text_transform: None,
                     };
                     self.collect_as_text(child, &mut current_text, context);
                 }
@@ -901,6 +912,7 @@ impl HtmlToMarkdownConverter {
                         let context = ProcessingContext {
                             in_table: false,
                             current_style: None,
+                            text_transform: None,
                         };
                         self.collect_as_text(grandchild, &mut current_text, context);
                     }
@@ -1107,6 +1119,7 @@ impl HtmlToMarkdownConverter {
         let context = ProcessingContext {
             in_table: false,
             current_style: None,
+            text_transform: None,
         };
         self.collect_content(node, mode, context).into_text()
     }
@@ -1120,6 +1133,7 @@ impl HtmlToMarkdownConverter {
         let context = ProcessingContext {
             in_table,
             current_style: None,
+            text_transform: None,
         };
         self.collect_content(node, mode, context).into_text()
     }
@@ -1133,6 +1147,7 @@ impl HtmlToMarkdownConverter {
         let context = ProcessingContext {
             in_table,
             current_style: None,
+            text_transform: None,
         };
         self.collect_content(node, mode, context).into_blocks()
     }
@@ -1150,7 +1165,32 @@ impl HtmlToMarkdownConverter {
                 if let Some(normalized) =
                     self.normalize_text_content(&content, text, context.current_style.clone())
                 {
-                    let text_node = TextNode::new(normalized, context.current_style.clone());
+                    // Apply text transformation if needed
+                    let transformed_text =
+                        match context.text_transform {
+                            Some(TextTransform::Subscript) => {
+                                MathMLParser::try_unicode_subscript(&normalized, true)
+                                    .unwrap_or_else(|| {
+                                        if normalized.len() == 1 {
+                                            format!("_{}", normalized)
+                                        } else {
+                                            format!("_{{{}}}", normalized)
+                                        }
+                                    })
+                            }
+                            Some(TextTransform::Superscript) => {
+                                MathMLParser::try_unicode_superscript(&normalized, true)
+                                    .unwrap_or_else(|| {
+                                        if normalized.len() == 1 {
+                                            format!("^{}", normalized)
+                                        } else {
+                                            format!("^{{{}}}", normalized)
+                                        }
+                                    })
+                            }
+                            None => normalized,
+                        };
+                    let text_node = TextNode::new(transformed_text, context.current_style.clone());
                     text.push_text(text_node);
                 }
             }
@@ -1183,7 +1223,32 @@ impl HtmlToMarkdownConverter {
                     current_text,
                     context.current_style.clone(),
                 ) {
-                    let text_node = TextNode::new(normalized, context.current_style.clone());
+                    // Apply text transformation if needed
+                    let transformed_text =
+                        match context.text_transform {
+                            Some(TextTransform::Subscript) => {
+                                MathMLParser::try_unicode_subscript(&normalized, true)
+                                    .unwrap_or_else(|| {
+                                        if normalized.len() == 1 {
+                                            format!("_{}", normalized)
+                                        } else {
+                                            format!("_{{{}}}", normalized)
+                                        }
+                                    })
+                            }
+                            Some(TextTransform::Superscript) => {
+                                MathMLParser::try_unicode_superscript(&normalized, true)
+                                    .unwrap_or_else(|| {
+                                        if normalized.len() == 1 {
+                                            format!("^{}", normalized)
+                                        } else {
+                                            format!("^{{{}}}", normalized)
+                                        }
+                                    })
+                            }
+                            None => normalized,
+                        };
+                    let text_node = TextNode::new(transformed_text, context.current_style.clone());
                     current_text.push_text(text_node);
                 }
             }
@@ -1248,6 +1313,28 @@ impl HtmlToMarkdownConverter {
                     text.push_text(TextNode::new("<br/>".to_string(), None));
                 } else {
                     text.push_inline(Inline::LineBreak);
+                }
+            }
+            "sub" => {
+                // Process children with subscript transformation context
+                let sub_context = ProcessingContext {
+                    in_table: context.in_table,
+                    current_style: context.current_style,
+                    text_transform: Some(TextTransform::Subscript),
+                };
+                for child in node.children.borrow().iter() {
+                    self.collect_as_text(child, text, sub_context.clone());
+                }
+            }
+            "sup" => {
+                // Process children with superscript transformation context
+                let sup_context = ProcessingContext {
+                    in_table: context.in_table,
+                    current_style: context.current_style,
+                    text_transform: Some(TextTransform::Superscript),
+                };
+                for child in node.children.borrow().iter() {
+                    self.collect_as_text(child, text, sup_context.clone());
                 }
             }
             _ => {
@@ -1327,6 +1414,28 @@ impl HtmlToMarkdownConverter {
                     current_text.push_inline(Inline::LineBreak);
                 }
             }
+            "sub" => {
+                // Process children with subscript transformation
+                let sub_context = ProcessingContext {
+                    in_table: context.in_table,
+                    current_style: context.current_style,
+                    text_transform: Some(TextTransform::Subscript),
+                };
+                for child in node.children.borrow().iter() {
+                    self.collect_as_blocks(child, blocks, current_text, sub_context.clone());
+                }
+            }
+            "sup" => {
+                // Process children with superscript transformation
+                let sup_context = ProcessingContext {
+                    in_table: context.in_table,
+                    current_style: context.current_style,
+                    text_transform: Some(TextTransform::Superscript),
+                };
+                for child in node.children.borrow().iter() {
+                    self.collect_as_blocks(child, blocks, current_text, sup_context.clone());
+                }
+            }
             _ => {
                 // Check if this element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
@@ -1398,6 +1507,7 @@ impl HtmlToMarkdownConverter {
         let context = ProcessingContext {
             in_table,
             current_style,
+            text_transform: None,
         };
         self.collect_as_text(node, text, context);
     }
@@ -1979,6 +2089,317 @@ The protocol operates on multiple layers:
     }
 
     #[test]
+    fn test_subscript_unicode_conversion() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Simple subscript that can be converted to Unicode
+        let html = r#"<p>H<sub>2</sub>O</p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                text_content, "H₂O",
+                "Should convert subscript 2 to Unicode ₂"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_superscript_unicode_conversion() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Simple superscript that can be converted to Unicode
+        let html = r#"<p>x<sup>2</sup> + y<sup>3</sup></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                text_content, "x² + y³",
+                "Should convert superscripts to Unicode"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_subscript_latex_fallback() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Complex subscript that should use LaTeX notation
+        let html = r#"<p>A<sub>xyz</sub></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                text_content, "A_{xyz}",
+                "Should use LaTeX notation for complex subscript"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_superscript_latex_fallback() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Complex superscript that can't be fully converted to Unicode
+        let html = r#"<p>2<sup>xy</sup></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                text_content, "2ˣʸ",
+                "Should convert available characters to Unicode"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+
+        // Test with characters that really can't be converted
+        let html2 = r#"<p>2<sup>αβ</sup></p>"#;
+        let doc2 = converter.convert(html2);
+
+        if let Block::Paragraph { content } = &doc2.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                text_content, "2^{αβ}",
+                "Should use LaTeX notation when Unicode not available"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_subscript_in_bold() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<p><strong>H<sub>2</sub>SO<sub>4</sub></strong></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Check that we have bold text with subscripts
+            let has_bold_with_subscripts = content.clone().into_iter().any(|item| {
+                if let TextOrInline::Text(node) = item {
+                    node.style == Some(Style::Strong)
+                        && (node.content.contains('₂') || node.content.contains('₄'))
+                } else {
+                    false
+                }
+            });
+            assert!(
+                has_bold_with_subscripts,
+                "Should preserve bold formatting with subscripts"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_superscript_in_italic() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<p><em>E=mc<sup>2</sup></em></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Check that we have italic text with superscript
+            let has_italic_with_superscript = content.clone().into_iter().any(|item| {
+                if let TextOrInline::Text(node) = item {
+                    node.style == Some(Style::Emphasis) && node.content.contains('²')
+                } else {
+                    false
+                }
+            });
+            assert!(
+                has_italic_with_superscript,
+                "Should preserve italic formatting with superscript"
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_subscript_in_link() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r##"<p><a href="#water"><sub>2</sub></a></p>"##;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            // Debug: print what we got
+            let text_items: Vec<String> = content
+                .clone()
+                .into_iter()
+                .map(|item| match item {
+                    TextOrInline::Text(node) => format!("Text: '{}'", node.content),
+                    TextOrInline::Inline(Inline::Link { text, url, .. }) => {
+                        let link_text: String = text
+                            .into_iter()
+                            .map(|t| match t {
+                                TextOrInline::Text(n) => n.content,
+                                _ => String::new(),
+                            })
+                            .collect();
+                        format!("Link: url='{}', text='{}'", url, link_text)
+                    }
+                    _ => format!("Other inline"),
+                })
+                .collect();
+
+            // Check for link with subscript in text
+            let has_link_with_subscript = content.clone().into_iter().any(|item| {
+                if let TextOrInline::Inline(Inline::Link { text, url, .. }) = item {
+                    let link_text: String = text
+                        .into_iter()
+                        .map(|t| match t {
+                            TextOrInline::Text(n) => n.content,
+                            _ => String::new(),
+                        })
+                        .collect();
+                    url == "#water" && link_text.contains("₂")
+                } else {
+                    false
+                }
+            });
+
+            assert!(
+                has_link_with_subscript,
+                "Should handle subscript within link text. Got items: {:?}",
+                text_items
+            );
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_subscript_in_table() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"
+        <table>
+            <tr>
+                <td>H<sub>2</sub>O</td>
+                <td>CO<sub>2</sub></td>
+            </tr>
+        </table>
+        "#;
+
+        let doc = converter.convert(html);
+
+        if let Block::Table { rows, .. } = &doc.blocks[0].block {
+            assert!(!rows.is_empty(), "Should have table rows");
+            let first_row = &rows[0];
+
+            // Get text from first cell
+            let first_cell_text: String = first_row.cells[0]
+                .content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(
+                first_cell_text.trim(),
+                "H₂O",
+                "Should convert subscript in table cell"
+            );
+
+            // Get text from second cell
+            let second_cell_text: String = first_row.cells[1]
+                .content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+
+            assert_eq!(
+                second_cell_text.trim(),
+                "CO₂",
+                "Should convert subscript in second table cell"
+            );
+        } else {
+            panic!("Expected table block");
+        }
+    }
+
+    #[test]
+    fn test_mixed_subscript_superscript() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<p>Formula: x<sup>2</sup> + y<sub>1</sub> = z<sup>n</sup></p>"#;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let text_content: String = content
+                .clone()
+                .into_iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(node) => Some(node.content),
+                    _ => None,
+                })
+                .collect();
+            assert!(text_content.contains("x²"), "Should have x superscript 2");
+            assert!(text_content.contains("y₁"), "Should have y subscript 1");
+            assert!(text_content.contains("zⁿ"), "Should have z superscript n");
+        } else {
+            panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
     fn test_mathml_with_subscripts_in_paragraph() {
         let mut converter = HtmlToMarkdownConverter::new();
         let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
@@ -2164,10 +2585,10 @@ The protocol operates on multiple layers:
 
         let expected = r#"
 [table width="3" height="2" header="true"]
-| Feature         | Description                                  | Status            |
-| --------------- | -------------------------------------------- | ----------------- |
-| **Performance** | Improved _response time_ by 50%              | `  completed  `   |
-| **Security**    | Added [two-factor auth](https://example.com) | `  in-progress  ` |
+| Feature         | Description                                  | Status        |
+| --------------- | -------------------------------------------- | ------------- |
+| **Performance** | Improved _response time_ by 50%              | `completed`   |
+| **Security**    | Added [two-factor auth](https://example.com) | `in-progress` |
 
 "#
         .trim_start();
@@ -2351,7 +2772,7 @@ The protocol operates on multiple layers:
         let doc = converter.convert(html);
         let rendered = renderer.render(&doc);
 
-        let expected = r#"Google's largest PaLM-2 model, for example, was trained using `  10  `²² FLOPs ([Chowdhery et al., 2022](https://arxiv.org/abs/2204.02311)). GPT-3-175B was trained using `  3.14 × 10  `²³ FLOPs ([Brown et al., 2020](https://arxiv.org/abs/2005.14165)).
+        let expected = r#"Google's largest PaLM-2 model, for example, was trained using `10`²² FLOPs ([Chowdhery et al., 2022](https://arxiv.org/abs/2204.02311)). GPT-3-175B was trained using `3.14 × 10`²³ FLOPs ([Brown et al., 2020](https://arxiv.org/abs/2005.14165)).
 
 "#;
 
@@ -2583,7 +3004,7 @@ The protocol operates on multiple layers:
 
         // Also test the rendered output
         let rendered = renderer.render(&doc);
-        let expected = r#"[NewsGuard](https://oreil.ly/LcBfx)[2](ch02.html#id699)
+        let expected = r#"[NewsGuard](https://oreil.ly/LcBfx)[²](ch02.html#id699)
 
 "#;
 
@@ -2653,12 +3074,12 @@ The protocol operates on multiple layers:
                 .find(|link| {
                     if let Inline::Link { text, .. } = link {
                         let text_str = renderer.render_text(text);
-                        text_str.trim() == "2"
+                        text_str.trim() == "²" // Superscript 2
                     } else {
                         false
                     }
                 })
-                .expect("Should find the footnote link with text '2'");
+                .expect("Should find the footnote link with text '²' (superscript)");
 
             if let Inline::Link {
                 url,
@@ -2772,8 +3193,8 @@ The protocol operates on multiple layers:
                     let text_str = renderer.render_text(text);
                     println!("Found link: text='{}', url='{}'", text_str, url);
 
-                    // Validate the link text and URL
-                    assert_eq!(text_str, "2", "Link text should be '2'");
+                    // Validate the link text and URL (should be superscript since it's in <sup>)
+                    assert_eq!(text_str, "²", "Link text should be '²' (superscript)");
                     assert_eq!(
                         url, "ch02.html#id699-marker",
                         "Link URL should be 'ch02.html#id699-marker'"
@@ -2789,6 +3210,72 @@ The protocol operates on multiple layers:
             );
         } else {
             panic!("Expected paragraph block");
+        }
+    }
+
+    #[test]
+    fn test_link_with_subscript_superscript() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r##"<p><a href="#water">H<sub>2</sub>O<sup>+</sup> molecule</a></p>"##;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            if let TextOrInline::Inline(Inline::Link { text, url, .. }) = &items[0] {
+                let text_str = renderer.render_text(text);
+                assert_eq!(
+                    text_str, "H₂O⁺ molecule",
+                    "Should have both sub and superscript"
+                );
+                assert_eq!(url, "#water", "URL should be preserved");
+            }
+        }
+
+        let html =
+            r##"<p data-type="footnote" id="water"><sup><a href="#water-marker">1</a></sup></p>"##;
+        let doc = converter.convert(html);
+
+        if let Block::Paragraph { content } = &doc.blocks[0].block {
+            let items: Vec<TextOrInline> = content.clone().into_iter().collect();
+
+            // Debug output to see what we actually got
+            println!("Number of items: {}", items.len());
+            for (i, item) in items.iter().enumerate() {
+                match item {
+                    TextOrInline::Text(node) => {
+                        println!("Item {}: Text('{}')", i, node.content);
+                    }
+                    TextOrInline::Inline(inline) => match inline {
+                        Inline::Link { text, url, .. } => {
+                            let text_str = renderer.render_text(text);
+                            println!("Item {}: Link(text='{}', url='{}')", i, text_str, url);
+                        }
+                        Inline::Anchor { id } => println!("Item {}: Anchor(id='{}')", i, id),
+                        _ => println!("Item {}: Other inline type", i),
+                    },
+                }
+            }
+
+            // First item should be the anchor from id="water"
+            if let TextOrInline::Inline(Inline::Anchor { id }) = &items[0] {
+                assert_eq!(id, "water", "Should have anchor from paragraph id");
+            } else {
+                panic!("Expected anchor at items[0] but got something else");
+            }
+
+            // Second item should be the link with superscript
+            if let TextOrInline::Inline(Inline::Link { text, url, .. }) = &items[1] {
+                let text_str = renderer.render_text(text);
+                assert_eq!(text_str, "¹", "Should have superscript text");
+                assert_eq!(url, "#water-marker", "URL should be preserved");
+            } else {
+                panic!("Expected link at items[1] but got something else");
+            }
+        } else {
+            panic!("oops 2");
         }
     }
 }
