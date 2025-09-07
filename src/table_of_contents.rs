@@ -1,3 +1,4 @@
+use crate::markdown_text_reader::ActiveSection;
 use crate::navigation_panel::CurrentBookInfo;
 use crate::theme::Base16Palette;
 use ratatui::{
@@ -90,6 +91,9 @@ pub struct TableOfContents {
     pub selected_index: usize,
     pub list_state: ListState,
     current_book_info: Option<CurrentBookInfo>,
+    active_item_index: Option<usize>, // Track the index of the currently reading item
+    last_viewport_height: usize,      // Track viewport height for scroll calculations
+    manual_navigation: bool,          // True when user is manually navigating TOC
 }
 
 impl TableOfContents {
@@ -101,6 +105,9 @@ impl TableOfContents {
             selected_index: 0,
             list_state,
             current_book_info: None,
+            active_item_index: None,
+            last_viewport_height: 0,
+            manual_navigation: false,
         }
     }
 
@@ -108,7 +115,92 @@ impl TableOfContents {
         self.current_book_info = Some(book_info);
     }
 
+    /// Update the active section and ensure it's visible in the viewport
+    /// This is called when the active section changes due to scrolling in the reading area
+    pub fn update_active_section(
+        &mut self,
+        active_section: &ActiveSection,
+        viewport_height: usize,
+    ) {
+        self.last_viewport_height = viewport_height;
+
+        if let Some(ref book_info) = self.current_book_info {
+            // Find the index of the active item in the flattened list
+            if let Some(active_index) =
+                self.find_active_item_index(&book_info.toc_items, active_section)
+            {
+                // Add 1 to account for the "Books List" item at the top
+                let active_index_with_header = active_index + 1;
+                self.active_item_index = Some(active_index_with_header);
+
+                // Only auto-scroll if user is not manually navigating
+                if !self.manual_navigation {
+                    // Ensure the active item is visible in the viewport
+                    self.ensure_item_visible(active_index_with_header, viewport_height);
+                }
+            }
+        }
+    }
+
+    /// Ensure a specific item is visible in the viewport
+    fn ensure_item_visible(&mut self, target_index: usize, viewport_height: usize) {
+        // Get the current offset from the list state
+        let current_offset = self.list_state.offset();
+
+        // Calculate visible range
+        let visible_start = current_offset;
+        let visible_end = current_offset + viewport_height.saturating_sub(3); // Account for borders
+
+        // Check if target is outside visible range
+        if target_index < visible_start {
+            // Scroll up to show the item at the top
+            *self.list_state.offset_mut() = target_index;
+        } else if target_index >= visible_end {
+            // Scroll down to show the item at the bottom
+            let new_offset = target_index.saturating_sub(viewport_height.saturating_sub(4));
+            *self.list_state.offset_mut() = new_offset;
+        }
+        // If item is already visible, don't change the offset
+    }
+
+    /// Find the index of the active item in the flattened TOC list
+    fn find_active_item_index(
+        &self,
+        items: &[TocItem],
+        active_section: &ActiveSection,
+    ) -> Option<usize> {
+        let mut current_index = 0;
+
+        for item in items {
+            // Check if this item matches the active section
+            if self.is_item_active(item, active_section) {
+                return Some(current_index);
+            }
+
+            current_index += 1;
+
+            // If it's an expanded section, count its children
+            if let TocItem::Section {
+                children,
+                is_expanded,
+                ..
+            } = item
+            {
+                if *is_expanded {
+                    if let Some(child_index) = self.find_active_item_index(children, active_section)
+                    {
+                        return Some(current_index + child_index);
+                    }
+                    current_index += self.count_visible_toc_items(children);
+                }
+            }
+        }
+
+        None
+    }
+
     pub fn move_selection_down(&mut self) {
+        self.manual_navigation = true; // User is manually navigating
         if let Some(ref current_book_info) = self.current_book_info {
             let total_items = self.count_visible_toc_items(&current_book_info.toc_items);
             // Add 1 for the "<< books list" item
@@ -120,10 +212,16 @@ impl TableOfContents {
     }
 
     pub fn move_selection_up(&mut self) {
+        self.manual_navigation = true; // User is manually navigating
         if self.selected_index > 0 {
             self.selected_index -= 1;
             self.list_state.select(Some(self.selected_index));
         }
+    }
+
+    /// Clear the manual navigation flag when focus returns to content
+    pub fn clear_manual_navigation(&mut self) {
+        self.manual_navigation = false;
     }
 
     /// Get the selected item (either back button or TOC item)
@@ -302,6 +400,8 @@ impl TableOfContents {
         palette: &Base16Palette,
         book_display_name: &str,
     ) {
+        // Store viewport height for scroll calculations
+        self.last_viewport_height = area.height as usize;
         let Some(ref current_book_info) = self.current_book_info else {
             return;
         };
@@ -327,7 +427,7 @@ impl TableOfContents {
             is_focused,
         );
         let title = format!("{} - Book", book_display_name);
-        let toc_list = List::new(items)
+        let mut toc_list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -335,8 +435,11 @@ impl TableOfContents {
                     .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(palette.base_00)),
             )
-            .highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
             .style(Style::default().bg(palette.base_00));
+
+        if is_focused {
+            toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
+        }
 
         f.render_stateful_widget(toc_list, area, &mut self.list_state);
     }
@@ -358,13 +461,24 @@ impl TableOfContents {
                 self.selected_index > 0 && self.selected_index - 1 == *toc_item_index;
 
             match item {
-                TocItem::Chapter { title, index, .. } => {
+                TocItem::Chapter {
+                    title,
+                    index,
+                    anchor,
+                    ..
+                } => {
                     // Render a simple chapter
-                    let chapter_style = if is_selected_toc_item {
-                        Style::default().fg(palette.base_08).bg(palette.base_01)
-                    // Highlight selected TOC item
-                    } else if *index == current_book.current_chapter {
-                        Style::default().fg(palette.base_08) // Highlight current chapter
+                    let is_active = self.is_item_active(item, &current_book.active_section);
+                    let chapter_style = if is_active {
+                        // // Always show active section in red, even when selected
+                        // if is_selected_toc_item {
+                        //     Style::default().fg(palette.base_08).bg(palette.base_01)
+                        // } else {
+                        Style::default().fg(palette.base_08)
+                    //     }
+                    // } else if is_selected_toc_item {
+                    // Non-active selected item
+                    //     Style::default().fg(palette.base_05).bg(palette.base_01)
                     } else {
                         Style::default().fg(text_color) // Dimmer for other chapters
                     };
@@ -381,23 +495,27 @@ impl TableOfContents {
                     index,
                     children,
                     is_expanded,
+                    anchor,
                     ..
                 } => {
                     // Render section header with expand/collapse indicator
                     let section_icon = if *is_expanded { "▼" } else { "▶" };
 
-                    // Determine the style based on selection and current chapter
-                    let section_style = if is_selected_toc_item {
-                        Style::default().fg(palette.base_0f).bg(palette.base_01)
-                    // Highlight selected TOC item
-                    } else if let Some(section_index) = index {
-                        if *section_index == current_book.current_chapter {
-                            Style::default().fg(palette.base_08) // Highlight if current chapter
-                        } else {
-                            Style::default().fg(palette.base_0d) // Blue for readable sections
-                        }
+                    // Determine the style based on selection and active section
+                    let is_active = self.is_item_active(item, &current_book.active_section);
+                    let section_style = if is_active {
+                        // Always show active section in red, even when selected
+                        // if is_selected_toc_item {
+                        //     Style::default().fg(palette.base_08).bg(palette.base_01)
+                        // } else {
+                        Style::default().fg(palette.base_08)
+                        // }
                     } else {
-                        Style::default().fg(palette.base_0d) // Blue for non-readable sections
+                        //if is_selected_toc_item {
+                        //     // Non-active selected item - use purple/magenta for sections
+                        //     Style::default().fg(palette.base_0f).bg(palette.base_01)
+                        // } else {
+                        Style::default().fg(palette.base_0d) // Blue for sections
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
@@ -427,6 +545,28 @@ impl TableOfContents {
             }
 
             *toc_item_index += 1;
+        }
+    }
+
+    /// Check if a TOC item is active based on the current active section
+    fn is_item_active(&self, item: &TocItem, active_section: &ActiveSection) -> bool {
+        match active_section {
+            ActiveSection::Anchor(active_anchor) => {
+                // Check if this item's anchor matches the active anchor
+                if let Some(item_anchor) = item.anchor() {
+                    item_anchor == active_anchor
+                } else {
+                    false
+                }
+            }
+            ActiveSection::Chapter(chapter_idx) => {
+                // Fall back to chapter index matching
+                if let Some(item_idx) = item.chapter_index() {
+                    item_idx == *chapter_idx
+                } else {
+                    false
+                }
+            }
         }
     }
 }

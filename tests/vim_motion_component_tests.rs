@@ -157,6 +157,7 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
             title: format!("Chapter {}", i),
             href: format!("chapter{}.xhtml", i),
             index: i - 1,
+            anchor: None,
         });
     }
 

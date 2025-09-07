@@ -2,6 +2,7 @@ use crate::book_list::BookList;
 use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::main_app::VimNavMotions;
+use crate::markdown_text_reader::ActiveSection;
 use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect};
@@ -18,6 +19,7 @@ pub struct CurrentBookInfo {
     pub path: String,
     pub toc_items: Vec<TocItem>,
     pub current_chapter: usize,
+    pub active_section: ActiveSection,
 }
 
 #[derive(Clone, PartialEq, Debug)]

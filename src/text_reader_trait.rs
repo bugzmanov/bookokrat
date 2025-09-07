@@ -7,12 +7,16 @@ use image::DynamicImage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::picker::Picker;
+use std::any::Any;
 use std::sync::Arc;
 use std::time::Duration;
 
 /// Trait defining the interface for text readers
 /// This abstracts over the string-based and AST-based implementations
 pub trait TextReaderTrait: VimNavMotions {
+    // Type casting support for downcasting
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
     // Content loading
     fn set_content_from_string(&mut self, content: &str, chapter_title: Option<String>);
     fn set_content_from_ast(&mut self, doc: Document, chapter_title: Option<String>);

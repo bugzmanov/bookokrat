@@ -60,10 +60,21 @@ impl BookImages {
     /// Get the size of an image from its source path (as referenced in the book text)
     /// Returns (width, height) if the image exists and can be loaded
     pub fn get_image_size(&self, image_src: &str) -> Option<(u32, u32)> {
+        self.get_image_size_with_context(image_src, None)
+    }
+
+    /// Get the size of an image with chapter context for better path resolution
+    pub fn get_image_size_with_context(
+        &self,
+        image_src: &str,
+        chapter_path: Option<&str>,
+    ) -> Option<(u32, u32)> {
         let epub_path = self.current_epub_path.as_ref()?;
 
-        // Delegate path resolution to ImageStorage
-        let image_path = self.storage.resolve_image_path(epub_path, image_src)?;
+        // Delegate path resolution to ImageStorage with chapter context
+        let image_path =
+            self.storage
+                .resolve_image_path_with_context(epub_path, image_src, chapter_path)?;
 
         // Check if it's an SVG file
         if image_path.extension().and_then(|ext| ext.to_str()) == Some("svg") {
@@ -92,10 +103,21 @@ impl BookImages {
 
     /// Get a DynamicImage from its source path (as referenced in the book text)
     pub fn get_image(&self, image_src: &str) -> Option<DynamicImage> {
+        self.get_image_with_context(image_src, None)
+    }
+
+    /// Get a DynamicImage with chapter context for better path resolution
+    pub fn get_image_with_context(
+        &self,
+        image_src: &str,
+        chapter_path: Option<&str>,
+    ) -> Option<DynamicImage> {
         let epub_path = self.current_epub_path.as_ref()?;
 
-        // Delegate path resolution to ImageStorage
-        let image_path = self.storage.resolve_image_path(epub_path, image_src)?;
+        // Delegate path resolution to ImageStorage with chapter context
+        let image_path =
+            self.storage
+                .resolve_image_path_with_context(epub_path, image_src, chapter_path)?;
 
         // Check if it's an SVG file
         if image_path.extension().and_then(|ext| ext.to_str()) == Some("svg") {
@@ -130,8 +152,26 @@ impl BookImages {
         cell_width: u16,
         cell_height: u16,
     ) -> Option<(DynamicImage, u16, u16)> {
-        // Get the image
-        let img = self.get_image(image_src)?;
+        self.load_and_resize_image_with_context(
+            image_src,
+            target_height_cells,
+            cell_width,
+            cell_height,
+            None,
+        )
+    }
+
+    /// Load and resize an image with chapter context
+    pub fn load_and_resize_image_with_context(
+        &self,
+        image_src: &str,
+        target_height_cells: u16,
+        cell_width: u16,
+        cell_height: u16,
+        chapter_path: Option<&str>,
+    ) -> Option<(DynamicImage, u16, u16)> {
+        // Get the image with chapter context
+        let img = self.get_image_with_context(image_src, chapter_path)?;
 
         let (img_width, img_height) = img.dimensions();
 

@@ -2887,6 +2887,10 @@ impl VimNavMotions for TextReader {
 }
 
 impl TextReaderTrait for TextReader {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
         // For string-based reader, we just store the content
         // The actual parsing happens during render via parse_styled_text_cached

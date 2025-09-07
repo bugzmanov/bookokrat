@@ -7,6 +7,7 @@ ideas to implement:
          [ ] Alow mouse selection & stuff
      [x] Math Formulas 
         [ ] Potential improvements: simple devision should be 1 line
+        [ ] Bug: multiline math in lists
      [ ] Markdown
          [.] links support 
              [x] superscript links (footnotes)
@@ -24,7 +25,7 @@ ideas to implement:
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
             [ ] according to logs kitty compression hapens too many times (maybe..)
-         [ ] Code 
+         [ ] Code Coloring 
          [x] epub:type blocks
  - AI integreration
      - Embeded validation for correct rendering (and markdown parsing) 

@@ -151,7 +151,7 @@ pub enum TableAlignment {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefinitionListItem {
     pub term: Text,
-    pub definitions: Vec<Text>,
+    pub definitions: Vec<Vec<Node>>, // Changed from Vec<Text> to Vec<Vec<Node>> to support block content
 }
 
 impl HeadingLevel {
@@ -240,15 +240,24 @@ impl TableRow {
 }
 
 impl DefinitionListItem {
-    pub fn new(term: Text, definitions: Vec<Text>) -> Self {
+    pub fn new(term: Text, definitions: Vec<Vec<Node>>) -> Self {
         DefinitionListItem { term, definitions }
     }
 
-    pub fn new_single(term: Text, definition: Text) -> Self {
+    pub fn new_single(term: Text, definition: Vec<Node>) -> Self {
         DefinitionListItem {
             term,
             definitions: vec![definition],
         }
+    }
+
+    // Helper method to create from simple text (backward compatibility)
+    pub fn new_from_text(term: Text, definitions: Vec<Text>) -> Self {
+        let definitions = definitions
+            .into_iter()
+            .map(|text| vec![Node::new(Block::Paragraph { content: text }, 0..0)])
+            .collect();
+        DefinitionListItem { term, definitions }
     }
 }
 

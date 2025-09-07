@@ -161,12 +161,17 @@ impl MarkdownRenderer {
             output.push_str(&term_str);
             output.push_str("\n");
 
-            // Render each definition with : prefix
-            for definition in &item.definitions {
+            // Render each definition (now blocks) with : prefix
+            for definition_blocks in &item.definitions {
+                // Each definition is now a Vec<Node>
                 output.push_str(": ");
-                let definition_str = self.render_text(definition);
-                output.push_str(&definition_str);
-                output.push_str("\n");
+                // Render all blocks in the definition
+                for (i, block_node) in definition_blocks.iter().enumerate() {
+                    if i > 0 {
+                        output.push_str("  "); // Add indentation for continuation
+                    }
+                    self.render_node(block_node, output);
+                }
             }
 
             output.push_str("\n");

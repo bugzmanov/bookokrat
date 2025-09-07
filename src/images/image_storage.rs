@@ -132,6 +132,15 @@ impl ImageStorage {
     }
 
     pub fn resolve_image_path(&self, epub_path: &Path, image_href: &str) -> Option<PathBuf> {
+        self.resolve_image_path_with_context(epub_path, image_href, None)
+    }
+
+    pub fn resolve_image_path_with_context(
+        &self,
+        epub_path: &Path,
+        image_href: &str,
+        chapter_path: Option<&str>,
+    ) -> Option<PathBuf> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
         let book_dir = self
@@ -147,6 +156,29 @@ impl ImageStorage {
         // Clean the href
         let clean_href = image_href.trim_start_matches('/');
 
+        // NEW: If we have chapter context and the href is relative, resolve it properly
+        if let Some(chapter) = chapter_path {
+            if clean_href.starts_with("../") {
+                // Get the directory of the chapter file
+                let chapter_path = Path::new(chapter);
+                if let Some(chapter_dir) = chapter_path.parent() {
+                    // Resolve the relative path from the chapter's directory
+                    // For example: chapter is "xhtml/ch01.xhtml", href is "../images/foo.jpg"
+                    // This resolves to "xhtml/../images/foo.jpg" which normalizes to "images/foo.jpg"
+                    let resolved = chapter_dir.join(clean_href);
+
+                    // Normalize the path (remove .. components)
+                    let normalized = normalize_path(&resolved);
+                    paths_to_try.push(book_dir.join(&normalized));
+
+                    // Also try without any leading directories if the normalized path has them
+                    if let Ok(stripped) = normalized.strip_prefix("OEBPS/") {
+                        paths_to_try.push(book_dir.join(stripped));
+                    }
+                }
+            }
+        }
+
         // Strategy 1: Direct path from book root
         paths_to_try.push(book_dir.join(clean_href));
 
@@ -154,12 +186,14 @@ impl ImageStorage {
         let without_oebps = clean_href.strip_prefix("OEBPS/").unwrap_or(clean_href);
         paths_to_try.push(book_dir.join(without_oebps));
 
-        // Strategy 3: If it's a relative path with ../, resolve it from OEBPS/text or similar
+        // Strategy 3: If it's a relative path with ../, resolve it from common directories
         if clean_href.starts_with("../") {
             // Remove the ../ prefix
             let without_parent = clean_href.strip_prefix("../").unwrap_or(clean_href);
             // Try from OEBPS directory
             paths_to_try.push(book_dir.join("OEBPS").join(without_parent));
+            // Try directly from book root (for case where images are at root level)
+            paths_to_try.push(book_dir.join(without_parent));
         }
 
         // Strategy 4: Try adding OEBPS prefix if not present
@@ -177,8 +211,8 @@ impl ImageStorage {
 
         // If none found, log all attempts
         warn!(
-            "Image not found: '{}' (tried: {:?})",
-            image_href, paths_to_try
+            "Image not found: '{}' with chapter context {:?} (tried: {:?})",
+            image_href, chapter_path, paths_to_try
         );
         None
     }
@@ -254,6 +288,36 @@ fn sanitize_filename(name: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                // Remove the last component if it exists and isn't also a ".."
+                if !components.is_empty() {
+                    if let Some(last) = components.last() {
+                        if !matches!(last, std::path::Component::ParentDir) {
+                            components.pop();
+                            continue;
+                        }
+                    }
+                }
+                components.push(component);
+            }
+            std::path::Component::CurDir => {
+                // Skip "." components
+                continue;
+            }
+            _ => {
+                components.push(component);
+            }
+        }
+    }
+
+    components.iter().collect()
 }
 
 fn collect_images_recursive(dir: &Path, images: &mut Vec<PathBuf>) -> Result<()> {

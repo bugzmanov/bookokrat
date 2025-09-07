@@ -4,7 +4,7 @@ use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
-use crate::markdown_text_reader::MarkdownTextReader;
+use crate::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator_wrapper::TextGeneratorWrapper;
 use crate::reading_history::ReadingHistory;
@@ -329,6 +329,15 @@ impl App {
                     let set_page_time = start_time.elapsed();
                     debug!("  - Set current page: {:?}", set_page_time);
 
+                    // Clear active anchor when changing chapters
+                    if let Some(markdown_reader) = self
+                        .text_reader
+                        .as_any_mut()
+                        .downcast_mut::<MarkdownTextReader>()
+                    {
+                        markdown_reader.clear_active_anchor();
+                    }
+
                     let content_start = std::time::Instant::now();
                     self.update_content();
                     let content_time = content_start.elapsed();
@@ -629,10 +638,23 @@ impl App {
             // Map chapter indices to the TOC items
             Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
 
+            // Get active section from text reader if it's a MarkdownTextReader
+            let active_section = if let Some(markdown_reader) =
+                self.text_reader
+                    .as_any_mut()
+                    .downcast_mut::<MarkdownTextReader>()
+            {
+                markdown_reader.get_active_section(self.current_chapter)
+            } else {
+                // Fallback for other text reader implementations
+                ActiveSection::Chapter(self.current_chapter)
+            };
+
             let book_info = CurrentBookInfo {
                 path: current_file.clone(),
                 toc_items,
                 current_chapter: self.current_chapter,
+                active_section,
             };
             self.cached_current_book_info = Some(book_info.clone());
 
@@ -660,14 +682,40 @@ impl App {
     }
 
     fn update_current_chapter_in_cache(&mut self) {
+        // Get the navigation area first to avoid borrow issues
+        let nav_area = if self.navigation_panel.mode == NavigationMode::TableOfContents {
+            Some(self.get_navigation_panel_area())
+        } else {
+            None
+        };
+
         if let Some(ref mut cached_info) = self.cached_current_book_info {
             cached_info.current_chapter = self.current_chapter;
+
+            // Update active section
+            cached_info.active_section = if let Some(markdown_reader) = self
+                .text_reader
+                .as_any_mut()
+                .downcast_mut::<MarkdownTextReader>()
+            {
+                markdown_reader.get_active_section(self.current_chapter)
+            } else {
+                ActiveSection::Chapter(self.current_chapter)
+            };
 
             // Update the table of contents with the updated book info
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
                 self.navigation_panel
                     .table_of_contents
                     .set_current_book_info(cached_info.clone());
+
+                // Update the active section and ensure it's visible
+                if let Some(area) = nav_area {
+                    let toc_height = area.height as usize;
+                    self.navigation_panel
+                        .table_of_contents
+                        .update_active_section(&cached_info.active_section, toc_height);
+                }
             }
         }
     }
@@ -823,6 +871,7 @@ impl App {
         if let Some(content) = &self.current_content {
             self.text_reader.scroll_down();
             self.save_bookmark();
+            self.update_current_chapter_in_cache(); // This will update active section
         }
     }
 
@@ -830,6 +879,7 @@ impl App {
         if let Some(content) = &self.current_content {
             self.text_reader.scroll_up();
             self.save_bookmark();
+            self.update_current_chapter_in_cache(); // This will update active section
         }
     }
 
@@ -838,6 +888,7 @@ impl App {
             self.text_reader
                 .scroll_half_screen_down(content, screen_height);
             self.save_bookmark();
+            self.update_current_chapter_in_cache(); // This will update active section
         }
     }
 
@@ -1090,6 +1141,10 @@ impl App {
                     // Click in content area (right 70% of screen)
                     if self.focused_panel != FocusedPanel::Content {
                         self.focused_panel = FocusedPanel::Content;
+                        // Clear manual navigation flag when switching to content
+                        self.navigation_panel
+                            .table_of_contents
+                            .clear_manual_navigation();
                     }
 
                     let content_area = self.get_content_area_rect();
@@ -1658,22 +1713,64 @@ impl App {
                 match toc_item {
                     TocItem::Chapter { index, anchor, .. } => {
                         let _ = self.navigate_to_chapter(index);
-                        // If there's an anchor, scroll to it after navigation
+                        // Handle anchor if present
                         if let Some(anchor_id) = anchor {
                             self.text_reader
-                                .handle_pending_anchor_scroll(Some(anchor_id));
+                                .handle_pending_anchor_scroll(Some(anchor_id.clone()));
+                            // Set this anchor as the active one
+                            if let Some(markdown_reader) = self
+                                .text_reader
+                                .as_any_mut()
+                                .downcast_mut::<MarkdownTextReader>()
+                            {
+                                markdown_reader.set_active_anchor(Some(anchor_id));
+                            }
+                        } else {
+                            // No anchor - clear any active anchor so only the chapter is highlighted
+                            if let Some(markdown_reader) = self
+                                .text_reader
+                                .as_any_mut()
+                                .downcast_mut::<MarkdownTextReader>()
+                            {
+                                markdown_reader.set_active_anchor(None);
+                            }
                         }
                         self.focused_panel = FocusedPanel::Content;
+                        // Clear manual navigation flag when jumping to content
+                        self.navigation_panel
+                            .table_of_contents
+                            .clear_manual_navigation();
+                        // Update the cache to reflect the correct active section
+                        self.update_current_chapter_in_cache();
                     }
                     TocItem::Section { index, anchor, .. } => {
                         if let Some(chapter_index) = index {
                             let _ = self.navigate_to_chapter(chapter_index);
-                            // If there's an anchor, scroll to it after navigation
+                            // Handle anchor if present
                             if let Some(anchor_id) = anchor {
                                 self.text_reader
-                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                                    .handle_pending_anchor_scroll(Some(anchor_id.clone()));
+                                // Set this anchor as the active one
+                                if let Some(markdown_reader) = self
+                                    .text_reader
+                                    .as_any_mut()
+                                    .downcast_mut::<MarkdownTextReader>()
+                                {
+                                    markdown_reader.set_active_anchor(Some(anchor_id));
+                                }
+                            } else {
+                                // No anchor - clear any active anchor so only the chapter is highlighted
+                                if let Some(markdown_reader) = self
+                                    .text_reader
+                                    .as_any_mut()
+                                    .downcast_mut::<MarkdownTextReader>()
+                                {
+                                    markdown_reader.set_active_anchor(None);
+                                }
                             }
                             self.focused_panel = FocusedPanel::Content;
+                            // Update the cache to reflect the correct active section
+                            self.update_current_chapter_in_cache();
                         } else {
                             self.navigation_panel
                                 .table_of_contents
@@ -1738,6 +1835,7 @@ impl App {
             self.text_reader
                 .scroll_half_screen_up(content, screen_height);
             self.save_bookmark();
+            self.update_current_chapter_in_cache(); // This will update active section
         }
     }
 
@@ -2189,7 +2287,13 @@ impl App {
             KeyCode::Tab => {
                 // Switch focus between panels
                 self.focused_panel = match self.focused_panel {
-                    FocusedPanel::FileList => FocusedPanel::Content,
+                    FocusedPanel::FileList => {
+                        // Clear manual navigation flag when leaving TOC
+                        self.navigation_panel
+                            .table_of_contents
+                            .clear_manual_navigation();
+                        FocusedPanel::Content
+                    }
                     FocusedPanel::Content => FocusedPanel::FileList,
                 };
             }

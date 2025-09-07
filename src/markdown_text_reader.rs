@@ -39,8 +39,9 @@ struct RenderedLine {
     spans: Vec<Span<'static>>,
     raw_text: String, // For text selection
     line_type: LineType,
-    link_nodes: Vec<LinkInfo>, // Links that are visible on this line
-    visual_height: usize,      // 1 for text, IMAGE_HEIGHT for images, etc.
+    link_nodes: Vec<LinkInfo>,   // Links that are visible on this line
+    visual_height: usize,        // 1 for text, IMAGE_HEIGHT for images, etc.
+    node_anchor: Option<String>, // Anchor/id from the Node if present
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -151,6 +152,23 @@ pub struct MarkdownTextReader {
 
     /// Pending anchor scroll after chapter navigation
     pending_anchor_scroll: Option<String>,
+
+    /// Last active anchor for maintaining continuous highlighting
+    last_active_anchor: Option<String>,
+}
+
+/// Represents the active section being read
+#[derive(Clone, Debug)]
+pub enum ActiveSection {
+    Anchor(String), // Specific section via anchor
+    Chapter(usize), // Fallback to chapter index
+}
+
+/// Node reference info to pass through rendering
+#[derive(Clone, Debug)]
+struct NodeReference {
+    id: Option<String>,
+    source_range: std::ops::Range<usize>,
 }
 
 impl MarkdownTextReader {
@@ -249,8 +267,11 @@ impl MarkdownTextReader {
                     continue;
                 }
 
-                // Try to get image dimensions from book images
-                if let Some((img_width, img_height)) = book_images.get_image_size(url) {
+                // Try to get image dimensions from book images with chapter context
+                let chapter_path = self.current_chapter_file.as_deref();
+                if let Some((img_width, img_height)) =
+                    book_images.get_image_size_with_context(url, chapter_path)
+                {
                     // Skip very small images
                     if img_width < 64 || img_height < 64 {
                         warn!(
@@ -343,6 +364,7 @@ impl MarkdownTextReader {
             anchor_positions: HashMap::new(),
             current_chapter_file: None,
             pending_anchor_scroll: None,
+            last_active_anchor: None,
         }
     }
 
@@ -501,6 +523,10 @@ impl MarkdownTextReader {
     ) {
         use MarkdownBlock::*;
 
+        // Store the current node's anchor to add to the first line rendered for this node
+        let current_node_anchor = node.id.clone();
+        let initial_line_count = lines.len();
+
         match &node.block {
             Heading { level, content } => {
                 self.render_heading(
@@ -614,6 +640,15 @@ impl MarkdownTextReader {
                 );
             }
         }
+
+        // If this node has an anchor ID and we created new lines, attach it to the first line
+        if let Some(anchor) = current_node_anchor {
+            if initial_line_count < lines.len() {
+                if let Some(line) = lines.get_mut(initial_line_count) {
+                    line.node_anchor = Some(anchor);
+                }
+            }
+        }
     }
 
     // Helper method to convert Text AST to plain string
@@ -701,6 +736,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
 
             self.raw_text_lines.push(wrapped_line.to_string());
@@ -731,6 +767,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
 
             self.raw_text_lines.push(decoration);
@@ -744,6 +781,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -819,6 +857,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Empty,
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -999,6 +1038,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
 
             self.raw_text_lines.push(code_line.to_string());
@@ -1012,6 +1052,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1110,6 +1151,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1207,6 +1249,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Text, // Table widget handles its own styling
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             };
 
             lines.push(rendered_line);
@@ -1242,6 +1285,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1444,6 +1488,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1472,6 +1517,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
 
         self.raw_text_lines.push(hr_line);
@@ -1484,6 +1530,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1540,23 +1587,21 @@ impl MarkdownTextReader {
                 false, // don't add empty line after
             );
 
-            // Render each definition (dd) - indented
-            for definition in &item.definitions {
-                let mut def_rich_spans = Vec::new();
-                for def_item in definition.iter() {
-                    def_rich_spans
-                        .extend(self.render_text_or_inline(def_item, palette, is_focused));
+            // Render each definition (dd) - as blocks with indentation
+            for definition_blocks in &item.definitions {
+                // Each definition is now a Vec<Node> (blocks), not just Text
+                for block_node in definition_blocks {
+                    // Render each block with 2 levels of indentation
+                    self.render_node(
+                        block_node,
+                        lines,
+                        total_height,
+                        width.saturating_sub(4), // Reduce width for indentation
+                        palette,
+                        is_focused,
+                        2, // 2 levels of indentation (4 spaces)
+                    );
                 }
-
-                self.render_text_spans(
-                    &def_rich_spans,
-                    None, // no prefix for definitions
-                    lines,
-                    total_height,
-                    width,
-                    2,     // 2 levels of indentation (4 spaces)
-                    false, // don't add empty line after
-                );
             }
 
             // Add a small spacing between definition items (but not after the last one)
@@ -1567,6 +1612,7 @@ impl MarkdownTextReader {
                     line_type: LineType::Empty,
                     link_nodes: vec![],
                     visual_height: 1,
+                    node_anchor: None,
                 });
                 self.raw_text_lines.push(String::new());
                 *total_height += 1;
@@ -1580,6 +1626,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1611,6 +1658,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -1622,6 +1670,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1671,6 +1720,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -1682,6 +1732,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1779,6 +1830,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Text,
                 link_nodes: line_links, // Captured links!
                 visual_height: 1,
+                node_anchor: None,
             });
 
             self.raw_text_lines.push(final_raw_text);
@@ -1793,6 +1845,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Empty,
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -2052,6 +2105,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2120,6 +2174,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 visual_height: 1,
+                node_anchor: None,
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync
@@ -2133,6 +2188,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             visual_height: 1,
+            node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2152,6 +2208,45 @@ impl MarkdownTextReader {
                 }
             }
         }
+    }
+
+    /// Clear the last active anchor when changing chapters
+    pub fn clear_active_anchor(&mut self) {
+        self.last_active_anchor = None;
+    }
+
+    /// Set the active anchor directly (used when clicking on TOC items)
+    pub fn set_active_anchor(&mut self, anchor: Option<String>) {
+        self.last_active_anchor = anchor;
+    }
+
+    /// Get the currently active section based on viewport position
+    pub fn get_active_section(&mut self, current_chapter: usize) -> ActiveSection {
+        // Calculate middle of viewport
+        let viewport_middle = self.scroll_offset + (self.visible_height / 2);
+
+        // Scan backwards from middle to find the most recent anchor
+        let lines_to_check = viewport_middle.min(self.rendered_content.lines.len());
+
+        for line_idx in (0..=lines_to_check).rev() {
+            if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                if let Some(ref anchor) = line.node_anchor {
+                    // Found an anchor - update and return it
+                    self.last_active_anchor = Some(anchor.clone());
+                    return ActiveSection::Anchor(anchor.clone());
+                }
+            }
+        }
+
+        // No anchor found before middle - check if we have a stored one
+        if let Some(ref anchor) = self.last_active_anchor {
+            // We still use the last known anchor if we're in the same chapter
+            // This maintains highlighting when scrolling past the last anchor
+            return ActiveSection::Anchor(anchor.clone());
+        }
+
+        // Fall back to chapter-level highlighting
+        ActiveSection::Chapter(current_chapter)
     }
 }
 
@@ -2199,6 +2294,10 @@ impl VimNavMotions for MarkdownTextReader {
 }
 
 impl TextReaderTrait for MarkdownTextReader {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
         // Parse HTML string to Markdown AST
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;

@@ -331,15 +331,16 @@ impl TocParser {
             return None;
         };
 
-        let href = if let Ok(content_regex) = Regex::new(r#"<content[^>]*src="([^"]*)"[^>]*/?>"#) {
-            content_regex
-                .captures(content)?
-                .get(1)?
-                .as_str()
-                .to_string()
-        } else {
-            return None;
-        };
+        let href =
+            if let Ok(content_regex) = Regex::new(r#"<content[^>]*src=["']([^"']*)["'][^>]*/?>"#) {
+                content_regex
+                    .captures(content)?
+                    .get(1)?
+                    .as_str()
+                    .to_string()
+            } else {
+                return None;
+            };
 
         // Find nested navPoints that are direct children
         let mut children = Vec::new();
@@ -521,7 +522,7 @@ mod tests {
   <section>
     <a href="../Text/content2.html">Главное за пять минут</a>
   </section>
-  
+
   <article>
     <a href="../Text/Section0002.html">Контекст</a>
     <div>
@@ -531,7 +532,7 @@ mod tests {
       <a href="../Text/content11.html">Как это выглядит</a>
     </p>
   </article>
-  
+
   <div>
     <a href="../Text/content21.html">Интерес</a>
     <span>
@@ -709,9 +710,15 @@ mod tests {
         }
 
         match &entries[1] {
-            TocItem::Chapter { title, href, .. } => {
+            TocItem::Chapter {
+                title,
+                href,
+                anchor,
+                ..
+            } => {
                 assert_eq!(title, "Title Page");
-                assert_eq!(href, "xhtml/title.xhtml#tit");
+                assert_eq!(href, "xhtml/title.xhtml");
+                assert_eq!(anchor, &Some("tit".to_string()));
             }
             _ => panic!("Entry should be a Chapter"),
         }

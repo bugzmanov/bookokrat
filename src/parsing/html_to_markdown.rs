@@ -703,6 +703,101 @@ impl HtmlToMarkdownConverter {
         }
     }
 
+    fn extract_table_as_block(&mut self, node: &Rc<markup5ever_rcdom::Node>) -> Option<Block> {
+        let mut header: Option<crate::markdown::TableRow> = None;
+        let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
+        let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
+        let mut max_columns = 0;
+        let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
+
+        // Process table children to find thead and tbody
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "thead" => {
+                            // Process header rows
+                            for thead_child in child.children.borrow().iter() {
+                                if let NodeData::Element { name, .. } = &thead_child.data {
+                                    if name.local.as_ref() == "tr" {
+                                        let row = self.extract_table_row_with_rowspan(
+                                            thead_child,
+                                            &mut rowspan_tracker,
+                                        );
+                                        max_columns = max_columns.max(row.cells.len());
+                                        header = Some(row);
+                                        break; // Only take the first header row
+                                    }
+                                }
+                            }
+                        }
+                        "tbody" => {
+                            // Process body rows
+                            for tbody_child in child.children.borrow().iter() {
+                                if let NodeData::Element { name, .. } = &tbody_child.data {
+                                    if name.local.as_ref() == "tr" {
+                                        let row = self.extract_table_row_with_rowspan(
+                                            tbody_child,
+                                            &mut rowspan_tracker,
+                                        );
+                                        max_columns = max_columns.max(row.cells.len());
+                                        rows.push(row);
+                                    }
+                                }
+                            }
+                        }
+                        "tr" => {
+                            // Direct tr children (no tbody/thead)
+                            let row =
+                                self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
+                            max_columns = max_columns.max(row.cells.len());
+
+                            // First row becomes header if we don't have one yet
+                            if header.is_none() && rows.is_empty() {
+                                header = Some(row);
+                            } else {
+                                rows.push(row);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Set default alignment for all columns
+        alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+
+        // Pad all rows to have max_columns cells
+        if let Some(ref mut header_row) = header {
+            while header_row.cells.len() < max_columns {
+                header_row.cells.push(crate::markdown::TableCell::new(
+                    crate::markdown::Text::default(),
+                ));
+            }
+        }
+        for row in &mut rows {
+            while row.cells.len() < max_columns {
+                row.cells.push(crate::markdown::TableCell::new(
+                    crate::markdown::Text::default(),
+                ));
+            }
+        }
+
+        // Only create table if we have content
+        if header.is_some() || !rows.is_empty() {
+            Some(Block::Table {
+                header,
+                rows,
+                alignment,
+            })
+        } else {
+            None
+        }
+    }
+
     fn extract_table_row(
         &mut self,
         tr_node: &Rc<markup5ever_rcdom::Node>,
@@ -840,16 +935,7 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
-        let kind = if tag_name == "ol" {
-            // Check for start attribute
-            let start = self
-                .get_attr_value(attrs, "start")
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(1);
-            crate::markdown::ListKind::Ordered { start }
-        } else {
-            crate::markdown::ListKind::Unordered
-        };
+        let kind = self.get_list_kind(tag_name, attrs);
 
         let items = self.extract_list_items(node);
 
@@ -891,51 +977,26 @@ impl HtmlToMarkdownConverter {
         items
     }
 
-    fn extract_list_item(
+    /// Extracts block content from a container element (li, dd, etc.)
+    /// This handles nested lists, paragraphs, images, code blocks, etc.
+    fn extract_container_blocks(
         &mut self,
-        li_node: &Rc<markup5ever_rcdom::Node>,
-    ) -> crate::markdown::ListItem {
+        container_node: &Rc<markup5ever_rcdom::Node>,
+    ) -> Vec<Node> {
         let mut content = Vec::new();
         let mut current_text = Text::default();
 
-        for child in li_node.children.borrow().iter() {
+        for child in container_node.children.borrow().iter() {
             match &child.data {
                 NodeData::Element { name, attrs, .. } => {
                     let tag_name = name.local.as_ref();
 
                     match tag_name {
                         "ul" | "ol" => {
-                            // Before flushing, trim trailing whitespace from current_text
-                            // since we're about to hit a block element
-                            self.trim_text_trailing_whitespace(&mut current_text);
+                            // Flush current text before block element
+                            self.flush_text_as_paragraph(&mut current_text, &mut content);
 
-                            // Flush current text as paragraph if it has actual content
-                            if !current_text.is_empty() {
-                                let has_content =
-                                    current_text.clone().into_iter().any(|item| match item {
-                                        TextOrInline::Text(node) => !node.content.trim().is_empty(),
-                                        TextOrInline::Inline(_) => true,
-                                    });
-
-                                if has_content {
-                                    let paragraph = Block::Paragraph {
-                                        content: current_text.clone(),
-                                    };
-                                    content.push(Node::new(paragraph, 0..0));
-                                }
-                                current_text = Text::default();
-                            }
-
-                            let kind = if tag_name == "ol" {
-                                let start = self
-                                    .get_attr_value(attrs, "start")
-                                    .and_then(|s| s.parse::<u32>().ok())
-                                    .unwrap_or(1);
-                                crate::markdown::ListKind::Ordered { start }
-                            } else {
-                                crate::markdown::ListKind::Unordered
-                            };
-
+                            let kind = self.get_list_kind(tag_name, attrs);
                             let nested_items = self.extract_list_items(child);
                             if !nested_items.is_empty() {
                                 let nested_list = Block::List {
@@ -946,26 +1007,7 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         "p" => {
-                            // Before flushing, trim trailing whitespace from current_text
-                            // since we're about to hit a block element
-                            self.trim_text_trailing_whitespace(&mut current_text);
-
-                            // Flush current text as paragraph if it has actual content
-                            if !current_text.is_empty() {
-                                let has_content =
-                                    current_text.clone().into_iter().any(|item| match item {
-                                        TextOrInline::Text(node) => !node.content.trim().is_empty(),
-                                        TextOrInline::Inline(_) => true,
-                                    });
-
-                                if has_content {
-                                    let paragraph = Block::Paragraph {
-                                        content: current_text.clone(),
-                                    };
-                                    content.push(Node::new(paragraph, 0..0));
-                                }
-                                current_text = Text::default();
-                            }
+                            self.flush_text_as_paragraph(&mut current_text, &mut content);
 
                             let para_content = self.extract_formatted_content(child);
                             if !para_content.is_empty() {
@@ -973,6 +1015,45 @@ impl HtmlToMarkdownConverter {
                                     content: para_content,
                                 };
                                 content.push(Node::new(paragraph, 0..0));
+                            }
+                        }
+                        "img" => {
+                            // Handle images inline within the container
+                            if let Some(src) = self.get_attr_value(attrs, "src") {
+                                let alt_text =
+                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                let title = self.get_attr_value(attrs, "title");
+
+                                let image_inline = Inline::Image {
+                                    alt_text,
+                                    url: src,
+                                    title,
+                                };
+                                current_text.push_inline(image_inline);
+                            }
+                        }
+                        "pre" => {
+                            self.flush_text_as_paragraph(&mut current_text, &mut content);
+
+                            // Extract code block content
+                            let mut code_content = String::new();
+                            self.collect_text_from_node(child, &mut code_content);
+                            let language = self.get_attr_value(attrs, "data-type");
+
+                            let code_block = Block::CodeBlock {
+                                language,
+                                content: code_content,
+                            };
+                            content.push(Node::new(code_block, 0..0));
+                        }
+                        "table" => {
+                            // Flush current text before table
+                            self.flush_text_as_paragraph(&mut current_text, &mut content);
+
+                            // Extract table content using the existing table extraction logic
+                            let table_block = self.extract_table_as_block(child);
+                            if let Some(table) = table_block {
+                                content.push(Node::new(table, 0..0));
                             }
                         }
                         _ => {
@@ -985,9 +1066,8 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                 }
-                NodeData::Text { contents } => {
+                NodeData::Text { .. } => {
                     // Process text nodes through the normal formatted content collector
-                    // This preserves proper spacing and formatting
                     let context = ProcessingContext {
                         in_table: false,
                         current_style: None,
@@ -1009,9 +1089,18 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Flush any remaining text as a paragraph
-        // But only if it contains actual content (not just whitespace)
+        // Flush any remaining text
+        self.flush_text_as_paragraph(&mut current_text, &mut content);
+
+        content
+    }
+
+    /// Helper method to flush current text as a paragraph if it has content
+    fn flush_text_as_paragraph(&mut self, current_text: &mut Text, content: &mut Vec<Node>) {
         if !current_text.is_empty() {
+            // Trim trailing whitespace before creating paragraph
+            self.trim_text_trailing_whitespace(current_text);
+
             // Check if the text has any non-whitespace content
             let has_content = current_text.clone().into_iter().any(|item| match item {
                 TextOrInline::Text(node) => !node.content.trim().is_empty(),
@@ -1020,16 +1109,57 @@ impl HtmlToMarkdownConverter {
 
             if has_content {
                 let paragraph = Block::Paragraph {
-                    content: current_text,
+                    content: current_text.clone(),
                 };
                 content.push(Node::new(paragraph, 0..0));
             }
+            *current_text = Text::default();
         }
+    }
+
+    /// Extract list kind from tag name and attributes
+    fn get_list_kind(
+        &self,
+        tag_name: &str,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+    ) -> crate::markdown::ListKind {
+        if tag_name == "ol" {
+            let start = self
+                .get_attr_value(attrs, "start")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            crate::markdown::ListKind::Ordered { start }
+        } else {
+            crate::markdown::ListKind::Unordered
+        }
+    }
+
+    fn extract_list_item(
+        &mut self,
+        li_node: &Rc<markup5ever_rcdom::Node>,
+    ) -> crate::markdown::ListItem {
+        let content = self.extract_container_blocks(li_node);
 
         crate::markdown::ListItem {
             content,
             task_status: None, // HTML doesn't have task lists
         }
+    }
+
+    fn extract_definition_content(&mut self, dd_node: &Rc<markup5ever_rcdom::Node>) -> Vec<Node> {
+        let mut content = self.extract_container_blocks(dd_node);
+
+        // Ensure we always return at least one block (even if empty)
+        if content.is_empty() {
+            content.push(Node::new(
+                Block::Paragraph {
+                    content: Text::default(),
+                },
+                0..0,
+            ));
+        }
+
+        content
     }
 
     fn handle_definition_list(
@@ -1040,7 +1170,7 @@ impl HtmlToMarkdownConverter {
     ) {
         let mut definition_items = Vec::new();
         let mut current_term: Option<Text> = None;
-        let mut current_definitions: Vec<Text> = Vec::new();
+        let mut current_definitions: Vec<Vec<Node>> = Vec::new();
 
         for child in node.children.borrow().iter() {
             match &child.data {
@@ -1064,10 +1194,10 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         "dd" => {
-                            // Extract definition content as flat text
-                            let definition_content = self.extract_formatted_content(child);
-                            if !definition_content.is_empty() {
-                                current_definitions.push(definition_content);
+                            // Extract definition content as blocks (like list items)
+                            let definition_blocks = self.extract_definition_content(child);
+                            if !definition_blocks.is_empty() {
+                                current_definitions.push(definition_blocks);
                             }
                         }
                         _ => {}
@@ -1141,15 +1271,7 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         "ul" | "ol" => {
-                            let kind = if tag_name == "ol" {
-                                let start = self
-                                    .get_attr_value(attrs, "start")
-                                    .and_then(|s| s.parse::<u32>().ok())
-                                    .unwrap_or(1);
-                                crate::markdown::ListKind::Ordered { start }
-                            } else {
-                                crate::markdown::ListKind::Unordered
-                            };
+                            let kind = self.get_list_kind(tag_name, attrs);
 
                             let items = self.extract_list_items(child);
                             if !items.is_empty() {

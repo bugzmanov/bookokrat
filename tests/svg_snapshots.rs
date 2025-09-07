@@ -2823,3 +2823,344 @@ Q = xW<sub>Q</sub></pre>
         create_test_failure_handler("test_html_subscript_rendering_svg"),
     );
 }
+
+#[test]
+fn test_definition_list_with_complex_content_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+
+    // Create HTML content with definition list containing lists and images
+    let dl_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Complex Definition List Test</title>
+</head>
+<body>
+    <h1>Definition List with Complex Content</h1>
+    <p>This tests definition lists with nested content like lists and images.</p>
+    
+    <dl>
+        <dt><strong>Programming Languages</strong></dt>
+        <dd>
+            <p>Popular programming languages include:</p>
+            <ul>
+                <li><em>Python</em> - High-level, interpreted language</li>
+                <li><strong>Rust</strong> - Systems programming language</li>
+                <li>JavaScript - Web development language</li>
+            </ul>
+            <ol>
+                <li>First learn the basics</li>
+                <li>Then practice with projects</li>
+                <li>Finally, contribute to open source</li>
+            </ol>
+        </dd>
+        
+        <dt>Data Structures</dt>
+        <dd>
+            Fundamental computer science concepts with visual representations:
+            <img src="datastructures.png" alt="Data structures diagram" width="400" height="300"/>
+            <p>Including arrays, linked lists, trees, and graphs.</p>
+        </dd>
+        
+        <dt><em>Algorithms</em></dt>
+        <dd>
+            <p>Step-by-step procedures for calculations:</p>
+            <ol>
+                <li><strong>Sorting algorithms</strong>
+                    <ul>
+                        <li>Quick sort</li>
+                        <li>Merge sort</li>
+                        <li>Heap sort</li>
+                    </ul>
+                </li>
+                <li><em>Search algorithms</em>
+                    <ul>
+                        <li>Binary search</li>
+                        <li>Linear search</li>
+                    </ul>
+                </li>
+            </ol>
+        </dd>
+        
+        <dt>Machine Learning</dt>
+        <dd>
+            <p>A subset of artificial intelligence that includes:</p>
+            <ul>
+                <li>Supervised learning with labeled data</li>
+                <li>Unsupervised learning for pattern discovery</li>
+                <li>Reinforcement learning through rewards</li>
+            </ul>
+            <img src="ml-workflow.jpg" alt="Machine learning workflow" width="500" height="350"/>
+        </dd>
+    </dl>
+    
+    <p>Definition lists are useful for glossaries and documentation.</p>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("dl_complex_test.html");
+    std::fs::write(&temp_html_path, dl_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_definition_list_complex.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/definition_list_complex_content.svg"),
+        "test_definition_list_with_complex_content_svg",
+        create_test_failure_handler("test_definition_list_with_complex_content_svg"),
+    );
+}
+
+#[test]
+fn test_lists_with_tables_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(140, 50);
+
+    // Create HTML content with lists containing tables
+    let list_table_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Lists with Tables Test</title>
+</head>
+<body>
+    <h1>Lists Containing Tables</h1>
+    <p>This tests lists that contain tables as their content.</p>
+    
+    <h2>Unordered List with Tables</h2>
+    <ul>
+        <li>
+            <p>Programming Language Comparison:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Language</th>
+                        <th>Type</th>
+                        <th>Performance</th>
+                        <th>Use Cases</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Python</td>
+                        <td>Interpreted</td>
+                        <td>Moderate</td>
+                        <td>Data Science, Web</td>
+                    </tr>
+                    <tr>
+                        <td>Rust</td>
+                        <td>Compiled</td>
+                        <td>High</td>
+                        <td>Systems, WebAssembly</td>
+                    </tr>
+                    <tr>
+                        <td>JavaScript</td>
+                        <td>JIT Compiled</td>
+                        <td>Good</td>
+                        <td>Web, Node.js</td>
+                    </tr>
+                </tbody>
+            </table>
+        </li>
+        <li>
+            <p>Database Systems:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Database</th>
+                        <th>Type</th>
+                        <th>License</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>PostgreSQL</td>
+                        <td>Relational</td>
+                        <td>Open Source</td>
+                    </tr>
+                    <tr>
+                        <td>MongoDB</td>
+                        <td>NoSQL</td>
+                        <td>SSPL</td>
+                    </tr>
+                </tbody>
+            </table>
+        </li>
+    </ul>
+    
+    <h2>Ordered List with Mixed Content</h2>
+    <ol>
+        <li>
+            <p>First, review the framework comparison:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Framework</th>
+                        <th>Language</th>
+                        <th>Learning Curve</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>React</strong></td>
+                        <td>JavaScript</td>
+                        <td>Moderate</td>
+                    </tr>
+                    <tr>
+                        <td><em>Vue</em></td>
+                        <td>JavaScript</td>
+                        <td>Easy</td>
+                    </tr>
+                    <tr>
+                        <td>Angular</td>
+                        <td>TypeScript</td>
+                        <td>Steep</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>Note the differences in learning curves.</p>
+        </li>
+        <li>
+            <p>Next, consider the performance metrics:</p>
+            <ul>
+                <li>Bundle size comparison:
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Framework</th>
+                                <th>Min Size (KB)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>React</td>
+                                <td>42.2</td>
+                            </tr>
+                            <tr>
+                                <td>Vue</td>
+                                <td>34.0</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </li>
+                <li>Runtime performance varies by use case</li>
+            </ul>
+        </li>
+        <li>
+            <p>Finally, deployment options:</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Platform</th>
+                        <th>Free Tier</th>
+                        <th>Auto-scaling</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Vercel</td>
+                        <td>Yes</td>
+                        <td>Yes</td>
+                    </tr>
+                    <tr>
+                        <td>Netlify</td>
+                        <td>Yes</td>
+                        <td>Limited</td>
+                    </tr>
+                    <tr>
+                        <td>AWS</td>
+                        <td>Limited</td>
+                        <td>Yes</td>
+                    </tr>
+                </tbody>
+            </table>
+        </li>
+    </ol>
+    
+    <h2>Nested Lists with Tables</h2>
+    <ul>
+        <li>Development Tools
+            <ul>
+                <li>IDEs and Editors:
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Editor</th>
+                                <th>Price</th>
+                                <th>Platform</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>VS Code</td>
+                                <td>Free</td>
+                                <td>Cross-platform</td>
+                            </tr>
+                            <tr>
+                                <td>IntelliJ</td>
+                                <td>Paid</td>
+                                <td>Cross-platform</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </li>
+                <li>Version Control Systems</li>
+            </ul>
+        </li>
+    </ul>
+    
+    <p>Tables within lists provide structured data presentation.</p>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("list_tables_test.html");
+    std::fs::write(&temp_html_path, list_table_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_lists_with_tables.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/lists_with_tables.svg"),
+        "test_lists_with_tables_svg",
+        create_test_failure_handler("test_lists_with_tables_svg"),
+    );
+}
