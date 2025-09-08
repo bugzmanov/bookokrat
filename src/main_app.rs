@@ -1,4 +1,5 @@
 use crate::book_manager::BookManager;
+use crate::book_stat::BookStat;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
@@ -86,6 +87,9 @@ pub struct App {
     image_popup_area: Option<Rect>,
     last_terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
+    // Book statistics popup
+    book_stat: BookStat,
+    show_book_stat: bool,
 }
 
 pub trait VimNavMotions {
@@ -226,6 +230,8 @@ impl App {
             image_popup_area: None,
             last_terminal_size: Rect::new(0, 0, 80, 24),
             profiler: Arc::new(Mutex::new(None)),
+            book_stat: BookStat::new(),
+            show_book_stat: false,
         };
 
         // Get actual terminal size on startup
@@ -1937,6 +1943,19 @@ impl App {
             self.image_popup_area = None;
         }
 
+        // Render book statistics popup if active
+        if self.show_book_stat {
+            // First render a dimming overlay
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            self.book_stat.render(f, f.area());
+        }
+
         let render_duration = render_start.elapsed();
         if render_duration.as_millis() > 5 {
             debug!("Rendering widgets took {}ms", render_duration.as_millis());
@@ -2037,7 +2056,38 @@ impl App {
                 true
             }
             " s" => {
-                // Handle Space->s to show raw HTML
+                // Handle Space->s to show raw HTML source
+                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
+                    // Get raw HTML content for current chapter
+                    if let Some(ref mut epub) = self.current_epub {
+                        if let Ok(raw_html) = epub.get_current_str() {
+                            self.text_reader.set_raw_html(raw_html);
+                            self.text_reader.toggle_raw_html();
+                        }
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " d" => {
+                // Handle Space->d to show book statistics (document stats)
+                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
+                    // Calculate and show book statistics
+                    if let Some(ref mut epub) = self.current_epub {
+                        let terminal_size = (self.terminal_width, self.terminal_height);
+                        if let Err(e) = self.book_stat.calculate_stats(epub, terminal_size) {
+                            error!("Failed to calculate book statistics: {}", e);
+                        } else {
+                            self.book_stat.show();
+                            self.show_book_stat = true;
+                        }
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " v" => {
+                // Handle Space->v to show raw HTML (alternative way)
                 if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
                     // Get raw HTML content for current chapter
                     if let Some(ref mut epub) = self.current_epub {
@@ -2092,6 +2142,33 @@ impl App {
             self.image_popup = None;
             self.image_popup_area = None;
             return;
+        }
+
+        // If book stat popup is shown, handle keys for it
+        if self.show_book_stat {
+            if self.book_stat.handle_key(key) {
+                if !self.book_stat.is_visible() {
+                    self.show_book_stat = false;
+                }
+                return;
+            }
+            // Handle vim navigation keys for book stat
+            match key.code {
+                KeyCode::Char('j') => {
+                    self.book_stat.handle_j();
+                    return;
+                }
+                KeyCode::Char('k') => {
+                    self.book_stat.handle_k();
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.book_stat.hide();
+                    self.show_book_stat = false;
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // For non-character keys or keys with modifiers (except shift), clear any pending sequence
@@ -2298,7 +2375,10 @@ impl App {
                 };
             }
             KeyCode::Char('d') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                // First check if this is part of a key sequence (e.g., Space+d)
+                if self.handle_key_sequence('d') {
+                    // Key was handled as part of a sequence
+                } else if key.modifiers.contains(KeyModifiers::CONTROL) {
                     if self.show_reading_history {
                         // Use VimNavMotions for reading history
                         if let Some(ref mut history) = self.reading_history {

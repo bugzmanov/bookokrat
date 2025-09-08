@@ -1,6 +1,7 @@
 // Export modules for use in tests
 pub mod book_list;
 pub mod book_manager;
+pub mod book_stat;
 pub mod bookmark;
 pub mod event_source;
 pub mod images;

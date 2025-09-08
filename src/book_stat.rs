@@ -1,0 +1,522 @@
+use crate::main_app::VimNavMotions;
+use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+use crate::parsing::markdown_renderer::MarkdownRenderer;
+use crate::toc_parser::TocParser;
+use anyhow::Result;
+use epub::doc::EpubDoc;
+use log::debug;
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use std::collections::HashSet;
+use std::io::BufReader;
+
+pub struct BookStat {
+    chapter_stats: Vec<ChapterStat>,
+    list_state: ListState,
+    visible: bool,
+    terminal_size: (u16, u16),
+}
+
+#[derive(Clone)]
+struct ChapterStat {
+    title: String,
+    screens: usize,
+}
+
+impl BookStat {
+    pub fn new() -> Self {
+        Self {
+            chapter_stats: Vec::new(),
+            list_state: ListState::default(),
+            visible: false,
+            terminal_size: (80, 24),
+        }
+    }
+
+    pub fn calculate_stats(
+        &mut self,
+        epub: &mut EpubDoc<BufReader<std::fs::File>>,
+        terminal_size: (u16, u16),
+    ) -> Result<()> {
+        self.terminal_size = terminal_size;
+        self.chapter_stats.clear();
+
+        // Parse TOC to get top-level chapters only
+        let toc_parser = TocParser::new();
+        let toc = toc_parser.parse_toc_structure(epub);
+
+        debug!("BookStat: Found {} TOC items", toc.len());
+
+        // Calculate available text area (accounting for UI elements)
+        let popup_height = terminal_size.1.saturating_sub(4) as usize;
+        let text_width = terminal_size.0.saturating_sub(6) as usize;
+        let lines_per_screen = popup_height.saturating_sub(4); // Account for borders and padding
+
+        // First try to process TOC items
+        if !toc.is_empty() {
+            debug!("BookStat: Processing {} TOC items", toc.len());
+            self.process_toc_items(&toc, epub, text_width, lines_per_screen);
+        }
+
+        // If no chapters found from TOC or TOC was empty, try spine items
+        if self.chapter_stats.is_empty() {
+            debug!("BookStat: No chapters found from TOC, falling back to spine items");
+            self.process_spine_items(epub, text_width, lines_per_screen);
+        }
+
+        // Deduplicate chapters by title (keep the first occurrence)
+        self.deduplicate_chapters();
+
+        // Select first item by default
+        if !self.chapter_stats.is_empty() {
+            self.list_state.select(Some(0));
+        }
+
+        debug!(
+            "BookStat: Collected {} chapter statistics after deduplication",
+            self.chapter_stats.len()
+        );
+
+        Ok(())
+    }
+
+    fn process_spine_items(
+        &mut self,
+        epub: &mut EpubDoc<BufReader<std::fs::File>>,
+        text_width: usize,
+        lines_per_screen: usize,
+    ) {
+        // Save current page to restore later
+        let current_page = epub.get_current_page();
+        let spine_len = epub.get_num_pages();
+        debug!("BookStat: Found {} spine items", spine_len);
+
+        for i in 0..spine_len {
+            let _ = epub.set_current_page(i);
+            if let Ok(content) = epub.get_current_str() {
+                // Skip very short content (likely navigation or empty pages)
+                if content.len() < 100 {
+                    debug!(
+                        "BookStat: Skipping spine item {} (too short: {} bytes)",
+                        i,
+                        content.len()
+                    );
+                    continue;
+                }
+
+                // Try to extract title from the HTML content
+                let title = self
+                    .extract_chapter_title(&content)
+                    .unwrap_or_else(|| format!("Chapter {}", i + 1));
+
+                debug!(
+                    "BookStat: Processing spine item {} '{}' with {} bytes",
+                    i,
+                    title,
+                    content.len()
+                );
+                self.add_chapter_stat(&title, &content, text_width, lines_per_screen);
+            }
+        }
+
+        // Restore original page
+        let _ = epub.set_current_page(current_page);
+    }
+
+    fn process_toc_items(
+        &mut self,
+        items: &[crate::table_of_contents::TocItem],
+        epub: &mut EpubDoc<BufReader<std::fs::File>>,
+        text_width: usize,
+        lines_per_screen: usize,
+    ) {
+        for item in items {
+            match item {
+                crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
+                    debug!(
+                        "BookStat: Processing chapter '{}' with href '{}'",
+                        title, href
+                    );
+                    // Process chapter
+                    if let Ok(content) = epub.get_resource_str_by_path(href) {
+                        debug!(
+                            "BookStat: Got content for chapter '{}', length: {}",
+                            title,
+                            content.len()
+                        );
+                        self.add_chapter_stat(title, &content, text_width, lines_per_screen);
+                    } else {
+                        debug!("BookStat: Failed to get content for chapter '{}'", title);
+                    }
+                }
+                crate::table_of_contents::TocItem::Section {
+                    title,
+                    href,
+                    children,
+                    ..
+                } => {
+                    // Process section if it has content
+                    if let Some(href_str) = href {
+                        debug!(
+                            "BookStat: Processing section '{}' with href '{}'",
+                            title, href_str
+                        );
+                        if let Ok(content) = epub.get_resource_str_by_path(href_str) {
+                            debug!(
+                                "BookStat: Got content for section '{}', length: {}",
+                                title,
+                                content.len()
+                            );
+                            self.add_chapter_stat(title, &content, text_width, lines_per_screen);
+                        } else {
+                            debug!("BookStat: Failed to get content for section '{}'", title);
+                        }
+                    } else {
+                        debug!(
+                            "BookStat: Section '{}' has no href, checking children",
+                            title
+                        );
+                        // Process children if section itself has no content
+                        if !children.is_empty() {
+                            self.process_toc_items(children, epub, text_width, lines_per_screen);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_chapter_stat(
+        &mut self,
+        title: &str,
+        content: &str,
+        text_width: usize,
+        lines_per_screen: usize,
+    ) {
+        // Convert HTML to Markdown AST
+        let mut converter = HtmlToMarkdownConverter::new();
+        let document = converter.convert(content);
+
+        // Render to text
+        let renderer = MarkdownRenderer::new();
+        let rendered_text = renderer.render(&document);
+
+        // Calculate screens based on rendered text
+        let screens = self.calculate_screens(&rendered_text, text_width, lines_per_screen);
+
+        debug!(
+            "BookStat: Chapter '{}' has {} screens (text length: {}, width: {}, lines/screen: {})",
+            title,
+            screens,
+            rendered_text.len(),
+            text_width,
+            lines_per_screen
+        );
+
+        self.chapter_stats.push(ChapterStat {
+            title: title.to_string(),
+            screens,
+        });
+    }
+
+    fn deduplicate_chapters(&mut self) {
+        let mut seen_titles = std::collections::HashSet::new();
+        let mut unique_chapters = Vec::new();
+
+        for chapter in &self.chapter_stats {
+            // Normalize title for comparison (trim and lowercase)
+            let normalized = chapter.title.trim().to_lowercase();
+            if !normalized.is_empty() && !seen_titles.contains(&normalized) {
+                seen_titles.insert(normalized);
+                unique_chapters.push(chapter.clone());
+            }
+        }
+
+        self.chapter_stats = unique_chapters;
+    }
+
+    fn extract_chapter_title(&self, html_content: &str) -> Option<String> {
+        // Try to extract title from HTML content
+        // Look for h1, h2, or title tags
+
+        // Try h1 first
+        if let Some(start) = html_content.find("<h1") {
+            if let Some(end_tag_start) = html_content[start..].find('>') {
+                let tag_end = start + end_tag_start + 1;
+                if let Some(close) = html_content[tag_end..].find("</h1>") {
+                    let title = &html_content[tag_end..tag_end + close];
+                    let clean_title = self.clean_html_title(title);
+                    if !clean_title.is_empty() {
+                        return Some(clean_title);
+                    }
+                }
+            }
+        }
+
+        // Try h2
+        if let Some(start) = html_content.find("<h2") {
+            if let Some(end_tag_start) = html_content[start..].find('>') {
+                let tag_end = start + end_tag_start + 1;
+                if let Some(close) = html_content[tag_end..].find("</h2>") {
+                    let title = &html_content[tag_end..tag_end + close];
+                    let clean_title = self.clean_html_title(title);
+                    if !clean_title.is_empty() {
+                        return Some(clean_title);
+                    }
+                }
+            }
+        }
+
+        // Try title tag
+        if let Some(start) = html_content.find("<title>") {
+            if let Some(end) = html_content.find("</title>") {
+                let title = &html_content[start + 7..end];
+                let clean_title = self.clean_html_title(title);
+                if !clean_title.is_empty() {
+                    return Some(clean_title);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn clean_html_title(&self, title: &str) -> String {
+        // Remove HTML tags and decode entities
+        let mut clean = title
+            .replace("<br/>", " ")
+            .replace("<br />", " ")
+            .replace("<br>", " ");
+
+        // Remove any remaining HTML tags
+        while let Some(start) = clean.find('<') {
+            if let Some(end) = clean[start..].find('>') {
+                clean.replace_range(start..start + end + 1, "");
+            } else {
+                break;
+            }
+        }
+
+        // Decode common HTML entities
+        clean = clean
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&nbsp;", " ")
+            .replace("&mdash;", "—")
+            .replace("&ndash;", "–")
+            .replace("&hellip;", "…")
+            .replace("&ldquo;", "\"")
+            .replace("&rdquo;", "\"")
+            .replace("&lsquo;", "'")
+            .replace("&rsquo;", "'");
+
+        clean.trim().to_string()
+    }
+
+    fn calculate_screens(&self, text: &str, width: usize, lines_per_screen: usize) -> usize {
+        if lines_per_screen == 0 || width == 0 {
+            return 0;
+        }
+
+        let mut total_lines = 0;
+
+        for line in text.lines() {
+            if line.is_empty() {
+                total_lines += 1;
+            } else {
+                // Calculate wrapped lines
+                let line_length = line.chars().count();
+                let wrapped_lines = (line_length + width - 1) / width;
+                total_lines += wrapped_lines.max(1);
+            }
+        }
+
+        // Calculate number of screens
+        (total_lines + lines_per_screen - 1) / lines_per_screen
+    }
+
+    pub fn show(&mut self) {
+        self.visible = true;
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+        if !self.visible {
+            return;
+        }
+
+        // Calculate popup dimensions
+        let popup_width = area.width.saturating_sub(10).min(80);
+        let popup_height = area.height.saturating_sub(4).min(30);
+
+        let popup_area = Rect {
+            x: (area.width.saturating_sub(popup_width)) / 2,
+            y: (area.height.saturating_sub(popup_height)) / 2,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear background
+        frame.render_widget(Clear, popup_area);
+
+        // Calculate cumulative percentages
+        let total_screens: usize = self.chapter_stats.iter().map(|s| s.screens).sum();
+        let mut cumulative_screens = 0;
+
+        // Create the list items
+        let items: Vec<ListItem> = if self.chapter_stats.is_empty() {
+            // Show a message if no chapters found
+            vec![ListItem::new(vec![Line::from(vec![Span::styled(
+                "No chapters found. Processing...",
+                Style::default().fg(Color::Yellow),
+            )])])]
+        } else {
+            self.chapter_stats
+                .iter()
+                .map(|stat| {
+                    // Calculate percentage read before this chapter
+                    let percentage = if total_screens > 0 {
+                        (cumulative_screens * 100) / total_screens
+                    } else {
+                        0
+                    };
+
+                    // Update cumulative for next iteration
+                    cumulative_screens += stat.screens;
+
+                    let screens_text = if stat.screens == 1 {
+                        "1 screen".to_string()
+                    } else {
+                        format!("{} screens", stat.screens)
+                    };
+
+                    let content = vec![Line::from(vec![
+                        Span::styled(
+                            format!("{:3}% ", percentage),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::raw(&stat.title),
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("[{}]", screens_text),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                    ])];
+
+                    ListItem::new(content)
+                })
+                .collect()
+        };
+
+        // Create the list widget
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title(" Chapter Statistics ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+
+        // Render the list
+        frame.render_stateful_widget(list, popup_area, &mut self.list_state);
+
+        // Add help text at the bottom
+        let help_text = "j/k: Navigate | Esc: Close";
+        let help = Paragraph::new(help_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+
+        let help_area = Rect {
+            x: popup_area.x,
+            y: popup_area.y + popup_area.height - 1,
+            width: popup_area.width,
+            height: 1,
+        };
+
+        frame.render_widget(help, help_area);
+    }
+
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Esc => {
+                self.hide();
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+impl VimNavMotions for BookStat {
+    fn handle_h(&mut self) {
+        // No horizontal movement in list
+    }
+
+    fn handle_j(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        let max_pos = self.chapter_stats.len().saturating_sub(1);
+        let new_pos = (current + 1).min(max_pos);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_k(&mut self) {
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_pos = current.saturating_sub(1);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_l(&mut self) {
+        // No horizontal movement in list
+    }
+
+    fn handle_ctrl_d(&mut self) {
+        // Move down half screen
+        let half_height = 10; // Approximate half of popup height
+        let current = self.list_state.selected().unwrap_or(0);
+        let max_pos = self.chapter_stats.len().saturating_sub(1);
+        let new_pos = (current + half_height).min(max_pos);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_ctrl_u(&mut self) {
+        // Move up half screen
+        let half_height = 10; // Approximate half of popup height
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_pos = current.saturating_sub(half_height);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_gg(&mut self) {
+        if !self.chapter_stats.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    fn handle_G(&mut self) {
+        if !self.chapter_stats.is_empty() {
+            self.list_state.select(Some(self.chapter_stats.len() - 1));
+        }
+    }
+}

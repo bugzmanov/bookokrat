@@ -39,6 +39,7 @@ ideas to implement:
          - "Show me similar concepts in other books"
          - Cross-reference technical books automatically
 
+[ ] Bug clicking in subchapter triggers image reaload
 Intermittent issues
     [ ] BUG: copy-paste copies wrong block & word selection(double click) and paragraph selection(triple click) got broken
     

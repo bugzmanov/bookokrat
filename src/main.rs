@@ -12,6 +12,7 @@ use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 
 mod book_list;
 mod book_manager;
+mod book_stat;
 mod bookmark;
 mod event_source;
 mod images;
