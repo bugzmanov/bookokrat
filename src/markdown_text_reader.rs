@@ -714,6 +714,7 @@ impl MarkdownTextReader {
         };
 
         let modifiers = match level {
+            HeadingLevel::H3 => Modifier::BOLD | Modifier::UNDERLINED,
             HeadingLevel::H4 => Modifier::BOLD | Modifier::UNDERLINED,
             _ => Modifier::BOLD,
         };
@@ -744,14 +745,10 @@ impl MarkdownTextReader {
         }
 
         // Add decoration line for H1-H3
-        if matches!(
-            level,
-            HeadingLevel::H1 | HeadingLevel::H2 | HeadingLevel::H3
-        ) {
+        if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
             let decoration = match level {
-                HeadingLevel::H1 => "▀".repeat(width), // Thick line
-                HeadingLevel::H2 => "═".repeat(width), // Double line
-                HeadingLevel::H3 => "─".repeat(width), // Thin line
+                HeadingLevel::H1 => "═".repeat(width), // Thick line
+                HeadingLevel::H2 => "─".repeat(width), // Double line
                 _ => unreachable!(),
             };
 
@@ -1644,7 +1641,7 @@ impl MarkdownTextReader {
         is_focused: bool,
     ) {
         // Add line separator before the block
-        let separator_line = "─".repeat(width);
+        let separator_line = ".".repeat(width);
         lines.push(RenderedLine {
             spans: vec![Span::styled(
                 separator_line.clone(),
@@ -1660,7 +1657,7 @@ impl MarkdownTextReader {
             visual_height: 1,
             node_anchor: None,
         });
-        self.raw_text_lines.push(separator_line);
+        self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
         //
         // Add empty line before the block
@@ -1706,7 +1703,6 @@ impl MarkdownTextReader {
         }
 
         // Add line separator after the block
-        let separator_line = "─".repeat(width);
         lines.push(RenderedLine {
             spans: vec![Span::styled(
                 separator_line.clone(),

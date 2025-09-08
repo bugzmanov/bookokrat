@@ -1501,9 +1501,15 @@ impl HtmlToMarkdownConverter {
                     text.push_inline(Inline::Anchor { id });
                 }
 
-                // Also handle as a link if it has an href
+                // Handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     text.push_inline(link);
+                } else {
+                    // If it's not a link (no href), still process children
+                    // This handles cases like <a id="anchor">text content</a>
+                    for child in node.children.borrow().iter() {
+                        self.collect_as_text(child, text, new_context.clone());
+                    }
                 }
             }
             "math" => {
@@ -1581,9 +1587,15 @@ impl HtmlToMarkdownConverter {
                     current_text.push_inline(Inline::Anchor { id });
                 }
 
-                // Also handle as a link if it has an href
+                // Handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     current_text.push_inline(link);
+                } else {
+                    // If it's not a link (no href), still process children
+                    // This handles cases like <a id="anchor">text content</a>
+                    for child in node.children.borrow().iter() {
+                        self.collect_as_blocks(child, blocks, current_text, new_context.clone());
+                    }
                 }
             }
             "math" => {

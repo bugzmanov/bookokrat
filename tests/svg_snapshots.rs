@@ -2838,7 +2838,7 @@ fn test_definition_list_with_complex_content_svg() {
 <body>
     <h1>Definition List with Complex Content</h1>
     <p>This tests definition lists with nested content like lists and images.</p>
-    
+
     <dl>
         <dt><strong>Programming Languages</strong></dt>
         <dd>
@@ -2854,14 +2854,14 @@ fn test_definition_list_with_complex_content_svg() {
                 <li>Finally, contribute to open source</li>
             </ol>
         </dd>
-        
+
         <dt>Data Structures</dt>
         <dd>
             Fundamental computer science concepts with visual representations:
             <img src="datastructures.png" alt="Data structures diagram" width="400" height="300"/>
             <p>Including arrays, linked lists, trees, and graphs.</p>
         </dd>
-        
+
         <dt><em>Algorithms</em></dt>
         <dd>
             <p>Step-by-step procedures for calculations:</p>
@@ -2881,7 +2881,7 @@ fn test_definition_list_with_complex_content_svg() {
                 </li>
             </ol>
         </dd>
-        
+
         <dt>Machine Learning</dt>
         <dd>
             <p>A subset of artificial intelligence that includes:</p>
@@ -2893,7 +2893,7 @@ fn test_definition_list_with_complex_content_svg() {
             <img src="ml-workflow.jpg" alt="Machine learning workflow" width="500" height="350"/>
         </dd>
     </dl>
-    
+
     <p>Definition lists are useful for glossaries and documentation.</p>
 </body>
 </html>
@@ -2947,7 +2947,7 @@ fn test_lists_with_tables_svg() {
 <body>
     <h1>Lists Containing Tables</h1>
     <p>This tests lists that contain tables as their content.</p>
-    
+
     <h2>Unordered List with Tables</h2>
     <ul>
         <li>
@@ -3008,7 +3008,7 @@ fn test_lists_with_tables_svg() {
             </table>
         </li>
     </ul>
-    
+
     <h2>Ordered List with Mixed Content</h2>
     <ol>
         <li>
@@ -3097,7 +3097,7 @@ fn test_lists_with_tables_svg() {
             </table>
         </li>
     </ol>
-    
+
     <h2>Nested Lists with Tables</h2>
     <ul>
         <li>Development Tools
@@ -3129,7 +3129,7 @@ fn test_lists_with_tables_svg() {
             </ul>
         </li>
     </ul>
-    
+
     <p>Tables within lists provide structured data presentation.</p>
 </body>
 </html>

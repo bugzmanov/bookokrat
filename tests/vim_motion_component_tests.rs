@@ -1,6 +1,7 @@
 use bookrat::book_manager::{BookInfo, BookManager};
 use bookrat::bookmark::Bookmarks;
 use bookrat::main_app::VimNavMotions;
+use bookrat::markdown_text_reader::ActiveSection;
 use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use bookrat::table_of_contents::TocItem;
 use bookrat::test_utils::test_helpers::create_test_terminal;
@@ -165,6 +166,7 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
         path: "test_book.epub".to_string(),
         toc_items,
         current_chapter: 0,
+        active_section: ActiveSection::Chapter(0),
     }
 }
 
