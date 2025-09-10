@@ -29,6 +29,7 @@ ideas to implement:
          [x] epub:type blocks
  - AI integreration
      - Embeded validation for correct rendering (and markdown parsing) 
+     - Re-explain already explained term or abbreviation (like in chapter nine BFF might be frealy used as abbreviation, since it was introduced in chapter 1)
      - Smart reading: 
          - Chapter Summary and main points
          - Quize

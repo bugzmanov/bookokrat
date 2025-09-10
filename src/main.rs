@@ -16,6 +16,7 @@ mod book_stat;
 mod bookmark;
 mod event_source;
 mod images;
+mod jump_list;
 mod main_app;
 mod markdown;
 mod markdown_text_reader;

@@ -5,6 +5,7 @@ use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
+use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator_wrapper::TextGeneratorWrapper;
@@ -90,6 +91,8 @@ pub struct App {
     // Book statistics popup
     book_stat: BookStat,
     show_book_stat: bool,
+    // Jump list for navigation history (Ctrl+O/Ctrl+I)
+    jump_list: JumpList,
 }
 
 pub trait VimNavMotions {
@@ -232,6 +235,7 @@ impl App {
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
             show_book_stat: false,
+            jump_list: JumpList::new(20),
         };
 
         // Get actual terminal size on startup
@@ -459,6 +463,41 @@ impl App {
     // LOW-LEVEL INTERNAL METHODS
     // =============================================================================
     // These methods should only be called by high-level actions above
+
+    fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
+        let mut doc = self
+            .book_manager
+            .load_epub(path)
+            .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
+
+        info!("Successfully loaded EPUB document (no bookmark restoration)");
+        self.total_chapters = doc.get_num_pages();
+        info!("Total chapters: {}", self.total_chapters);
+
+        // Extract images from the EPUB to the temp directory
+        let path_buf = std::path::PathBuf::from(path);
+        if let Err(e) = self.image_storage.extract_images(&path_buf) {
+            error!("Failed to extract images from EPUB: {}", e);
+            // Continue loading even if image extraction fails
+        } else {
+            info!("Successfully extracted images from EPUB");
+        }
+
+        // Load the book in BookImages abstraction
+        if let Err(e) = self.book_images.load_book(&path_buf) {
+            error!("Failed to load book in BookImages: {}", e);
+            // Continue loading even if BookImages fails
+        }
+
+        // Don't restore bookmarks - just set to chapter 0
+        self.current_chapter = 0;
+
+        self.current_epub = Some(doc);
+        self.current_file = Some(path.to_string());
+        self.update_content();
+        self.refresh_chapter_cache();
+        Ok(())
+    }
 
     fn load_epub_internal(&mut self, path: &str) -> Result<()> {
         let mut doc = self
@@ -1266,6 +1305,17 @@ impl App {
         &mut self,
         link_info: &crate::text_reader::LinkInfo,
     ) -> std::io::Result<bool> {
+        // Save current location to jump list before navigating
+        if let Some(current_file) = &self.current_file {
+            let current_location = JumpLocation {
+                epub_path: current_file.clone(),
+                chapter_index: self.current_chapter,
+                scroll_position: self.text_reader.get_scroll_offset(),
+                anchor: None,
+            };
+            self.jump_list.push(current_location);
+        }
+
         match &link_info.link_type {
             Some(crate::markdown::LinkType::External) => self.handle_external_link(&link_info.url),
             Some(crate::markdown::LinkType::InternalAnchor) => {
@@ -1678,6 +1728,59 @@ impl App {
         self.text_reader.get_scroll_offset()
     }
 
+    /// Jump to a specific location from the jump list
+    fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
+        // Check if we need to open a different book
+        if self.current_file.as_ref() != Some(&location.epub_path) {
+            // Open the book WITHOUT restoring bookmarks (we'll set our own position)
+            self.load_epub_internal_without_bookmark(&location.epub_path)?;
+        }
+
+        // Navigate to the chapter if needed
+        if self.current_chapter != location.chapter_index {
+            // Navigate without triggering bookmark save
+            self.navigate_to_chapter(location.chapter_index)?;
+        }
+
+        // Force restore scroll position after any content updates
+        // This needs to happen AFTER navigate_to_chapter which resets scroll
+        self.text_reader
+            .restore_scroll_position(location.scroll_position);
+
+        // If there's an anchor, scroll to it
+        if let Some(ref anchor) = location.anchor {
+            let _ = self.scroll_to_anchor(anchor);
+        }
+
+        // Save bookmark at the jumped-to location
+        self.save_bookmark();
+
+        Ok(())
+    }
+
+    /// Handle Ctrl+O - jump back in history
+    fn jump_back(&mut self) {
+        // Check if we can actually jump back
+        if !self.jump_list.can_jump_back() {
+            return;
+        }
+
+        if let Some(location) = self.jump_list.jump_back() {
+            if let Err(e) = self.jump_to_location(location) {
+                error!("Failed to jump back: {}", e);
+            }
+        }
+    }
+
+    /// Handle Ctrl+I - jump forward in history
+    fn jump_forward(&mut self) {
+        if let Some(location) = self.jump_list.jump_forward() {
+            if let Err(e) = self.jump_to_location(location) {
+                error!("Failed to jump forward: {}", e);
+            }
+        }
+    }
+
     /// Calculate the navigation panel width based on stored terminal width
     fn calculate_navigation_panel_width(&self) -> u16 {
         // 30% of terminal width, minimum 20 columns
@@ -1991,7 +2094,7 @@ impl App {
                     "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Content => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Ctrl+O: Open | q: Quit"
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Space+o: Open | q: Quit"
                 }
             }
         };
@@ -2112,6 +2215,12 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " o" => {
+                // Handle Space->o to open current EPUB with system viewer
+                self.open_with_system_viewer();
+                self.key_sequence.clear();
+                true
+            }
             _ if sequence.len() >= 2 => {
                 // Unknown sequence of 2+ chars, reset
                 self.key_sequence.clear();
@@ -2162,9 +2271,49 @@ impl App {
                     self.book_stat.handle_k();
                     return;
                 }
+                KeyCode::Char('g') => {
+                    // Check if this completes a 'gg' sequence
+                    if !self.handle_key_sequence('g') {
+                        // 'g' by itself doesn't do anything, waiting for next key
+                    } else if self.key_sequence.len() == 2 && self.key_sequence == vec!['g', 'g'] {
+                        // Handle 'gg' - go to top
+                        self.book_stat.handle_gg();
+                        self.key_sequence.clear();
+                    }
+                    return;
+                }
+                KeyCode::Char('G') => {
+                    // Go to bottom
+                    self.book_stat.handle_G();
+                    return;
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Scroll half page down
+                    self.book_stat.handle_ctrl_d();
+                    return;
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Scroll half page up
+                    self.book_stat.handle_ctrl_u();
+                    return;
+                }
                 KeyCode::Esc => {
                     self.book_stat.hide();
                     self.show_book_stat = false;
+                    return;
+                }
+                KeyCode::Enter => {
+                    // Jump to selected chapter
+                    if let Some(chapter_index) = self.book_stat.get_selected_chapter_index() {
+                        // Hide the statistics popup
+                        self.book_stat.hide();
+                        self.show_book_stat = false;
+
+                        // Navigate to the selected chapter
+                        if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                            error!("Failed to navigate to chapter {}: {}", chapter_index, e);
+                        }
+                    }
                     return;
                 }
                 _ => {}
@@ -2236,6 +2385,13 @@ impl App {
                     self.show_reading_history = true;
                 }
             }
+            KeyCode::Char('i') => {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    // Ctrl+I: Jump forward in history (vim-style)
+                    self.jump_forward();
+                }
+                // 'i' by itself doesn't do anything
+            }
             KeyCode::Char('l') => {
                 if self.show_reading_history {
                     // Use VimNavMotions for reading history (could select/enter)
@@ -2252,8 +2408,10 @@ impl App {
             }
             KeyCode::Char('o') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    // Ctrl+O: Open current EPUB with system viewer
-                    self.open_with_system_viewer();
+                    // Ctrl+O: Jump back in history (vim-style)
+                    self.jump_back();
+                } else if !self.handle_key_sequence('o') {
+                    // 'o' is part of Space+o sequence or does nothing by itself
                 }
             }
             KeyCode::Char('p') => {

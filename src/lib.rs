@@ -5,6 +5,7 @@ pub mod book_stat;
 pub mod bookmark;
 pub mod event_source;
 pub mod images;
+pub mod jump_list;
 pub mod main_app;
 pub mod markdown;
 pub mod markdown_text_reader;

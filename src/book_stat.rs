@@ -24,6 +24,7 @@ pub struct BookStat {
 struct ChapterStat {
     title: String,
     screens: usize,
+    chapter_index: usize, // The actual chapter index in the EPUB
 }
 
 impl BookStat {
@@ -118,7 +119,7 @@ impl BookStat {
                     title,
                     content.len()
                 );
-                self.add_chapter_stat(&title, &content, text_width, lines_per_screen);
+                self.add_chapter_stat(&title, &content, text_width, lines_per_screen, i);
             }
         }
 
@@ -135,10 +136,12 @@ impl BookStat {
     ) {
         for item in items {
             match item {
-                crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
+                crate::table_of_contents::TocItem::Chapter {
+                    title, href, index, ..
+                } => {
                     debug!(
-                        "BookStat: Processing chapter '{}' with href '{}'",
-                        title, href
+                        "BookStat: Processing chapter '{}' with href '{}' at index {}",
+                        title, href, index
                     );
                     // Process chapter
                     if let Ok(content) = epub.get_resource_str_by_path(href) {
@@ -147,7 +150,13 @@ impl BookStat {
                             title,
                             content.len()
                         );
-                        self.add_chapter_stat(title, &content, text_width, lines_per_screen);
+                        self.add_chapter_stat(
+                            title,
+                            &content,
+                            text_width,
+                            lines_per_screen,
+                            *index,
+                        );
                     } else {
                         debug!("BookStat: Failed to get content for chapter '{}'", title);
                     }
@@ -155,24 +164,33 @@ impl BookStat {
                 crate::table_of_contents::TocItem::Section {
                     title,
                     href,
+                    index,
                     children,
                     ..
                 } => {
                     // Process section if it has content
                     if let Some(href_str) = href {
-                        debug!(
-                            "BookStat: Processing section '{}' with href '{}'",
-                            title, href_str
-                        );
-                        if let Ok(content) = epub.get_resource_str_by_path(href_str) {
+                        if let Some(chapter_index) = index {
                             debug!(
-                                "BookStat: Got content for section '{}', length: {}",
-                                title,
-                                content.len()
+                                "BookStat: Processing section '{}' with href '{}' at index {}",
+                                title, href_str, chapter_index
                             );
-                            self.add_chapter_stat(title, &content, text_width, lines_per_screen);
-                        } else {
-                            debug!("BookStat: Failed to get content for section '{}'", title);
+                            if let Ok(content) = epub.get_resource_str_by_path(href_str) {
+                                debug!(
+                                    "BookStat: Got content for section '{}', length: {}",
+                                    title,
+                                    content.len()
+                                );
+                                self.add_chapter_stat(
+                                    title,
+                                    &content,
+                                    text_width,
+                                    lines_per_screen,
+                                    *chapter_index,
+                                );
+                            } else {
+                                debug!("BookStat: Failed to get content for section '{}'", title);
+                            }
                         }
                     } else {
                         debug!(
@@ -195,6 +213,7 @@ impl BookStat {
         content: &str,
         text_width: usize,
         lines_per_screen: usize,
+        chapter_index: usize,
     ) {
         // Convert HTML to Markdown AST
         let mut converter = HtmlToMarkdownConverter::new();
@@ -219,6 +238,7 @@ impl BookStat {
         self.chapter_stats.push(ChapterStat {
             title: title.to_string(),
             screens,
+            chapter_index,
         });
     }
 
@@ -354,6 +374,13 @@ impl BookStat {
         self.visible
     }
 
+    /// Get the actual EPUB chapter index of the currently selected chapter
+    pub fn get_selected_chapter_index(&self) -> Option<usize> {
+        self.list_state
+            .selected()
+            .and_then(|idx| self.chapter_stats.get(idx).map(|stat| stat.chapter_index))
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         if !self.visible {
             return;
@@ -441,7 +468,7 @@ impl BookStat {
         frame.render_stateful_widget(list, popup_area, &mut self.list_state);
 
         // Add help text at the bottom
-        let help_text = "j/k: Navigate | Esc: Close";
+        let help_text = "j/k: Navigate | Enter: Jump | G/gg: Bottom/Top | Esc: Close";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
