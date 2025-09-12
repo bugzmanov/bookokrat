@@ -2488,8 +2488,8 @@ fn test_basic_markdown_elements_svg() {
             <li>First numbered item</li>
             <li>Second numbered item with formatting
                 <ol>
-                    <li>Nested numbered item</li>
-                    <li>Another nested numbered item</li>
+                    <li><p>Nested numbered item</p></li>
+                    <li><p>Another nested numbered item</p></li>
                 </ol>
             </li>
             <li>Third numbered item</li>

@@ -732,25 +732,43 @@ mod tests {
         }
 
         match &entries[6] {
-            TocItem::Chapter { title, href, .. } => {
+            TocItem::Chapter {
+                title,
+                href,
+                anchor,
+                ..
+            } => {
                 assert_eq!(title, "1. Simpleminded Hope");
-                assert_eq!(href, "xhtml/chapter1.xhtml#ch1");
+                assert_eq!(href, "xhtml/chapter1.xhtml");
+                assert_eq!(anchor, &Some("ch1".to_string()));
             }
             _ => panic!("Entry should be a Chapter"),
         }
 
         match &entries[7] {
-            TocItem::Chapter { title, href, .. } => {
+            TocItem::Chapter {
+                title,
+                href,
+                anchor,
+                ..
+            } => {
                 assert_eq!(title, "2. Pitching the Revolution");
-                assert_eq!(href, "xhtml/chapter2.xhtml#ch2");
+                assert_eq!(href, "xhtml/chapter2.xhtml");
+                assert_eq!(anchor, &Some("ch2".to_string()));
             }
             _ => panic!("Entry should be a Chapter"),
         }
 
         match &entries[10] {
-            TocItem::Chapter { title, href, .. } => {
+            TocItem::Chapter {
+                title,
+                href,
+                anchor,
+                ..
+            } => {
                 assert_eq!(title, "5. The Little Red Book");
-                assert_eq!(href, "xhtml/chapter5.xhtml#ch5");
+                assert_eq!(href, "xhtml/chapter5.xhtml");
+                assert_eq!(anchor, &Some("ch5".to_string()));
             }
             _ => panic!("Entry should be a Chapter"),
         }
