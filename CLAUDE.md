@@ -636,3 +636,4 @@ The following elements now properly support rich text:
 - **Future elements**: Should follow the same pattern
 
 This architecture ensures that bold text, italic text, links, and other formatting work consistently across all markdown elements without hardcoding support for each element type.
+- don't use eprintln if you need logging. this is TUI application. eprintln breaks UI. use log crate to do proper logging

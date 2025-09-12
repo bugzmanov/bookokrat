@@ -218,7 +218,12 @@ impl HtmlToMarkdownConverter {
         current_text: &Text,
         current_style: Option<Style>,
     ) -> Option<String> {
+        // Special case: if content is only whitespace but we have existing text,
+        // preserve a single space to maintain separation between elements
         if content.trim().is_empty() {
+            if !current_text.is_empty() && content.contains(|c: char| c.is_whitespace()) {
+                return Some(" ".to_string());
+            }
             return None;
         }
 
