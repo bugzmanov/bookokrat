@@ -320,12 +320,8 @@ impl TocParser {
         let title = if let Ok(label_regex) =
             Regex::new(r#"(?s)<navLabel[^>]*>.*?<text[^>]*>([^<]+)</text>.*?</navLabel>"#)
         {
-            label_regex
-                .captures(content)?
-                .get(1)?
-                .as_str()
-                .trim()
-                .to_string()
+            let captured_text = label_regex.captures(content)?.get(1)?.as_str();
+            captured_text.trim().to_string()
         } else {
             debug!("Failed to extract title from navPoint");
             return None;

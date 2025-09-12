@@ -4,13 +4,12 @@ use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::toc_parser::TocParser;
 use anyhow::Result;
 use epub::doc::EpubDoc;
-use log::debug;
+use log::{debug, error};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
-use std::collections::HashSet;
 use std::io::BufReader;
 
 pub struct BookStat {
@@ -20,11 +19,12 @@ pub struct BookStat {
     terminal_size: (u16, u16),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct ChapterStat {
     title: String,
     screens: usize,
     chapter_index: usize, // The actual chapter index in the EPUB
+    is_top_level: bool,   // Whether this is a top-level chapter or nested section
 }
 
 impl BookStat {
@@ -45,86 +45,24 @@ impl BookStat {
         self.terminal_size = terminal_size;
         self.chapter_stats.clear();
 
-        // Parse TOC to get top-level chapters only
         let toc_parser = TocParser::new();
         let toc = toc_parser.parse_toc_structure(epub);
 
-        debug!("BookStat: Found {} TOC items", toc.len());
-
-        // Calculate available text area (accounting for UI elements)
         let popup_height = terminal_size.1.saturating_sub(4) as usize;
         let text_width = terminal_size.0.saturating_sub(6) as usize;
         let lines_per_screen = popup_height.saturating_sub(4); // Account for borders and padding
 
-        // First try to process TOC items
         if !toc.is_empty() {
-            debug!("BookStat: Processing {} TOC items", toc.len());
             self.process_toc_items(&toc, epub, text_width, lines_per_screen);
         }
 
-        // If no chapters found from TOC or TOC was empty, try spine items
-        if self.chapter_stats.is_empty() {
-            debug!("BookStat: No chapters found from TOC, falling back to spine items");
-            self.process_spine_items(epub, text_width, lines_per_screen);
-        }
-
-        // Deduplicate chapters by title (keep the first occurrence)
-        self.deduplicate_chapters();
-
-        // Select first item by default
         if !self.chapter_stats.is_empty() {
             self.list_state.select(Some(0));
         }
 
-        debug!(
-            "BookStat: Collected {} chapter statistics after deduplication",
-            self.chapter_stats.len()
-        );
+        debug!("Chapter stats: {:?}", self.chapter_stats);
 
         Ok(())
-    }
-
-    fn process_spine_items(
-        &mut self,
-        epub: &mut EpubDoc<BufReader<std::fs::File>>,
-        text_width: usize,
-        lines_per_screen: usize,
-    ) {
-        // Save current page to restore later
-        let current_page = epub.get_current_page();
-        let spine_len = epub.get_num_pages();
-        debug!("BookStat: Found {} spine items", spine_len);
-
-        for i in 0..spine_len {
-            let _ = epub.set_current_page(i);
-            if let Ok(content) = epub.get_current_str() {
-                // Skip very short content (likely navigation or empty pages)
-                if content.len() < 100 {
-                    debug!(
-                        "BookStat: Skipping spine item {} (too short: {} bytes)",
-                        i,
-                        content.len()
-                    );
-                    continue;
-                }
-
-                // Try to extract title from the HTML content
-                let title = self
-                    .extract_chapter_title(&content)
-                    .unwrap_or_else(|| format!("Chapter {}", i + 1));
-
-                debug!(
-                    "BookStat: Processing spine item {} '{}' with {} bytes",
-                    i,
-                    title,
-                    content.len()
-                );
-                self.add_chapter_stat(&title, &content, text_width, lines_per_screen, i);
-            }
-        }
-
-        // Restore original page
-        let _ = epub.set_current_page(current_page);
     }
 
     fn process_toc_items(
@@ -134,31 +72,51 @@ impl BookStat {
         text_width: usize,
         lines_per_screen: usize,
     ) {
+        self.process_toc_items_recursive(items, epub, text_width, lines_per_screen, true);
+    }
+
+    fn process_toc_items_recursive(
+        &mut self,
+        items: &[crate::table_of_contents::TocItem],
+        epub: &mut EpubDoc<BufReader<std::fs::File>>,
+        text_width: usize,
+        lines_per_screen: usize,
+        is_top_level: bool,
+    ) {
         for item in items {
             match item {
                 crate::table_of_contents::TocItem::Chapter {
                     title, href, index, ..
                 } => {
-                    debug!(
-                        "BookStat: Processing chapter '{}' with href '{}' at index {}",
-                        title, href, index
-                    );
-                    // Process chapter
-                    if let Ok(content) = epub.get_resource_str_by_path(href) {
-                        debug!(
-                            "BookStat: Got content for chapter '{}', length: {}",
-                            title,
-                            content.len()
-                        );
-                        self.add_chapter_stat(
-                            title,
-                            &content,
-                            text_width,
-                            lines_per_screen,
-                            *index,
-                        );
+                    // Try to get content using the chapter index first
+                    let current_page = epub.get_current_page();
+                    let content_result = if epub.set_current_page(*index).is_ok() {
+                        epub.get_current_str()
                     } else {
-                        debug!("BookStat: Failed to get content for chapter '{}'", title);
+                        // Fallback to trying the href directly
+                        epub.get_resource_str_by_path(href)
+                    };
+
+                    // Restore original page
+                    let _ = epub.set_current_page(current_page);
+
+                    match content_result {
+                        Ok(content) => {
+                            self.add_chapter_stat(
+                                title,
+                                &content,
+                                text_width,
+                                lines_per_screen,
+                                *index,
+                                is_top_level,
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                "BookStat: Failed to get content for chapter '{}' with href '{}' at index {}: {}",
+                                title, href, index, e
+                            );
+                        }
                     }
                 }
                 crate::table_of_contents::TocItem::Section {
@@ -170,36 +128,75 @@ impl BookStat {
                 } => {
                     // Process section if it has content
                     if let Some(href_str) = href {
-                        if let Some(chapter_index) = index {
-                            debug!(
-                                "BookStat: Processing section '{}' with href '{}' at index {}",
-                                title, href_str, chapter_index
-                            );
-                            if let Ok(content) = epub.get_resource_str_by_path(href_str) {
-                                debug!(
-                                    "BookStat: Got content for section '{}', length: {}",
-                                    title,
-                                    content.len()
-                                );
+                        // For sections, we need to find the actual chapter index from the epub spine
+                        // since sections don't have indices mapped
+                        let current_page = epub.get_current_page();
+
+                        let (chapter_index, content_result) = if let Some(idx) = index {
+                            // Use provided index
+                            if epub.set_current_page(*idx).is_ok() {
+                                (*idx, epub.get_current_str())
+                            } else {
+                                (*idx, epub.get_resource_str_by_path(href_str))
+                            }
+                        } else {
+                            // Try to find the chapter index by matching the href in the spine
+                            let mut found_index = None;
+                            let mut found_content = None;
+
+                            for i in 0..epub.get_num_pages() {
+                                if epub.set_current_page(i).is_ok() {
+                                    if let Ok(current_path) = epub.get_current_path() {
+                                        let path_str = current_path.to_string_lossy();
+                                        if path_str.ends_with(href_str)
+                                            || href_str.ends_with(path_str.as_ref())
+                                        {
+                                            found_index = Some(i);
+                                            found_content = Some(epub.get_current_str());
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if let (Some(idx), Some(content)) = (found_index, found_content) {
+                                (idx, content)
+                            } else {
+                                // Last resort: try the href directly
+                                (0, epub.get_resource_str_by_path(href_str))
+                            }
+                        };
+
+                        // Restore original page
+                        let _ = epub.set_current_page(current_page);
+
+                        match content_result {
+                            Ok(content) => {
                                 self.add_chapter_stat(
                                     title,
                                     &content,
                                     text_width,
                                     lines_per_screen,
-                                    *chapter_index,
+                                    chapter_index,
+                                    is_top_level,
                                 );
-                            } else {
-                                debug!("BookStat: Failed to get content for section '{}'", title);
+                            }
+                            Err(e) => {
+                                error!(
+                                    "BookStat: Failed to get content for section '{}' with href '{}' at index {}: {}",
+                                    title, href_str, chapter_index, e
+                                );
                             }
                         }
                     } else {
-                        debug!(
-                            "BookStat: Section '{}' has no href, checking children",
-                            title
-                        );
-                        // Process children if section itself has no content
                         if !children.is_empty() {
-                            self.process_toc_items(children, epub, text_width, lines_per_screen);
+                            self.process_toc_items_recursive(
+                                children,
+                                epub,
+                                text_width,
+                                lines_per_screen,
+                                false,
+                            );
                         }
                     }
                 }
@@ -214,6 +211,7 @@ impl BookStat {
         text_width: usize,
         lines_per_screen: usize,
         chapter_index: usize,
+        is_top_level: bool,
     ) {
         // Convert HTML to Markdown AST
         let mut converter = HtmlToMarkdownConverter::new();
@@ -226,118 +224,26 @@ impl BookStat {
         // Calculate screens based on rendered text
         let screens = self.calculate_screens(&rendered_text, text_width, lines_per_screen);
 
-        debug!(
-            "BookStat: Chapter '{}' has {} screens (text length: {}, width: {}, lines/screen: {})",
-            title,
-            screens,
-            rendered_text.len(),
-            text_width,
-            lines_per_screen
-        );
-
-        self.chapter_stats.push(ChapterStat {
-            title: title.to_string(),
-            screens,
-            chapter_index,
-        });
-    }
-
-    fn deduplicate_chapters(&mut self) {
-        let mut seen_titles = std::collections::HashSet::new();
-        let mut unique_chapters = Vec::new();
-
-        for chapter in &self.chapter_stats {
-            // Normalize title for comparison (trim and lowercase)
-            let normalized = chapter.title.trim().to_lowercase();
-            if !normalized.is_empty() && !seen_titles.contains(&normalized) {
-                seen_titles.insert(normalized);
-                unique_chapters.push(chapter.clone());
+        if is_top_level {
+            // Only add top-level chapters to the visible stats list
+            self.chapter_stats.push(ChapterStat {
+                title: title.to_string(),
+                screens,
+                chapter_index,
+                is_top_level,
+            });
+        } else {
+            // For nested sections, contribute screens to the parent top-level chapter
+            // Find the last top-level chapter and add screens to it
+            if let Some(last_top_level) = self
+                .chapter_stats
+                .iter_mut()
+                .rev()
+                .find(|stat| stat.is_top_level)
+            {
+                last_top_level.screens += screens;
             }
         }
-
-        self.chapter_stats = unique_chapters;
-    }
-
-    fn extract_chapter_title(&self, html_content: &str) -> Option<String> {
-        // Try to extract title from HTML content
-        // Look for h1, h2, or title tags
-
-        // Try h1 first
-        if let Some(start) = html_content.find("<h1") {
-            if let Some(end_tag_start) = html_content[start..].find('>') {
-                let tag_end = start + end_tag_start + 1;
-                if let Some(close) = html_content[tag_end..].find("</h1>") {
-                    let title = &html_content[tag_end..tag_end + close];
-                    let clean_title = self.clean_html_title(title);
-                    if !clean_title.is_empty() {
-                        return Some(clean_title);
-                    }
-                }
-            }
-        }
-
-        // Try h2
-        if let Some(start) = html_content.find("<h2") {
-            if let Some(end_tag_start) = html_content[start..].find('>') {
-                let tag_end = start + end_tag_start + 1;
-                if let Some(close) = html_content[tag_end..].find("</h2>") {
-                    let title = &html_content[tag_end..tag_end + close];
-                    let clean_title = self.clean_html_title(title);
-                    if !clean_title.is_empty() {
-                        return Some(clean_title);
-                    }
-                }
-            }
-        }
-
-        // Try title tag
-        if let Some(start) = html_content.find("<title>") {
-            if let Some(end) = html_content.find("</title>") {
-                let title = &html_content[start + 7..end];
-                let clean_title = self.clean_html_title(title);
-                if !clean_title.is_empty() {
-                    return Some(clean_title);
-                }
-            }
-        }
-
-        None
-    }
-
-    fn clean_html_title(&self, title: &str) -> String {
-        // Remove HTML tags and decode entities
-        let mut clean = title
-            .replace("<br/>", " ")
-            .replace("<br />", " ")
-            .replace("<br>", " ");
-
-        // Remove any remaining HTML tags
-        while let Some(start) = clean.find('<') {
-            if let Some(end) = clean[start..].find('>') {
-                clean.replace_range(start..start + end + 1, "");
-            } else {
-                break;
-            }
-        }
-
-        // Decode common HTML entities
-        clean = clean
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&apos;", "'")
-            .replace("&nbsp;", " ")
-            .replace("&mdash;", "—")
-            .replace("&ndash;", "–")
-            .replace("&hellip;", "…")
-            .replace("&ldquo;", "\"")
-            .replace("&rdquo;", "\"")
-            .replace("&lsquo;", "'")
-            .replace("&rsquo;", "'");
-
-        clean.trim().to_string()
     }
 
     fn calculate_screens(&self, text: &str, width: usize, lines_per_screen: usize) -> usize {
@@ -436,7 +342,7 @@ impl BookStat {
                             format!("{:3}% ", percentage),
                             Style::default().fg(Color::DarkGray),
                         ),
-                        Span::raw(&stat.title),
+                        Span::raw(stat.title.replace("\n", " ")),
                         Span::raw(" "),
                         Span::styled(
                             format!("[{}]", screens_text),
