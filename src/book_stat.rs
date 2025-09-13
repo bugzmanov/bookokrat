@@ -94,8 +94,13 @@ impl BookStat {
                         epub.get_current_str().map(|(content, _)| content)
                     } else {
                         // Fallback to trying to find the resource by path
-                        let matching_id = epub.resources.iter()
-                            .find(|(_, (path, _))| path.to_string_lossy() == *href || path.to_string_lossy().ends_with(href))
+                        let matching_id = epub
+                            .resources
+                            .iter()
+                            .find(|(_, (path, _))| {
+                                path.to_string_lossy() == *href
+                                    || path.to_string_lossy().ends_with(href)
+                            })
                             .map(|(id, _)| id.clone());
 
                         if let Some(id) = matching_id {
@@ -146,8 +151,13 @@ impl BookStat {
                                 (*idx, epub.get_current_str().map(|(content, _)| content))
                             } else {
                                 // Try to find resource by path
-                                let matching_id = epub.resources.iter()
-                                    .find(|(_, (path, _))| path.to_string_lossy() == *href_str || path.to_string_lossy().ends_with(href_str))
+                                let matching_id = epub
+                                    .resources
+                                    .iter()
+                                    .find(|(_, (path, _))| {
+                                        path.to_string_lossy() == *href_str
+                                            || path.to_string_lossy().ends_with(href_str)
+                                    })
                                     .map(|(id, _)| id.clone());
 
                                 let result = if let Some(id) = matching_id {
@@ -170,7 +180,8 @@ impl BookStat {
                                             || href_str.ends_with(path_str.as_ref())
                                         {
                                             found_index = Some(i);
-                                            found_content = epub.get_current_str().map(|(content, _)| content);
+                                            found_content =
+                                                epub.get_current_str().map(|(content, _)| content);
                                             break;
                                         }
                                     }
@@ -182,8 +193,13 @@ impl BookStat {
                             } else {
                                 // Last resort: try the href directly
                                 // Try to find resource by path
-                                let matching_id = epub.resources.iter()
-                                    .find(|(_, (path, _))| path.to_string_lossy() == *href_str || path.to_string_lossy().ends_with(href_str))
+                                let matching_id = epub
+                                    .resources
+                                    .iter()
+                                    .find(|(_, (path, _))| {
+                                        path.to_string_lossy() == *href_str
+                                            || path.to_string_lossy().ends_with(href_str)
+                                    })
                                     .map(|(id, _)| id.clone());
 
                                 let result = if let Some(id) = matching_id {

@@ -155,6 +155,4 @@ impl Default for BackgroundImageLoader {
 }
 
 #[cfg(test)]
-mod tests {
-    
-}
+mod tests {}

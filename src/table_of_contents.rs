@@ -1,6 +1,7 @@
 use crate::markdown_text_reader::ActiveSection;
 use crate::navigation_panel::CurrentBookInfo;
 use crate::theme::Base16Palette;
+use log::debug;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -52,30 +53,6 @@ impl TocItem {
         match self {
             TocItem::Chapter { anchor, .. } => anchor.as_ref(),
             TocItem::Section { anchor, .. } => anchor.as_ref(),
-        }
-    }
-
-    /// Check if this item has children
-    pub fn has_children(&self) -> bool {
-        match self {
-            TocItem::Chapter { .. } => false,
-            TocItem::Section { children, .. } => !children.is_empty(),
-        }
-    }
-
-    /// Get children if this is a section
-    pub fn children(&self) -> &[TocItem] {
-        match self {
-            TocItem::Chapter { .. } => &[],
-            TocItem::Section { children, .. } => children,
-        }
-    }
-
-    /// Check if this section is expanded (only applies to sections)
-    pub fn is_expanded(&self) -> bool {
-        match self {
-            TocItem::Chapter { .. } => false, // Chapters don't expand
-            TocItem::Section { is_expanded, .. } => *is_expanded,
         }
     }
 
@@ -461,12 +438,7 @@ impl TableOfContents {
                 self.selected_index > 0 && self.selected_index - 1 == *toc_item_index;
 
             match item {
-                TocItem::Chapter {
-                    title,
-                    
-                    
-                    ..
-                } => {
+                TocItem::Chapter { title, .. } => {
                     // Render a simple chapter
                     let is_active = self.is_item_active(item, &current_book.active_section);
                     let chapter_style = if is_active {
@@ -492,10 +464,9 @@ impl TableOfContents {
                 }
                 TocItem::Section {
                     title,
-                    
+
                     children,
                     is_expanded,
-                    
                     ..
                 } => {
                     // Render section header with expand/collapse indicator
@@ -562,6 +533,7 @@ impl TableOfContents {
             ActiveSection::Chapter(chapter_idx) => {
                 // Fall back to chapter index matching
                 if let Some(item_idx) = item.chapter_index() {
+                    debug!("Here!!!!!!!");
                     item_idx == *chapter_idx
                 } else {
                     false

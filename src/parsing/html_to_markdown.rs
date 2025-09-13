@@ -1,6 +1,6 @@
 use crate::markdown::{
-    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Style, Text,
-    TextNode, TextOrInline,
+    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Style, Text, TextNode,
+    TextOrInline,
 };
 use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;

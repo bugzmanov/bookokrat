@@ -1,7 +1,4 @@
-use crate::{
-    markdown::classify_link_href,
-    text_reader_trait::LinkInfo,
-};
+use crate::{markdown::classify_link_href, text_reader_trait::LinkInfo};
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Style, Stylize},
