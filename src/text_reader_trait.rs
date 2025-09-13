@@ -1,8 +1,6 @@
 use crate::images::book_images::BookImages;
 use crate::main_app::VimNavMotions;
 use crate::markdown::Document;
-use crate::text_reader::EmbeddedImage;
-use crate::text_reader::LinkInfo;
 use image::DynamicImage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -10,6 +8,18 @@ use ratatui_image::picker::Picker;
 use std::any::Any;
 use std::sync::Arc;
 use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub struct LinkInfo {
+    pub text: String,
+    pub url: String,
+    pub line: usize,
+    pub start_col: usize,
+    pub end_col: usize,
+    pub link_type: Option<crate::markdown::LinkType>,
+    pub target_chapter: Option<String>,
+    pub target_anchor: Option<String>,
+}
 
 /// Trait defining the interface for text readers
 /// This abstracts over the string-based and AST-based implementations

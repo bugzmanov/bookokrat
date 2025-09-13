@@ -18,7 +18,6 @@ pub mod simple_fake_books;
 pub mod system_command;
 pub mod table;
 pub mod table_of_contents;
-pub mod text_reader;
 pub mod text_reader_trait;
 pub mod text_selection;
 pub mod theme;

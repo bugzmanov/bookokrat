@@ -6,10 +6,8 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::table::{Table as CustomTable, TableConfig};
-use crate::text_reader::{EmbeddedImage, EmbeddedTable, ImageLoadState, LinkInfo};
-use crate::text_reader_trait::TextReaderTrait;
+use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
@@ -21,6 +19,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, StatefulImage, picker::Picker};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -91,6 +90,75 @@ impl RichSpan {
             RichSpan::Link { info, .. } => Some(info),
         }
     }
+}
+
+pub enum ImageLoadState {
+    NotLoaded,
+
+    Loaded {
+        image: Arc<DynamicImage>,
+        protocol: StatefulProtocol,
+    },
+
+    Failed {
+        reason: String,
+    },
+}
+
+pub struct EmbeddedImage {
+    pub src: String,
+    pub lines_before_image: usize,
+    pub height_cells: u16,
+    pub width: u32,
+    pub height: u32,
+    pub state: ImageLoadState,
+}
+
+/// Height for regular images in terminal cells
+const IMAGE_HEIGHT_REGULAR: u16 = 15;
+/// Height for wide images (aspect ratio > 3:1) in terminal cells
+const IMAGE_HEIGHT_WIDE: u16 = 7;
+/// Aspect ratio threshold for wide images
+const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
+
+impl EmbeddedImage {
+    pub fn height_in_cells(width: u32, height: u32) -> u16 {
+        let aspect_ratio = width as f32 / height as f32;
+
+        let height_cells = if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
+            IMAGE_HEIGHT_WIDE
+        } else if height < 150 {
+            IMAGE_HEIGHT_WIDE
+        } else {
+            IMAGE_HEIGHT_REGULAR
+        };
+        height_cells
+    }
+
+    pub fn failed_img(img_src: &str, error_msg: &str) -> EmbeddedImage {
+        let height_cells = EmbeddedImage::height_in_cells(200, 200);
+        EmbeddedImage {
+            src: img_src.into(),
+            lines_before_image: 0, // Will be set properly in parse_styled_text_internal_with_raw
+            height_cells,
+            width: 200,
+            height: 200,
+            state: ImageLoadState::Failed {
+                reason: error_msg.into(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddedTable {
+    pub lines_before_table: usize, // Line position where table starts
+    pub num_rows: usize,
+    pub num_cols: usize,
+    pub has_header: bool,
+    pub header_row: Option<Vec<String>>, // Header cells if present
+    pub data_rows: Vec<Vec<String>>,     // Data cells
+    pub height_cells: usize,             // Total height in terminal cells
 }
 
 /// AST-based text reader that directly processes Markdown Document
@@ -291,7 +359,7 @@ impl MarkdownTextReader {
                             height_cells,
                             width: img_width,
                             height: img_height,
-                            state: crate::text_reader::ImageLoadState::NotLoaded,
+                            state: ImageLoadState::NotLoaded,
                         },
                     );
 
@@ -2114,9 +2182,9 @@ impl MarkdownTextReader {
             if let Some(embedded_image) = self.embedded_images.borrow().get(url) {
                 let height = embedded_image.height_cells;
                 let status = match &embedded_image.state {
-                    crate::text_reader::ImageLoadState::Loaded { .. } => LoadingStatus::Loaded,
-                    crate::text_reader::ImageLoadState::Failed { .. } => LoadingStatus::Failed,
-                    crate::text_reader::ImageLoadState::NotLoaded => LoadingStatus::Loading,
+                    ImageLoadState::Loaded { .. } => LoadingStatus::Loaded,
+                    ImageLoadState::Failed { .. } => LoadingStatus::Failed,
+                    ImageLoadState::NotLoaded => LoadingStatus::Loading,
                 };
                 (height, status)
             } else {
@@ -2135,7 +2203,7 @@ impl MarkdownTextReader {
                     height_cells: image_height,
                     width: 200,  // Default width, will be updated when loaded
                     height: 200, // Default height, will be updated when loaded
-                    state: crate::text_reader::ImageLoadState::NotLoaded,
+                    state: ImageLoadState::NotLoaded,
                 }
             })
             .lines_before_image = lines_before_image;
@@ -2651,7 +2719,7 @@ impl TextReaderTrait for MarkdownTextReader {
                 } else {
                     for (img, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
-                            img_state.state = crate::text_reader::ImageLoadState::Failed {
+                            img_state.state = ImageLoadState::Failed {
                                 reason: "terminal doesn't support images".to_string(),
                             };
                         }
@@ -2672,12 +2740,12 @@ impl TextReaderTrait for MarkdownTextReader {
                 if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
                     // Store the loaded image with protocol
                     embedded_image.state = if let Some(ref picker) = self.image_picker {
-                        crate::text_reader::ImageLoadState::Loaded {
+                        ImageLoadState::Loaded {
                             image: Arc::new(image.clone()),
                             protocol: picker.new_resize_protocol(image),
                         }
                     } else {
-                        crate::text_reader::ImageLoadState::Failed {
+                        ImageLoadState::Failed {
                             reason: "Image picker not initialized".to_string(),
                         }
                     };
@@ -2734,7 +2802,7 @@ impl TextReaderTrait for MarkdownTextReader {
             .borrow()
             .get(image_src)
             .and_then(|img| match &img.state {
-                crate::text_reader::ImageLoadState::Loaded { image, .. } => Some(image.clone()),
+                ImageLoadState::Loaded { image, .. } => Some(image.clone()),
                 _ => None,
             })
     }
@@ -2904,10 +2972,7 @@ impl TextReaderTrait for MarkdownTextReader {
                     if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
                         // Check if image is loaded
                         if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
-                            matches!(
-                                embedded_image.state,
-                                crate::text_reader::ImageLoadState::Loaded { .. }
-                            )
+                            matches!(embedded_image.state, ImageLoadState::Loaded { .. })
                         } else {
                             false
                         }
