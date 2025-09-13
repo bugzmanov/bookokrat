@@ -232,13 +232,6 @@ pub enum ActiveSection {
     Chapter(usize), // Fallback to chapter index
 }
 
-/// Node reference info to pass through rendering
-#[derive(Clone, Debug)]
-struct NodeReference {
-    id: Option<String>,
-    source_range: std::ops::Range<usize>,
-}
-
 impl MarkdownTextReader {
     fn render_raw_html(
         &mut self,
@@ -433,56 +426,6 @@ impl MarkdownTextReader {
             current_chapter_file: None,
             pending_anchor_scroll: None,
             last_active_anchor: None,
-        }
-    }
-
-    /// Main rendering entry point - replaces parse_styled_text_cached
-    pub fn update_from_document(
-        &mut self,
-        doc: Document,
-        chapter_title: Option<String>,
-        palette: &Base16Palette,
-        width: usize,
-        is_focused: bool,
-    ) {
-        // Store the AST directly
-        self.markdown_document = Some(doc);
-
-        // Clear old state
-        self.links.clear();
-        self.embedded_tables.borrow_mut().clear();
-        self.raw_text_lines.clear();
-
-        // Build rendered content from AST
-        if self.markdown_document.is_some() {
-            // Clone the document to avoid borrow checker issues
-            let doc = self.markdown_document.as_ref().unwrap().clone();
-            self.rendered_content = self.render_document_to_lines(&doc, width, palette, is_focused);
-        }
-
-        // Update line counts
-        self.total_wrapped_lines = self.rendered_content.total_height;
-
-        // Mark cache as fresh
-        self.cache_generation += 1;
-        self.last_width = width;
-        self.last_focus_state = is_focused;
-
-        // Check if we have a pending anchor scroll after anchors are collected
-        if let Some(anchor_id) = self.pending_anchor_scroll.take() {
-            if let Some(target_line) = self.get_anchor_position(&anchor_id) {
-                self.scroll_to_line(target_line);
-                self.highlight_line_temporarily(target_line, Duration::from_secs(2));
-                debug!(
-                    "Scrolled to pending anchor '{}' at line {} after content load",
-                    anchor_id, target_line
-                );
-            } else {
-                debug!(
-                    "Pending anchor '{}' not found in current chapter after content load",
-                    anchor_id
-                );
-            }
         }
     }
 
@@ -1012,9 +955,7 @@ impl MarkdownTextReader {
                         });
                     }
 
-                    Inline::Image {  alt_text, .. } => {
-                        // Images in inline context just show placeholder text
-                        // They should be rendered as blocks in render_paragraph
+                    Inline::Image { alt_text, .. } => {
                         rich_spans
                             .push(RichSpan::Text(Span::raw(format!("[image: {}]", alt_text))));
                     }
@@ -1024,12 +965,10 @@ impl MarkdownTextReader {
                     }
 
                     Inline::LineBreak => {
-                        // Force a line break
                         rich_spans.push(RichSpan::Text(Span::raw("\n")));
                     }
 
                     Inline::SoftBreak => {
-                        // Space for soft break
                         rich_spans.push(RichSpan::Text(Span::raw(" ")));
                     }
                 }
@@ -2051,99 +1990,6 @@ impl MarkdownTextReader {
         } else {
             // Fallback if we can't find the position
             vec![RichSpan::Text(Span::raw(wrapped_line.to_string()))]
-        }
-    }
-
-    /// Map a wrapped line back to its styled spans, preserving formatting like links
-    fn map_wrapped_line_to_styled_spans(
-        &self,
-        wrapped_line: &str,
-        original_spans: &[Span<'static>],
-    ) -> Vec<Span<'static>> {
-        // Build a flattened representation of the original content with style info
-        struct CharWithStyle {
-            ch: char,
-            style: RatatuiStyle,
-        }
-
-        let mut chars_with_style = Vec::new();
-        for span in original_spans {
-            for ch in span.content.chars() {
-                chars_with_style.push(CharWithStyle {
-                    ch,
-                    style: span.style,
-                });
-            }
-        }
-
-        // Find where this wrapped line starts in the original content
-        let wrapped_chars: Vec<char> = wrapped_line.chars().collect();
-        if wrapped_chars.is_empty() {
-            return vec![Span::raw("")];
-        }
-
-        // Find the starting position of wrapped_line in the original content
-        let mut start_pos = None;
-        for i in 0..=chars_with_style.len().saturating_sub(wrapped_chars.len()) {
-            let mut matches = true;
-            for (j, &wrapped_ch) in wrapped_chars.iter().enumerate() {
-                if i + j >= chars_with_style.len() || chars_with_style[i + j].ch != wrapped_ch {
-                    matches = false;
-                    break;
-                }
-            }
-            if matches {
-                start_pos = Some(i);
-                break;
-            }
-        }
-
-        // If we found the position, reconstruct the spans with proper styling
-        if let Some(pos) = start_pos {
-            let mut result_spans = Vec::new();
-            let mut current_style = None;
-            let mut current_text = String::new();
-
-            for i in pos..pos + wrapped_chars.len() {
-                if i >= chars_with_style.len() {
-                    break;
-                }
-
-                let char_style = &chars_with_style[i];
-
-                if current_style.as_ref() != Some(&char_style.style) {
-                    // Style changed, push the accumulated span
-                    if !current_text.is_empty() {
-                        if let Some(style) = current_style {
-                            result_spans.push(Span::styled(current_text.clone(), style));
-                        } else {
-                            result_spans.push(Span::raw(current_text.clone()));
-                        }
-                        current_text.clear();
-                    }
-                    current_style = Some(char_style.style);
-                }
-
-                current_text.push(char_style.ch);
-            }
-
-            // Push the final accumulated span
-            if !current_text.is_empty() {
-                if let Some(style) = current_style {
-                    result_spans.push(Span::styled(current_text, style));
-                } else {
-                    result_spans.push(Span::raw(current_text));
-                }
-            }
-
-            if result_spans.is_empty() {
-                vec![Span::raw(wrapped_line.to_string())]
-            } else {
-                result_spans
-            }
-        } else {
-            // Fallback: return as unstyled if we can't find the position
-            vec![Span::raw(wrapped_line.to_string())]
         }
     }
 

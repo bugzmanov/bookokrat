@@ -26,11 +26,8 @@ impl TocParser {
     pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
         // Try NCX document first (EPUB2 style) - more reliable parsing
         if let Some(ncx_id) = self.find_ncx_document(doc) {
-            debug!("Found NCX document: {}", ncx_id);
             if let Ok(ncx_content) = doc.get_resource_str(&ncx_id) {
-                debug!("NCX content length: {} chars", ncx_content.len());
                 let ncx_entries = self.parse_ncx_document(&ncx_content);
-                debug!("NCX parsing returned {} entries", ncx_entries.len());
                 if !ncx_entries.is_empty() {
                     return ncx_entries;
                 }
@@ -81,22 +78,11 @@ impl TocParser {
         if let Ok(navmap_regex) = Regex::new(r#"(?s)<navMap[^>]*>(.*?)</navMap>"#) {
             if let Some(captures) = navmap_regex.captures(content) {
                 if let Some(navmap_content) = captures.get(1) {
-                    debug!(
-                        "Found navMap content, length: {} chars",
-                        navmap_content.as_str().len()
-                    );
                     entries.extend(self.parse_ncx_nav_points(navmap_content.as_str()));
-                    debug!("Parsed {} entries from navMap", entries.len());
-                } else {
-                    debug!("navMap regex matched but no content captured");
                 }
             } else {
-                debug!("navMap regex did not match");
             }
-        } else {
-            debug!("Failed to compile navMap regex");
         }
-
         entries
     }
 

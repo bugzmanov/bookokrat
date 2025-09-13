@@ -298,44 +298,15 @@ impl App {
 
     /// Navigate to a specific chapter - ensures all state is properly updated
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
-        let start_time = std::time::Instant::now();
-
         if let Some(doc) = &mut self.current_epub {
             if chapter_index < self.total_chapters {
                 if doc.set_current_page(chapter_index).is_ok() {
                     self.current_chapter = chapter_index;
-                    info!(
-                        "=== Starting navigation to chapter {} ===",
-                        self.current_chapter + 1
-                    );
 
-                    let set_page_time = start_time.elapsed();
-                    debug!("  - Set current page: {:?}", set_page_time);
-
-                    // Clear active anchor when changing chapters
                     self.text_reader.clear_active_anchor();
-
-                    let content_start = std::time::Instant::now();
                     self.update_content();
-                    let content_time = content_start.elapsed();
-                    debug!("  - Update content: {:?}", content_time);
-
-                    let cache_start = std::time::Instant::now();
                     self.update_current_chapter_in_cache();
-                    let cache_time = cache_start.elapsed();
-                    debug!("  - Update cache: {:?}", cache_time);
-
-                    let bookmark_start = std::time::Instant::now();
                     self.save_bookmark_with_throttle(true);
-                    let bookmark_time = bookmark_start.elapsed();
-                    debug!("  - Save bookmark: {:?}", bookmark_time);
-
-                    let total_time = start_time.elapsed();
-                    info!(
-                        "=== Chapter {} loaded in {:?} ===",
-                        self.current_chapter + 1,
-                        total_time
-                    );
 
                     Ok(())
                 } else {
@@ -476,13 +447,9 @@ impl App {
         self.total_chapters = doc.get_num_pages();
         info!("Total chapters: {}", self.total_chapters);
 
-        // Extract images from the EPUB to the temp directory
         let path_buf = std::path::PathBuf::from(path);
         if let Err(e) = self.image_storage.extract_images(&path_buf) {
             error!("Failed to extract images from EPUB: {}", e);
-            // Continue loading even if image extraction fails
-        } else {
-            info!("Successfully extracted images from EPUB");
         }
 
         // Load the book in BookImages abstraction
@@ -493,10 +460,6 @@ impl App {
 
         // Try to load bookmark
         if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
-            info!(
-                "Found bookmark: chapter {}, offset {}",
-                bookmark.chapter, bookmark.scroll_offset
-            );
             // Skip metadata page if needed
             if bookmark.chapter > 0 {
                 for _ in 0..bookmark.chapter {
@@ -578,71 +541,22 @@ impl App {
     /// Convert TOC entries to section structure
 
     fn refresh_chapter_cache(&mut self) {
-        debug!("refresh_chapter_cache called");
         if let (Some(current_file), Some(epub)) = (&self.current_file, &mut self.current_epub) {
-            debug!("refresh_chapter_cache: processing book '{}'", current_file);
-
-            // Parse TOC structure to create hierarchical sections
             let mut toc_items = self.text_generator.parse_toc_structure(epub);
 
-            // Debug: Log the parsed TOC structure
-            debug!("Parsed {} TOC items", toc_items.len());
-            for (i, item) in toc_items.iter().enumerate() {
-                match item {
-                    TocItem::Chapter { title, href, .. } => {
-                        debug!("TOC Item {}: Chapter '{}' -> '{}'", i, title, href);
-                    }
-                    TocItem::Section {
-                        title,
-                        href,
-                        children,
-                        ..
-                    } => {
-                        let href_str = href.as_ref().map(|h| h.as_str()).unwrap_or("None");
-                        debug!(
-                            "TOC Item {}: Section '{}' -> '{}' (children: {})",
-                            i,
-                            title,
-                            href_str,
-                            children.len()
-                        );
-                        for (j, child) in children.iter().enumerate() {
-                            match child {
-                                TocItem::Chapter { title, href, .. } => {
-                                    debug!("  Child {}: Chapter '{}' -> '{}'", j, title, href);
-                                }
-                                TocItem::Section { title, .. } => {
-                                    debug!("  Child {}: Section '{}'", j, title);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Store current position to restore later
             let original_chapter = epub.get_current_page();
 
-            // First, get chapter information for all chapters
             let mut chapter_map = std::collections::HashMap::new();
-            debug!("Building chapter map for {} chapters", self.total_chapters);
             for i in 0..self.total_chapters {
                 if epub.set_current_page(i).is_ok() {
                     if let Ok(_content) = epub.get_current_str() {
                         if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
-                            // Normalize href for matching
                             let normalized_href = self.text_generator.normalize_href(&chapter_href);
-                            debug!(
-                                "Chapter {}: '{}' -> normalized: '{}'",
-                                i, chapter_href, normalized_href
-                            );
                             chapter_map.insert(normalized_href, i);
                         }
                     }
                 }
             }
-
-            debug!("Chapter map contains {} entries", chapter_map.keys().len());
 
             // Restore original position
             let _ = epub.set_current_page(original_chapter);
