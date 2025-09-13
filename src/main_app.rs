@@ -25,11 +25,9 @@ pub enum ChapterDirection {
     Previous,
 }
 
+use std::io::BufReader;
 use std::sync::{Arc, Mutex};
-use std::{
-    io::BufReader,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
@@ -300,7 +298,7 @@ impl App {
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
         if let Some(doc) = &mut self.current_epub {
             if chapter_index < self.total_chapters {
-                if doc.set_current_page(chapter_index).is_ok() {
+                if doc.set_current_page(chapter_index) {
                     self.current_chapter = chapter_index;
 
                     self.text_reader.clear_active_anchor();
@@ -330,7 +328,7 @@ impl App {
             match direction {
                 ChapterDirection::Next => {
                     if self.current_chapter < self.total_chapters - 1 {
-                        if doc.go_next().is_ok() {
+                        if doc.go_next() {
                             self.current_chapter += 1;
                             info!("Moving to next chapter: {}", self.current_chapter + 1);
                             self.update_content();
@@ -347,7 +345,7 @@ impl App {
                 }
                 ChapterDirection::Previous => {
                     if self.current_chapter > 0 {
-                        if doc.go_prev().is_ok() {
+                        if doc.go_prev() {
                             self.current_chapter -= 1;
                             info!("Moving to previous chapter: {}", self.current_chapter + 1);
                             self.update_content();
@@ -463,7 +461,7 @@ impl App {
             // Skip metadata page if needed
             if bookmark.chapter > 0 {
                 for _ in 0..bookmark.chapter {
-                    if doc.go_next().is_err() {
+                    if !doc.go_next() {
                         error!("Failed to navigate to bookmarked chapter");
                         break;
                     }
@@ -475,7 +473,7 @@ impl App {
         } else {
             // Skip the first chapter if it's just metadata
             if self.total_chapters > 1 {
-                if doc.go_next().is_ok() {
+                if doc.go_next() {
                     self.current_chapter = 1;
                     info!("Skipped metadata page, moved to chapter 2");
                 } else {
@@ -497,8 +495,8 @@ impl App {
         chapter_index: usize,
     ) -> Option<String> {
         if chapter_index < doc.spine.len() {
-            let spine_id = &doc.spine[chapter_index];
-            if let Some((path, _)) = doc.resources.get(spine_id) {
+            let spine_item = &doc.spine[chapter_index];
+            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
                 return Some(path.to_string_lossy().to_string());
             }
         }
@@ -548,8 +546,8 @@ impl App {
 
             let mut chapter_map = std::collections::HashMap::new();
             for i in 0..self.total_chapters {
-                if epub.set_current_page(i).is_ok() {
-                    if let Ok(_content) = epub.get_current_str() {
+                if epub.set_current_page(i) {
+                    if let Some((_content, _)) = epub.get_current_str() {
                         if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
                             let normalized_href = self.text_generator.normalize_href(&chapter_href);
                             chapter_map.insert(normalized_href, i);
@@ -559,7 +557,7 @@ impl App {
             }
 
             // Restore original position
-            let _ = epub.set_current_page(original_chapter);
+            epub.set_current_page(original_chapter);
 
             // Map chapter indices to the TOC items
             Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
@@ -651,12 +649,12 @@ impl App {
     fn update_content(&mut self) {
         if let Some(doc) = &mut self.current_epub {
             let (content, title) = match doc.get_current_str() {
-                Ok(raw_html) => {
+                Some((raw_html, _mime)) => {
                     let title = self.text_generator.extract_chapter_title(&raw_html);
                     (raw_html, title)
                 }
-                Err(e) => {
-                    error!("Failed to get raw HTML: {}", e);
+                None => {
+                    error!("Failed to get raw HTML");
                     ("Error reading chapter content.".to_string(), None)
                 }
             };
@@ -1905,7 +1903,7 @@ impl App {
                 if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
                     // Get raw HTML content for current chapter
                     if let Some(ref mut epub) = self.current_epub {
-                        if let Ok(raw_html) = epub.get_current_str() {
+                        if let Some((raw_html, _)) = epub.get_current_str() {
                             self.text_reader.set_raw_html(raw_html);
                             self.text_reader.toggle_raw_html();
                         }
@@ -1936,7 +1934,7 @@ impl App {
                 if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
                     // Get raw HTML content for current chapter
                     if let Some(ref mut epub) = self.current_epub {
-                        if let Ok(raw_html) = epub.get_current_str() {
+                        if let Some((raw_html, _)) = epub.get_current_str() {
                             self.text_reader.set_raw_html(raw_html);
                             self.text_reader.toggle_raw_html();
                         }

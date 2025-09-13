@@ -100,7 +100,7 @@ impl ImageStorage {
             if is_image_mime_type(mime_type) {
                 debug!("Found image resource: {} ({})", id, mime_type);
 
-                if let Ok(data) = doc.get_resource(id) {
+                if let Some((data, _mime)) = doc.get_resource(id) {
                     let image_path = book_dir.join(&path);
 
                     if let Some(parent) = image_path.parent() {

@@ -1,8 +1,8 @@
 use crate::table_of_contents::TocItem;
-use epub::doc::EpubDoc;
+use epub::doc::{EpubDoc, NavPoint};
 use log::debug;
 use regex::Regex;
-use std::io::BufReader;
+use std::io::{Read, Seek};
 
 pub struct TocParser;
 
@@ -23,10 +23,18 @@ impl TocParser {
     }
 
     /// Parse EPUB table of contents to get hierarchical structure
-    pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
+    pub fn parse_toc_structure<R: Read + Seek>(&self, doc: &mut EpubDoc<R>) -> Vec<TocItem> {
+        // First try the built-in TOC from epub 2.x
+        if !doc.toc.is_empty() {
+            debug!("Using built-in TOC with {} entries", doc.toc.len());
+            return self.convert_navpoints_to_toc_items(&doc.toc);
+        }
+
+        debug!("Built-in TOC is empty, falling back to manual parsing");
+
         // Try NCX document first (EPUB2 style) - more reliable parsing
         if let Some(ncx_id) = self.find_ncx_document(doc) {
-            if let Ok(ncx_content) = doc.get_resource_str(&ncx_id) {
+            if let Some((ncx_content, _)) = doc.get_resource_str(&ncx_id) {
                 let ncx_entries = self.parse_ncx_document(&ncx_content);
                 if !ncx_entries.is_empty() {
                     return ncx_entries;
@@ -36,7 +44,7 @@ impl TocParser {
 
         // Fallback to navigation document (EPUB3 style)
         if let Some(nav_id) = self.find_nav_document(doc) {
-            if let Ok(nav_content) = doc.get_resource_str(&nav_id) {
+            if let Some((nav_content, _)) = doc.get_resource_str(&nav_id) {
                 return self.parse_nav_document(&nav_content);
             }
         }
@@ -45,8 +53,40 @@ impl TocParser {
         Vec::new()
     }
 
+    /// Convert NavPoint structure to TocItem structure
+    fn convert_navpoints_to_toc_items(&self, navpoints: &[NavPoint]) -> Vec<TocItem> {
+        navpoints.iter().map(|navpoint| self.convert_navpoint_to_toc_item(navpoint)).collect()
+    }
+
+    /// Convert a single NavPoint to TocItem
+    fn convert_navpoint_to_toc_item(&self, navpoint: &NavPoint) -> TocItem {
+        let href = navpoint.content.to_string_lossy().to_string();
+        let (clean_href, anchor) = self.split_href_and_anchor(&href);
+
+        if navpoint.children.is_empty() {
+            // No children, create a Chapter
+            TocItem::Chapter {
+                title: navpoint.label.clone(),
+                href: clean_href,
+                index: 0, // Will be mapped later
+                anchor,
+            }
+        } else {
+            // Has children, create a Section
+            let children = self.convert_navpoints_to_toc_items(&navpoint.children);
+            TocItem::Section {
+                title: navpoint.label.clone(),
+                href: Some(clean_href),
+                index: None, // Will be mapped later
+                anchor,
+                children,
+                is_expanded: true,
+            }
+        }
+    }
+
     /// Find NCX document ID (EPUB2)
-    fn find_ncx_document(&self, doc: &EpubDoc<BufReader<std::fs::File>>) -> Option<String> {
+    fn find_ncx_document<R: Read + Seek>(&self, doc: &EpubDoc<R>) -> Option<String> {
         for (id, (path, mimetype)) in &doc.resources {
             if mimetype.contains("application/x-dtbncx+xml")
                 || path.to_string_lossy().ends_with(".ncx")
@@ -58,7 +98,7 @@ impl TocParser {
     }
 
     /// Find navigation document ID (EPUB3)
-    fn find_nav_document(&self, doc: &EpubDoc<BufReader<std::fs::File>>) -> Option<String> {
+    fn find_nav_document<R: Read + Seek>(&self, doc: &EpubDoc<R>) -> Option<String> {
         for (id, (path, mimetype)) in &doc.resources {
             if mimetype.contains("application/xhtml+xml")
                 && (path.to_string_lossy().contains("nav")
@@ -314,7 +354,7 @@ impl TocParser {
         };
 
         let href =
-            if let Ok(content_regex) = Regex::new(r#"<content[^>]*src=["']([^"']*)["'][^>]*/?>"#) {
+            if let Ok(content_regex) = Regex::new(r#"<content[^>]*src=["']([^"']*)[\"'][^>]*/?>"#) {
                 content_regex
                     .captures(content)?
                     .get(1)?

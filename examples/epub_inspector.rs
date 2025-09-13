@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "-".repeat(60));
 
         match doc.get_current_str() {
-            Ok(content) => {
+            Some((content, _mime)) => {
                 // Check if this chapter contains a section header (h1 tag)
                 if content.contains("<h1") {
                     println!("*** SECTION HEADER FOUND ***");
@@ -67,8 +67,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Only print first 200 chars to keep output manageable
                 println!("{}", &content[..std::cmp::min(200, content.len())]);
             }
-            Err(e) => {
-                println!("Error reading chapter {}: {}", i + 1, e);
+            None => {
+                println!("Error reading chapter {}", i + 1);
             }
         }
 

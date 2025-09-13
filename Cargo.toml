@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 ratatui = "0.29.0"
 crossterm = "0.27.0"
-epub = "1.1.0"
+epub = "2.1.4"
 anyhow = "1.0.79"
 simplelog = "0.12.1"
 html2text = "0.2.1"

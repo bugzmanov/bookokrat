@@ -2,7 +2,7 @@ use crate::table_of_contents::TocItem;
 use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
 use regex::Regex;
-use std::io::BufReader;
+use std::io::{Read, Seek};
 
 pub struct TextGenerator {
     toc_parser: TocParser,
@@ -63,7 +63,7 @@ impl TextGenerator {
         }
     }
 
-    pub fn parse_toc_structure(&self, doc: &mut EpubDoc<BufReader<std::fs::File>>) -> Vec<TocItem> {
+    pub fn parse_toc_structure<R: Read + Seek>(&self, doc: &mut EpubDoc<R>) -> Vec<TocItem> {
         self.toc_parser.parse_toc_structure(doc)
     }
 }
