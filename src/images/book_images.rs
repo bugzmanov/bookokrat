@@ -253,6 +253,6 @@ impl BookImages {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use tempfile::TempDir;
+    
+    
 }

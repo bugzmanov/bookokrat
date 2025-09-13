@@ -1,11 +1,11 @@
 use bookrat::book_manager::{BookInfo, BookManager};
 use bookrat::bookmark::Bookmarks;
 use bookrat::main_app::VimNavMotions;
-use bookrat::markdown_text_reader::ActiveSection;
+use bookrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use bookrat::table_of_contents::TocItem;
 use bookrat::test_utils::test_helpers::create_test_terminal;
-use bookrat::text_reader::TextReader;
+use bookrat::text_reader_trait::TextReaderTrait;
 use bookrat::theme::Base16Palette;
 
 mod snapshot_assertions;
@@ -264,7 +264,7 @@ fn test_text_reader_vim_motion_g() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 20);
 
-    let mut text_reader = TextReader::new();
+    let mut text_reader = MarkdownTextReader::new();
 
     // Create test content with many lines
     let test_content = (0..=100)
@@ -277,54 +277,22 @@ fn test_text_reader_vim_motion_g() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    println!("Created {} input lines", test_content.lines().count());
-
-    // Let the text reader calculate its own dimensions based on the area
     let area = terminal.get_frame().size();
     text_reader.update_wrapped_lines_if_needed(&test_content, area);
-
-    println!("Total wrapped lines: {}", text_reader.total_wrapped_lines);
-    println!("Visible height: {}", text_reader.visible_height);
-    println!("Scroll offset before G: {}", text_reader.scroll_offset);
 
     // Test G (go to bottom)
     text_reader.handle_G();
 
-    println!("Scroll offset after G: {}", text_reader.scroll_offset);
-    println!(
-        "Should show lines {} to {}",
-        text_reader.scroll_offset,
-        text_reader.scroll_offset + text_reader.visible_height - 1
-    );
-
-    // Debug: Check the last few lines of content and actual wrapping
-    let lines: Vec<&str> = test_content.lines().collect();
-    for i in 98..=100 {
-        println!("Line {}: len={}", i, lines[i].len());
-    }
-
-    // Check what width is actually being used for text
-    println!("Area width: {}, height: {}", area.width, area.height);
-    let text_width = area.width.saturating_sub(12) as usize;
-    println!("Text width for wrapping: {}", text_width);
-
-    // Render only the text reader
     terminal
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
             let chapter_title = Some("Chapter 1".to_string());
-            text_reader.render(f, area, &test_content, &chapter_title, 1, 5, &palette, true);
+            text_reader.render(f, area, &chapter_title, 1, 5, &palette, true);
         })
         .unwrap();
 
     let svg_output = terminal_to_svg(&terminal);
-
-    // Debug: print what we expect to see
-    println!("\nExpected to see at bottom (accounting for wrapping):");
-    println!(
-        "Line 100 wraps to: 'This is line 100. Lorem ipsum dolor sit amet,' + 'consectetur adipiscing elit.'"
-    );
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write(
@@ -346,7 +314,7 @@ fn test_text_reader_vim_motion_gg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 20);
 
-    let mut text_reader = TextReader::new();
+    let mut text_reader = MarkdownTextReader::new();
 
     // Create test content
     let test_content = (0..=100)
@@ -364,7 +332,7 @@ fn test_text_reader_vim_motion_gg() {
     text_reader.update_wrapped_lines_if_needed(&test_content, area);
 
     // Scroll down first
-    text_reader.scroll_offset = 50;
+    text_reader.scroll_down();
 
     // Test gg (go to top)
     text_reader.handle_j();
@@ -376,7 +344,7 @@ fn test_text_reader_vim_motion_gg() {
             let area = f.size();
             let palette = get_test_palette();
             let chapter_title = Some("Chapter 1".to_string());
-            text_reader.render(f, area, &test_content, &chapter_title, 1, 5, &palette, true);
+            text_reader.render(f, area, &chapter_title, 1, 5, &palette, true);
         })
         .unwrap();
 

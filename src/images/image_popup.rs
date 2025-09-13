@@ -7,9 +7,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use ratatui_image::{Image, Resize, picker::Picker, protocol::Protocol};
+use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 pub struct ImagePopup {
     pub image: Arc<DynamicImage>,

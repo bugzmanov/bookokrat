@@ -5,9 +5,7 @@ use image::DynamicImage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui_image::picker::Picker;
-use std::any::Any;
 use std::sync::Arc;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct LinkInfo {
@@ -24,9 +22,6 @@ pub struct LinkInfo {
 /// Trait defining the interface for text readers
 /// This abstracts over the string-based and AST-based implementations
 pub trait TextReaderTrait: VimNavMotions {
-    // Type casting support for downcasting
-    fn as_any_mut(&mut self) -> &mut dyn Any;
-
     // Content loading
     fn set_content_from_string(&mut self, content: &str, chapter_title: Option<String>);
     fn set_content_from_ast(&mut self, doc: Document, chapter_title: Option<String>);
@@ -38,8 +33,8 @@ pub trait TextReaderTrait: VimNavMotions {
     // Scrolling
     fn scroll_up(&mut self);
     fn scroll_down(&mut self);
-    fn scroll_half_screen_up(&mut self, content: &str, screen_height: usize);
-    fn scroll_half_screen_down(&mut self, content: &str, screen_height: usize);
+    fn scroll_half_screen_up(&mut self, screen_height: usize);
+    fn scroll_half_screen_down(&mut self, screen_height: usize);
     fn get_scroll_offset(&self) -> usize;
     fn restore_scroll_position(&mut self, offset: usize);
     fn get_max_scroll_offset(&self) -> usize;
@@ -56,7 +51,7 @@ pub trait TextReaderTrait: VimNavMotions {
     fn has_text_selection(&self) -> bool;
 
     // Image handling
-    fn preload_image_dimensions(&mut self, content: &str, book_images: &BookImages);
+    fn preload_image_dimensions(&mut self, book_images: &BookImages);
     fn check_for_loaded_images(&mut self) -> bool;
     fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String>;
     fn get_image_picker(&self) -> Option<&Picker>;
@@ -92,7 +87,6 @@ pub trait TextReaderTrait: VimNavMotions {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        content: &str,
         chapter_title: &Option<String>,
         current_chapter: usize,
         total_chapters: usize,

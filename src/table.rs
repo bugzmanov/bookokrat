@@ -1,5 +1,5 @@
 use crate::{
-    markdown::{LinkType, classify_link_href},
+    markdown::classify_link_href,
     text_reader_trait::LinkInfo,
 };
 use ratatui::{
@@ -305,7 +305,7 @@ impl Table {
         start_col: usize,
     ) -> Vec<Span<'static>> {
         let mut spans = Vec::new();
-        let mut chars: Vec<char> = text.chars().collect();
+        let chars: Vec<char> = text.chars().collect();
         let mut i = 0;
         let mut current_text = String::new();
         let mut current_col = start_col;
@@ -487,7 +487,7 @@ impl Table {
         base_color: Color,
     ) -> Vec<Span<'static>> {
         let mut spans = Vec::new();
-        let mut chars: Vec<char> = text.chars().collect();
+        let chars: Vec<char> = text.chars().collect();
         let mut i = 0;
         let mut current_text = String::new();
 

@@ -156,5 +156,5 @@ impl Default for BackgroundImageLoader {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 }

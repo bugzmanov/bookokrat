@@ -6,7 +6,7 @@ use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
 use crate::jump_list::{JumpList, JumpLocation};
-use crate::markdown_text_reader::{ActiveSection, MarkdownTextReader};
+use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator::TextGenerator;
 use crate::reading_history::ReadingHistory;
@@ -50,7 +50,6 @@ pub struct App {
     bookmarks: Bookmarks,
     image_storage: Arc<ImageStorage>,
     book_images: BookImages,
-    current_content: Option<String>,
     current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
     current_chapter: usize,
     total_chapters: usize,
@@ -184,7 +183,6 @@ impl App {
             bookmarks,
             image_storage,
             book_images,
-            current_content: None,
             current_epub: None,
             current_chapter: 0,
             total_chapters: 0,
@@ -434,7 +432,7 @@ impl App {
     // These methods should only be called by high-level actions above
 
     fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
-        let mut doc = self
+        let doc = self
             .book_manager
             .load_epub(path)
             .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
@@ -653,17 +651,7 @@ impl App {
             Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
 
             // Get active section from text reader if it's a MarkdownTextReader
-            let active_section = if let Some(markdown_reader) =
-                self.text_reader
-                    .as_any_mut()
-                    .downcast_mut::<MarkdownTextReader>()
-            {
-                markdown_reader.get_active_section(self.current_chapter)
-            } else {
-                // Fallback for other text reader implementations
-                ActiveSection::Chapter(self.current_chapter)
-            };
-
+            let active_section = self.text_reader.get_active_section(self.current_chapter);
             let book_info = CurrentBookInfo {
                 path: current_file.clone(),
                 toc_items,
@@ -683,18 +671,6 @@ impl App {
         }
     }
 
-    pub fn get_current_book_info(&self) -> Option<&CurrentBookInfo> {
-        self.cached_current_book_info.as_ref()
-    }
-
-    pub fn get_image_storage(&self) -> &ImageStorage {
-        &self.image_storage
-    }
-
-    pub fn get_current_file_path(&self) -> Option<&str> {
-        self.current_file.as_deref()
-    }
-
     fn update_current_chapter_in_cache(&mut self) {
         // Get the navigation area first to avoid borrow issues
         let nav_area = if self.navigation_panel.mode == NavigationMode::TableOfContents {
@@ -707,15 +683,7 @@ impl App {
             cached_info.current_chapter = self.current_chapter;
 
             // Update active section
-            cached_info.active_section = if let Some(markdown_reader) = self
-                .text_reader
-                .as_any_mut()
-                .downcast_mut::<MarkdownTextReader>()
-            {
-                markdown_reader.get_active_section(self.current_chapter)
-            } else {
-                ActiveSection::Chapter(self.current_chapter)
-            };
+            cached_info.active_section = self.text_reader.get_active_section(self.current_chapter);
 
             // Update the table of contents with the updated book info
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
@@ -767,15 +735,9 @@ impl App {
     }
 
     fn update_content(&mut self) {
-        let overall_start = std::time::Instant::now();
-
         if let Some(doc) = &mut self.current_epub {
-            let process_start = std::time::Instant::now();
-
             let (content, title) = match doc.get_current_str() {
                 Ok(raw_html) => {
-                    debug!("Got raw HTML for AST reader, {} bytes", raw_html.len());
-                    // Extract title from raw HTML (we still need this)
                     let title = self.text_generator.extract_chapter_title(&raw_html);
                     (raw_html, title)
                 }
@@ -784,61 +746,24 @@ impl App {
                     ("Error reading chapter content.".to_string(), None)
                 }
             };
-            let process_time = process_start.elapsed();
-            debug!("    - Process chapter content: {:?}", process_time);
 
             self.current_chapter_title = title.clone();
-            let content_length = content.len();
 
-            // Set the current chapter file for link handling
             if let Some(chapter_file) = Self::get_chapter_href(doc, self.current_chapter) {
-                debug!("Setting current chapter file to: {}", chapter_file);
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
             } else {
                 self.text_reader.set_current_chapter_file(None);
             }
 
-            // Count images in content for stats (adjust for raw HTML)
-            let image_count = content.matches("<img ").count();
-            if image_count > 0 {
-                debug!("    - Found {} images in chapter", image_count);
-            }
-
-            self.current_content = Some(content);
-
-            // First update content (this will clear caches)
-            let update_start = std::time::Instant::now();
-            self.text_reader.content_updated(content_length);
-            let update_time = update_start.elapsed();
-            debug!("    - Content updated: {:?}", update_time);
+            self.text_reader.content_updated(content.len());
 
             if self.current_file.is_some() {
-                if let Some(ref content) = self.current_content {
-                    if image_count > 0 {
-                        self.text_reader.set_content_from_string(content, title);
-                        let preload_start = std::time::Instant::now();
-                        self.text_reader
-                            .preload_image_dimensions(content, &self.book_images);
-                        let preload_time = preload_start.elapsed();
-                        info!(
-                            "    - Preloaded {} images in {:?}",
-                            image_count, preload_time
-                        );
-                    }
-                }
+                self.text_reader.set_content_from_string(&content, title);
+                self.text_reader.preload_image_dimensions(&self.book_images);
             }
-
-            let total_update_time = overall_start.elapsed();
-            debug!("    - Total update_content time: {:?}", total_update_time);
-
-            if let Some(ref title) = self.current_chapter_title {
-                info!("    - Chapter title: \"{}\"", title);
-            }
-            info!("    - Content length: {} chars", content_length);
         } else {
             error!("No EPUB document loaded");
-            self.current_content = Some("No EPUB document loaded.".to_string());
             self.text_reader.content_updated(0);
         }
     }
@@ -860,28 +785,27 @@ impl App {
     }
 
     pub fn scroll_down(&mut self) {
-        if let Some(content) = &self.current_content {
-            self.text_reader.scroll_down();
-            self.save_bookmark();
-            self.update_current_chapter_in_cache(); // This will update active section
-        }
+        self.text_reader.scroll_down();
+        self.save_bookmark();
+        self.update_current_chapter_in_cache(); // This will update active section
     }
 
     pub fn scroll_up(&mut self) {
-        if let Some(content) = &self.current_content {
-            self.text_reader.scroll_up();
-            self.save_bookmark();
-            self.update_current_chapter_in_cache(); // This will update active section
-        }
+        self.text_reader.scroll_up();
+        self.save_bookmark();
+        self.update_current_chapter_in_cache(); // This will update active section
     }
 
     pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
-        if let Some(content) = &self.current_content {
-            self.text_reader
-                .scroll_half_screen_down(content, screen_height);
-            self.save_bookmark();
-            self.update_current_chapter_in_cache(); // This will update active section
-        }
+        self.text_reader.scroll_half_screen_down(screen_height);
+        self.save_bookmark();
+        self.update_current_chapter_in_cache(); // This will update active section
+    }
+
+    fn scroll_half_screen_up(&mut self, screen_height: usize) {
+        self.text_reader.scroll_half_screen_up(screen_height);
+        self.save_bookmark();
+        self.update_current_chapter_in_cache(); // This will update active section
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -1770,24 +1694,11 @@ impl App {
                         if let Some(anchor_id) = anchor {
                             self.text_reader
                                 .handle_pending_anchor_scroll(Some(anchor_id.clone()));
-                            // Set this anchor as the active one
-                            if let Some(markdown_reader) = self
-                                .text_reader
-                                .as_any_mut()
-                                .downcast_mut::<MarkdownTextReader>()
-                            {
-                                markdown_reader.set_active_anchor(Some(anchor_id));
-                            }
+                            self.text_reader.set_active_anchor(Some(anchor_id));
                         } else {
-                            // No anchor - clear any active anchor so only the chapter is highlighted
-                            if let Some(markdown_reader) = self
-                                .text_reader
-                                .as_any_mut()
-                                .downcast_mut::<MarkdownTextReader>()
-                            {
-                                markdown_reader.set_active_anchor(None);
-                            }
+                            self.text_reader.set_active_anchor(None);
                         }
+
                         self.focused_panel = FocusedPanel::Content;
                         // Clear manual navigation flag when jumping to content
                         self.navigation_panel
@@ -1804,22 +1715,9 @@ impl App {
                                 self.text_reader
                                     .handle_pending_anchor_scroll(Some(anchor_id.clone()));
                                 // Set this anchor as the active one
-                                if let Some(markdown_reader) = self
-                                    .text_reader
-                                    .as_any_mut()
-                                    .downcast_mut::<MarkdownTextReader>()
-                                {
-                                    markdown_reader.set_active_anchor(Some(anchor_id));
-                                }
+                                self.text_reader.set_active_anchor(Some(anchor_id));
                             } else {
-                                // No anchor - clear any active anchor so only the chapter is highlighted
-                                if let Some(markdown_reader) = self
-                                    .text_reader
-                                    .as_any_mut()
-                                    .downcast_mut::<MarkdownTextReader>()
-                                {
-                                    markdown_reader.set_active_anchor(None);
-                                }
+                                self.text_reader.set_active_anchor(None);
                             }
                             self.focused_panel = FocusedPanel::Content;
                             // Update the cache to reflect the correct active section
@@ -1883,15 +1781,6 @@ impl App {
         }
     }
 
-    fn scroll_half_screen_up(&mut self, screen_height: usize) {
-        if let Some(content) = &self.current_content {
-            self.text_reader
-                .scroll_half_screen_up(content, screen_height);
-            self.save_bookmark();
-            self.update_current_chapter_in_cache(); // This will update active section
-        }
-    }
-
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
         let render_start = std::time::Instant::now();
 
@@ -1933,27 +1822,22 @@ impl App {
         );
 
         // Render text content or default message
-        if let Some(content) = &self.current_content {
-            if self.current_epub.is_some() {
-                // Update wrapped lines based on current area dimensions
-                self.text_reader
-                    .update_wrapped_lines_if_needed(content, main_chunks[1]);
+        if self.current_epub.is_some() {
+            // Update wrapped lines based on current area dimensions
+            // self.text_reader
+            //     .update_wrapped_lines_if_needed(content, main_chunks[1]);
 
-                self.text_reader.render(
-                    f,
-                    main_chunks[1],
-                    content,
-                    &self.current_chapter_title,
-                    self.current_chapter,
-                    self.total_chapters,
-                    &OCEANIC_NEXT,
-                    self.focused_panel == FocusedPanel::Content,
-                );
-            } else {
-                // Render default content area when no EPUB is loaded
-                self.render_default_content(f, main_chunks[1], content);
-            }
+            self.text_reader.render(
+                f,
+                main_chunks[1],
+                &self.current_chapter_title,
+                self.current_chapter,
+                self.total_chapters,
+                &OCEANIC_NEXT,
+                self.focused_panel == FocusedPanel::Content,
+            );
         } else {
+            // Render default content area when no EPUB is loaded
             self.render_default_content(f, main_chunks[1], "Select a file to view its content");
         }
 
@@ -2522,25 +2406,14 @@ impl App {
                 }
             }
             KeyCode::Char('G') => {
-                // Handle 'G' motion - go to bottom
                 if self.show_reading_history {
-                    // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_G();
                     }
                 } else if self.focused_panel == FocusedPanel::FileList {
                     self.navigation_panel.handle_G();
-                } else if let Some(_content) = &self.current_content {
-                    // For content, scroll to bottom
-                    // Calculate the maximum scroll offset
-                    if self.text_reader.get_total_wrapped_lines()
-                        > self.text_reader.get_visible_height()
-                    {
-                        let offset = self.text_reader.get_total_wrapped_lines()
-                            - self.text_reader.get_visible_height();
-                        self.text_reader.restore_scroll_position(offset);
-                        self.save_bookmark();
-                    }
+                } else if self.current_epub.is_some() {
+                    self.text_reader.handle_G();
                 }
             }
             KeyCode::Char('c') => {

@@ -1012,7 +1012,7 @@ impl MarkdownTextReader {
                         });
                     }
 
-                    Inline::Image { url, alt_text, .. } => {
+                    Inline::Image {  alt_text, .. } => {
                         // Images in inline context just show placeholder text
                         // They should be rendered as blocks in render_paragraph
                         rich_spans
@@ -2334,14 +2334,14 @@ impl VimNavMotions for MarkdownTextReader {
     fn handle_ctrl_d(&mut self) {
         if self.visible_height > 0 {
             let screen_height = self.visible_height;
-            self.scroll_half_screen_down("", screen_height);
+            self.scroll_half_screen_down(screen_height);
         }
     }
 
     fn handle_ctrl_u(&mut self) {
         if self.visible_height > 0 {
             let screen_height = self.visible_height;
-            self.scroll_half_screen_up("", screen_height);
+            self.scroll_half_screen_up(screen_height);
         }
     }
 
@@ -2358,35 +2358,14 @@ impl VimNavMotions for MarkdownTextReader {
 }
 
 impl TextReaderTrait for MarkdownTextReader {
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
     fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
         // Parse HTML string to Markdown AST
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-
-        debug!(
-            "set_content_from_string called with {} bytes of content",
-            content.len()
-        );
-        debug!(
-            "First 500 chars of content: {}",
-            &content.chars().take(500).collect::<String>()
-        );
-
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(content);
 
-        debug!("Converted to AST with {} blocks", doc.blocks.len());
-        for (i, block) in doc.blocks.iter().take(3).enumerate() {
-            debug!("Block {}: {:?}", i, block);
-        }
-
-        // Store the document - rendering will happen in the render() method
         self.markdown_document = Some(doc);
 
-        // Clear old state
         self.links.clear();
         self.embedded_tables.borrow_mut().clear();
         self.raw_text_lines.clear();
@@ -2395,7 +2374,6 @@ impl TextReaderTrait for MarkdownTextReader {
 
         // Mark cache as invalid to force re-rendering
         self.cache_generation += 1;
-
         debug!("Parsed HTML to Markdown AST in set_content_from_string");
     }
 
@@ -2449,30 +2427,13 @@ impl TextReaderTrait for MarkdownTextReader {
             self.cached_text_width = width;
             self.visible_height = height;
 
-            // Parse HTML content to Markdown AST if we don't have it yet
             if self.markdown_document.is_none() && !content.is_empty() {
                 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-
-                debug!(
-                    "update_wrapped_lines_if_needed: parsing {} bytes of content",
-                    content.len()
-                );
-                debug!(
-                    "First 500 chars: {}",
-                    &content.chars().take(500).collect::<String>()
-                );
 
                 let mut converter = HtmlToMarkdownConverter::new();
                 let doc = converter.convert(content);
 
-                debug!("Converted to {} blocks", doc.blocks.len());
-                for (i, block) in doc.blocks.iter().take(3).enumerate() {
-                    debug!("Block {}: {:?}", i, block);
-                }
-
                 self.markdown_document = Some(doc);
-
-                // Mark cache as invalid to force re-rendering
                 self.cache_generation += 1;
 
                 debug!("Parsed HTML to Markdown AST in update_wrapped_lines_if_needed");
@@ -2495,14 +2456,14 @@ impl TextReaderTrait for MarkdownTextReader {
         }
     }
 
-    fn scroll_half_screen_up(&mut self, _content: &str, screen_height: usize) {
+    fn scroll_half_screen_up(&mut self, screen_height: usize) {
         let scroll_amount = screen_height / 2;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
         self.highlight_visual_line = Some(0);
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
     }
 
-    fn scroll_half_screen_down(&mut self, _content: &str, screen_height: usize) {
+    fn scroll_half_screen_down(&mut self, screen_height: usize) {
         let scroll_amount = screen_height / 2;
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
@@ -2689,7 +2650,7 @@ impl TextReaderTrait for MarkdownTextReader {
         self.text_selection.has_selection()
     }
 
-    fn preload_image_dimensions(&mut self, _content: &str, book_images: &BookImages) {
+    fn preload_image_dimensions(&mut self, book_images: &BookImages) {
         // Extract images from the AST and preload their dimensions
         if let Some(doc) = self.markdown_document.clone() {
             self.background_loader.cancel_loading();
@@ -2870,7 +2831,6 @@ impl TextReaderTrait for MarkdownTextReader {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        _content: &str,
         chapter_title: &Option<String>,
         current_chapter: usize,
         total_chapters: usize,

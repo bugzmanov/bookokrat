@@ -8,7 +8,7 @@ use crossterm::{
 };
 use log::{error, info};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
+use simplelog::{LevelFilter, WriteLogger};
 
 mod book_list;
 mod book_manager;

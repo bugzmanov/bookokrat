@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_extract_images_from_digital_frontier() {
         let temp_dir = TempDir::new().unwrap();
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
 
@@ -381,7 +381,7 @@ mod tests {
     #[test]
     fn test_resolve_image_path() {
         let temp_dir = TempDir::new().unwrap();
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
         storage.extract_images(epub_path).unwrap();
@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn test_cleanup() {
         let temp_dir = TempDir::new().unwrap();
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
         storage.extract_images(epub_path).unwrap();
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn test_skip_extraction_if_images_exist() {
         let temp_dir = TempDir::new().unwrap();
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
 
@@ -460,7 +460,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         // Create a new storage instance to simulate app restart
-        let mut storage2 = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage2 = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         // Second extraction should skip due to existing images
         storage2.extract_images(epub_path).unwrap();
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn test_extract_after_cleanup() {
         let temp_dir = TempDir::new().unwrap();
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
 
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
 
@@ -516,7 +516,7 @@ mod tests {
         fs::write(&dummy_image, "<svg></svg>").unwrap();
 
         // Now create storage and try to extract
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
 
         // Record the modification time of our dummy image
@@ -543,7 +543,7 @@ mod tests {
         fs::create_dir_all(&book_dir).unwrap();
 
         // Create storage and extract - should proceed with extraction
-        let mut storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
+        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
         let epub_path = Path::new("tests/testdata/digital_frontier.epub");
 
         storage.extract_images(epub_path).unwrap();

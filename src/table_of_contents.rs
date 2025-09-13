@@ -463,8 +463,8 @@ impl TableOfContents {
             match item {
                 TocItem::Chapter {
                     title,
-                    index,
-                    anchor,
+                    
+                    
                     ..
                 } => {
                     // Render a simple chapter
@@ -492,10 +492,10 @@ impl TableOfContents {
                 }
                 TocItem::Section {
                     title,
-                    index,
+                    
                     children,
                     is_expanded,
-                    anchor,
+                    
                     ..
                 } => {
                     // Render section header with expand/collapse indicator

@@ -1,10 +1,11 @@
-use bookrat::text_reader::TextReader;
+use bookrat::markdown_text_reader::MarkdownTextReader;
+use bookrat::text_reader_trait::TextReaderTrait;
 
 /// Test that the picker detects terminal cell dimensions dynamically
 #[test]
 fn test_dynamic_cell_height_detection() {
     // Create a TextReader instance which should detect cell height during initialization
-    let reader = TextReader::new();
+    let reader = MarkdownTextReader::new();
 
     // The test passes if TextReader::new() completes without panic
     // The actual detection happens during initialization and is logged
@@ -12,7 +13,8 @@ fn test_dynamic_cell_height_detection() {
     // We can't directly test the detected values since they depend on the terminal,
     // but we can verify that the initialization completes successfully
     assert_eq!(
-        reader.scroll_offset, 0,
+        reader.get_scroll_offset(),
+        0,
         "TextReader should initialize with scroll_offset = 0"
     );
 

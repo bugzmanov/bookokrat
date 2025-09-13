@@ -1,5 +1,5 @@
 use crate::markdown::{
-    Block, DefinitionListItem, Document, HeadingLevel, Inline, LinkType, Node, Style, Text,
+    Block, DefinitionListItem, Document, HeadingLevel, Inline, Node, Style, Text,
     TextNode, TextOrInline,
 };
 use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
@@ -1948,9 +1948,8 @@ impl Default for HtmlToMarkdownConverter {
 mod tests {
     use super::*;
     use crate::{
-        markdown::{Style, TextNode, TextOrInline},
+        markdown::{Style, TextOrInline},
         parsing::markdown_renderer::MarkdownRenderer,
-        parsing::text_generator::TextGenerator,
     };
 
     #[test]
