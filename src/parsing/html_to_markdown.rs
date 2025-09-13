@@ -1949,8 +1949,8 @@ mod tests {
     use super::*;
     use crate::{
         markdown::{Style, TextNode, TextOrInline},
-        parsing::html5ever_text_generator::TextGenerator,
         parsing::markdown_renderer::MarkdownRenderer,
+        parsing::text_generator::TextGenerator,
     };
 
     #[test]
@@ -3232,7 +3232,7 @@ The protocol operates on multiple layers:
 
         // Also test the rendered output
         let rendered = renderer.render(&doc);
-        let expected = r#"[NewsGuard](https://oreil.ly/LcBfx)[²](ch02.html#id699)
+        let expected = r#"[NewsGuard](https://oreil.ly/LcBfx) [²](ch02.html#id699)
 
 "#;
 

@@ -8,7 +8,7 @@ use crate::images::image_storage::ImageStorage;
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
-use crate::parsing::text_generator_wrapper::TextGeneratorWrapper;
+use crate::parsing::text_generator::TextGenerator;
 use crate::reading_history::ReadingHistory;
 use crate::system_command::{
     MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
@@ -53,7 +53,7 @@ pub enum TextReaderImplementation {
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
-    text_generator: TextGeneratorWrapper,
+    text_generator: TextGenerator,
     text_reader: Box<dyn TextReaderTrait>,
     text_reader_impl: TextReaderImplementation,
     bookmarks: Bookmarks,
@@ -163,7 +163,7 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
-        let text_generator = TextGeneratorWrapper::new_html5ever();
+        let text_generator = crate::parsing::text_generator::TextGenerator::new();
 
         // Choose text reader implementation based on environment variable
         // Hardcoded choice - change USE_AST_READER to true to use the new implementation
@@ -579,7 +579,7 @@ impl App {
     fn map_chapter_indices(
         toc_items: &mut Vec<TocItem>,
         chapter_map: &std::collections::HashMap<String, usize>,
-        text_generator: &TextGeneratorWrapper,
+        text_generator: &TextGenerator,
     ) {
         for item in toc_items.iter_mut() {
             match item {
