@@ -14,7 +14,6 @@ pub mod navigation_panel;
 pub mod panic_handler;
 pub mod parsing;
 pub mod reading_history;
-pub mod simple_fake_books;
 pub mod system_command;
 pub mod table;
 pub mod table_of_contents;
@@ -23,6 +22,10 @@ pub mod text_selection;
 pub mod theme;
 pub mod toc_parser;
 
+// Test utilities - only available when test-utils feature is enabled or during tests
+#[cfg(any(test, feature = "test-utils"))]
+pub mod simple_fake_books;
+#[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
 // Re-export main app components

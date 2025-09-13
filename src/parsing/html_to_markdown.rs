@@ -1094,10 +1094,7 @@ impl HtmlToMarkdownConverter {
     ) -> crate::markdown::ListItem {
         let content = self.extract_container_blocks(li_node);
 
-        crate::markdown::ListItem {
-            content,
-            task_status: None, // HTML doesn't have task lists
-        }
+        crate::markdown::ListItem::new(content)
     }
 
     fn extract_definition_content(&mut self, dd_node: &Rc<markup5ever_rcdom::Node>) -> Vec<Node> {

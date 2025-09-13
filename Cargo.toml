@@ -45,11 +45,15 @@ html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 
 [dev-dependencies]
+bookrat = { path = ".", features = ["test-utils"] }
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"
 tempfile = "3.8"
 walkdir = "2.4"
+
+[features]
+test-utils = []
 
 [profile.release]
 debug = true

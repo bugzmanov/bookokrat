@@ -142,6 +142,7 @@ pub struct TableCell {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub enum TableAlignment {
     None,
     Left,
@@ -227,6 +228,7 @@ impl ListItem {
         }
     }
 
+    #[allow(dead_code)]
     pub fn new_task(content: Vec<Node>, status: TaskStatus) -> Self {
         ListItem {
             content,

@@ -10,35 +10,10 @@ use log::{error, info};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
-mod book_list;
-mod book_manager;
-mod book_stat;
-mod bookmark;
-mod event_source;
-mod images;
-mod jump_list;
-mod main_app;
-mod markdown;
-mod markdown_text_reader;
-mod mathml_renderer;
-mod navigation_panel;
-mod panic_handler;
-mod parsing;
-mod reading_history;
-mod simple_fake_books;
-mod system_command;
-mod table;
-mod table_of_contents;
-mod text_reader_trait;
-mod text_selection;
-mod theme;
-mod toc_parser;
-
-#[cfg(test)]
-mod test_utils;
-
-use crate::event_source::KeyboardEventSource;
-use crate::main_app::{App, run_app_with_event_source};
+// Use modules from the library crate
+use bookrat::event_source::KeyboardEventSource;
+use bookrat::main_app::{App, run_app_with_event_source};
+use bookrat::panic_handler;
 
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup

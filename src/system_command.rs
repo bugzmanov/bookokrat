@@ -186,11 +186,13 @@ impl RealSystemCommandExecutor {
 }
 
 /// Mock system command executor for testing
+#[cfg(any(test, feature = "test-utils"))]
 pub struct MockSystemCommandExecutor {
     pub executed_commands: std::cell::RefCell<Vec<String>>,
     pub should_fail: bool,
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl MockSystemCommandExecutor {
     pub fn new() -> Self {
         Self {
@@ -211,6 +213,7 @@ impl MockSystemCommandExecutor {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
 impl SystemCommandExecutor for MockSystemCommandExecutor {
     fn open_file(&self, path: &str) -> Result<(), String> {
         self.executed_commands.borrow_mut().push(path.to_string());

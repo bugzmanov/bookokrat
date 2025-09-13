@@ -10,9 +10,7 @@ use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator::TextGenerator;
 use crate::reading_history::ReadingHistory;
-use crate::system_command::{
-    MockSystemCommandExecutor, RealSystemCommandExecutor, SystemCommandExecutor,
-};
+use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::{SelectedTocItem, TocItem};
 use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::theme::OCEANIC_NEXT;
@@ -112,11 +110,12 @@ impl App {
         Self::new_with_config(None, Some("bookmarks.json"), true)
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn new_with_mock_system_executor(
         book_directory: Option<&str>,
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
-        system_executor: MockSystemCommandExecutor,
+        system_executor: crate::system_command::MockSystemCommandExecutor,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
