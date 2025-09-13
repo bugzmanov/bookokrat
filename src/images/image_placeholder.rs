@@ -190,11 +190,6 @@ impl ImagePlaceholder {
             visible,
         }
     }
-
-    /// Returns the number of lines this placeholder occupies
-    pub fn line_count(&self) -> usize {
-        self.raw_lines.len()
-    }
 }
 
 #[cfg(test)]

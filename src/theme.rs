@@ -1,6 +1,7 @@
 use ratatui::style::Color;
 
 // Color palette structure
+#[allow(dead_code)]
 pub struct Base16Palette {
     pub base_00: Color, // Background
     pub base_01: Color, // Lighter background
@@ -20,6 +21,7 @@ pub struct Base16Palette {
     pub base_0f: Color, // Brown
 }
 
+#[allow(dead_code)]
 pub const OCEANIC_NEXT: Base16Palette = Base16Palette {
     base_00: Color::from_u32(0x1B2B34),
     base_01: Color::from_u32(0x343D46),

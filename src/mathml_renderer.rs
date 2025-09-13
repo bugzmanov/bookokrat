@@ -12,7 +12,6 @@ use std::collections::HashMap;
 pub enum MathMLError {
     XmlParse(String),
     InvalidStructure(String),
-    UnsupportedElement(String),
 }
 
 impl std::fmt::Display for MathMLError {
@@ -20,7 +19,6 @@ impl std::fmt::Display for MathMLError {
         match self {
             Self::XmlParse(msg) => write!(f, "XML parsing error: {msg}"),
             Self::InvalidStructure(msg) => write!(f, "Invalid MathML structure: {msg}"),
-            Self::UnsupportedElement(msg) => write!(f, "Unsupported element: {msg}"),
         }
     }
 }

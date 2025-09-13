@@ -1,6 +1,5 @@
 use crate::table_of_contents::TocItem;
 use epub::doc::{EpubDoc, NavPoint};
-use log::debug;
 use std::io::{Read, Seek};
 
 pub struct TocParser;
@@ -43,7 +42,6 @@ impl TocParser {
             TocItem::Chapter {
                 title: navpoint.label.clone(),
                 href: clean_href,
-                index: 0, // Will be mapped later
                 anchor,
             }
         } else {
@@ -52,7 +50,6 @@ impl TocParser {
             TocItem::Section {
                 title: navpoint.label.clone(),
                 href: Some(clean_href),
-                index: None, // Will be mapped later
                 anchor,
                 children,
                 is_expanded: true,

@@ -39,7 +39,6 @@ struct RenderedLine {
     raw_text: String, // For text selection
     line_type: LineType,
     link_nodes: Vec<LinkInfo>,   // Links that are visible on this line
-    visual_height: usize,        // 1 for text, IMAGE_HEIGHT for images, etc.
     node_anchor: Option<String>, // Anchor/id from the Node if present
 }
 
@@ -747,7 +746,6 @@ impl MarkdownTextReader {
                     needs_decoration: false,
                 },
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
 
@@ -774,7 +772,6 @@ impl MarkdownTextReader {
                     needs_decoration: true,
                 },
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
 
@@ -788,7 +785,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -811,7 +807,7 @@ impl MarkdownTextReader {
 
         for item in content.iter() {
             match item {
-                TextOrInline::Inline(Inline::Image { url, alt_text, .. }) => {
+                TextOrInline::Inline(Inline::Image { url, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
                         self.render_text_spans(
@@ -827,15 +823,7 @@ impl MarkdownTextReader {
                     }
 
                     // Render the image as a separate block
-                    self.render_image_placeholder(
-                        url,
-                        alt_text,
-                        lines,
-                        total_height,
-                        width,
-                        palette,
-                        is_focused,
-                    );
+                    self.render_image_placeholder(url, lines, total_height, width, palette);
                     has_content = true;
                 }
                 _ => {
@@ -864,7 +852,6 @@ impl MarkdownTextReader {
                 raw_text: String::new(),
                 line_type: LineType::Empty,
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
             self.raw_text_lines.push(String::new());
@@ -1015,7 +1002,7 @@ impl MarkdownTextReader {
         content: &str,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
-        width: usize,
+        _width: usize, //todo: not supported yet
         palette: &Base16Palette,
         is_focused: bool,
     ) {
@@ -1041,7 +1028,6 @@ impl MarkdownTextReader {
                     language: language.map(String::from),
                 },
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
 
@@ -1055,7 +1041,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1154,7 +1139,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1252,7 +1236,6 @@ impl MarkdownTextReader {
                 raw_text: raw_text.clone(),
                 line_type: LineType::Text, // Table widget handles its own styling
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             };
 
@@ -1288,7 +1271,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1491,7 +1473,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1520,7 +1501,6 @@ impl MarkdownTextReader {
             raw_text: hr_line.clone(),
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
 
@@ -1533,7 +1513,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1615,7 +1594,6 @@ impl MarkdownTextReader {
                     raw_text: String::new(),
                     line_type: LineType::Empty,
                     link_nodes: vec![],
-                    visual_height: 1,
                     node_anchor: None,
                 });
                 self.raw_text_lines.push(String::new());
@@ -1629,7 +1607,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1661,7 +1638,6 @@ impl MarkdownTextReader {
             raw_text: separator_line.clone(),
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(separator_line.clone());
@@ -1673,18 +1649,16 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
 
-        debug!("EpubBlock: {:?}", content);
         // Render the content blocks with controlled spacing
-        for (i, content_node) in content.iter().enumerate() {
+        for content_node in content.iter() {
             // Render the content node normally
             match &content_node.block {
-                MarkdownBlock::Heading { level, content } => {
+                MarkdownBlock::Heading { content, .. } => {
                     self.render_heading(
                         HeadingLevel::H5, // remap to always same time of heading to avoid visual hierarchy issues
                         content,
@@ -1722,7 +1696,6 @@ impl MarkdownTextReader {
             raw_text: separator_line.clone(),
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(separator_line);
@@ -1734,7 +1707,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -1832,7 +1804,6 @@ impl MarkdownTextReader {
                 raw_text: final_raw_text.clone(),
                 line_type: LineType::Text,
                 link_nodes: line_links, // Captured links!
-                visual_height: 1,
                 node_anchor: None,
             });
 
@@ -1847,7 +1818,6 @@ impl MarkdownTextReader {
                 raw_text: String::new(),
                 line_type: LineType::Empty,
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
             self.raw_text_lines.push(String::new());
@@ -1996,12 +1966,10 @@ impl MarkdownTextReader {
     fn render_image_placeholder(
         &mut self,
         url: &str,
-        alt_text: &str,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
         palette: &Base16Palette,
-        is_focused: bool,
     ) {
         // Constants for image display
         const IMAGE_HEIGHT_WIDE: u16 = 20;
@@ -2014,7 +1982,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -2083,7 +2050,6 @@ impl MarkdownTextReader {
                     src: url.to_string(),
                 },
                 link_nodes: vec![],
-                visual_height: 1,
                 node_anchor: None,
             });
 
@@ -2097,7 +2063,6 @@ impl MarkdownTextReader {
             raw_text: String::new(),
             line_type: LineType::Empty,
             link_nodes: vec![],
-            visual_height: 1,
             node_anchor: None,
         });
         self.raw_text_lines.push(String::new());
@@ -2223,23 +2188,6 @@ impl TextReaderTrait for MarkdownTextReader {
         debug!("Parsed HTML to Markdown AST in set_content_from_string");
     }
 
-    fn set_content_from_ast(&mut self, doc: Document, _chapter_title: Option<String>) {
-        // This is the main entry point for the AST-based reader
-        // Store the document - rendering will happen in the render() method
-        // when we have access to palette and width
-        self.markdown_document = Some(doc);
-
-        // Clear old state
-        self.links.clear();
-        self.embedded_tables.borrow_mut().clear();
-        self.raw_text_lines.clear();
-        self.scroll_offset = 0;
-        self.text_selection.clear_selection();
-
-        // Mark cache as invalid to force re-rendering
-        self.cache_generation += 1;
-    }
-
     fn content_updated(&mut self, content_length: usize) {
         self.content_length = content_length;
         self.scroll_offset = 0;
@@ -2263,28 +2211,6 @@ impl TextReaderTrait for MarkdownTextReader {
         self.embedded_images.borrow_mut().clear();
 
         debug!("content_updated: cleared markdown_document and all state");
-    }
-
-    fn update_wrapped_lines_if_needed(&mut self, content: &str, area: Rect) {
-        let width = area.width as usize;
-        let height = area.height as usize;
-
-        if self.cached_text_width != width || self.visible_height != height {
-            self.cached_text_width = width;
-            self.visible_height = height;
-
-            if self.markdown_document.is_none() && !content.is_empty() {
-                use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-
-                let mut converter = HtmlToMarkdownConverter::new();
-                let doc = converter.convert(content);
-
-                self.markdown_document = Some(doc);
-                self.cache_generation += 1;
-
-                debug!("Parsed HTML to Markdown AST in update_wrapped_lines_if_needed");
-            }
-        }
     }
 
     fn scroll_up(&mut self) {
@@ -2902,7 +2828,7 @@ impl TextReaderTrait for MarkdownTextReader {
                                     };
 
                                     // Calculate actual image width in terminal cells based on aspect ratio
-                                    let (image_width_pixels, image_height_pixels) =
+                                    let (image_width_pixels, _image_height_pixels) =
                                         scaled_image.dimensions();
                                     let font_size = picker.font_size();
                                     let image_width_cells =
@@ -2958,28 +2884,12 @@ impl TextReaderTrait for MarkdownTextReader {
         // Text selection is already handled via apply_selection_highlighting in the visible_lines loop
     }
 
-    fn get_total_wrapped_lines(&self) -> usize {
-        self.total_wrapped_lines
-    }
-
-    fn get_visible_height(&self) -> usize {
-        self.visible_height
-    }
-
     fn get_last_content_area(&self) -> Option<Rect> {
         self.last_content_area
     }
 
     // Internal link navigation methods (from trait)
     fn get_anchor_position(&self, anchor_id: &str) -> Option<usize> {
-        debug!(
-            "Looking for anchor '{}' in {} available anchors",
-            anchor_id,
-            self.anchor_positions.len()
-        );
-
-        // Print ALL available anchors for debugging
-        let all_anchors: Vec<&String> = self.anchor_positions.keys().collect();
         self.anchor_positions.get(anchor_id).copied()
     }
 

@@ -20,13 +20,6 @@ pub struct Bookmarks {
 }
 
 impl Bookmarks {
-    pub fn new() -> Self {
-        Self {
-            books: HashMap::new(),
-            file_path: Some("bookmarks.json".to_string()),
-        }
-    }
-
     pub fn ephemeral() -> Self {
         Self {
             books: HashMap::new(),
@@ -39,10 +32,6 @@ impl Bookmarks {
             books: HashMap::new(),
             file_path: Some(file_path.to_string()),
         }
-    }
-
-    pub fn load() -> anyhow::Result<Self> {
-        Self::load_from_file("bookmarks.json")
     }
 
     pub fn load_or_ephemeral(file_path: Option<&str>) -> Self {

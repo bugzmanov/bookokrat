@@ -26,24 +26,6 @@ impl BookImages {
         }
     }
 
-    /// Create a new BookImages instance with images stored in the project temp directory
-    pub fn new_in_project_temp() -> Result<Self> {
-        let storage = ImageStorage::new_in_project_temp()?;
-        Ok(Self {
-            storage: Arc::new(storage),
-            current_epub_path: None,
-        })
-    }
-
-    /// Create a new BookImages instance with a custom storage directory
-    pub fn with_storage_dir(base_dir: PathBuf) -> Result<Self> {
-        let storage = ImageStorage::new(base_dir)?;
-        Ok(Self {
-            storage: Arc::new(storage),
-            current_epub_path: None,
-        })
-    }
-
     /// Load images for a specific EPUB book
     pub fn load_book(&mut self, epub_path: &Path) -> Result<()> {
         debug!("Loading images for book: {:?}", epub_path);
@@ -55,12 +37,6 @@ impl BookImages {
         self.current_epub_path = Some(epub_path.to_path_buf());
 
         Ok(())
-    }
-
-    /// Get the size of an image from its source path (as referenced in the book text)
-    /// Returns (width, height) if the image exists and can be loaded
-    pub fn get_image_size(&self, image_src: &str) -> Option<(u32, u32)> {
-        self.get_image_size_with_context(image_src, None)
     }
 
     /// Get the size of an image with chapter context for better path resolution

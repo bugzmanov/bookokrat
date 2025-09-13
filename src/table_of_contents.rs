@@ -1,7 +1,6 @@
 use crate::markdown_text_reader::ActiveSection;
 use crate::navigation_panel::CurrentBookInfo;
 use crate::theme::Base16Palette;
-use log::debug;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -17,14 +16,12 @@ pub enum TocItem {
     Chapter {
         title: String,
         href: String,
-        index: usize,
         anchor: Option<String>, // Optional anchor/fragment within the chapter
     },
     /// A section that may have its own content and contains child items
     Section {
         title: String,
         href: Option<String>, // Some sections are readable, others are just containers
-        index: Option<usize>, // Chapter index if this section is also readable
         anchor: Option<String>, // Optional anchor/fragment within the chapter
         children: Vec<TocItem>,
         is_expanded: bool,
@@ -40,11 +37,11 @@ impl TocItem {
         }
     }
 
-    /// Get the chapter index if this item is readable
-    pub fn chapter_index(&self) -> Option<usize> {
+    /// Get the href for this item
+    pub fn href(&self) -> Option<&str> {
         match self {
-            TocItem::Chapter { index, .. } => Some(*index),
-            TocItem::Section { index, .. } => *index,
+            TocItem::Chapter { href, .. } => Some(href),
+            TocItem::Section { href, .. } => href.as_deref(),
         }
     }
 
@@ -434,23 +431,12 @@ impl TableOfContents {
     ) {
         let (text_color, _border_color, _bg_color) = palette.get_panel_colors(is_focused);
         for item in toc_items {
-            let is_selected_toc_item =
-                self.selected_index > 0 && self.selected_index - 1 == *toc_item_index;
-
             match item {
                 TocItem::Chapter { title, .. } => {
                     // Render a simple chapter
                     let is_active = self.is_item_active(item, &current_book.active_section);
                     let chapter_style = if is_active {
-                        // // Always show active section in red, even when selected
-                        // if is_selected_toc_item {
-                        //     Style::default().fg(palette.base_08).bg(palette.base_01)
-                        // } else {
                         Style::default().fg(palette.base_08)
-                    //     }
-                    // } else if is_selected_toc_item {
-                    // Non-active selected item
-                    //     Style::default().fg(palette.base_05).bg(palette.base_01)
                     } else {
                         Style::default().fg(text_color) // Dimmer for other chapters
                     };
@@ -469,23 +455,12 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    // Render section header with expand/collapse indicator
                     let section_icon = if *is_expanded { "▼" } else { "▶" };
 
-                    // Determine the style based on selection and active section
                     let is_active = self.is_item_active(item, &current_book.active_section);
                     let section_style = if is_active {
-                        // Always show active section in red, even when selected
-                        // if is_selected_toc_item {
-                        //     Style::default().fg(palette.base_08).bg(palette.base_01)
-                        // } else {
                         Style::default().fg(palette.base_08)
-                        // }
                     } else {
-                        //if is_selected_toc_item {
-                        //     // Non-active selected item - use purple/magenta for sections
-                        //     Style::default().fg(palette.base_0f).bg(palette.base_01)
-                        // } else {
                         Style::default().fg(palette.base_0d) // Blue for sections
                     };
 
@@ -530,11 +505,26 @@ impl TableOfContents {
                     false
                 }
             }
-            ActiveSection::Chapter(chapter_idx) => {
-                // Fall back to chapter index matching
-                if let Some(item_idx) = item.chapter_index() {
-                    debug!("Here!!!!!!!");
-                    item_idx == *chapter_idx
+            ActiveSection::Chapter(_chapter_idx) => {
+                // Compare by href - check if this item's href matches the current chapter's href
+                if let Some(current_book) = &self.current_book_info {
+                    if let Some(current_href) = &current_book.current_chapter_href {
+                        if let Some(item_href) = item.href() {
+                            // Normalize both hrefs for comparison
+                            let current_normalized =
+                                current_href.split('#').next().unwrap_or(current_href);
+                            let item_normalized = item_href.split('#').next().unwrap_or(item_href);
+
+                            // Check if they match
+                            current_normalized == item_normalized
+                                || current_normalized.ends_with(item_normalized)
+                                || item_normalized.ends_with(current_normalized)
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
                 } else {
                     false
                 }

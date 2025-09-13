@@ -1,4 +1,4 @@
-use crate::{markdown::classify_link_href, text_reader_trait::LinkInfo};
+use crate::text_reader_trait::LinkInfo;
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Style, Stylize},
@@ -227,7 +227,6 @@ impl Table {
                 while start < chars.len() {
                     let end = (start + width).min(chars.len());
                     let chunk: String = chars[start..end].iter().collect();
-                    let chunk_display_width = chunk.chars().count();
                     current_line.push(Span::styled(chunk, span.style.clone()));
 
                     if !current_line.is_empty() {
@@ -291,190 +290,6 @@ impl Table {
         }
 
         result
-    }
-
-    /// Parse markdown formatting with link detection
-    fn parse_markdown_formatting_with_links(
-        &mut self,
-        text: &str,
-        base_color: Color,
-        line_num: usize,
-        start_col: usize,
-    ) -> Vec<Span<'static>> {
-        let mut spans = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-        let mut current_text = String::new();
-        let mut current_col = start_col;
-
-        while i < chars.len() {
-            // Check for markdown-style links [text](url)
-            if chars[i] == '[' {
-                // Look for the matching ]( pattern
-                let mut link_text = String::new();
-                let mut j = i + 1;
-                let mut found_link = false;
-
-                while j < chars.len() && chars[j] != ']' {
-                    link_text.push(chars[j]);
-                    j += 1;
-                }
-
-                if j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(' {
-                    // Found link pattern, extract URL
-                    j += 2; // Skip ](
-                    let mut url = String::new();
-                    while j < chars.len() && chars[j] != ')' {
-                        url.push(chars[j]);
-                        j += 1;
-                    }
-
-                    if j < chars.len() && chars[j] == ')' {
-                        // Valid link found
-                        found_link = true;
-
-                        // Add any pending text
-                        if !current_text.is_empty() {
-                            spans.push(Span::styled(
-                                current_text.clone(),
-                                Style::default().fg(base_color),
-                            ));
-                            current_col += current_text.chars().count();
-                            current_text.clear();
-                        }
-
-                        // Store link information for click handling
-                        let link_start_col = current_col;
-                        let link_end_col = link_start_col + link_text.chars().count();
-
-                        // Classify the link
-                        let (link_type, target_chapter, target_anchor) = classify_link_href(&url);
-
-                        self.links.push(LinkInfo {
-                            text: link_text.clone(),
-                            url: url.clone(),
-                            line: self.base_line + line_num,
-                            start_col: link_start_col,
-                            end_col: link_end_col,
-                            link_type: Some(link_type),
-                            target_chapter,
-                            target_anchor,
-                        });
-
-                        // Add link with underline styling (cyan color like text_reader)
-                        let link_color = Color::Cyan; // Use same color as text_reader
-                        spans.push(Span::styled(
-                            link_text.clone(),
-                            Style::default()
-                                .fg(link_color)
-                                .add_modifier(ratatui::style::Modifier::UNDERLINED),
-                        ));
-
-                        current_col += link_text.chars().count();
-                        i = j + 1; // Move past the closing )
-                        continue;
-                    }
-                }
-
-                if !found_link {
-                    // Not a valid link, treat [ as normal character
-                    current_text.push('[');
-                    current_col += 1;
-                    i += 1;
-                }
-            }
-            // Check for bold (**text** or __text__)
-            else if i + 1 < chars.len()
-                && ((chars[i] == '*' && chars[i + 1] == '*')
-                    || (chars[i] == '_' && chars[i + 1] == '_'))
-            {
-                // Save any accumulated text
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(base_color),
-                    ));
-                    current_col += current_text.chars().count();
-                    current_text.clear();
-                }
-
-                let marker = chars[i];
-                i += 2; // Skip opening markers
-
-                // Find closing markers
-                let mut j = i;
-                while j + 1 < chars.len() {
-                    if chars[j] == marker && chars[j + 1] == marker {
-                        // Found closing markers
-                        let bold_text: String = chars[i..j].iter().collect();
-                        spans.push(Span::styled(
-                            bold_text.clone(),
-                            Style::default().fg(base_color).bold(),
-                        ));
-                        current_col += bold_text.chars().count();
-                        i = j + 2;
-                        break;
-                    }
-                    j += 1;
-                }
-
-                if j + 1 >= chars.len() {
-                    // No closing markers found, treat as normal text
-                    current_text.push(marker);
-                    current_text.push(marker);
-                }
-            }
-            // Check for italic (*text* or _text_) - but not bold
-            else if (chars[i] == '*' || chars[i] == '_')
-                && (i == 0 || (i > 0 && chars[i - 1] != chars[i]))
-                && (i + 1 < chars.len() && chars[i + 1] != chars[i])
-            {
-                // Save any accumulated text
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(base_color),
-                    ));
-                    current_col += current_text.chars().count();
-                    current_text.clear();
-                }
-
-                let marker = chars[i];
-                i += 1; // Skip opening marker
-
-                // Find closing marker
-                let mut j = i;
-                while j < chars.len() {
-                    if chars[j] == marker && (j + 1 >= chars.len() || chars[j + 1] != marker) {
-                        // Found closing marker
-                        let italic_text: String = chars[i..j].iter().collect();
-                        spans.push(Span::styled(
-                            italic_text.clone(),
-                            Style::default().fg(base_color).italic(),
-                        ));
-                        current_col += italic_text.chars().count();
-                        i = j + 1;
-                        break;
-                    }
-                    j += 1;
-                }
-
-                if j >= chars.len() {
-                    // No closing marker found, treat as normal text
-                    current_text.push(marker);
-                }
-            } else {
-                current_text.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        // Add any remaining text
-        if !current_text.is_empty() {
-            spans.push(Span::styled(current_text, Style::default().fg(base_color)));
-        }
-
-        spans
     }
 
     /// Parse markdown formatting in text and return styled spans (without link detection)
@@ -732,7 +547,6 @@ impl Table {
                             break;
                         }
 
-                        let span_len = span.content.len();
                         let span_display_width = span.content.chars().count();
                         if span_display_width <= remaining_width {
                             line_spans.push(span);
@@ -767,33 +581,6 @@ impl Table {
         }
 
         lines
-    }
-
-    /// Calculate the total height the table will occupy
-    pub fn calculate_height(&self, available_width: u16) -> u16 {
-        let widths = self.calculate_column_widths(available_width);
-        let mut height = 0;
-
-        // Top border
-        height += 1;
-
-        // Header if present
-        if let Some(ref header) = self.header {
-            let header_lines = self.render_row(header, &widths, true);
-            height += header_lines.len() as u16;
-            height += 1; // Middle border
-        }
-
-        // Data rows
-        for row in &self.rows {
-            let row_lines = self.render_row(row, &widths, false);
-            height += row_lines.len() as u16;
-        }
-
-        // Bottom border
-        height += 1;
-
-        height
     }
 
     /// Render the table into a vector of lines for integration with Paragraph widget
@@ -847,157 +634,6 @@ impl Table {
         lines.push(self.render_bottom_border(&widths));
 
         lines
-    }
-
-    /// Extract link information from table cells and populate the links vec
-    /// This should be called after the table position is known
-    pub fn populate_links(&mut self, base_line: usize, available_width: u16) {
-        self.base_line = base_line;
-        self.links.clear();
-
-        let widths = self.calculate_column_widths(available_width);
-        let mut current_line = base_line + 1; // Skip top border
-
-        // Process header if present
-        if let Some(header) = self.header.clone() {
-            self.extract_links_from_row(&header, &widths, current_line);
-            current_line += self.count_row_lines(&header, &widths);
-            current_line += 1; // Skip middle border
-        }
-
-        // Process data rows
-        let rows = self.rows.clone();
-        for row in &rows {
-            self.extract_links_from_row(row, &widths, current_line);
-            current_line += self.count_row_lines(row, &widths);
-        }
-    }
-
-    /// Extract links from a single row
-    fn extract_links_from_row(&mut self, row: &[String], widths: &[u16], start_line: usize) {
-        for (col_idx, cell) in row.iter().enumerate() {
-            if col_idx >= widths.len() {
-                continue;
-            }
-
-            let width = widths[col_idx] as usize;
-            if width == 0 {
-                continue;
-            }
-
-            // Calculate column offset (including borders and previous columns)
-            let mut col_offset = 1; // Left border
-            for i in 0..col_idx {
-                if i < widths.len() {
-                    col_offset += widths[i] as usize + 1; // column width + separator
-                }
-            }
-
-            // Process <br/> tags first
-            let cell_with_newlines = cell.replace("<br/> ", "\n").replace("<br/>", "\n");
-            let cell_lines_from_br: Vec<&str> = cell_with_newlines.split('\n').collect();
-
-            let mut line_in_cell = 0;
-            for br_line in cell_lines_from_br {
-                // Extract links from this line
-                self.extract_links_from_text(br_line, start_line + line_in_cell, col_offset);
-                line_in_cell += 1;
-            }
-        }
-    }
-
-    /// Count how many rendered lines a row will take
-    fn count_row_lines(&self, row: &[String], widths: &[u16]) -> usize {
-        let mut max_lines = 1;
-
-        for (i, cell) in row.iter().enumerate() {
-            if i >= widths.len() {
-                continue;
-            }
-
-            let width = widths[i] as usize;
-            if width == 0 {
-                continue;
-            }
-
-            // Process <br/> tags
-            let cell_with_newlines = cell.replace("<br/> ", "\n").replace("<br/>", "\n");
-            let cell_lines = cell_with_newlines.split('\n').count();
-            max_lines = max_lines.max(cell_lines);
-        }
-
-        max_lines
-    }
-
-    /// Extract links from a single line of text
-    fn extract_links_from_text(&mut self, text: &str, line_num: usize, start_col: usize) {
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-        let mut current_col = start_col;
-
-        while i < chars.len() {
-            if chars[i] == '[' {
-                // Look for the matching ]( pattern
-                let mut link_text = String::new();
-                let mut j = i + 1;
-
-                while j < chars.len() && chars[j] != ']' {
-                    link_text.push(chars[j]);
-                    j += 1;
-                }
-
-                if j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(' {
-                    // Found link pattern, extract URL
-                    j += 2; // Skip ](
-                    let mut url = String::new();
-                    while j < chars.len() && chars[j] != ')' {
-                        url.push(chars[j]);
-                        j += 1;
-                    }
-
-                    if j < chars.len() && chars[j] == ')' {
-                        // Valid link found
-                        let link_start_col = current_col;
-                        let link_end_col = link_start_col + link_text.chars().count();
-
-                        // Classify the link
-                        let (link_type, target_chapter, target_anchor) = classify_link_href(&url);
-
-                        self.links.push(LinkInfo {
-                            text: link_text.clone(),
-                            url: url.clone(),
-                            line: line_num,
-                            start_col: link_start_col,
-                            end_col: link_end_col,
-                            link_type: Some(link_type),
-                            target_chapter,
-                            target_anchor,
-                        });
-
-                        current_col += link_text.chars().count();
-                        i = j + 1; // Move past the closing )
-                        continue;
-                    }
-                }
-
-                // Not a valid link, advance normally
-                current_col += 1;
-                i += 1;
-            } else {
-                current_col += 1;
-                i += 1;
-            }
-        }
-    }
-
-    /// Get link at a specific position (similar to text_reader)
-    pub fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo> {
-        for link in &self.links {
-            if link.line == line && column >= link.start_col && column < link.end_col {
-                return Some(link);
-            }
-        }
-        None
     }
 
     /// Get all links in this table
@@ -1088,26 +724,6 @@ mod tests {
     }
 
     #[test]
-    fn test_height_calculation() {
-        let rows = vec![
-            vec![
-                "Short".to_string(),
-                "This is a longer text that will wrap".to_string(),
-            ],
-            vec!["Row 2".to_string(), "Simple".to_string()],
-        ];
-
-        let table = Table::new(rows)
-            .header(vec!["Col 1".to_string(), "Col 2".to_string()])
-            .constraints(vec![Constraint::Length(8), Constraint::Length(12)]);
-
-        let height = table.calculate_height(30);
-
-        // Should include: top border (1) + header (1) + middle border (1) + data rows (varies based on wrapping) + bottom border (1)
-        assert!(height >= 5); // Minimum expected height
-    }
-
-    #[test]
     fn test_render_to_lines() {
         let rows = vec![
             vec!["A".to_string(), "B".to_string()],
@@ -1147,55 +763,6 @@ mod tests {
     }
 
     #[test]
-    fn test_table_with_wrapping_content() {
-        let rows = vec![
-            vec!["Short".to_string(), "This is a very long text that should wrap across multiple lines when rendered in a narrow column".to_string()],
-            vec!["Row 2".to_string(), "Another long text that will also wrap and demonstrate how table height is calculated".to_string()],
-        ];
-
-        let table = Table::new(rows)
-            .header(vec!["Col 1".to_string(), "Col 2".to_string()])
-            .constraints(vec![Constraint::Length(8), Constraint::Length(20)]);
-
-        // Test with narrow width to force wrapping
-        let height_narrow = table.calculate_height(35);
-
-        // Test with wide width - should be shorter due to less wrapping
-        let height_wide = table.calculate_height(80);
-
-        // Height with narrow width should be greater than height with wide width
-        // because narrow columns cause more text wrapping
-        assert!(height_narrow >= height_wide);
-
-        // Should be at least the minimum (top border + header + middle border + 2 data rows + bottom border)
-        assert!(height_narrow >= 5);
-        assert!(height_wide >= 5);
-    }
-
-    #[test]
-    fn test_table_with_br_tags() {
-        let rows = vec![
-            vec![
-                "Cell with<br/>line break".to_string(),
-                "Normal cell".to_string(),
-            ],
-            vec![
-                "Another<br/>multi<br/>line".to_string(),
-                "Simple".to_string(),
-            ],
-        ];
-
-        let table =
-            Table::new(rows).constraints(vec![Constraint::Length(15), Constraint::Length(10)]);
-
-        let height = table.calculate_height(30);
-
-        // Should account for line breaks in cells
-        // Top border (1) + first row with <br/> (2) + second row with 2 <br/> (3) + bottom border (1) = 7
-        assert!(height >= 7);
-    }
-
-    #[test]
     fn test_table_with_newlines() {
         let rows = vec![
             vec![
@@ -1207,12 +774,6 @@ mod tests {
 
         let table =
             Table::new(rows).constraints(vec![Constraint::Length(15), Constraint::Length(10)]);
-
-        let height = table.calculate_height(30);
-
-        // Should account for newlines in cells
-        // Top border (1) + first row with newline (2) + second row with 2 newlines (3) + bottom border (1) = 7
-        assert!(height >= 7);
 
         let lines = table.render_to_lines(30);
 
@@ -1319,58 +880,6 @@ mod tests {
                 assert!(line.spans.len() >= 3); // At least border spans + content
             }
         }
-    }
-
-    #[test]
-    fn test_table_with_links() {
-        let rows = vec![
-            vec![
-                "Cell with [link text](https://example.com)".to_string(),
-                "Normal cell".to_string(),
-            ],
-            vec![
-                "Another [Google](https://google.com) link".to_string(),
-                "[Multiple](http://one.com) [links](http://two.com)".to_string(),
-            ],
-        ];
-
-        let mut table = Table::new(rows)
-            .header(vec!["Header 1".to_string(), "Header 2".to_string()])
-            .constraints(vec![Constraint::Length(40), Constraint::Length(40)]);
-
-        // Populate links as would be done in text_reader
-        table.populate_links(100, 85); // Base line 100, width 85
-
-        let links = table.get_links();
-
-        // Should find 4 links total
-        assert_eq!(links.len(), 4, "Should find 4 links in the table");
-
-        // Check first link
-        assert_eq!(links[0].text, "link text");
-        assert_eq!(links[0].url, "https://example.com");
-        assert!(links[0].line >= 100); // Should be after the base line
-
-        // Check second link
-        assert_eq!(links[1].text, "Google");
-        assert_eq!(links[1].url, "https://google.com");
-
-        // Check third link
-        assert_eq!(links[2].text, "Multiple");
-        assert_eq!(links[2].url, "http://one.com");
-
-        // Check fourth link
-        assert_eq!(links[3].text, "links");
-        assert_eq!(links[3].url, "http://two.com");
-
-        // Test link position detection
-        let link_at_pos = table.get_link_at_position(links[0].line, links[0].start_col);
-        assert!(link_at_pos.is_some());
-        assert_eq!(link_at_pos.unwrap().url, "https://example.com");
-
-        // Test position outside link
-        let no_link = table.get_link_at_position(links[0].line, 0);
-        assert!(no_link.is_none());
     }
 
     #[test]

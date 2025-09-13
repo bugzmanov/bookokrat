@@ -85,13 +85,28 @@ impl BookStat {
     ) {
         for item in items {
             match item {
-                crate::table_of_contents::TocItem::Chapter {
-                    title, href, index, ..
-                } => {
-                    // Try to get content using the chapter index first
+                crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
+                    // Find the spine index for this href
                     let current_page = epub.get_current_page();
-                    let content_result = if epub.set_current_page(*index) {
-                        epub.get_current_str().map(|(content, _)| content)
+
+                    // Try to find the chapter in the spine
+                    let mut spine_index = None;
+                    for (idx, spine_item) in epub.spine.iter().enumerate() {
+                        if let Some((path, _)) = epub.resources.get(&spine_item.idref) {
+                            let path_str = path.to_string_lossy();
+                            if path_str.ends_with(href) || href.ends_with(&*path_str) {
+                                spine_index = Some(idx);
+                                break;
+                            }
+                        }
+                    }
+
+                    let content_result = if let Some(idx) = spine_index {
+                        if epub.set_current_page(idx) {
+                            epub.get_current_str().map(|(content, _)| content)
+                        } else {
+                            None
+                        }
                     } else {
                         // Fallback to trying to find the resource by path
                         let matching_id = epub
@@ -120,14 +135,14 @@ impl BookStat {
                                 &content,
                                 text_width,
                                 lines_per_screen,
-                                *index,
+                                spine_index.unwrap_or(0),
                                 is_top_level,
                             );
                         }
                         None => {
                             error!(
-                                "BookStat: Failed to get content for chapter '{}' with href '{}' at index {}",
-                                title, href, index
+                                "BookStat: Failed to get content for chapter '{}' with href '{}'",
+                                title, href
                             );
                         }
                     }
@@ -135,79 +150,48 @@ impl BookStat {
                 crate::table_of_contents::TocItem::Section {
                     title,
                     href,
-                    index,
                     children,
                     ..
                 } => {
                     // Process section if it has content
                     if let Some(href_str) = href {
                         // For sections, we need to find the actual chapter index from the epub spine
-                        // since sections don't have indices mapped
                         let current_page = epub.get_current_page();
 
-                        let (chapter_index, content_result) = if let Some(idx) = index {
-                            // Use provided index
-                            if epub.set_current_page(*idx) {
-                                (*idx, epub.get_current_str().map(|(content, _)| content))
-                            } else {
-                                // Try to find resource by path
-                                let matching_id = epub
-                                    .resources
-                                    .iter()
-                                    .find(|(_, (path, _))| {
-                                        path.to_string_lossy() == *href_str
-                                            || path.to_string_lossy().ends_with(href_str)
-                                    })
-                                    .map(|(id, _)| id.clone());
-
-                                let result = if let Some(id) = matching_id {
-                                    epub.get_resource_str(&id).map(|(content, _)| content)
-                                } else {
-                                    None
-                                };
-                                (*idx, result)
-                            }
-                        } else {
-                            // Try to find the chapter index by matching the href in the spine
-                            let mut found_index = None;
-                            let mut found_content = None;
-
-                            for i in 0..epub.get_num_pages() {
-                                if epub.set_current_page(i) {
-                                    if let Some(current_path) = epub.get_current_path() {
-                                        let path_str = current_path.to_string_lossy();
-                                        if path_str.ends_with(href_str)
-                                            || href_str.ends_with(path_str.as_ref())
-                                        {
-                                            found_index = Some(i);
-                                            found_content =
-                                                epub.get_current_str().map(|(content, _)| content);
-                                            break;
-                                        }
-                                    }
+                        // Try to find the section in the spine
+                        let mut spine_index = None;
+                        for (idx, spine_item) in epub.spine.iter().enumerate() {
+                            if let Some((path, _)) = epub.resources.get(&spine_item.idref) {
+                                let path_str = path.to_string_lossy();
+                                if path_str.ends_with(href_str) || href_str.ends_with(&*path_str) {
+                                    spine_index = Some(idx);
+                                    break;
                                 }
                             }
+                        }
 
-                            if let (Some(idx), Some(content)) = (found_index, found_content) {
-                                (idx, Some(content))
+                        let content_result = if let Some(idx) = spine_index {
+                            // Use found index
+                            if epub.set_current_page(idx) {
+                                epub.get_current_str().map(|(content, _)| content)
                             } else {
-                                // Last resort: try the href directly
-                                // Try to find resource by path
-                                let matching_id = epub
-                                    .resources
-                                    .iter()
-                                    .find(|(_, (path, _))| {
-                                        path.to_string_lossy() == *href_str
-                                            || path.to_string_lossy().ends_with(href_str)
-                                    })
-                                    .map(|(id, _)| id.clone());
+                                None
+                            }
+                        } else {
+                            // Try to find resource by path as fallback
+                            let matching_id = epub
+                                .resources
+                                .iter()
+                                .find(|(_, (path, _))| {
+                                    path.to_string_lossy() == *href_str
+                                        || path.to_string_lossy().ends_with(href_str)
+                                })
+                                .map(|(id, _)| id.clone());
 
-                                let result = if let Some(id) = matching_id {
-                                    epub.get_resource_str(&id).map(|(content, _)| content)
-                                } else {
-                                    None
-                                };
-                                (0, result)
+                            if let Some(id) = matching_id {
+                                epub.get_resource_str(&id).map(|(content, _)| content)
+                            } else {
+                                None
                             }
                         };
 
@@ -221,14 +205,14 @@ impl BookStat {
                                     &content,
                                     text_width,
                                     lines_per_screen,
-                                    chapter_index,
+                                    spine_index.unwrap_or(0),
                                     is_top_level,
                                 );
                             }
                             None => {
                                 error!(
-                                    "BookStat: Failed to get content for section '{}' with href '{}' at index {}",
-                                    title, href_str, chapter_index
+                                    "BookStat: Failed to get content for section '{}' with href '{}'",
+                                    title, href_str
                                 );
                             }
                         }

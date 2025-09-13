@@ -613,7 +613,6 @@ impl HtmlToMarkdownConverter {
     ) {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
-        let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
         let mut max_columns = 0;
         let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
 
@@ -675,7 +674,7 @@ impl HtmlToMarkdownConverter {
         }
 
         // Set default alignment for all columns
-        alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+        let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
 
         // Pad all rows to have max_columns cells
         if let Some(ref mut header_row) = header {
@@ -711,7 +710,6 @@ impl HtmlToMarkdownConverter {
     fn extract_table_as_block(&mut self, node: &Rc<markup5ever_rcdom::Node>) -> Option<Block> {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
-        let mut alignment: Vec<crate::markdown::TableAlignment> = Vec::new();
         let mut max_columns = 0;
         let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
 
@@ -773,7 +771,7 @@ impl HtmlToMarkdownConverter {
         }
 
         // Set default alignment for all columns
-        alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+        let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
 
         // Pad all rows to have max_columns cells
         if let Some(ref mut header_row) = header {
@@ -801,55 +799,6 @@ impl HtmlToMarkdownConverter {
         } else {
             None
         }
-    }
-
-    fn extract_table_row(
-        &mut self,
-        tr_node: &Rc<markup5ever_rcdom::Node>,
-    ) -> crate::markdown::TableRow {
-        let mut cells = Vec::new();
-
-        for child in tr_node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, attrs, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "th" => {
-                            let content = self.extract_formatted_content_with_context(child, true);
-                            let rowspan = self
-                                .get_attr_value(attrs, "rowspan")
-                                .and_then(|s| s.parse::<u32>().ok())
-                                .unwrap_or(1);
-                            let cell = if rowspan > 1 {
-                                crate::markdown::TableCell::new_header_with_rowspan(
-                                    content, rowspan,
-                                )
-                            } else {
-                                crate::markdown::TableCell::new_header(content)
-                            };
-                            cells.push(cell);
-                        }
-                        "td" => {
-                            let content = self.extract_formatted_content_with_context(child, true);
-                            let rowspan = self
-                                .get_attr_value(attrs, "rowspan")
-                                .and_then(|s| s.parse::<u32>().ok())
-                                .unwrap_or(1);
-                            let cell = if rowspan > 1 {
-                                crate::markdown::TableCell::new_with_rowspan(content, rowspan)
-                            } else {
-                                crate::markdown::TableCell::new(content)
-                            };
-                            cells.push(cell);
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        crate::markdown::TableRow::new(cells)
     }
 
     fn extract_table_row_with_rowspan(
@@ -1724,22 +1673,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    // Legacy method kept for compatibility - delegates to new unified system
-    fn collect_formatted_content_with_context(
-        &self,
-        node: &Rc<markup5ever_rcdom::Node>,
-        text: &mut Text,
-        current_style: Option<Style>,
-        in_table: bool,
-    ) {
-        let context = ProcessingContext {
-            in_table,
-            current_style,
-            text_transform: None,
-        };
-        self.collect_as_text(node, text, context);
-    }
-
     fn get_attr_value(
         &self,
         attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
@@ -1828,23 +1761,6 @@ impl HtmlToMarkdownConverter {
         for item in new_items {
             text.push(item);
         }
-    }
-
-    //todo: this should be done on a parsing/convertion phase
-    pub fn decode_entities(&self, text: &str) -> String {
-        text.replace("&nbsp;", " ")
-            .replace("&amp;", "&")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&quot;", "\"")
-            .replace("&apos;", "'")
-            .replace("&mdash;", "—")
-            .replace("&ndash;", "–")
-            .replace("&hellip;", "...")
-            .replace("&ldquo;", "\u{201C}")
-            .replace("&rdquo;", "\u{201D}")
-            .replace("&lsquo;", "\u{2018}")
-            .replace("&rsquo;", "\u{2019}")
     }
 
     /// Groups consecutive dialog paragraphs into single paragraphs with line breaks.
@@ -2899,7 +2815,7 @@ The protocol operates on multiple layers:
     }
 
     #[test]
-    fn test_very_wide_table_with_BR() {
+    fn test_very_wide_table_with_br() {
         let mut converter = HtmlToMarkdownConverter::new();
         let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
 

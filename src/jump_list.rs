@@ -37,28 +37,19 @@ impl JumpList {
     /// Add a new jump location to the list
     /// This clears any forward history (entries after current position)
     pub fn push(&mut self, location: JumpLocation) {
-        // If we're not at the end of the list, remove all entries after current position
         if let Some(pos) = self.current_position {
-            // Keep only entries up to and including current position
             self.entries.truncate(pos + 1);
         }
 
-        // Don't add duplicate consecutive entries
         if let Some(last) = self.entries.back() {
             if last == &location {
                 return;
             }
         }
-
-        // Add the new entry
         self.entries.push_back(location);
-
-        // Maintain max size by removing oldest entries
         while self.entries.len() > self.max_size {
             self.entries.pop_front();
         }
-
-        // Reset position to point to the newest entry
         self.current_position = None;
     }
 
@@ -67,9 +58,7 @@ impl JumpList {
     pub fn jump_back(&mut self) -> Option<JumpLocation> {
         match self.current_position {
             None => {
-                // Currently at the newest entry (implicit current position)
                 if !self.entries.is_empty() {
-                    // Jump to the last saved position
                     let new_pos = self.entries.len() - 1;
                     self.current_position = Some(new_pos);
                     self.entries.get(new_pos).cloned()
@@ -78,7 +67,6 @@ impl JumpList {
                 }
             }
             Some(pos) if pos > 0 => {
-                // Move to previous entry
                 self.current_position = Some(pos - 1);
                 self.entries.get(pos - 1).cloned()
             }
@@ -91,46 +79,22 @@ impl JumpList {
     pub fn jump_forward(&mut self) -> Option<JumpLocation> {
         match self.current_position {
             Some(pos) if pos < self.entries.len() - 1 => {
-                // Move to next entry
                 self.current_position = Some(pos + 1);
                 self.entries.get(pos + 1).cloned()
             }
             Some(pos) if pos == self.entries.len() - 1 => {
-                // Moving to the implicit "current" position
                 self.current_position = None;
-                None // No specific location to jump to, stay at current
+                None
             }
             _ => None, // Already at the newest
         }
     }
 
-    /// Get the current jump list position for display
-    pub fn get_position_info(&self) -> (usize, usize) {
-        let current = self.current_position.unwrap_or(self.entries.len());
-        let total = self.entries.len();
-        (current, total)
-    }
-
     /// Clear the jump list
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.entries.clear();
         self.current_position = None;
-    }
-
-    /// Check if we can jump back
-    pub fn can_jump_back(&self) -> bool {
-        match self.current_position {
-            None => !self.entries.is_empty(), // Can jump back if we have at least one entry
-            Some(pos) => pos > 0,
-        }
-    }
-
-    /// Check if we can jump forward
-    pub fn can_jump_forward(&self) -> bool {
-        match self.current_position {
-            Some(pos) => pos < self.entries.len() - 1,
-            None => false,
-        }
     }
 }
 

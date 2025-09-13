@@ -19,6 +19,7 @@ pub struct CurrentBookInfo {
     pub path: String,
     pub toc_items: Vec<TocItem>,
     pub current_chapter: usize,
+    pub current_chapter_href: Option<String>, // The href of the current chapter
     pub active_section: ActiveSection,
 }
 

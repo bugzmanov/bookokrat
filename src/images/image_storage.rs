@@ -33,7 +33,6 @@ impl ImageStorage {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
         if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
-            debug!("Images already extracted for: {}", epub_path_str);
             return Ok(());
         }
 
@@ -73,10 +72,6 @@ impl ImageStorage {
             }
 
             if has_images {
-                debug!(
-                    "Book directory already exists with images, skipping extraction: {:?}",
-                    book_dir
-                );
                 self.book_dirs
                     .lock()
                     .unwrap()
@@ -94,12 +89,9 @@ impl ImageStorage {
             .with_context(|| format!("Failed to parse EPUB: {:?}", epub_path))?;
 
         let resources = doc.resources.clone();
-        let mut extracted_count = 0;
 
         for (id, (path, mime_type)) in resources.iter() {
             if is_image_mime_type(mime_type) {
-                debug!("Found image resource: {} ({})", id, mime_type);
-
                 if let Some((data, _mime)) = doc.get_resource(id) {
                     let image_path = book_dir.join(&path);
 
@@ -110,29 +102,18 @@ impl ImageStorage {
 
                     fs::write(&image_path, &data)
                         .with_context(|| format!("Failed to write image: {:?}", image_path))?;
-
-                    debug!("Extracted image: {:?}", image_path);
-                    extracted_count += 1;
                 } else {
                     warn!("Failed to extract resource: {}", id);
                 }
             }
         }
 
-        debug!(
-            "Extracted {} images from {}",
-            extracted_count, epub_path_str
-        );
         self.book_dirs
             .lock()
             .unwrap()
             .insert(epub_path_str, book_dir);
 
         Ok(())
-    }
-
-    pub fn resolve_image_path(&self, epub_path: &Path, image_href: &str) -> Option<PathBuf> {
-        self.resolve_image_path_with_context(epub_path, image_href, None)
     }
 
     pub fn resolve_image_path_with_context(
@@ -150,28 +131,17 @@ impl ImageStorage {
             .get(&epub_path_str)
             .cloned()?;
 
-        // Try multiple strategies to resolve the image path
         let mut paths_to_try = Vec::new();
-
-        // Clean the href
         let clean_href = image_href.trim_start_matches('/');
-
-        // NEW: If we have chapter context and the href is relative, resolve it properly
         if let Some(chapter) = chapter_path {
             if clean_href.starts_with("../") {
-                // Get the directory of the chapter file
                 let chapter_path = Path::new(chapter);
                 if let Some(chapter_dir) = chapter_path.parent() {
-                    // Resolve the relative path from the chapter's directory
-                    // For example: chapter is "xhtml/ch01.xhtml", href is "../images/foo.jpg"
-                    // This resolves to "xhtml/../images/foo.jpg" which normalizes to "images/foo.jpg"
                     let resolved = chapter_dir.join(clean_href);
 
-                    // Normalize the path (remove .. components)
                     let normalized = normalize_path(&resolved);
                     paths_to_try.push(book_dir.join(&normalized));
 
-                    // Also try without any leading directories if the normalized path has them
                     if let Ok(stripped) = normalized.strip_prefix("OEBPS/") {
                         paths_to_try.push(book_dir.join(stripped));
                     }
@@ -179,6 +149,8 @@ impl ImageStorage {
             }
         }
 
+        // TODO: this is garbage of an approach
+        //
         // Strategy 1: Direct path from book root
         paths_to_try.push(book_dir.join(clean_href));
 
@@ -209,67 +181,11 @@ impl ImageStorage {
             }
         }
 
-        // If none found, log all attempts
         warn!(
             "Image not found: '{}' with chapter context {:?} (tried: {:?})",
             image_href, chapter_path, paths_to_try
         );
         None
-    }
-
-    pub fn get_book_images(&self, epub_path: &Path) -> Option<Vec<PathBuf>> {
-        let epub_path_str = epub_path.to_string_lossy().to_string();
-        let book_dir = self
-            .book_dirs
-            .lock()
-            .unwrap()
-            .get(&epub_path_str)
-            .cloned()?;
-
-        let mut images = Vec::new();
-        collect_images_recursive(&book_dir, &mut images).ok()?;
-
-        Some(images)
-    }
-
-    pub fn cleanup_book(&self, epub_path: &Path) -> Result<()> {
-        let epub_path_str = epub_path.to_string_lossy().to_string();
-
-        if let Some(book_dir) = self.book_dirs.lock().unwrap().remove(&epub_path_str) {
-            if book_dir.exists() {
-                fs::remove_dir_all(&book_dir)
-                    .with_context(|| format!("Failed to remove book directory: {:?}", book_dir))?;
-                debug!("Cleaned up images for: {}", epub_path_str);
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn cleanup_all(&self) -> Result<()> {
-        let book_dirs: Vec<PathBuf> = self
-            .book_dirs
-            .lock()
-            .unwrap()
-            .drain()
-            .map(|(_, v)| v)
-            .collect();
-        for book_dir in book_dirs {
-            if book_dir.exists() {
-                fs::remove_dir_all(&book_dir)
-                    .with_context(|| format!("Failed to remove book directory: {:?}", book_dir))?;
-            }
-        }
-
-        if self.base_dir.exists() {
-            if fs::read_dir(&self.base_dir)?.next().is_none() {
-                fs::remove_dir(&self.base_dir).with_context(|| {
-                    format!("Failed to remove base directory: {:?}", self.base_dir)
-                })?;
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -355,72 +271,6 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_images_from_digital_frontier() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-
-        storage.extract_images(epub_path).unwrap();
-
-        let images = storage.get_book_images(epub_path).unwrap();
-        assert!(!images.is_empty(), "No images were extracted");
-
-        let expected_images = ["tech_lab.svg", "network.svg", "cover.svg"];
-        for expected in &expected_images {
-            let found = images.iter().any(|path| {
-                path.file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|name| name == *expected)
-                    .unwrap_or(false)
-            });
-            assert!(found, "Expected image {} not found", expected);
-        }
-    }
-
-    #[test]
-    fn test_resolve_image_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-        storage.extract_images(epub_path).unwrap();
-
-        let test_cases = vec![
-            "OEBPS/images/tech_lab.svg",
-            "images/tech_lab.svg",
-            "/OEBPS/images/network.svg",
-            "../images/cover.svg",
-        ];
-
-        for href in test_cases {
-            if let Some(resolved) = storage.resolve_image_path(epub_path, href) {
-                assert!(
-                    resolved.exists(),
-                    "Resolved path doesn't exist: {:?}",
-                    resolved
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_cleanup() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-        storage.extract_images(epub_path).unwrap();
-
-        let images = storage.get_book_images(epub_path).unwrap();
-        assert!(!images.is_empty());
-
-        storage.cleanup_book(epub_path).unwrap();
-
-        assert!(storage.get_book_images(epub_path).is_none());
-    }
-
-    #[test]
     fn test_mime_type_detection() {
         assert!(is_image_mime_type("image/png"));
         assert!(is_image_mime_type("image/jpeg"));
@@ -437,123 +287,6 @@ mod tests {
         assert_eq!(
             sanitize_filename("name:with*special?chars"),
             "name_with_special_chars"
-        );
-    }
-
-    #[test]
-    fn test_skip_extraction_if_images_exist() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-
-        // First extraction
-        storage.extract_images(epub_path).unwrap();
-        let images_first = storage.get_book_images(epub_path).unwrap();
-        assert!(!images_first.is_empty());
-
-        // Get modification time of first image
-        let first_image_path = &images_first[0];
-        let first_mod_time = fs::metadata(first_image_path).unwrap().modified().unwrap();
-
-        // Small delay to ensure filesystem timestamps differ
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        // Create a new storage instance to simulate app restart
-        let storage2 = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        // Second extraction should skip due to existing images
-        storage2.extract_images(epub_path).unwrap();
-        let images_second = storage2.get_book_images(epub_path).unwrap();
-
-        // Verify same number of images
-        assert_eq!(images_first.len(), images_second.len());
-
-        // Verify the first image wasn't re-extracted (same modification time)
-        let second_mod_time = fs::metadata(first_image_path).unwrap().modified().unwrap();
-        assert_eq!(
-            first_mod_time, second_mod_time,
-            "Image was re-extracted when it shouldn't have been"
-        );
-    }
-
-    #[test]
-    fn test_extract_after_cleanup() {
-        let temp_dir = TempDir::new().unwrap();
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-
-        // First extraction
-        storage.extract_images(epub_path).unwrap();
-        let images_first = storage.get_book_images(epub_path).unwrap();
-        assert_eq!(images_first.len(), 3);
-
-        // Clean up
-        storage.cleanup_book(epub_path).unwrap();
-        assert!(storage.get_book_images(epub_path).is_none());
-
-        // Extract again - should work since directory was cleaned
-        storage.extract_images(epub_path).unwrap();
-        let images_second = storage.get_book_images(epub_path).unwrap();
-        assert_eq!(images_second.len(), 3);
-    }
-
-    #[test]
-    fn test_skip_extraction_with_existing_directory_structure() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Manually create the expected directory structure with an image
-        let book_dir = temp_dir
-            .path()
-            .join("digital_frontier")
-            .join("OEBPS")
-            .join("images");
-        fs::create_dir_all(&book_dir).unwrap();
-
-        // Create a dummy image file
-        let dummy_image = book_dir.join("test.svg");
-        fs::write(&dummy_image, "<svg></svg>").unwrap();
-
-        // Now create storage and try to extract
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-
-        // Record the modification time of our dummy image
-        let original_mod_time = fs::metadata(&dummy_image).unwrap().modified().unwrap();
-
-        // Extract should skip because images already exist
-        storage.extract_images(epub_path).unwrap();
-
-        // Verify our dummy image wasn't touched
-        assert!(dummy_image.exists());
-        let new_mod_time = fs::metadata(&dummy_image).unwrap().modified().unwrap();
-        assert_eq!(original_mod_time, new_mod_time);
-
-        // Storage should still report the book as available
-        assert!(storage.get_book_images(epub_path).is_some());
-    }
-
-    #[test]
-    fn test_extract_with_empty_directory() {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create empty directory structure
-        let book_dir = temp_dir.path().join("digital_frontier");
-        fs::create_dir_all(&book_dir).unwrap();
-
-        // Create storage and extract - should proceed with extraction
-        let storage = ImageStorage::new(temp_dir.path().to_path_buf()).unwrap();
-        let epub_path = Path::new("tests/testdata/digital_frontier.epub");
-
-        storage.extract_images(epub_path).unwrap();
-
-        // Verify images were extracted
-        let images = storage.get_book_images(epub_path).unwrap();
-        assert_eq!(
-            images.len(),
-            3,
-            "Should extract all 3 images even with existing empty directory"
         );
     }
 }

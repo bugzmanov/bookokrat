@@ -117,6 +117,7 @@ pub enum ListKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum TaskStatus {
     Checked,
     Unchecked,
@@ -155,6 +156,7 @@ pub struct DefinitionListItem {
 }
 
 impl HeadingLevel {
+    #[allow(dead_code)]
     pub fn from_u8(level: u8) -> Option<Self> {
         match level {
             1 => Some(HeadingLevel::H1),

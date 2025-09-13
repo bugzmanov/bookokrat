@@ -503,71 +503,19 @@ impl App {
         None
     }
 
-    /// Map chapter indices from the chapter_map to TocItem entries
-    fn map_chapter_indices(
-        toc_items: &mut Vec<TocItem>,
-        chapter_map: &std::collections::HashMap<String, usize>,
-        text_generator: &TextGenerator,
-    ) {
-        for item in toc_items.iter_mut() {
-            match item {
-                TocItem::Chapter { href, index, .. } => {
-                    let normalized_href = text_generator.normalize_href(href);
-                    if let Some(&chapter_index) = chapter_map.get(&normalized_href) {
-                        *index = chapter_index;
-                    }
-                }
-                TocItem::Section {
-                    href,
-                    index,
-                    children,
-                    ..
-                } => {
-                    if let Some(href_str) = href {
-                        let normalized_href = text_generator.normalize_href(href_str);
-                        if let Some(&chapter_index) = chapter_map.get(&normalized_href) {
-                            *index = Some(chapter_index);
-                        }
-                    }
-                    // Recursively map children
-                    Self::map_chapter_indices(children, chapter_map, text_generator);
-                }
-            }
-        }
-    }
-
-    /// Convert TOC entries to section structure
-
     fn refresh_chapter_cache(&mut self) {
         if let (Some(current_file), Some(epub)) = (&self.current_file, &mut self.current_epub) {
-            let mut toc_items = self.text_generator.parse_toc_structure(epub);
+            let toc_items = self.text_generator.parse_toc_structure(epub);
 
-            let original_chapter = epub.get_current_page();
-
-            let mut chapter_map = std::collections::HashMap::new();
-            for i in 0..self.total_chapters {
-                if epub.set_current_page(i) {
-                    if let Some((_content, _)) = epub.get_current_str() {
-                        if let Some(chapter_href) = Self::get_chapter_href(epub, i) {
-                            let normalized_href = self.text_generator.normalize_href(&chapter_href);
-                            chapter_map.insert(normalized_href, i);
-                        }
-                    }
-                }
-            }
-
-            // Restore original position
-            epub.set_current_page(original_chapter);
-
-            // Map chapter indices to the TOC items
-            Self::map_chapter_indices(&mut toc_items, &chapter_map, &self.text_generator);
-
-            // Get active section from text reader if it's a MarkdownTextReader
             let active_section = self.text_reader.get_active_section(self.current_chapter);
+
+            let current_chapter_href = Self::get_chapter_href(epub, self.current_chapter);
+
             let book_info = CurrentBookInfo {
                 path: current_file.clone(),
                 toc_items,
                 current_chapter: self.current_chapter,
+                current_chapter_href,
                 active_section,
             };
             self.cached_current_book_info = Some(book_info.clone());
@@ -730,12 +678,6 @@ impl App {
         use std::time::Duration;
 
         let start_time = std::time::Instant::now();
-        if initial_mouse_event.kind != MouseEventKind::Moved {
-            debug!(
-                "handle_mouse_event called with: {:?} at ({}, {})",
-                initial_mouse_event.kind, initial_mouse_event.column, initial_mouse_event.row
-            );
-        }
 
         // Extra validation for horizontal scrolls to prevent crossterm overflow bug
         if matches!(
@@ -744,10 +686,6 @@ impl App {
         ) {
             if !self.is_valid_mouse_coordinates(initial_mouse_event.column, initial_mouse_event.row)
             {
-                debug!(
-                    "Dropping horizontal scroll event with invalid coordinates: ({}, {})",
-                    initial_mouse_event.column, initial_mouse_event.row
-                );
                 return;
             }
         }
@@ -785,17 +723,9 @@ impl App {
         match initial_mouse_event.kind {
             MouseEventKind::ScrollDown => {
                 scroll_down_count += 1;
-                debug!(
-                    "Starting vertical scroll batching with ScrollDown at ({}, {})",
-                    initial_column, initial_row
-                );
             }
             MouseEventKind::ScrollUp => {
                 scroll_up_count += 1;
-                debug!(
-                    "Starting vertical scroll batching with ScrollUp at ({}, {})",
-                    initial_column, initial_row
-                );
             }
             _ => unreachable!(), // We already checked this is a scroll event
         }
@@ -1264,22 +1194,18 @@ impl App {
     fn find_chapter_recursive(&self, items: &[TocItem], filename: &str) -> Option<usize> {
         for item in items {
             match item {
-                TocItem::Chapter { href, index, .. } => {
+                TocItem::Chapter { href, .. } => {
                     let href_without_anchor = href.split('#').next().unwrap_or(href);
 
                     if href_without_anchor == filename
                         || href_without_anchor.ends_with(&format!("/{}", filename))
                         || (filename.contains('/') && href_without_anchor.ends_with(filename))
                     {
-                        return Some(*index);
+                        // Found the matching TOC item, now find its spine index
+                        return self.find_spine_index_by_href(href);
                     }
                 }
-                TocItem::Section {
-                    href,
-                    index,
-                    children,
-                    ..
-                } => {
+                TocItem::Section { href, children, .. } => {
                     // Check if this section matches
                     if let Some(section_href) = href {
                         // Strip any anchor from the href for comparison
@@ -1290,9 +1216,8 @@ impl App {
                             || href_without_anchor.ends_with(&format!("/{}", filename))
                             || (filename.contains('/') && href_without_anchor.ends_with(filename))
                         {
-                            if let Some(section_index) = index {
-                                return Some(*section_index);
-                            }
+                            // Found the matching section, find its spine index
+                            return self.find_spine_index_by_href(section_href);
                         }
                     }
                     // Recursively search children
@@ -1302,6 +1227,32 @@ impl App {
                 }
             }
         }
+        None
+    }
+
+    /// Find the spine index for a given href
+    fn find_spine_index_by_href(&self, href: &str) -> Option<usize> {
+        let doc = self.current_epub.as_ref()?;
+
+        // Normalize the href for comparison
+        let normalized_href = self.text_generator.normalize_href(href);
+
+        // Search through the spine
+        for (index, spine_item) in doc.spine.iter().enumerate() {
+            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
+                let path_str = path.to_string_lossy();
+                let normalized_path = self.text_generator.normalize_href(&path_str);
+
+                // Check if the paths match
+                if normalized_path == normalized_href
+                    || normalized_path.ends_with(&normalized_href)
+                    || normalized_href.ends_with(&normalized_path)
+                {
+                    return Some(index);
+                }
+            }
+        }
+
         None
     }
 
@@ -1540,11 +1491,6 @@ impl App {
 
     /// Handle Ctrl+O - jump back in history
     fn jump_back(&mut self) {
-        // Check if we can actually jump back
-        if !self.jump_list.can_jump_back() {
-            return;
-        }
-
         if let Some(location) = self.jump_list.jump_back() {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump back: {}", e);
@@ -1600,41 +1546,56 @@ impl App {
             SelectedActionOwned::TocItem(toc_item) => {
                 // Check if this is a section or a chapter
                 match toc_item {
-                    TocItem::Chapter { index, anchor, .. } => {
-                        let _ = self.navigate_to_chapter(index);
-                        // Handle anchor if present
-                        if let Some(anchor_id) = anchor {
-                            self.text_reader
-                                .handle_pending_anchor_scroll(Some(anchor_id.clone()));
-                            self.text_reader.set_active_anchor(Some(anchor_id));
-                        } else {
-                            self.text_reader.set_active_anchor(None);
-                        }
-
-                        self.focused_panel = FocusedPanel::Content;
-                        // Clear manual navigation flag when jumping to content
-                        self.navigation_panel
-                            .table_of_contents
-                            .clear_manual_navigation();
-                        // Update the cache to reflect the correct active section
-                        self.update_current_chapter_in_cache();
-                    }
-                    TocItem::Section { index, anchor, .. } => {
-                        if let Some(chapter_index) = index {
-                            let _ = self.navigate_to_chapter(chapter_index);
+                    TocItem::Chapter { href, anchor, .. } => {
+                        // Find the spine index for this href
+                        if let Some(spine_index) = self.find_spine_index_by_href(&href) {
+                            let _ = self.navigate_to_chapter(spine_index);
                             // Handle anchor if present
                             if let Some(anchor_id) = anchor {
                                 self.text_reader
                                     .handle_pending_anchor_scroll(Some(anchor_id.clone()));
-                                // Set this anchor as the active one
                                 self.text_reader.set_active_anchor(Some(anchor_id));
                             } else {
                                 self.text_reader.set_active_anchor(None);
                             }
+
                             self.focused_panel = FocusedPanel::Content;
+                            // Clear manual navigation flag when jumping to content
+                            self.navigation_panel
+                                .table_of_contents
+                                .clear_manual_navigation();
                             // Update the cache to reflect the correct active section
                             self.update_current_chapter_in_cache();
                         } else {
+                            error!("Could not find spine index for href: {}", href);
+                        }
+                    }
+                    TocItem::Section { href, anchor, .. } => {
+                        if let Some(section_href) = href {
+                            // This section has content - navigate to it
+                            if let Some(spine_index) = self.find_spine_index_by_href(&section_href)
+                            {
+                                let _ = self.navigate_to_chapter(spine_index);
+                                // Handle anchor if present
+                                if let Some(anchor_id) = anchor {
+                                    self.text_reader
+                                        .handle_pending_anchor_scroll(Some(anchor_id.clone()));
+                                    // Set this anchor as the active one
+                                    self.text_reader.set_active_anchor(Some(anchor_id));
+                                } else {
+                                    self.text_reader.set_active_anchor(None);
+                                }
+                                self.focused_panel = FocusedPanel::Content;
+                                // Update the cache to reflect the correct active section
+                                self.update_current_chapter_in_cache();
+                            } else {
+                                error!(
+                                    "Could not find spine index for section href: {}",
+                                    section_href
+                                );
+                            }
+                        } else {
+                            // No href - just toggle expansion
                             self.navigation_panel
                                 .table_of_contents
                                 .toggle_selected_expansion();
@@ -1694,8 +1655,6 @@ impl App {
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
-        let render_start = std::time::Instant::now();
-
         // Update auto-scroll state for continuous scrolling during text selection
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
@@ -1797,11 +1756,6 @@ impl App {
             f.render_widget(dim_block, f.area());
 
             self.book_stat.render(f, f.area());
-        }
-
-        let render_duration = render_start.elapsed();
-        if render_duration.as_millis() > 5 {
-            debug!("Rendering widgets took {}ms", render_duration.as_millis());
         }
     }
 
@@ -2186,23 +2140,12 @@ impl App {
                                 Some(SelectedTocItem::TocItem(toc_item)) => {
                                     // Check if this is a section or a chapter
                                     match toc_item {
-                                        TocItem::Chapter { index, anchor, .. } => {
-                                            let chapter_index = *index;
-                                            let anchor_id = anchor.clone();
-                                            // Navigate to the chapter
-                                            let _ = self.navigate_to_chapter(chapter_index);
-                                            // If there's an anchor, scroll to it after navigation
-                                            if let Some(anchor_id) = anchor_id {
-                                                self.text_reader
-                                                    .handle_pending_anchor_scroll(Some(anchor_id));
-                                            }
-                                            self.focused_panel = FocusedPanel::Content;
-                                        }
-                                        TocItem::Section { index, anchor, .. } => {
-                                            if let Some(chapter_index) = index {
-                                                let chapter_index = *chapter_index;
+                                        TocItem::Chapter { href, anchor, .. } => {
+                                            if let Some(chapter_index) =
+                                                self.find_spine_index_by_href(href)
+                                            {
                                                 let anchor_id = anchor.clone();
-                                                // This section has content - navigate to it
+                                                // Navigate to the chapter
                                                 let _ = self.navigate_to_chapter(chapter_index);
                                                 // If there's an anchor, scroll to it after navigation
                                                 if let Some(anchor_id) = anchor_id {
@@ -2211,6 +2154,25 @@ impl App {
                                                     );
                                                 }
                                                 self.focused_panel = FocusedPanel::Content;
+                                            }
+                                        }
+                                        TocItem::Section { href, anchor, .. } => {
+                                            if let Some(href_str) = href {
+                                                if let Some(chapter_index) =
+                                                    self.find_spine_index_by_href(href_str)
+                                                {
+                                                    let anchor_id = anchor.clone();
+                                                    // This section has content - navigate to it
+                                                    let _ = self.navigate_to_chapter(chapter_index);
+                                                    // If there's an anchor, scroll to it after navigation
+                                                    if let Some(anchor_id) = anchor_id {
+                                                        self.text_reader
+                                                            .handle_pending_anchor_scroll(Some(
+                                                                anchor_id,
+                                                            ));
+                                                    }
+                                                    self.focused_panel = FocusedPanel::Content;
+                                                }
                                             } else {
                                                 // This section has no content - just toggle expansion
                                                 self.navigation_panel

@@ -1,6 +1,5 @@
 use crate::images::book_images::BookImages;
 use crate::main_app::VimNavMotions;
-use crate::markdown::Document;
 use image::DynamicImage;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -24,11 +23,9 @@ pub struct LinkInfo {
 pub trait TextReaderTrait: VimNavMotions {
     // Content loading
     fn set_content_from_string(&mut self, content: &str, chapter_title: Option<String>);
-    fn set_content_from_ast(&mut self, doc: Document, chapter_title: Option<String>);
 
     // Content updates
     fn content_updated(&mut self, content_length: usize);
-    fn update_wrapped_lines_if_needed(&mut self, content: &str, area: Rect);
 
     // Scrolling
     fn scroll_up(&mut self);
@@ -95,7 +92,5 @@ pub trait TextReaderTrait: VimNavMotions {
     );
 
     // State access (needed by main_app)
-    fn get_total_wrapped_lines(&self) -> usize;
-    fn get_visible_height(&self) -> usize;
     fn get_last_content_area(&self) -> Option<Rect>;
 }

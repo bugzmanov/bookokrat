@@ -157,7 +157,6 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
         toc_items.push(TocItem::Chapter {
             title: format!("Chapter {}", i),
             href: format!("chapter{}.xhtml", i),
-            index: i - 1,
             anchor: None,
         });
     }
@@ -166,6 +165,7 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
         path: "test_book.epub".to_string(),
         toc_items,
         current_chapter: 0,
+        current_chapter_href: Some("chapter1.xhtml".to_string()),
         active_section: ActiveSection::Chapter(0),
     }
 }
@@ -278,7 +278,7 @@ fn test_text_reader_vim_motion_g() {
         .join("\n");
 
     let area = terminal.get_frame().size();
-    text_reader.update_wrapped_lines_if_needed(&test_content, area);
+    text_reader.set_content_from_string(&test_content, None);
 
     // Test G (go to bottom)
     text_reader.handle_G();
@@ -329,7 +329,7 @@ fn test_text_reader_vim_motion_gg() {
 
     // Update wrapped lines
     let area = terminal.get_frame().size();
-    text_reader.update_wrapped_lines_if_needed(&test_content, area);
+    text_reader.set_content_from_string(&test_content, None);
 
     // Scroll down first
     text_reader.scroll_down();

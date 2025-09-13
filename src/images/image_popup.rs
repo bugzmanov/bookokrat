@@ -190,33 +190,4 @@ impl ImagePopup {
             height: popup_height,
         }
     }
-
-    /// Calculate centered image area for original size mode
-    fn calculate_centered_image_area(&self, inner_area: Rect) -> Rect {
-        let (img_width, img_height) = self.image.dimensions();
-
-        // Get font size from picker for accurate cell estimation
-        let font_size = self.picker.font_size();
-        let cell_width_pixels = font_size.0 as f32;
-        let cell_height_pixels = font_size.1 as f32;
-
-        // Calculate image size in terminal cells
-        let estimated_width_cells = (img_width as f32 / cell_width_pixels).ceil() as u16;
-        let estimated_height_cells = (img_height as f32 / cell_height_pixels).ceil() as u16;
-
-        // Constrain to available space
-        let width = estimated_width_cells.min(inner_area.width);
-        let height = estimated_height_cells.min(inner_area.height);
-
-        // Center within inner area
-        let x_offset = (inner_area.width.saturating_sub(width)) / 2;
-        let y_offset = (inner_area.height.saturating_sub(height)) / 2;
-
-        Rect {
-            x: inner_area.x + x_offset,
-            y: inner_area.y + y_offset,
-            width,
-            height,
-        }
-    }
 }
