@@ -20,7 +20,6 @@ pub mod table_of_contents;
 pub mod text_reader_trait;
 pub mod text_selection;
 pub mod theme;
-pub mod toc_parser;
 
 // Test utilities - only available when test-utils feature is enabled or during tests
 #[cfg(any(test, feature = "test-utils"))]

@@ -1,7 +1,7 @@
 use crate::main_app::VimNavMotions;
 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 use crate::parsing::markdown_renderer::MarkdownRenderer;
-use crate::toc_parser::TocParser;
+use crate::parsing::toc_parser::TocParser;
 use anyhow::Result;
 use epub::doc::EpubDoc;
 use log::{debug, error};

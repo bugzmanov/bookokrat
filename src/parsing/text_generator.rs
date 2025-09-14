@@ -1,5 +1,5 @@
+use crate::parsing::toc_parser::TocParser;
 use crate::table_of_contents::TocItem;
-use crate::toc_parser::TocParser;
 use epub::doc::EpubDoc;
 use regex::Regex;
 use std::io::{Read, Seek};
