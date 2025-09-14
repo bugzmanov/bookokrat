@@ -475,7 +475,7 @@ impl VimNavMotions for BookStat {
         }
     }
 
-    fn handle_G(&mut self) {
+    fn handle_upper_g(&mut self) {
         if !self.chapter_stats.is_empty() {
             self.list_state.select(Some(self.chapter_stats.len() - 1));
         }

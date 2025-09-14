@@ -1973,8 +1973,6 @@ impl MarkdownTextReader {
     ) {
         // Constants for image display
         const IMAGE_HEIGHT_WIDE: u16 = 20;
-        const IMAGE_HEIGHT_TALL: u16 = 30;
-        const TALL_ASPECT_RATIO: f32 = 1.5;
 
         // Add empty line before image
         lines.push(RenderedLine {
@@ -2161,7 +2159,7 @@ impl VimNavMotions for MarkdownTextReader {
         debug!("Scrolled to top of document");
     }
 
-    fn handle_G(&mut self) {
+    fn handle_upper_g(&mut self) {
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = max_offset;
         debug!("Scrolled to bottom of document: offset {}", max_offset);

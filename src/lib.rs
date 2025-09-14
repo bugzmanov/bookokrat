@@ -28,4 +28,4 @@ pub mod simple_fake_books;
 pub mod test_utils;
 
 // Re-export main app components
-pub use main_app::{App, FocusedPanel, run_app_with_event_source};
+pub use main_app::{App, FocusedPanel, MainPanel, PopupWindow, run_app_with_event_source};

@@ -293,7 +293,7 @@ impl VimNavMotions for ReadingHistory {
         }
     }
 
-    fn handle_G(&mut self) {
+    fn handle_upper_g(&mut self) {
         // Go to bottom - select last item
         if !self.items.is_empty() {
             let last_index = self.items.len() - 1;

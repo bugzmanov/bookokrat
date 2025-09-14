@@ -263,7 +263,7 @@ fn test_chapter_title_normal_length_svg() {
         let path = book_info.path.clone();
         let _ = app.open_book_for_reading_by_path(&path);
         // Switch to content focus like runtime behavior after loading
-        app.focused_panel = bookrat::main_app::FocusedPanel::Content;
+        app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::Content);
         // Force animation to complete for testing
     }
 
@@ -1711,7 +1711,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     }
 
     // Ensure content panel has focus
-    app.focused_panel = bookrat::main_app::FocusedPanel::Content;
+    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::Content);
 
     // Draw initial state
     terminal
@@ -1799,7 +1799,7 @@ fn test_toc_navigation_bug_svg() {
     }
 
     // Start with file list panel focused to show the TOC
-    app.focused_panel = bookrat::main_app::FocusedPanel::FileList;
+    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::FileList);
 
     // Draw initial state - should show book with expanded TOC
     terminal

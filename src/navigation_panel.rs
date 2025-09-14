@@ -228,7 +228,7 @@ impl VimNavMotions for NavigationPanel {
         }
     }
 
-    fn handle_G(&mut self) {
+    fn handle_upper_g(&mut self) {
         // Go to bottom - move selection to last item
         match self.mode {
             NavigationMode::BookSelection => {

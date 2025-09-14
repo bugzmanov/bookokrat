@@ -68,7 +68,6 @@ pub struct App {
     terminal_height: u16,
     // Reading history
     reading_history: Option<ReadingHistory>,
-    show_reading_history: bool,
     // Image popup
     image_popup: Option<ImagePopup>,
     image_popup_area: Option<Rect>,
@@ -76,7 +75,6 @@ pub struct App {
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
     // Book statistics popup
     book_stat: BookStat,
-    show_book_stat: bool,
     // Jump list for navigation history (Ctrl+O/Ctrl+I)
     jump_list: JumpList,
 }
@@ -89,13 +87,26 @@ pub trait VimNavMotions {
     fn handle_ctrl_d(&mut self);
     fn handle_ctrl_u(&mut self);
     fn handle_gg(&mut self);
-    fn handle_G(&mut self);
+    fn handle_upper_g(&mut self);
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone, Copy)]
 pub enum FocusedPanel {
+    Main(MainPanel),
+    Popup(PopupWindow),
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum MainPanel {
     FileList,
     Content,
+}
+
+#[derive(PartialEq, Debug, Clone, Copy)]
+pub enum PopupWindow {
+    ReadingHistory,
+    BookStats,
+    ImagePopup,
 }
 
 #[derive(PartialEq, Debug)]
@@ -108,6 +119,19 @@ enum ClickType {
 impl App {
     pub fn new() -> Self {
         Self::new_with_config(None, Some("bookmarks.json"), true)
+    }
+
+    /// Helper method to check if focus is on a main panel (not a popup)
+    fn is_main_panel(&self, panel: MainPanel) -> bool {
+        match self.focused_panel {
+            FocusedPanel::Main(p) => p == panel,
+            FocusedPanel::Popup(_) => false,
+        }
+    }
+
+    /// Helper method to check if any popup is active
+    fn has_active_popup(&self) -> bool {
+        matches!(self.focused_panel, FocusedPanel::Popup(_))
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -185,7 +209,7 @@ impl App {
             total_chapters: 0,
             current_file: None,
             current_chapter_title: None,
-            focused_panel: FocusedPanel::FileList,
+            focused_panel: FocusedPanel::Main(MainPanel::FileList),
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
             // Initialize click tracking
@@ -198,13 +222,11 @@ impl App {
             terminal_width: 80,  // Default width, will be updated on render
             terminal_height: 24, // Default height, will be updated on render
             reading_history: None,
-            show_reading_history: false,
             image_popup: None,
             image_popup_area: None,
             last_terminal_size: Rect::new(0, 0, 80, 24),
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
-            show_book_stat: false,
             jump_list: JumpList::new(20),
         };
 
@@ -284,7 +306,7 @@ impl App {
             }
 
             // Switch focus to content after loading
-            self.focused_panel = FocusedPanel::Content;
+            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
             info!("Successfully opened book for reading: {}", path);
             Ok(())
@@ -368,7 +390,7 @@ impl App {
     /// Switch back to book list mode - ensures clean state transition
     pub fn switch_to_book_list_mode(&mut self) {
         self.navigation_panel.switch_to_book_mode();
-        self.focused_panel = FocusedPanel::FileList;
+        self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
         info!("Switched to book list mode");
     }
 
@@ -809,7 +831,10 @@ impl App {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if image popup is shown first - close it on any click
-                if self.image_popup.is_some() {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ImagePopup)
+                ) {
                     // Check if click is outside the popup area
                     if let Some(popup_area) = self.image_popup_area {
                         let click_x = mouse_event.column;
@@ -823,6 +848,8 @@ impl App {
                         {
                             self.image_popup = None;
                             self.image_popup_area = None;
+                            // Return to previous focus (content)
+                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                             debug!("Image popup closed via mouse click outside");
                         }
                     }
@@ -830,7 +857,10 @@ impl App {
                 }
 
                 // Check if reading history is shown next
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
 
                     if let Some(ref mut history) = self.reading_history {
@@ -846,7 +876,8 @@ impl App {
                                             self.book_manager.find_book_index_by_path(path)
                                         {
                                             // Close history and open the book
-                                            self.show_reading_history = false;
+                                            self.focused_panel =
+                                                FocusedPanel::Main(MainPanel::Content);
                                             self.reading_history = None;
                                             let _ = self.open_book_for_reading(book_index);
                                         }
@@ -863,7 +894,7 @@ impl App {
 
                 let nav_panel_width = self.calculate_navigation_panel_width();
                 if mouse_event.column < nav_panel_width {
-                    self.focused_panel = FocusedPanel::FileList;
+                    self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
                     self.text_reader.clear_selection();
 
                     let nav_area = self.get_navigation_panel_area();
@@ -896,8 +927,8 @@ impl App {
                     }
                 } else {
                     // Click in content area (right 70% of screen)
-                    if self.focused_panel != FocusedPanel::Content {
-                        self.focused_panel = FocusedPanel::Content;
+                    if !self.is_main_panel(MainPanel::Content) {
+                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                         // Clear manual navigation flag when switching to content
                         self.navigation_panel
                             .table_of_contents
@@ -943,7 +974,10 @@ impl App {
             }
             MouseEventKind::Up(MouseButton::Left) => {
                 // Block if image popup is shown
-                if self.image_popup.is_some() {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ImagePopup)
+                ) {
                     return;
                 }
 
@@ -988,7 +1022,10 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 // Block if image popup is shown
-                if self.image_popup.is_some() {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ImagePopup)
+                ) {
                     return;
                 }
 
@@ -1352,11 +1389,12 @@ impl App {
         let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
         self.image_popup = Some(popup);
         self.image_popup_area = None; // Will be set on render
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::ImagePopup);
     }
 
     /// Apply scroll events (positive for down, negative for up)
     fn apply_scroll(&mut self, scroll_amount: i32, column: u16) {
-        if self.image_popup.is_some() {
+        if self.has_active_popup() {
             return;
         }
         if scroll_amount == 0 {
@@ -1558,7 +1596,7 @@ impl App {
                                 self.text_reader.set_active_anchor(None);
                             }
 
-                            self.focused_panel = FocusedPanel::Content;
+                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                             // Clear manual navigation flag when jumping to content
                             self.navigation_panel
                                 .table_of_contents
@@ -1584,7 +1622,7 @@ impl App {
                                 } else {
                                     self.text_reader.set_active_anchor(None);
                                 }
-                                self.focused_panel = FocusedPanel::Content;
+                                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                                 // Update the cache to reflect the correct active section
                                 self.update_current_chapter_in_cache();
                             } else {
@@ -1685,7 +1723,7 @@ impl App {
         self.navigation_panel.render(
             f,
             main_chunks[0],
-            self.focused_panel == FocusedPanel::FileList,
+            self.is_main_panel(MainPanel::FileList),
             &OCEANIC_NEXT,
             &self.bookmarks,
             &self.book_manager,
@@ -1704,7 +1742,7 @@ impl App {
                 self.current_chapter,
                 self.total_chapters,
                 &OCEANIC_NEXT,
-                self.focused_panel == FocusedPanel::Content,
+                self.is_main_panel(MainPanel::Content),
             );
         } else {
             // Render default content area when no EPUB is loaded
@@ -1715,7 +1753,10 @@ impl App {
         self.render_help_bar(f, chunks[1], fps_counter);
 
         // Render reading history popup if active
-        if self.show_reading_history {
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ReadingHistory)
+        ) {
             // First render a dimming overlay
             let dim_block = Block::default().style(
                 Style::default()
@@ -1745,7 +1786,10 @@ impl App {
         }
 
         // Render book statistics popup if active
-        if self.show_book_stat {
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookStats)
+        ) {
             // First render a dimming overlay
             let dim_block = Block::default().style(
                 Style::default()
@@ -1761,7 +1805,7 @@ impl App {
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
         // Use focus-aware colors instead of hardcoded false
         let (text_color, border_color, _bg_color) =
-            OCEANIC_NEXT.get_panel_colors(self.focused_panel == FocusedPanel::Content);
+            OCEANIC_NEXT.get_panel_colors(self.is_main_panel(MainPanel::Content));
 
         let content_border = Block::default()
             .borders(Borders::ALL)
@@ -1783,12 +1827,17 @@ impl App {
             "c/Ctrl+C: Copy to clipboard | ESC: Clear selection"
         } else {
             match self.focused_panel {
-                FocusedPanel::FileList => {
+                FocusedPanel::Main(MainPanel::FileList) => {
                     "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit"
                 }
-                FocusedPanel::Content => {
+                FocusedPanel::Main(MainPanel::Content) => {
                     "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Space+o: Open | q: Quit"
                 }
+                FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
+                    "j/k: Navigate | Enter: Open | ESC: Close"
+                }
+                FocusedPanel::Popup(PopupWindow::BookStats) => "j/k/Ctrl+d/u: Scroll | ESC: Close",
+                FocusedPanel::Popup(PopupWindow::ImagePopup) => "ESC/Any key: Close",
             }
         };
 
@@ -1836,16 +1885,23 @@ impl App {
         match sequence.as_str() {
             "gg" => {
                 // Handle 'gg' motion - go to top
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_gg();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
+                } else if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::BookStats)
+                ) {
+                    self.book_stat.handle_gg();
+                } else if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_gg();
                 } else {
-                    // For content, reset scroll to top
-                    self.text_reader.restore_scroll_position(0);
+                    self.text_reader.handle_gg();
                     self.save_bookmark();
                 }
                 self.key_sequence.clear();
@@ -1853,7 +1909,7 @@ impl App {
             }
             " s" => {
                 // Handle Space->s to show raw HTML source
-                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
+                if self.is_main_panel(MainPanel::Content) && self.current_epub.is_some() {
                     // Get raw HTML content for current chapter
                     if let Some(ref mut epub) = self.current_epub {
                         if let Some((raw_html, _)) = epub.get_current_str() {
@@ -1867,7 +1923,7 @@ impl App {
             }
             " d" => {
                 // Handle Space->d to show book statistics (document stats)
-                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
+                if self.is_main_panel(MainPanel::Content) && self.current_epub.is_some() {
                     // Calculate and show book statistics
                     if let Some(ref mut epub) = self.current_epub {
                         let terminal_size = (self.terminal_width, self.terminal_height);
@@ -1875,21 +1931,7 @@ impl App {
                             error!("Failed to calculate book statistics: {}", e);
                         } else {
                             self.book_stat.show();
-                            self.show_book_stat = true;
-                        }
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " v" => {
-                // Handle Space->v to show raw HTML (alternative way)
-                if self.focused_panel == FocusedPanel::Content && self.current_epub.is_some() {
-                    // Get raw HTML content for current chapter
-                    if let Some(ref mut epub) = self.current_epub {
-                        if let Some((raw_html, _)) = epub.get_current_str() {
-                            self.text_reader.set_raw_html(raw_html);
-                            self.text_reader.toggle_raw_html();
+                            self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
                         }
                     }
                 }
@@ -1898,7 +1940,7 @@ impl App {
             }
             " c" => {
                 // Handle Space->c to copy entire chapter content
-                if self.focused_panel == FocusedPanel::Content {
+                if self.is_main_panel(MainPanel::Content) {
                     if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
                         debug!("Copy chapter failed: {}", e);
                     } else {
@@ -1940,17 +1982,24 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         // If image popup is shown, close it on any key press
-        if self.image_popup.is_some() {
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ImagePopup)
+        ) {
             self.image_popup = None;
             self.image_popup_area = None;
+            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
             return;
         }
 
         // If book stat popup is shown, handle keys for it
-        if self.show_book_stat {
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookStats)
+        ) {
             if self.book_stat.handle_key(key) {
                 if !self.book_stat.is_visible() {
-                    self.show_book_stat = false;
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                 }
                 return;
             }
@@ -1977,7 +2026,7 @@ impl App {
                 }
                 KeyCode::Char('G') => {
                     // Go to bottom
-                    self.book_stat.handle_G();
+                    self.book_stat.handle_upper_g();
                     return;
                 }
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1992,7 +2041,7 @@ impl App {
                 }
                 KeyCode::Esc => {
                     self.book_stat.hide();
-                    self.show_book_stat = false;
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                     return;
                 }
                 KeyCode::Enter => {
@@ -2000,7 +2049,7 @@ impl App {
                     if let Some(chapter_index) = self.book_stat.get_selected_chapter_index() {
                         // Hide the statistics popup
                         self.book_stat.hide();
-                        self.show_book_stat = false;
+                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
                         // Navigate to the selected chapter
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
@@ -2029,36 +2078,45 @@ impl App {
 
         match key.code {
             KeyCode::Char('j') => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_j();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
-                    self.navigation_panel.move_selection_down();
+                } else if self.is_main_panel(MainPanel::FileList) {
+                    self.navigation_panel.handle_j();
                 } else {
                     self.scroll_down();
                 }
             }
             KeyCode::Char('k') => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Use VimNavMotions for reading history
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_k();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
+                } else if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.move_selection_up();
                 } else {
                     self.scroll_up();
                 }
             }
             KeyCode::Char('h') => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Use VimNavMotions for reading history (could close history)
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_h();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
+                } else if self.is_main_panel(MainPanel::FileList) {
                     // Use VimNavMotions for navigation panel
                     self.navigation_panel.handle_h();
                 } else {
@@ -2068,14 +2126,17 @@ impl App {
             }
             KeyCode::Char('H') => {
                 // Toggle reading history
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Close history
-                    self.show_reading_history = false;
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                     self.reading_history = None;
                 } else {
                     // Open history
                     self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
-                    self.show_reading_history = true;
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
                 }
             }
             KeyCode::Char('i') => {
@@ -2086,12 +2147,15 @@ impl App {
                 // 'i' by itself doesn't do anything
             }
             KeyCode::Char('l') => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Use VimNavMotions for reading history (could select/enter)
                     if let Some(ref mut history) = self.reading_history {
                         history.handle_l();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
+                } else if self.is_main_panel(MainPanel::FileList) {
                     // Use VimNavMotions for navigation panel (future: could expand/enter)
                     self.navigation_panel.handle_l();
                 } else {
@@ -2111,7 +2175,10 @@ impl App {
                 self.toggle_profiling();
             }
             KeyCode::Enter => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Handle selection from reading history
                     if let Some(ref history) = self.reading_history {
                         if let Some(path) = history.selected_path() {
@@ -2120,7 +2187,7 @@ impl App {
                                 self.book_manager.find_book_index_by_path(path)
                             {
                                 // Close history and open the book
-                                self.show_reading_history = false;
+                                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                                 self.reading_history = None;
                                 let _ = self.open_book_for_reading(book_index);
                             }
@@ -2152,7 +2219,8 @@ impl App {
                                                         Some(anchor_id),
                                                     );
                                                 }
-                                                self.focused_panel = FocusedPanel::Content;
+                                                self.focused_panel =
+                                                    FocusedPanel::Main(MainPanel::Content);
                                             }
                                         }
                                         TocItem::Section { href, anchor, .. } => {
@@ -2170,7 +2238,8 @@ impl App {
                                                                 anchor_id,
                                                             ));
                                                     }
-                                                    self.focused_panel = FocusedPanel::Content;
+                                                    self.focused_panel =
+                                                        FocusedPanel::Main(MainPanel::Content);
                                                 }
                                             } else {
                                                 // This section has no content - just toggle expansion
@@ -2194,9 +2263,9 @@ impl App {
             }
             KeyCode::Char(' ') => {
                 // Check if this might be part of a key sequence (space-s for raw HTML)
-                if self.focused_panel == FocusedPanel::Content && !self.handle_key_sequence(' ') {
+                if self.is_main_panel(MainPanel::Content) && !self.handle_key_sequence(' ') {
                     // Space by itself in content view doesn't do anything, it's waiting for the next key
-                } else if self.focused_panel == FocusedPanel::FileList
+                } else if self.is_main_panel(MainPanel::FileList)
                     && self.navigation_panel.mode == NavigationMode::TableOfContents
                 {
                     // Toggle section expansion when focused on file list and in TOC mode
@@ -2221,29 +2290,37 @@ impl App {
                 }
             }
             KeyCode::Tab => {
-                // Switch focus between panels
-                self.focused_panel = match self.focused_panel {
-                    FocusedPanel::FileList => {
-                        // Clear manual navigation flag when leaving TOC
-                        self.navigation_panel
-                            .table_of_contents
-                            .clear_manual_navigation();
-                        FocusedPanel::Content
-                    }
-                    FocusedPanel::Content => FocusedPanel::FileList,
-                };
+                // Switch focus between panels (only works in main panels, not popups)
+                if !self.has_active_popup() {
+                    self.focused_panel = match self.focused_panel {
+                        FocusedPanel::Main(MainPanel::FileList) => {
+                            // Clear manual navigation flag when leaving TOC
+                            self.navigation_panel
+                                .table_of_contents
+                                .clear_manual_navigation();
+                            FocusedPanel::Main(MainPanel::Content)
+                        }
+                        FocusedPanel::Main(MainPanel::Content) => {
+                            FocusedPanel::Main(MainPanel::FileList)
+                        }
+                        FocusedPanel::Popup(_) => self.focused_panel, // No tab switching in popups
+                    };
+                }
             }
             KeyCode::Char('d') => {
                 // First check if this is part of a key sequence (e.g., Space+d)
                 if self.handle_key_sequence('d') {
                     // Key was handled as part of a sequence
                 } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.show_reading_history {
+                    if matches!(
+                        self.focused_panel,
+                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                    ) {
                         // Use VimNavMotions for reading history
                         if let Some(ref mut history) = self.reading_history {
                             history.handle_ctrl_d();
                         }
-                    } else if self.focused_panel == FocusedPanel::FileList {
+                    } else if self.is_main_panel(MainPanel::FileList) {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_ctrl_d();
                     } else if let Some(visible_height) = screen_height {
@@ -2253,12 +2330,15 @@ impl App {
             }
             KeyCode::Char('u') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.show_reading_history {
+                    if matches!(
+                        self.focused_panel,
+                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                    ) {
                         // Use VimNavMotions for reading history
                         if let Some(ref mut history) = self.reading_history {
                             history.handle_ctrl_u();
                         }
-                    } else if self.focused_panel == FocusedPanel::FileList {
+                    } else if self.is_main_panel(MainPanel::FileList) {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_ctrl_u();
                     } else if let Some(visible_height) = screen_height {
@@ -2279,14 +2359,17 @@ impl App {
                 }
             }
             KeyCode::Char('G') => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     if let Some(ref mut history) = self.reading_history {
-                        history.handle_G();
+                        history.handle_upper_g();
                     }
-                } else if self.focused_panel == FocusedPanel::FileList {
-                    self.navigation_panel.handle_G();
+                } else if self.is_main_panel(MainPanel::FileList) {
+                    self.navigation_panel.handle_upper_g();
                 } else if self.current_epub.is_some() {
-                    self.text_reader.handle_G();
+                    self.text_reader.handle_upper_g();
                 }
             }
             KeyCode::Char('c') => {
@@ -2299,9 +2382,12 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if self.show_reading_history {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
                     // Close reading history
-                    self.show_reading_history = false;
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                     self.reading_history = None;
                 } else if self.text_reader.has_text_selection() {
                     // Clear text selection when ESC is pressed

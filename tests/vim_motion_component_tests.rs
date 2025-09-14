@@ -80,7 +80,7 @@ fn test_book_list_vim_motion_g() {
     // Ensure we're in book selection mode
     assert_eq!(nav_panel.mode, NavigationMode::BookSelection);
 
-    nav_panel.handle_G();
+    nav_panel.handle_upper_g();
     terminal
         .draw(|f| {
             let area = f.size();
@@ -183,7 +183,7 @@ fn test_navigation_panel_vim_motion_g() {
     nav_panel.switch_to_toc_mode(0, book_info);
 
     // Test G (go to bottom)
-    nav_panel.handle_G();
+    nav_panel.handle_upper_g();
 
     // Render only the navigation panel
     terminal
@@ -281,7 +281,7 @@ fn test_text_reader_vim_motion_g() {
     text_reader.set_content_from_string(&test_content, None);
 
     // Test G (go to bottom)
-    text_reader.handle_G();
+    text_reader.handle_upper_g();
 
     terminal
         .draw(|f| {
