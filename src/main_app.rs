@@ -132,31 +132,52 @@ impl App {
 
     /// Check if we're in search mode
     fn is_in_search_mode(&self) -> bool {
-        // Navigation panel now handles search for both modes
-        self.navigation_panel.is_searching()
+        // Check both navigation panel and content area for search mode
+        self.navigation_panel.is_searching() || self.text_reader.is_searching()
     }
 
     /// Handle search input
     fn handle_search_input(&mut self, c: char) {
-        let mut query = self.navigation_panel.get_search_state().query.clone();
-        query.push(c);
-        self.navigation_panel.update_search_query(&query);
+        if self.navigation_panel.is_searching() {
+            let mut query = self.navigation_panel.get_search_state().query.clone();
+            query.push(c);
+            self.navigation_panel.update_search_query(&query);
+        } else if self.text_reader.is_searching() {
+            let mut query = self.text_reader.get_search_state().query.clone();
+            query.push(c);
+            self.text_reader.update_search_query(&query);
+        }
     }
 
     /// Handle search backspace
     fn handle_search_backspace(&mut self) {
-        let mut query = self.navigation_panel.get_search_state().query.clone();
-        query.pop();
-        self.navigation_panel.update_search_query(&query);
+        if self.navigation_panel.is_searching() {
+            let mut query = self.navigation_panel.get_search_state().query.clone();
+            query.pop();
+            self.navigation_panel.update_search_query(&query);
+        } else if self.text_reader.is_searching() {
+            let mut query = self.text_reader.get_search_state().query.clone();
+            query.pop();
+            self.text_reader.update_search_query(&query);
+        }
     }
 
     /// Cancel current search
     fn cancel_current_search(&mut self) {
-        let search_state = self.navigation_panel.get_search_state();
-        if search_state.mode == SearchMode::InputMode {
-            self.navigation_panel.cancel_search();
-        } else {
-            self.navigation_panel.exit_search();
+        if self.navigation_panel.is_searching() {
+            let search_state = self.navigation_panel.get_search_state();
+            if search_state.mode == SearchMode::InputMode {
+                self.navigation_panel.cancel_search();
+            } else {
+                self.navigation_panel.exit_search();
+            }
+        } else if self.text_reader.is_searching() {
+            let search_state = self.text_reader.get_search_state();
+            if search_state.mode == SearchMode::InputMode {
+                self.text_reader.cancel_search();
+            } else {
+                self.text_reader.exit_search();
+            }
         }
     }
 
@@ -1856,7 +1877,12 @@ impl App {
 
         // Check if we're in search mode
         let help_content = if self.is_in_search_mode() {
-            let search_state = self.navigation_panel.get_search_state();
+            // Get the appropriate search state
+            let search_state = if self.navigation_panel.is_searching() {
+                self.navigation_panel.get_search_state()
+            } else {
+                self.text_reader.get_search_state()
+            };
             match search_state.mode {
                 SearchMode::InputMode => {
                     // Show search input with cursor
@@ -2140,56 +2166,103 @@ impl App {
 
         match key.code {
             KeyCode::Char('/') => {
-                // Start search when '/' is pressed in FileList mode (works for both book list and TOC)
+                // Start search when '/' is pressed
                 if self.is_main_panel(MainPanel::FileList) {
+                    // Start search in navigation panel (book list or TOC)
                     self.navigation_panel.start_search();
+                } else if self.is_main_panel(MainPanel::Content) {
+                    // Start search in content area
+                    self.text_reader.start_search();
                 }
             }
             KeyCode::Char('n') if self.is_in_search_mode() => {
                 // Handle 'n' in search mode - next match
-                let search_state = self.navigation_panel.get_search_state();
-                if search_state.mode == SearchMode::NavigationMode {
-                    self.navigation_panel.next_match();
-                } else {
-                    // In input mode, 'n' is just a regular character
-                    self.handle_search_input('n');
+                if self.navigation_panel.is_searching() {
+                    let search_state = self.navigation_panel.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.navigation_panel.next_match();
+                    } else {
+                        // In input mode, 'n' is just a regular character
+                        self.handle_search_input('n');
+                    }
+                } else if self.text_reader.is_searching() {
+                    let search_state = self.text_reader.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.text_reader.next_match();
+                    } else {
+                        // In input mode, 'n' is just a regular character
+                        self.handle_search_input('n');
+                    }
                 }
             }
             KeyCode::Char('N') if self.is_in_search_mode() => {
                 // Handle 'N' in search mode - previous match
-                let search_state = self.navigation_panel.get_search_state();
-                if search_state.mode == SearchMode::NavigationMode {
-                    self.navigation_panel.previous_match();
-                } else {
-                    // In input mode, 'N' is just a regular character
-                    self.handle_search_input('N');
+                if self.navigation_panel.is_searching() {
+                    let search_state = self.navigation_panel.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.navigation_panel.previous_match();
+                    } else {
+                        // In input mode, 'N' is just a regular character
+                        self.handle_search_input('N');
+                    }
+                } else if self.text_reader.is_searching() {
+                    let search_state = self.text_reader.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.text_reader.previous_match();
+                    } else {
+                        // In input mode, 'N' is just a regular character
+                        self.handle_search_input('N');
+                    }
                 }
             }
             KeyCode::Char(c) if self.is_in_search_mode() => {
                 // Handle regular character input in search mode
-                let search_state = self.navigation_panel.get_search_state();
-                if search_state.mode == SearchMode::InputMode {
+                let in_input_mode = if self.navigation_panel.is_searching() {
+                    self.navigation_panel.get_search_state().mode == SearchMode::InputMode
+                } else if self.text_reader.is_searching() {
+                    self.text_reader.get_search_state().mode == SearchMode::InputMode
+                } else {
+                    false
+                };
+
+                if in_input_mode {
                     self.handle_search_input(c);
                 }
                 // In NavigationMode, regular characters are ignored (except n/N handled above)
             }
             KeyCode::Backspace if self.is_in_search_mode() => {
                 // Handle backspace in search mode
-                let search_state = self.navigation_panel.get_search_state();
-                if search_state.mode == SearchMode::InputMode {
+                let in_input_mode = if self.navigation_panel.is_searching() {
+                    self.navigation_panel.get_search_state().mode == SearchMode::InputMode
+                } else if self.text_reader.is_searching() {
+                    self.text_reader.get_search_state().mode == SearchMode::InputMode
+                } else {
+                    false
+                };
+
+                if in_input_mode {
                     self.handle_search_backspace();
                 }
                 // In NavigationMode, backspace is ignored
             }
             KeyCode::Enter if self.is_in_search_mode() => {
                 // Handle Enter in search mode
-                let search_state = self.navigation_panel.get_search_state();
-                if search_state.mode == SearchMode::InputMode {
-                    // Confirm search and switch to navigation mode
-                    self.navigation_panel.confirm_search();
-                } else {
-                    // In NavigationMode, Enter selects the current item
-                    self.handle_navigation_panel_enter();
+                if self.navigation_panel.is_searching() {
+                    let search_state = self.navigation_panel.get_search_state();
+                    if search_state.mode == SearchMode::InputMode {
+                        // Confirm search and switch to navigation mode
+                        self.navigation_panel.confirm_search();
+                    } else {
+                        // In NavigationMode, Enter selects the current item
+                        self.handle_navigation_panel_enter();
+                    }
+                } else if self.text_reader.is_searching() {
+                    let search_state = self.text_reader.get_search_state();
+                    if search_state.mode == SearchMode::InputMode {
+                        // Confirm search and switch to navigation mode
+                        self.text_reader.confirm_search();
+                    }
+                    // In NavigationMode for content, Enter doesn't do anything special
                 }
             }
             KeyCode::Esc if self.is_in_search_mode() => {
@@ -2199,8 +2272,14 @@ impl App {
             KeyCode::Char('j') => {
                 // Allow 'j' in NavigationMode but handle as input in InputMode
                 if self.is_in_search_mode() {
-                    let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
+                    let in_input_mode = if self.navigation_panel.is_searching() {
+                        self.navigation_panel.get_search_state().mode == SearchMode::InputMode
+                    } else if self.text_reader.is_searching() {
+                        self.text_reader.get_search_state().mode == SearchMode::InputMode
+                    } else {
+                        false
+                    };
+                    if in_input_mode {
                         self.handle_search_input('j');
                         return;
                     }
@@ -2222,8 +2301,14 @@ impl App {
             KeyCode::Char('k') => {
                 // Allow 'k' in NavigationMode but handle as input in InputMode
                 if self.is_in_search_mode() {
-                    let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
+                    let in_input_mode = if self.navigation_panel.is_searching() {
+                        self.navigation_panel.get_search_state().mode == SearchMode::InputMode
+                    } else if self.text_reader.is_searching() {
+                        self.text_reader.get_search_state().mode == SearchMode::InputMode
+                    } else {
+                        false
+                    };
+                    if in_input_mode {
                         self.handle_search_input('k');
                         return;
                     }

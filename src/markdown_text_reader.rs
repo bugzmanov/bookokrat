@@ -6,6 +6,7 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
+use crate::search::{SearchState, SearchablePanel, find_matches_in_text};
 use crate::table::{Table as CustomTable, TableConfig};
 use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::text_selection::TextSelection;
@@ -217,6 +218,9 @@ pub struct MarkdownTextReader {
     /// Current chapter filename (for resolving relative links)
     current_chapter_file: Option<String>,
 
+    /// Search state for vim-like search
+    search_state: SearchState,
+
     /// Pending anchor scroll after chapter navigation
     pending_anchor_scroll: Option<String>,
 
@@ -423,6 +427,7 @@ impl MarkdownTextReader {
             embedded_tables: RefCell::new(Vec::new()),
             anchor_positions: HashMap::new(),
             current_chapter_file: None,
+            search_state: SearchState::new(),
             pending_anchor_scroll: None,
             last_active_anchor: None,
         }
@@ -2121,6 +2126,132 @@ impl MarkdownTextReader {
         // Fall back to chapter-level highlighting
         ActiveSection::Chapter(current_chapter)
     }
+
+    /// Apply search highlighting to a line's spans
+    fn apply_search_highlighting(
+        &self,
+        line_idx: usize,
+        line_spans: Vec<Span<'static>>,
+        _palette: &Base16Palette,
+    ) -> Vec<Span<'static>> {
+        if !self.search_state.active || self.search_state.matches.is_empty() {
+            return line_spans;
+        }
+
+        // Check if this line has any search matches
+        let line_matches: Vec<_> = self
+            .search_state
+            .matches
+            .iter()
+            .filter(|m| m.index == line_idx)
+            .collect();
+
+        if line_matches.is_empty() {
+            return line_spans;
+        }
+
+        // Get the raw text for this line to calculate positions
+        let _raw_text = self
+            .rendered_content
+            .lines
+            .get(line_idx)
+            .map(|l| l.raw_text.clone())
+            .unwrap_or_default();
+
+        let mut result_spans = Vec::new();
+        let mut char_offset = 0;
+
+        for span in line_spans {
+            let span_text = span.content.to_string();
+            let span_len = span_text.len();
+            let span_end = char_offset + span_len;
+
+            // Check if any highlights overlap with this span
+            let mut segments = vec![];
+            let mut last_pos = 0;
+
+            for match_item in &line_matches {
+                for (highlight_start, highlight_end) in &match_item.highlight_ranges {
+                    // Check if this highlight overlaps with the current span
+                    if *highlight_end > char_offset && *highlight_start < span_end {
+                        // Calculate relative positions within the span
+                        let rel_start = highlight_start.saturating_sub(char_offset).min(span_len);
+                        let rel_end = highlight_end.saturating_sub(char_offset).min(span_len);
+
+                        if rel_start > last_pos {
+                            // Add non-highlighted segment before this match
+                            segments.push((last_pos, rel_start, false));
+                        }
+
+                        // Add highlighted segment
+                        segments.push((rel_start, rel_end, true));
+                        last_pos = rel_end;
+                    }
+                }
+            }
+
+            // Add any remaining non-highlighted text
+            if last_pos < span_len {
+                segments.push((last_pos, span_len, false));
+            }
+
+            // Create new spans based on segments
+            if segments.is_empty() {
+                result_spans.push(span);
+            } else {
+                for (start, end, is_highlighted) in segments {
+                    if start >= end {
+                        continue;
+                    }
+
+                    let text_segment = span_text[start..end].to_string();
+                    let style = if is_highlighted {
+                        let is_current = self.search_state.is_current_match(line_idx);
+                        if is_current {
+                            // Current match: bright yellow background with black text
+                            RatatuiStyle::default().bg(Color::Yellow).fg(Color::Black)
+                        } else {
+                            // Other matches: dim yellow background, preserve original fg
+                            span.style.bg(Color::Rgb(100, 100, 0))
+                        }
+                    } else {
+                        span.style
+                    };
+
+                    result_spans.push(Span::styled(text_segment, style));
+                }
+            }
+
+            char_offset = span_end;
+        }
+
+        result_spans
+    }
+
+    /// Get searchable content (visible lines as text)
+    fn get_visible_text(&self) -> Vec<String> {
+        self.rendered_content
+            .lines
+            .iter()
+            .map(|line| line.raw_text.clone())
+            .collect()
+    }
+
+    /// Jump to a specific line in the content
+    fn jump_to_line(&mut self, line_idx: usize) {
+        if line_idx < self.rendered_content.lines.len() {
+            // Center the line in the viewport if possible
+            let half_height = self.visible_height / 2;
+            self.scroll_offset = line_idx.saturating_sub(half_height);
+
+            // Ensure we don't scroll past the end
+            let max_scroll = self
+                .rendered_content
+                .total_height
+                .saturating_sub(self.visible_height);
+            self.scroll_offset = self.scroll_offset.min(max_scroll);
+        }
+    }
 }
 
 impl VimNavMotions for MarkdownTextReader {
@@ -2741,6 +2872,9 @@ impl TextReaderTrait for MarkdownTextReader {
                     line_spans = line_with_selection.spans;
                 }
 
+                // Apply search highlighting after selection highlighting
+                line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
+
                 visible_lines.push(Line::from(line_spans));
             }
         }
@@ -2924,6 +3058,77 @@ impl TextReaderTrait for MarkdownTextReader {
         if let Some(ref anchor_id) = self.pending_anchor_scroll {
             debug!("Stored pending anchor scroll for '{}'", anchor_id);
         }
+    }
+}
+
+impl SearchablePanel for MarkdownTextReader {
+    fn start_search(&mut self) {
+        self.search_state.start_search(self.scroll_offset);
+    }
+
+    fn cancel_search(&mut self) {
+        let original_position = self.search_state.cancel_search();
+        self.scroll_offset = original_position;
+    }
+
+    fn confirm_search(&mut self) {
+        self.search_state.confirm_search();
+        // If search was cancelled (empty query), restore position
+        if !self.search_state.active {
+            let original_position = self.search_state.original_position;
+            self.scroll_offset = original_position;
+        }
+    }
+
+    fn exit_search(&mut self) {
+        self.search_state.exit_search();
+        // Keep current position
+    }
+
+    fn update_search_query(&mut self, query: &str) {
+        self.search_state.update_query(query.to_string());
+
+        // Find matches in visible text
+        let searchable = self.get_searchable_content();
+        let matches = find_matches_in_text(query, &searchable);
+        self.search_state.set_matches(matches);
+
+        // Jump to match if found
+        if let Some(match_index) = self.search_state.get_current_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn next_match(&mut self) {
+        if let Some(match_index) = self.search_state.next_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn previous_match(&mut self) {
+        if let Some(match_index) = self.search_state.previous_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn get_search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    fn is_searching(&self) -> bool {
+        self.search_state.active
+    }
+
+    fn has_matches(&self) -> bool {
+        !self.search_state.matches.is_empty()
+    }
+
+    fn jump_to_match(&mut self, match_index: usize) {
+        self.jump_to_line(match_index);
+    }
+
+    fn get_searchable_content(&self) -> Vec<String> {
+        self.get_visible_text()
     }
 }
 
