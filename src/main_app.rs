@@ -136,6 +136,17 @@ impl App {
         self.navigation_panel.is_searching() || self.text_reader.is_searching()
     }
 
+    /// Check if we're actively typing a search query (InputMode)
+    fn is_search_input_mode(&self) -> bool {
+        if self.navigation_panel.is_searching() {
+            self.navigation_panel.get_search_state().mode == SearchMode::InputMode
+        } else if self.text_reader.is_searching() {
+            self.text_reader.get_search_state().mode == SearchMode::InputMode
+        } else {
+            false
+        }
+    }
+
     /// Handle search input
     fn handle_search_input(&mut self, c: char) {
         if self.navigation_panel.is_searching() {
@@ -2215,35 +2226,13 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char(c) if self.is_in_search_mode() => {
-                // Handle regular character input in search mode
-                let in_input_mode = if self.navigation_panel.is_searching() {
-                    self.navigation_panel.get_search_state().mode == SearchMode::InputMode
-                } else if self.text_reader.is_searching() {
-                    self.text_reader.get_search_state().mode == SearchMode::InputMode
-                } else {
-                    false
-                };
-
-                if in_input_mode {
-                    self.handle_search_input(c);
-                }
-                // In NavigationMode, regular characters are ignored (except n/N handled above)
+            KeyCode::Char(c) if self.is_search_input_mode() => {
+                // We're typing a search query - handle ALL characters as input
+                self.handle_search_input(c);
             }
-            KeyCode::Backspace if self.is_in_search_mode() => {
-                // Handle backspace in search mode
-                let in_input_mode = if self.navigation_panel.is_searching() {
-                    self.navigation_panel.get_search_state().mode == SearchMode::InputMode
-                } else if self.text_reader.is_searching() {
-                    self.text_reader.get_search_state().mode == SearchMode::InputMode
-                } else {
-                    false
-                };
-
-                if in_input_mode {
-                    self.handle_search_backspace();
-                }
-                // In NavigationMode, backspace is ignored
+            KeyCode::Backspace if self.is_search_input_mode() => {
+                // Handle backspace when typing search query
+                self.handle_search_backspace();
             }
             KeyCode::Enter if self.is_in_search_mode() => {
                 // Handle Enter in search mode
@@ -2270,20 +2259,6 @@ impl App {
                 self.cancel_current_search();
             }
             KeyCode::Char('j') => {
-                // Allow 'j' in NavigationMode but handle as input in InputMode
-                if self.is_in_search_mode() {
-                    let in_input_mode = if self.navigation_panel.is_searching() {
-                        self.navigation_panel.get_search_state().mode == SearchMode::InputMode
-                    } else if self.text_reader.is_searching() {
-                        self.text_reader.get_search_state().mode == SearchMode::InputMode
-                    } else {
-                        false
-                    };
-                    if in_input_mode {
-                        self.handle_search_input('j');
-                        return;
-                    }
-                }
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)
@@ -2299,20 +2274,6 @@ impl App {
                 }
             }
             KeyCode::Char('k') => {
-                // Allow 'k' in NavigationMode but handle as input in InputMode
-                if self.is_in_search_mode() {
-                    let in_input_mode = if self.navigation_panel.is_searching() {
-                        self.navigation_panel.get_search_state().mode == SearchMode::InputMode
-                    } else if self.text_reader.is_searching() {
-                        self.text_reader.get_search_state().mode == SearchMode::InputMode
-                    } else {
-                        false
-                    };
-                    if in_input_mode {
-                        self.handle_search_input('k');
-                        return;
-                    }
-                }
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)

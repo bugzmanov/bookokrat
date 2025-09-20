@@ -1,6 +1,6 @@
 use crate::markdown_text_reader::ActiveSection;
 use crate::navigation_panel::CurrentBookInfo;
-use crate::search::{SearchState, SearchablePanel, find_matches_in_text};
+use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::Base16Palette;
 use ratatui::{
     Frame,
@@ -184,6 +184,11 @@ impl TableOfContents {
             if self.selected_index < total_items {
                 self.selected_index += 1;
                 self.list_state.select(Some(self.selected_index));
+                // Clear current match when manually navigating so next 'n' finds from new position
+                if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode
+                {
+                    self.search_state.current_match_index = None;
+                }
             }
         }
     }
@@ -193,6 +198,10 @@ impl TableOfContents {
         if self.selected_index > 0 {
             self.selected_index -= 1;
             self.list_state.select(Some(self.selected_index));
+            // Clear current match when manually navigating so next 'n' finds from new position
+            if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
+                self.search_state.current_match_index = None;
+            }
         }
     }
 
@@ -741,14 +750,80 @@ impl SearchablePanel for TableOfContents {
     }
 
     fn next_match(&mut self) {
-        if let Some(match_index) = self.search_state.next_match() {
-            self.jump_to_match(match_index);
+        if self.search_state.matches.is_empty() {
+            return;
+        }
+
+        // If we have a current match index, go to the next one
+        if let Some(current_idx) = self.search_state.current_match_index {
+            // Move to next match
+            let next_idx = (current_idx + 1) % self.search_state.matches.len();
+            self.search_state.current_match_index = Some(next_idx);
+
+            if let Some(search_match) = self.search_state.matches.get(next_idx) {
+                self.jump_to_match(search_match.index);
+            }
+        } else {
+            // No current match, find the first match after current selected position
+            let current_position = self.selected_index;
+
+            // Find the first match that's after the current position
+            let mut next_match_idx = None;
+            for (idx, search_match) in self.search_state.matches.iter().enumerate() {
+                if search_match.index > current_position {
+                    next_match_idx = Some(idx);
+                    break;
+                }
+            }
+
+            // If no match found after current position, wrap to beginning
+            let target_idx = next_match_idx.unwrap_or(0);
+            self.search_state.current_match_index = Some(target_idx);
+
+            if let Some(search_match) = self.search_state.matches.get(target_idx) {
+                self.jump_to_match(search_match.index);
+            }
         }
     }
 
     fn previous_match(&mut self) {
-        if let Some(match_index) = self.search_state.previous_match() {
-            self.jump_to_match(match_index);
+        if self.search_state.matches.is_empty() {
+            return;
+        }
+
+        // If we have a current match index, go to the previous one
+        if let Some(current_idx) = self.search_state.current_match_index {
+            // Move to previous match
+            let prev_idx = if current_idx == 0 {
+                self.search_state.matches.len() - 1
+            } else {
+                current_idx - 1
+            };
+            self.search_state.current_match_index = Some(prev_idx);
+
+            if let Some(search_match) = self.search_state.matches.get(prev_idx) {
+                self.jump_to_match(search_match.index);
+            }
+        } else {
+            // No current match, find the last match before current selected position
+            let current_position = self.selected_index;
+
+            // Find the last match that's before the current position
+            let mut prev_match_idx = None;
+            for (idx, search_match) in self.search_state.matches.iter().enumerate().rev() {
+                if search_match.index < current_position {
+                    prev_match_idx = Some(idx);
+                    break;
+                }
+            }
+
+            // If no match found before current position, wrap to end
+            let target_idx = prev_match_idx.unwrap_or(self.search_state.matches.len() - 1);
+            self.search_state.current_match_index = Some(target_idx);
+
+            if let Some(search_match) = self.search_state.matches.get(target_idx) {
+                self.jump_to_match(search_match.index);
+            }
         }
     }
 
