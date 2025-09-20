@@ -18,8 +18,11 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - Hierarchical table of contents navigation with expandable sections
 - Text selection with mouse support (single, double, and triple-click)
 - Reading history tracking with quick access popup
+- Book statistics popup showing chapter and screen information
 - External EPUB reader integration
-- Vim-like keybindings throughout the interface
+- Vim-like keybindings throughout the interface including "/" search
+- Book-wide text search with fuzzy matching
+- Vim-style jump list navigation (Ctrl+o/Ctrl+i)
 - Bookmark persistence and reading progress tracking
 - Cross-platform support (macOS, Windows, Linux)
 - Embedded image display with dynamic sizing and placeholder support
@@ -53,6 +56,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - **Panic Test**: `cargo run --example panic_test` - Interactive test to verify panic handler properly restores mouse functionality
 - **Simulated Input Example**: `cargo run --example simulated_input_example` - Demonstrates running the app with simulated keyboard input for testing
 - **MathML Test**: `cargo run --example test_mathml_rust` - Tests MathML parsing and ASCII rendering functionality
+- **Book Discovery Test**: `cargo run --example test_book_discovery` - Tests book discovery and loading functionality
 
 ## Architecture
 
@@ -66,13 +70,17 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 2. **main_app.rs** - Core application logic (src/main_app.rs)
    - `App` struct: Central state management and component orchestration
    - `FocusedPanel` enum: Tracks which panel has keyboard focus
+   - `PopupWindow` enum: Manages popups (ReadingHistory, BookStats, ImagePopup)
    - High-level action handling (open book, navigate chapters, switch modes)
    - Mouse event batching and processing
-   - Vim-like keybinding support with multi-key sequences
+   - Vim-like keybinding support with multi-key sequences including "/" search
    - Text selection and clipboard integration
    - Bookmark management with throttled saving
    - Reading history popup management
+   - Book statistics popup display
    - Image popup display and interaction
+   - Jump list navigation support
+   - Search mode integration
    - Performance profiling integration with pprof
    - FPS monitoring through `FPSCounter` struct
 
@@ -96,7 +104,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 
 6. **navigation_panel.rs** - Left panel navigation manager (src/navigation_panel.rs)
    - `NavigationPanel` struct: Manages mode switching between book list and TOC
-   - `NavigationMode` enum: BookSelection vs TableOfContents
+   - `NavigationMode` enum: BookSelection vs TableOfContents vs BookSearch
    - Renders appropriate sub-component based on mode
    - Handles mouse clicks and keyboard navigation
    - Extracts user actions for the main app
@@ -108,14 +116,9 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
    - Current chapter highlighting
    - Mouse and keyboard navigation support
 
-8. **toc_parser.rs** - EPUB TOC extraction (src/toc_parser.rs)
-   - `TocParser` struct: Parses NCX (EPUB2) and Nav (EPUB3) documents
-   - Hierarchical structure extraction
-   - Resource discovery and format detection
-   - Robust regex-based content extraction
-
-9. **text_reader.rs** - Reading view component (src/text_reader.rs)
-   - `TextReader` struct: Manages text display and scrolling
+8. **markdown_text_reader.rs** - Main reading view component (src/markdown_text_reader.rs)
+   - `MarkdownTextReader` struct: Manages text display and scrolling using Markdown AST
+   - Implements `TextReaderTrait` for abstraction
    - Reading time calculation (250 WPM default)
    - Chapter progress percentage tracking
    - Smooth scrolling with acceleration
@@ -128,6 +131,14 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
    - Auto-scroll functionality during text selection
    - Raw HTML viewing mode toggle
    - Background image loading coordination
+   - Rich text rendering with preserved formatting
+   - Search highlighting support
+   - Jump position tracking
+
+9. **text_reader_trait.rs** - Text reader abstraction (src/text_reader_trait.rs)
+   - `TextReaderTrait`: Common interface for different text reader implementations
+   - Unified API for scrolling, navigation, and content access
+   - Enables swapping between different rendering implementations
 
 10. **text_selection.rs** - Text selection system (src/text_selection.rs)
     - `TextSelection` struct: Manages selection state and rendering
@@ -137,19 +148,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Visual highlighting with customizable colors
     - Coordinate validation and conversion
 
-11. **text_generator.rs** - HTML to text conversion (src/text_generator.rs)
-    - `TextGenerator` struct: Processes EPUB HTML content
-    - Regex-based HTML cleaning
-    - Chapter title extraction
-    - Paragraph formatting with proper indentation
-    - Entity decoding (e.g., &mdash;, &ldquo;)
-    - Code block detection and formatting
-    - Table parsing and formatting
-    - Image tag extraction and placeholder insertion
-    - Link extraction and formatting
-    - Syntax highlighting support for code blocks
-
-12. **reading_history.rs** - Recent books popup (src/reading_history.rs)
+11. **reading_history.rs** - Recent books popup (src/reading_history.rs)
     - `ReadingHistory` struct: Manages history display and interaction
     - Extracts recent books from bookmarks
     - Chronological sorting with deduplication
@@ -157,39 +156,39 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Mouse and keyboard navigation
     - Implements `VimNavMotions` for consistent navigation
 
-13. **system_command.rs** - External application integration (src/system_command.rs)
+12. **system_command.rs** - External application integration (src/system_command.rs)
     - `SystemCommandExecutor` trait: Abstraction for system commands
     - Cross-platform file opening (macOS, Windows, Linux)
     - EPUB reader detection (Calibre, ClearView, Skim, FBReader)
     - Chapter-specific navigation support
     - Mockable interface for testing
 
-14. **event_source.rs** - Input event abstraction (src/event_source.rs)
+13. **event_source.rs** - Input event abstraction (src/event_source.rs)
     - `EventSource` trait: Abstraction for event polling/reading
     - `KeyboardEventSource`: Real crossterm-based implementation
     - `SimulatedEventSource`: Mock for testing
     - Helper methods for creating test events
 
-15. **theme.rs** - Color theming (src/theme.rs)
+14. **theme.rs** - Color theming (src/theme.rs)
     - `Base16Palette` struct: Color scheme definition
     - Oceanic Next theme implementation
     - Dynamic color selection based on UI mode
 
-16. **panic_handler.rs** - Enhanced panic handling (src/panic_handler.rs)
+15. **panic_handler.rs** - Enhanced panic handling (src/panic_handler.rs)
     - `initialize_panic_handler()`: Sets up panic hooks based on build type
     - Debug builds: Uses `better-panic` for detailed backtraces
     - Release builds: Uses `human-panic` for user-friendly crash reports
     - Terminal state restoration on panic to prevent broken terminal
     - Proper mouse capture restoration to maintain mouse functionality post-panic
 
-17. **syntax_highlighter.rs** - Code syntax highlighting (src/syntax_highlighter.rs)
+16. **syntax_highlighter.rs** - Code syntax highlighting (src/syntax_highlighter.rs)
     - `SyntaxHighlighter` struct: Provides syntax highlighting for code blocks
     - Uses syntect library for highlighting
     - Multiple theme support (Monokai, base16 themes)
     - Language detection and appropriate syntax rules
     - Converts highlighted code to ratatui-compatible styled text
 
-18. **mathml_renderer.rs** - MathML to ASCII conversion (src/mathml_renderer.rs)
+17. **mathml_renderer.rs** - MathML to ASCII conversion (src/mathml_renderer.rs)
     - `MathMLParser` struct: Converts MathML expressions to terminal-friendly ASCII art
     - `MathBox` struct: Represents rendered mathematical expressions with positioning
     - Unicode subscript/superscript support for improved readability
@@ -198,7 +197,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Multi-line parentheses for complex expressions
     - Baseline alignment for proper mathematical layout
 
-19. **markdown.rs** - Markdown AST definitions (src/markdown.rs)
+18. **markdown.rs** - Markdown AST definitions (src/markdown.rs)
     - `Document` struct: Root container for parsed content
     - `Node` struct: Individual content blocks with source tracking
     - `Block` enum: Different content types (heading, paragraph, code, table, etc.)
@@ -208,9 +207,51 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - `HeadingLevel` enum: H1-H6 heading levels
     - Complete table support structures (rows, cells, alignment)
 
+### Search and Navigation Components
+
+19. **search.rs** - General search state and functionality (src/search.rs)
+    - `SearchState` struct: Manages search state across the application
+    - Tracks current search query and mode
+    - Integrates with main app for search coordination
+
+20. **book_search.rs** - Book-wide search UI (src/book_search.rs)
+    - `BookSearch` struct: Full-text search across entire book
+    - Search result navigation with chapter context
+    - Fuzzy matching support
+    - Visual search result highlighting
+    - Implements `VimNavMotions` for consistent navigation
+
+21. **search_engine.rs** - Search engine implementation (src/search_engine.rs)
+    - `SearchEngine` struct: Core search functionality
+    - Fuzzy string matching using fuzzy_matcher crate (NOTE: needs to be added to Cargo.toml)
+    - Case-insensitive search
+    - Search result ranking and scoring
+    - Multi-chapter search support
+
+22. **jump_list.rs** - Vim-like jump list navigation (src/jump_list.rs)
+    - `JumpList` struct: Maintains navigation history
+    - Forward/backward navigation (Ctrl+o/Ctrl+i)
+    - Chapter and position tracking
+    - Circular buffer implementation
+    - Integrates with main navigation flow
+
+23. **book_stat.rs** - Book statistics popup (src/book_stat.rs)
+    - `BookStat` struct: Displays book statistics
+    - Chapter count and screen count per chapter
+    - Total screens calculation
+    - Centered popup display
+    - Quick overview of book structure
+
+24. **table.rs** - Custom table widget (src/table.rs)
+    - `Table` struct: Enhanced table rendering
+    - Column alignment support
+    - Header and content separation
+    - Responsive width calculation
+    - Used by book statistics and search results
+
 ### Parsing Components (src/parsing/)
 
-20. **html_to_markdown.rs** - HTML to Markdown AST conversion (src/parsing/html_to_markdown.rs)
+25. **html_to_markdown.rs** - HTML to Markdown AST conversion (src/parsing/html_to_markdown.rs)
     - `HtmlToMarkdownConverter` struct: Converts HTML content to clean Markdown AST
     - Uses html5ever for robust DOM parsing and traversal
     - Handles various HTML elements (headings, paragraphs, images, MathML)
@@ -218,7 +259,7 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - Preserves text formatting and inline elements during conversion
     - Entity decoding for proper text representation
 
-21. **markdown_renderer.rs** - Markdown AST to string rendering (src/parsing/markdown_renderer.rs)
+26. **markdown_renderer.rs** - Markdown AST to string rendering (src/parsing/markdown_renderer.rs)
     - `MarkdownRenderer` struct: Converts Markdown AST to formatted text output
     - Simple AST traversal and string conversion without cleanup logic
     - Applies Markdown formatting syntax (headers, bold, italic, code)
@@ -226,57 +267,64 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
     - H1 uppercase transformation for consistency
     - Proper spacing and formatting for terminal display
 
-22. **html5ever_text_generator.rs** - Modern HTML parsing implementation (src/parsing/html5ever_text_generator.rs)
-    - `TextGenerator` struct: Alternative to regex-based HTML processing
-    - Uses html5ever for standards-compliant HTML parsing
-    - Integration with Markdown AST pipeline for clean text processing
-    - Improved handling of complex HTML structures and nested elements
-
-23. **text_generator_wrapper.rs** - Implementation abstraction layer (src/parsing/text_generator_wrapper.rs)
-    - `TextGeneratorWrapper` struct: Provides unified interface for different text generators
-    - `TextGeneratorImpl` enum: Switches between regex and html5ever implementations
-    - Allows easy switching between parsing approaches for testing and development
-    - Delegates core functionality (chapter processing, TOC parsing) to chosen implementation
-
-24. **text_generator.rs** - Legacy regex-based HTML processing (src/parsing/text_generator.rs)
+27. **text_generator.rs** - Legacy regex-based HTML processing (src/parsing/text_generator.rs)
     - Original regex-based implementation maintained for compatibility
     - Direct HTML tag processing and text extraction
     - Comprehensive entity decoding and content cleaning
+    - Used as fallback for certain parsing scenarios
+
+28. **toc_parser.rs** - TOC parsing implementation (src/parsing/toc_parser.rs)
+    - Parses NCX (EPUB2) and Nav (EPUB3) documents
+    - Hierarchical structure extraction
+    - Resource discovery and format detection
+    - Robust regex-based content extraction
 
 ### Image Components (src/images/)
 
-25. **image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
+29. **image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
     - `ImageStorage` struct: Manages extracted EPUB images
     - Automatic image extraction from EPUB files
     - Directory-based caching in `temp_images/`
     - Thread-safe storage with Arc<Mutex>
     - Deduplication of already extracted images
 
-26. **book_images.rs** - Book-specific image management (src/images/book_images.rs)
+30. **book_images.rs** - Book-specific image management (src/images/book_images.rs)
     - `BookImages` struct: Manages images for current book
     - Image path resolution from EPUB resources
     - Integration with ImageStorage for caching
     - Support for various image formats (PNG, JPEG, etc.)
 
-27. **image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
+31. **image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
     - `ImagePlaceholder` struct: Displays loading/error states
     - `LoadingStatus` enum: NotStarted, Loading, Loaded, Failed
     - Visual feedback during image loading
     - Error message display for failed loads
     - Configurable styling and dimensions
 
-28. **image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
+32. **image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
     - `ImagePopup` struct: Modal image display
     - Full-screen overlay with centered image
     - Keyboard controls (Esc to close, navigation)
     - Mouse interaction support
     - Image scaling and aspect ratio preservation
 
-29. **background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
+33. **background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
     - `BackgroundImageLoader` struct: Non-blocking image loads
     - Thread-based background loading
     - Prevents UI freezing during image loading
     - Callback-based completion notification
+
+### Test Utilities
+
+34. **simple_fake_books.rs** - Test book creation (src/simple_fake_books.rs)
+    - Helper functions for creating test EPUB files
+    - Generates sample books with various content types
+    - Used in unit and integration tests
+
+35. **test_utils.rs** - Test helper functions (src/test_utils.rs)
+    - Common test utilities and fixtures
+    - Mock data generation
+    - Test environment setup
 
 ### Key Dependencies (Cargo.toml)
 - `ratatui` (0.29.0): Terminal UI framework
@@ -306,14 +354,17 @@ BookRat is a terminal user interface (TUI) EPUB reader written in Rust. It provi
 - `once_cell` (1.19): Lazy static initialization for Unicode mappings
 - `html5ever` (0.27): Modern HTML5 parsing
 - `markup5ever_rcdom` (0.3): DOM representation for html5ever
+- **MISSING**: `fuzzy_matcher` (0.3.7): Required for search_engine.rs but not in Cargo.toml
 
 ### State Management
 The application maintains state through the `App` struct in `main_app.rs` which includes:
 - Current EPUB document and chapter information
-- Navigation panel with mode switching (book list vs TOC)
-- Text reader with scroll position and content state
+- Navigation panel with mode switching (book list vs TOC vs search)
+- Text reader (MarkdownTextReader) with scroll position and content state
 - Text selection state and clipboard integration
-- Reading history popup state
+- Popup management (reading history, book stats, image viewer)
+- Search state and search mode tracking
+- Jump list for navigation history
 - Bookmark management with throttled saves
 - Book manager for file discovery
 - Focus tracking between panels
@@ -340,7 +391,7 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 9. HTML entities are decoded in the final text
 10. Images are loaded asynchronously in background
 
-**Legacy Regex-based Pipeline (available via wrapper):**
+**Legacy Regex-based Pipeline (available as fallback):**
 1. EPUB file is opened and validated
 2. Images are extracted and cached to `temp_images/` directory
 3. Table of contents is parsed from NCX or Nav documents
@@ -358,19 +409,22 @@ The application maintains state through the `App` struct in `main_app.rs` which 
 15. Images are loaded asynchronously in background
 
 **Text Generator Selection:**
-The application uses `TextGeneratorWrapper` to switch between implementations. Currently defaults to html5ever-based processing for improved HTML handling and MathML support.
+The application primarily uses the Markdown AST-based pipeline through MarkdownTextReader for rendering, with html_to_markdown.rs handling the HTML to AST conversion.
 
 ### User Interface Features
-- **Navigation Panel**: Switchable between book list and table of contents
+- **Navigation Panel**: Switchable between book list, table of contents, and search results
 - **File Browser Mode**: Lists all EPUB files with last read timestamps
 - **Table of Contents**: Hierarchical view with expandable sections
-- **Reading Mode**: Displays formatted text with chapter info
+- **Reading Mode**: Displays formatted text with chapter info using Markdown AST
 - **Text Selection**: Mouse-driven selection with clipboard support
 - **Reading History**: Quick access popup for recently read books
+- **Book Statistics**: Popup showing chapter and screen counts
+- **Search Functionality**: Book-wide search with fuzzy matching and result navigation
+- **Jump List Navigation**: Vim-style forward/backward navigation history
 - **Progress Tracking**: Shows chapter number, reading progress %, and time remaining
 - **External Reader Integration**: Open books in GUI EPUB readers
 - **Responsive Design**: Adjusts to terminal size changes
-- **Vim Navigation**: Consistent vim-like keybindings throughout
+- **Vim Navigation**: Consistent vim-like keybindings throughout including "/" search
 - **Embedded Images**: Display images inline with dynamic sizing
 - **Image Placeholders**: Loading indicators for images
 - **Image Popup**: Full-screen image viewer with keyboard controls
@@ -384,22 +438,26 @@ The application uses `TextGeneratorWrapper` to switch between implementations. C
 - **LaTeX Fallback**: LaTeX notation for complex mathematical expressions
 
 ### Keyboard Controls
-- `j`/`k`: Navigate file list, TOC, or scroll content (line by line)
+- `j`/`k`: Navigate file list, TOC, search results, or scroll content (line by line)
 - `Ctrl+d`/`Ctrl+u`: Scroll half screen down/up with highlight
 - `h`/`l`: Navigate between chapters
 - `Tab`: Switch focus between navigation panel and content view
-- `Enter`: Select a file/chapter to read or expand/collapse TOC sections
+- `Enter`: Select a file/chapter/search result to read or expand/collapse TOC sections
 - `Space`: Expand/collapse TOC sections
 - `b`: Toggle between book list and table of contents
 - `Shift + h`: Show reading history popup
-- `Ctrl+o`: Open current book in external EPUB reader
+- `s`: Show book statistics popup
+- `/`: Enter search mode (vim-style search)
+- `n`/`N`: Navigate to next/previous search result
+- `Ctrl+o`/`Ctrl+i`: Navigate backward/forward in jump list
+- `Ctrl+Shift+o`: Open current book in external EPUB reader
 - `g`/`G`: Go to top/bottom (vim-style)
 - `gg`: Go to beginning (vim-style multi-key)
 - `i`: Open image popup when cursor is on an image
 - `v`: Toggle raw HTML view
 - `p`: Start/stop performance profiling
 - `q`: Quit the application
-- `Esc`: Cancel text selection, close popups, or exit image viewer
+- `Esc`: Cancel text selection, close popups, exit search mode, or exit image viewer
 
 ### Mouse Controls
 - **Click**: Select items in lists or TOC, or click on images/links
@@ -527,6 +585,7 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 5. **State Updates**: State changes trigger re-renders through the main render loop
 
 ## Important Notes
+- **CRITICAL**: The fuzzy_matcher dependency is used in search_engine.rs but missing from Cargo.toml - needs to be added
 - The application scans the current directory for EPUB files on startup
 - Bookmarks are automatically saved when navigating between chapters or files
 - The most recently read book is auto-loaded on startup
@@ -547,8 +606,11 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - The application uses a local fork of ratatui-image for terminal image rendering
 - MathML expressions are converted to ASCII art with Unicode subscripts/superscripts when possible
 - The text processing pipeline has been migrated from direct regex processing to a Markdown AST-based approach
-- Multiple text generation implementations are available via TextGeneratorWrapper for flexibility
+- The main text reader is now MarkdownTextReader, which uses the Markdown AST pipeline
 - Mathematical expressions support advanced layouts including fractions, square roots, and summations
+- Search functionality uses fuzzy matching for better result discovery
+- Jump list maintains a navigation history for easy backward/forward navigation
+- Book statistics provide a quick overview of book structure and size
 
 ## Performance Considerations
 - **CRITICAL**: Performance is one of the most important aspects of this project
@@ -564,8 +626,8 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Never log a guess of what might have happened - only actual errors
 - Use proper error context with anyhow for better debugging
 - Preserve error chains for proper error tracing
-- when introducing new regexes they should always be cached to avoid recompilation cycles
-- rendering of items in markdown_text_reader.rs should always use Base16Palette and should avoid relying on default ratatui style
+- When introducing new regexes they should always be cached to avoid recompilation cycles
+- Rendering of items in markdown_text_reader.rs should always use Base16Palette and should avoid relying on default ratatui style
 
 ## Rich Text Rendering Architecture (MarkdownTextReader)
 
@@ -586,7 +648,7 @@ fn render_text_spans(
     width: usize,
     indent: usize,                    // Proper indentation support
     add_empty_line_after: bool,
-) 
+)
 ```
 
 **Key Features:**
@@ -631,10 +693,18 @@ self.render_text_spans(
 ### Updated Elements
 The following elements now properly support rich text:
 - **Lists**: Bullets/numbers + rich text content with proper indentation
-- **Quotes**: "> " prefix + italic styling + rich text content  
+- **Quotes**: "> " prefix + italic styling + rich text content
 - **Definition Lists**: Bold terms + indented definitions with rich text
 - **Future elements**: Should follow the same pattern
 
 This architecture ensures that bold text, italic text, links, and other formatting work consistently across all markdown elements without hardcoding support for each element type.
-- don't use eprintln if you need logging. this is TUI application. eprintln breaks UI. use log crate to do proper logging
+
+## Logging Guidelines
+- Don't use eprintln if you need logging. This is TUI application. eprintln breaks UI. Use log crate to do proper logging
 - Always log actual error that happened when creating "failed" branch logging
+
+## Critical Missing Dependency
+**ACTION REQUIRED**: The `fuzzy_matcher` crate is used in `src/search_engine.rs` but is not declared in `Cargo.toml`. Add the following to dependencies:
+```toml
+fuzzy_matcher = "0.3.7"
+```
