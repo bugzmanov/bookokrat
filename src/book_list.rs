@@ -1,10 +1,11 @@
 use crate::book_manager::{BookInfo, BookManager};
 use crate::bookmark::Bookmarks;
+use crate::search::{SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::Base16Palette;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
@@ -13,6 +14,7 @@ pub struct BookList {
     pub selected: usize,
     pub list_state: ListState,
     book_infos: Vec<BookInfo>,
+    search_state: SearchState,
 }
 
 impl BookList {
@@ -28,6 +30,7 @@ impl BookList {
             selected: 0,
             list_state,
             book_infos: books,
+            search_state: SearchState::new(),
         }
     }
 
@@ -102,17 +105,70 @@ impl BookList {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
-            // Highlight the currently open book in red
-            let book_style = if Some(idx) == current_book_index {
+            // Determine base style for this book
+            let base_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
             } else {
                 Style::default().fg(text_color)
             };
 
-            let content = Line::from(vec![Span::styled(
-                book_info.display_name.clone(),
-                book_style,
-            )]);
+            // Check if this item is a search match
+            let is_search_match = self.search_state.is_match(idx);
+            let is_current_search_match = self.search_state.is_current_match(idx);
+
+            // Build the line with potential search highlights
+            let content = if self.search_state.active && is_search_match {
+                // Find the highlight ranges for this match
+                let empty_vec = vec![];
+                let highlight_ranges = self
+                    .search_state
+                    .matches
+                    .iter()
+                    .find(|m| m.index == idx)
+                    .map(|m| &m.highlight_ranges)
+                    .unwrap_or(&empty_vec);
+
+                let mut spans = Vec::new();
+                let text = &book_info.display_name;
+                let mut last_end = 0;
+
+                for (start, end) in highlight_ranges {
+                    // Add non-highlighted text before this match
+                    if *start > last_end {
+                        spans.push(Span::styled(text[last_end..*start].to_string(), base_style));
+                    }
+
+                    // Add highlighted match text
+                    let highlight_style = if is_current_search_match {
+                        // Current match: bright yellow background with black text
+                        Style::default().bg(Color::Yellow).fg(Color::Black)
+                    } else {
+                        // Other matches: dim yellow background
+                        Style::default().bg(Color::Rgb(100, 100, 0)).fg(text_color)
+                    };
+
+                    spans.push(Span::styled(
+                        text[*start..*end].to_string(),
+                        highlight_style,
+                    ));
+
+                    last_end = *end;
+                }
+
+                // Add remaining non-highlighted text
+                if last_end < text.len() {
+                    spans.push(Span::styled(text[last_end..].to_string(), base_style));
+                }
+
+                Line::from(spans)
+            } else {
+                // No search active or not a match - render normally
+                Line::from(vec![Span::styled(
+                    book_info.display_name.clone(),
+                    base_style,
+                )])
+            };
+
             items.push(ListItem::new(content));
         }
 
@@ -137,6 +193,82 @@ impl BookList {
             .style(Style::default().bg(palette.base_00));
 
         f.render_stateful_widget(files, area, &mut self.list_state);
+    }
+}
+
+impl SearchablePanel for BookList {
+    fn start_search(&mut self) {
+        self.search_state.start_search(self.selected);
+    }
+
+    fn cancel_search(&mut self) {
+        let original_position = self.search_state.cancel_search();
+        self.set_selection_to_index(original_position);
+    }
+
+    fn confirm_search(&mut self) {
+        self.search_state.confirm_search();
+        // If search was cancelled (empty query), restore position
+        if !self.search_state.active {
+            let original_position = self.search_state.original_position;
+            self.set_selection_to_index(original_position);
+        }
+    }
+
+    fn exit_search(&mut self) {
+        self.search_state.exit_search();
+        // Keep current position
+    }
+
+    fn update_search_query(&mut self, query: &str) {
+        self.search_state.update_query(query.to_string());
+
+        // Find matches in book names
+        let searchable = self.get_searchable_content();
+        let matches = find_matches_in_text(query, &searchable);
+        self.search_state.set_matches(matches);
+
+        // Jump to match if found
+        if let Some(match_index) = self.search_state.get_current_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn next_match(&mut self) {
+        if let Some(match_index) = self.search_state.next_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn previous_match(&mut self) {
+        if let Some(match_index) = self.search_state.previous_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn get_search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    fn is_searching(&self) -> bool {
+        self.search_state.active
+    }
+
+    fn has_matches(&self) -> bool {
+        !self.search_state.matches.is_empty()
+    }
+
+    fn jump_to_match(&mut self, match_index: usize) {
+        if match_index < self.book_infos.len() {
+            self.set_selection_to_index(match_index);
+        }
+    }
+
+    fn get_searchable_content(&self) -> Vec<String> {
+        self.book_infos
+            .iter()
+            .map(|book| book.display_name.clone())
+            .collect()
     }
 }
 

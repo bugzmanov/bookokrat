@@ -14,6 +14,7 @@ pub mod navigation_panel;
 pub mod panic_handler;
 pub mod parsing;
 pub mod reading_history;
+pub mod search;
 pub mod system_command;
 pub mod table;
 pub mod table_of_contents;

@@ -3,6 +3,7 @@ use crate::book_manager::BookManager;
 use crate::bookmark::Bookmarks;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
+use crate::search::{SearchState, SearchablePanel};
 use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect};
@@ -78,6 +79,10 @@ impl NavigationPanel {
     pub fn switch_to_book_mode(&mut self) {
         self.mode = NavigationMode::BookSelection;
         // Keep current_book_index so we can highlight the open book
+    }
+
+    pub fn is_in_book_mode(&self) -> bool {
+        matches!(self.mode, NavigationMode::BookSelection)
     }
 
     pub fn get_selected_book_index(&self) -> usize {
@@ -248,6 +253,92 @@ impl VimNavMotions for NavigationPanel {
                     self.table_of_contents.list_state.select(Some(last_index));
                 }
             }
+        }
+    }
+}
+
+impl SearchablePanel for NavigationPanel {
+    fn start_search(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.start_search(),
+            NavigationMode::TableOfContents => self.table_of_contents.start_search(),
+        }
+    }
+
+    fn cancel_search(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.cancel_search(),
+            NavigationMode::TableOfContents => self.table_of_contents.cancel_search(),
+        }
+    }
+
+    fn confirm_search(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.confirm_search(),
+            NavigationMode::TableOfContents => self.table_of_contents.confirm_search(),
+        }
+    }
+
+    fn exit_search(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.exit_search(),
+            NavigationMode::TableOfContents => self.table_of_contents.exit_search(),
+        }
+    }
+
+    fn update_search_query(&mut self, query: &str) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.update_search_query(query),
+            NavigationMode::TableOfContents => self.table_of_contents.update_search_query(query),
+        }
+    }
+
+    fn next_match(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.next_match(),
+            NavigationMode::TableOfContents => self.table_of_contents.next_match(),
+        }
+    }
+
+    fn previous_match(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.previous_match(),
+            NavigationMode::TableOfContents => self.table_of_contents.previous_match(),
+        }
+    }
+
+    fn get_search_state(&self) -> &SearchState {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.get_search_state(),
+            NavigationMode::TableOfContents => self.table_of_contents.get_search_state(),
+        }
+    }
+
+    fn is_searching(&self) -> bool {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.is_searching(),
+            NavigationMode::TableOfContents => self.table_of_contents.is_searching(),
+        }
+    }
+
+    fn has_matches(&self) -> bool {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.has_matches(),
+            NavigationMode::TableOfContents => self.table_of_contents.has_matches(),
+        }
+    }
+
+    fn jump_to_match(&mut self, match_index: usize) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.jump_to_match(match_index),
+            NavigationMode::TableOfContents => self.table_of_contents.jump_to_match(match_index),
+        }
+    }
+
+    fn get_searchable_content(&self) -> Vec<String> {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.get_searchable_content(),
+            NavigationMode::TableOfContents => self.table_of_contents.get_searchable_content(),
         }
     }
 }

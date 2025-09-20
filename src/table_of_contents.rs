@@ -1,10 +1,11 @@
 use crate::markdown_text_reader::ActiveSection;
 use crate::navigation_panel::CurrentBookInfo;
+use crate::search::{SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::Base16Palette;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
@@ -68,6 +69,7 @@ pub struct TableOfContents {
     active_item_index: Option<usize>, // Track the index of the currently reading item
     last_viewport_height: usize,      // Track viewport height for scroll calculations
     manual_navigation: bool,          // True when user is manually navigating TOC
+    search_state: SearchState,
 }
 
 impl TableOfContents {
@@ -82,6 +84,7 @@ impl TableOfContents {
             active_item_index: None,
             last_viewport_height: 0,
             manual_navigation: false,
+            search_state: SearchState::new(),
         }
     }
 
@@ -384,13 +387,21 @@ impl TableOfContents {
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
 
         let mut items: Vec<ListItem> = Vec::new();
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            "← Books List",
-            Style::default().fg(palette.base_0b),
-        )])));
+
+        // Add the back button - check if it matches search
+        let back_text = "← Books List";
+        let back_line = if self.search_state.active && self.search_state.is_match(0) {
+            self.create_highlighted_line(back_text, 0, palette.base_0b, palette)
+        } else {
+            Line::from(vec![Span::styled(
+                back_text,
+                Style::default().fg(palette.base_0b),
+            )])
+        };
+        items.push(ListItem::new(back_line));
 
         // Render TOC items
-        let mut toc_item_index = 0;
+        let mut toc_item_index = 1; // Start at 1 because 0 is the back button
         self.render_toc_items(
             current_book_info,
             &mut items,
@@ -435,17 +446,32 @@ impl TableOfContents {
                 TocItem::Chapter { title, .. } => {
                     // Render a simple chapter
                     let is_active = self.is_item_active(item, &current_book.active_section);
-                    let chapter_style = if is_active {
-                        Style::default().fg(palette.base_08)
+                    let base_color = if is_active {
+                        palette.base_08
                     } else {
-                        Style::default().fg(text_color) // Dimmer for other chapters
+                        text_color // Dimmer for other chapters
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let chapter_content = Line::from(vec![Span::styled(
-                        format!("{}{}", indent, title),
-                        chapter_style,
-                    )]);
+                    let full_text = format!("{}{}", indent, title);
+
+                    // Check if this item matches search
+                    let chapter_content = if self.search_state.active
+                        && self.search_state.is_match(*toc_item_index)
+                    {
+                        self.create_highlighted_line_with_indent(
+                            &full_text,
+                            *toc_item_index,
+                            base_color,
+                            palette,
+                            indent.len(),
+                        )
+                    } else {
+                        Line::from(vec![Span::styled(
+                            full_text,
+                            Style::default().fg(base_color),
+                        )])
+                    };
                     items.push(ListItem::new(chapter_content));
                 }
                 TocItem::Section {
@@ -458,17 +484,32 @@ impl TableOfContents {
                     let section_icon = if *is_expanded { "▼" } else { "▶" };
 
                     let is_active = self.is_item_active(item, &current_book.active_section);
-                    let section_style = if is_active {
-                        Style::default().fg(palette.base_08)
+                    let base_color = if is_active {
+                        palette.base_08
                     } else {
-                        Style::default().fg(palette.base_0d) // Blue for sections
+                        palette.base_0d // Blue for sections
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let section_content = Line::from(vec![Span::styled(
-                        format!("{}{} {}", indent, section_icon, title),
-                        section_style,
-                    )]);
+                    let full_text = format!("{}{} {}", indent, section_icon, title);
+
+                    // Check if this item matches search
+                    let section_content = if self.search_state.active
+                        && self.search_state.is_match(*toc_item_index)
+                    {
+                        self.create_highlighted_line_with_indent(
+                            &full_text,
+                            *toc_item_index,
+                            base_color,
+                            palette,
+                            indent.len(),
+                        )
+                    } else {
+                        Line::from(vec![Span::styled(
+                            full_text,
+                            Style::default().fg(base_color),
+                        )])
+                    };
                     items.push(ListItem::new(section_content));
 
                     *toc_item_index += 1; // Increment for the section itself
@@ -530,6 +571,207 @@ impl TableOfContents {
                 }
             }
         }
+    }
+
+    /// Create a line with search highlighting
+    fn create_highlighted_line(
+        &self,
+        text: &str,
+        index: usize,
+        base_color: Color,
+        palette: &Base16Palette,
+    ) -> Line<'static> {
+        self.create_highlighted_line_with_indent(text, index, base_color, palette, 0)
+    }
+
+    /// Create a line with search highlighting, accounting for indent
+    fn create_highlighted_line_with_indent(
+        &self,
+        text: &str,
+        index: usize,
+        base_color: Color,
+        _palette: &Base16Palette,
+        _indent_len: usize,
+    ) -> Line<'static> {
+        let empty_vec = vec![];
+        let highlight_ranges = self
+            .search_state
+            .matches
+            .iter()
+            .find(|m| m.index == index)
+            .map(|m| &m.highlight_ranges)
+            .unwrap_or(&empty_vec);
+
+        let mut spans = Vec::new();
+        let mut last_end = 0;
+
+        let is_current_match = self.search_state.is_current_match(index);
+
+        for (start, end) in highlight_ranges {
+            // The highlight ranges are already calculated for the full text including indent
+            // No need to adjust them
+
+            // Add non-highlighted text before this match
+            if *start > last_end {
+                spans.push(Span::styled(
+                    text[last_end..*start].to_string(),
+                    Style::default().fg(base_color),
+                ));
+            }
+
+            // Add highlighted match text
+            let highlight_style = if is_current_match {
+                // Current match: bright yellow background with black text
+                Style::default().bg(Color::Yellow).fg(Color::Black)
+            } else {
+                // Other matches: dim yellow background
+                Style::default().bg(Color::Rgb(100, 100, 0)).fg(base_color)
+            };
+
+            spans.push(Span::styled(
+                text[*start..*end].to_string(),
+                highlight_style,
+            ));
+
+            last_end = *end;
+        }
+
+        // Add remaining non-highlighted text
+        if last_end < text.len() {
+            spans.push(Span::styled(
+                text[last_end..].to_string(),
+                Style::default().fg(base_color),
+            ));
+        }
+
+        Line::from(spans)
+    }
+
+    /// Helper method to collect all visible TOC items with their display text
+    fn collect_visible_items(&self) -> Vec<String> {
+        let mut items = Vec::new();
+
+        // Add the back button
+        items.push("← Books List".to_string());
+
+        // Add TOC items
+        if let Some(ref book_info) = self.current_book_info {
+            self.collect_toc_items_text(&book_info.toc_items, &mut items, 0);
+        }
+
+        items
+    }
+
+    /// Recursively collect text from TOC items
+    fn collect_toc_items_text(
+        &self,
+        toc_items: &[TocItem],
+        items: &mut Vec<String>,
+        indent_level: usize,
+    ) {
+        for item in toc_items {
+            match item {
+                TocItem::Chapter { title, .. } => {
+                    let indent = "  ".repeat(indent_level + 1);
+                    items.push(format!("{}{}", indent, title));
+                }
+                TocItem::Section {
+                    title,
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    let section_icon = if *is_expanded { "▼" } else { "▶" };
+                    let indent = "  ".repeat(indent_level + 1);
+                    items.push(format!("{}{} {}", indent, section_icon, title));
+
+                    // Only collect children if expanded
+                    if *is_expanded {
+                        self.collect_toc_items_text(children, items, indent_level + 1);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper to set selection to a specific index
+    fn set_selection_to_index(&mut self, index: usize) {
+        self.selected_index = index;
+        self.list_state.select(Some(index));
+        self.manual_navigation = true; // Mark as manual navigation
+    }
+}
+
+impl SearchablePanel for TableOfContents {
+    fn start_search(&mut self) {
+        self.search_state.start_search(self.selected_index);
+    }
+
+    fn cancel_search(&mut self) {
+        let original_position = self.search_state.cancel_search();
+        self.set_selection_to_index(original_position);
+    }
+
+    fn confirm_search(&mut self) {
+        self.search_state.confirm_search();
+        // If search was cancelled (empty query), restore position
+        if !self.search_state.active {
+            let original_position = self.search_state.original_position;
+            self.set_selection_to_index(original_position);
+        }
+    }
+
+    fn exit_search(&mut self) {
+        self.search_state.exit_search();
+        // Keep current position
+    }
+
+    fn update_search_query(&mut self, query: &str) {
+        self.search_state.update_query(query.to_string());
+
+        // Find matches in visible TOC items
+        let searchable = self.get_searchable_content();
+        let matches = find_matches_in_text(query, &searchable);
+        self.search_state.set_matches(matches);
+
+        // Jump to match if found
+        if let Some(match_index) = self.search_state.get_current_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn next_match(&mut self) {
+        if let Some(match_index) = self.search_state.next_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn previous_match(&mut self) {
+        if let Some(match_index) = self.search_state.previous_match() {
+            self.jump_to_match(match_index);
+        }
+    }
+
+    fn get_search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    fn is_searching(&self) -> bool {
+        self.search_state.active
+    }
+
+    fn has_matches(&self) -> bool {
+        !self.search_state.matches.is_empty()
+    }
+
+    fn jump_to_match(&mut self, match_index: usize) {
+        if match_index < self.get_total_items() {
+            self.set_selection_to_index(match_index);
+        }
+    }
+
+    fn get_searchable_content(&self) -> Vec<String> {
+        self.collect_visible_items()
     }
 }
 
