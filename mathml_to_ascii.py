@@ -61,9 +61,9 @@ class MathMLParser:
         # Unicode subscript mappings
         self.unicode_subscripts = {
             '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
-            'a': 'ₐ', 'e': 'ₑ', 'i': 'ᵢ', 'o': 'ₒ', 'u': 'ᵤ', 'x': 'ₓ', 'h': 'ₕ', 'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ', 
+            'a': 'ₐ', 'e': 'ₑ', 'i': 'ᵢ', 'o': 'ₒ', 'u': 'ᵤ', 'x': 'ₓ', 'h': 'ₕ', 'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ',
             'n': 'ₙ', 'p': 'ₚ', 'r': 'ᵣ', 's': 'ₛ', 't': 'ₜ', 'v': 'ᵥ', 'ə': 'ₔ',
-            '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎'
+            '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎', ',': ',', ' ': ' '
         }
         
         # Unicode superscript mappings
@@ -119,8 +119,15 @@ class MathMLParser:
         elif tag == 'mo':
             # Operator
             text = elem.text or ''
+            # Check if it's a prefix operator (like log)
+            form = elem.get('form', '')
+
+            # Handle special operators
+            if form == 'prefix' or text in ['log', 'ln', 'sin', 'cos', 'tan', 'exp']:
+                # Prefix operators don't get extra spacing
+                return MathBox(text)
             # Add spacing around binary operators
-            if text in ['=', '+', '-', '*', '/']:
+            elif text in ['=', '+', '-', '*', '/', '≠']:  # ≠ is ≠ (not equal)
                 return MathBox(f' {text} ')
             # No extra spacing for brackets, parentheses
             elif text in ['(', ')', '[', ']', '{', '}']:
@@ -156,7 +163,11 @@ class MathMLParser:
         elif tag == 'munder':
             # Under (like sum with subscript)
             return self.process_under(elem)
-        
+
+        elif tag == 'munderover':
+            # Under and over (like sum with both sub and superscript)
+            return self.process_underover(elem)
+
         elif tag == 'msqrt':
             # Square root
             return self.process_square_root(elem)
@@ -211,28 +222,55 @@ class MathMLParser:
         """Process a fraction element."""
         if len(elem) != 2:
             return MathBox('?')
-        
+
+        # Check for invisible fraction (linethickness="0pt") - used for conditions in summations
+        linethickness = elem.get('linethickness', '')
+        is_invisible = linethickness == '0pt'
+
         numerator = self.process_element(elem[0])
         denominator = self.process_element(elem[1])
-        
-        # Calculate dimensions
+
+        # For invisible fractions, stack vertically without a line
+        if is_invisible:
+            width = max(numerator.width, denominator.width)
+            height = numerator.height + denominator.height
+            baseline = numerator.height - 1  # Adjust baseline
+
+            # Create result box
+            result = MathBox.create_empty(width, height, baseline)
+
+            # Place numerator (centered, top)
+            num_offset = (width - numerator.width) // 2
+            for y in range(numerator.height):
+                for x in range(numerator.width):
+                    result.set_char(x + num_offset, y, numerator.get_char(x, y))
+
+            # Place denominator directly below (no bar)
+            den_offset = (width - denominator.width) // 2
+            for y in range(denominator.height):
+                for x in range(denominator.width):
+                    result.set_char(x + den_offset, numerator.height + y, denominator.get_char(x, y))
+
+            return result
+
+        # Regular fraction with visible bar
         width = max(numerator.width, denominator.width)
         height = numerator.height + 1 + denominator.height
         baseline = numerator.height  # Fraction bar at baseline
-        
+
         # Create result box
         result = MathBox.create_empty(width, height, baseline)
-        
+
         # Place numerator (centered, above fraction bar)
         num_offset = (width - numerator.width) // 2
         for y in range(numerator.height):
             for x in range(numerator.width):
                 result.set_char(x + num_offset, y, numerator.get_char(x, y))
-        
+
         # Draw fraction bar at baseline
         for x in range(width):
             result.set_char(x, baseline, '─')
-        
+
         # Place denominator (centered, below fraction bar)
         den_offset = (width - denominator.width) // 2
         for y in range(denominator.height):
@@ -245,17 +283,15 @@ class MathMLParser:
         """Try to convert text to Unicode subscripts, return None if not possible."""
         if not self.use_unicode or not text:
             return None
-        
-        # For complex subscripts, use underscore format instead
-        if len(text) > 1 or any(c not in self.unicode_subscripts for c in text):
-            return f"_{text}"
-        
+
+        # Try to convert all characters to Unicode subscripts
         result = ""
         for char in text:
             if char in self.unicode_subscripts:
                 result += self.unicode_subscripts[char]
             else:
-                return f"_{text}"  # Use underscore format if can't convert
+                # If any character can't be converted, use underscore format
+                return f"_{text}"
         return result
     
     def try_unicode_superscript(self, text: str) -> Optional[str]:
@@ -391,7 +427,49 @@ class MathMLParser:
                 result.set_char(x + under_offset, base.height + y, under.get_char(x, y))
         
         return result
-    
+
+    def process_underover(self, elem: ET.Element) -> MathBox:
+        """Process an underover element (like summation with both subscript and superscript)."""
+        if len(elem) != 3:
+            return MathBox('?')
+
+        base = self.process_element(elem[0])
+        under = self.process_element(elem[1])
+        over = self.process_element(elem[2])
+
+        # Check if this is a summation
+        is_summation = (len(elem[0].text or '') > 0 and '∑' in elem[0].text) if hasattr(elem[0], 'text') else False
+
+        # Calculate dimensions
+        width = max(base.width, under.width, over.width)
+        if is_summation:
+            width = max(width, 2)  # Ensure minimum width for summation
+        height = over.height + base.height + under.height
+        baseline = over.height + base.baseline
+
+        # Create result box
+        result = MathBox.create_empty(width, height, baseline)
+
+        # Place over (centered above)
+        over_offset = (width - over.width) // 2
+        for y in range(over.height):
+            for x in range(over.width):
+                result.set_char(x + over_offset, y, over.get_char(x, y))
+
+        # Place base (centered in middle)
+        base_offset = (width - base.width) // 2
+        for y in range(base.height):
+            for x in range(base.width):
+                result.set_char(x + base_offset, over.height + y, base.get_char(x, y))
+
+        # Place under (centered below)
+        under_offset = (width - under.width) // 2
+        for y in range(under.height):
+            for x in range(under.width):
+                result.set_char(x + under_offset, over.height + base.height + y, under.get_char(x, y))
+
+        return result
+
     def generate_sqrt_radical(self, height, length):
         """Generate square root radical symbol with given height and length."""
         if height < 3:
@@ -893,6 +971,32 @@ def main():
     result3 = mathml_to_ascii(complex_table)
     print("Complex table with fenced expression:")
     print(result3)
+    print()
+
+    # Summation with underover example (entropy formula)
+    entropy_formula = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML" display="block">
+      <mrow>
+        <msub><mi>H</mi> <mi>i</mi> </msub>
+        <mo>=</mo>
+        <mo>-</mo>
+        <munderover><mo>∑</mo> <mfrac linethickness="0pt"><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow> <mrow><msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub><mo>≠</mo><mn>0</mn></mrow></mfrac> <mi>n</mi> </munderover>
+        <mrow>
+          <msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub>
+          <msub><mo form="prefix">log</mo> <mn>2</mn> </msub>
+          <mrow>
+            <mo>(</mo>
+            <msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub>
+            <mo>)</mo>
+          </mrow>
+        </mrow>
+      </mrow>
+    </math>
+    """
+
+    result4 = mathml_to_ascii(entropy_formula)
+    print("Entropy formula with summation:")
+    print(result4)
 
 
 if __name__ == "__main__":

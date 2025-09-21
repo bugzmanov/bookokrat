@@ -61,7 +61,8 @@ static UNICODE_SUBSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
         ('(', '₍'),
         (')', '₎'),
         ('ə', 'ₔ'),
-        ('-', '₋'),
+        (',', ','), // Comma stays as-is
+        (' ', ' '), // Space stays as-is
     ]
     .iter()
     .copied()
@@ -222,9 +223,9 @@ impl MathMLParser {
 
         text.chars()
             .map(|c| {
-                // Handle spaces in subscripts
-                if c == ' ' {
-                    Some(' ')
+                // Handle spaces and commas in subscripts (they stay as-is)
+                if c == ' ' || c == ',' {
+                    Some(c)
                 } else {
                     UNICODE_SUBSCRIPTS.get(&c).copied()
                 }
@@ -300,8 +301,16 @@ impl MathMLParser {
             "mo" => {
                 // Operator
                 let text = node.text().unwrap_or("");
-                // Add spacing around binary operators
-                if matches!(text, "=" | "+" | "-" | "*" | "/") {
+                // Check if it's a prefix operator (like log)
+                let form = node.attribute("form").unwrap_or("");
+
+                // Handle special operators
+                if form == "prefix" || matches!(text, "log" | "ln" | "sin" | "cos" | "tan" | "exp")
+                {
+                    // Prefix operators don't get extra spacing
+                    Ok(MathBox::new(text))
+                } else if matches!(text, "=" | "+" | "-" | "*" | "/" | "≠") {
+                    // Add spacing around binary operators
                     Ok(MathBox::new(&format!(" {} ", text)))
                 } else if matches!(text, "(" | ")" | "[" | "]" | "{" | "}") {
                     // No extra spacing for brackets, parentheses
@@ -352,6 +361,11 @@ impl MathMLParser {
             "munder" => {
                 // Under (like sum with subscript)
                 self.process_under(node)
+            }
+
+            "munderover" => {
+                // Under and over (like sum with both sub and superscript)
+                self.process_underover(node)
             }
 
             "msqrt" => {
@@ -440,10 +454,46 @@ impl MathMLParser {
             ));
         }
 
+        // Check for invisible fraction (linethickness="0pt") - used for conditions in summations
+        let linethickness = node.attribute("linethickness").unwrap_or("");
+        let is_invisible = linethickness == "0pt";
+
         let numerator = self.process_element(&children[0])?;
         let denominator = self.process_element(&children[1])?;
 
-        // Calculate dimensions
+        // For invisible fractions, stack vertically without a line
+        if is_invisible {
+            let width = numerator.width.max(denominator.width);
+            let height = numerator.height + denominator.height;
+            let baseline = numerator.height - 1; // Adjust baseline
+
+            // Create result box
+            let mut result = MathBox::create_empty(width, height, baseline);
+
+            // Place numerator (centered, top)
+            let num_offset = (width.saturating_sub(numerator.width)) / 2;
+            for y in 0..numerator.height {
+                for x in 0..numerator.width {
+                    result.set_char(x + num_offset, y, numerator.get_char(x, y));
+                }
+            }
+
+            // Place denominator directly below (no bar)
+            let den_offset = (width.saturating_sub(denominator.width)) / 2;
+            for y in 0..denominator.height {
+                for x in 0..denominator.width {
+                    result.set_char(
+                        x + den_offset,
+                        numerator.height + y,
+                        denominator.get_char(x, y),
+                    );
+                }
+            }
+
+            return Ok(result);
+        }
+
+        // Regular fraction with visible bar
         let width = numerator.width.max(denominator.width);
         let height = numerator.height + 1 + denominator.height;
         let baseline = numerator.height; // Fraction bar at baseline
@@ -819,6 +869,68 @@ impl MathMLParser {
         for y in 0..under.height {
             for x in 0..under.width {
                 result.set_char(x + under_offset, base.height + y, under.get_char(x, y));
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Process an underover element (like summation with both subscript and superscript)
+    fn process_underover(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+        if children.len() != 3 {
+            return Err(MathMLError::InvalidStructure(
+                "Underover element needs exactly 3 children".into(),
+            ));
+        }
+
+        let base = self.process_element(&children[0])?;
+        let under = self.process_element(&children[1])?;
+        let over = self.process_element(&children[2])?;
+
+        // Check if this is a summation
+        let is_summation = node
+            .children()
+            .find(|n| n.is_element())
+            .and_then(|n| n.text())
+            .map_or(false, |text| text.contains('∑'));
+
+        // Calculate dimensions
+        let mut width = base.width.max(under.width).max(over.width);
+        if is_summation {
+            width = width.max(2); // Ensure minimum width for summation
+        }
+        let height = over.height + base.height + under.height;
+        let baseline = over.height + base.baseline;
+
+        // Create result box
+        let mut result = MathBox::create_empty(width, height, baseline);
+
+        // Place over (centered above)
+        let over_offset = (width.saturating_sub(over.width)) / 2;
+        for y in 0..over.height {
+            for x in 0..over.width {
+                result.set_char(x + over_offset, y, over.get_char(x, y));
+            }
+        }
+
+        // Place base (centered in middle)
+        let base_offset = (width.saturating_sub(base.width)) / 2;
+        for y in 0..base.height {
+            for x in 0..base.width {
+                result.set_char(x + base_offset, over.height + y, base.get_char(x, y));
+            }
+        }
+
+        // Place under (centered below)
+        let under_offset = (width.saturating_sub(under.width)) / 2;
+        for y in 0..under.height {
+            for x in 0..under.width {
+                result.set_char(
+                    x + under_offset,
+                    over.height + base.height + y,
+                    under.get_char(x, y),
+                );
             }
         }
 
@@ -2191,6 +2303,36 @@ P(x₁,x₂,...,xₙ)     = ⎜──────────────⎟  = 
         ⎧  G_left/right measures the impurity of the left/right subset
 where   ⎨m_left/right is the number of instances in the left/right subset
         ⎩                      m = m_left + m_right"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_multiline_eq(&result.trim(), &expected.trim());
+    }
+
+    #[test]
+    fn test_entropy_formula_with_munderover() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" display="block">
+  <mrow>
+    <msub><mi>H</mi> <mi>i</mi> </msub>
+    <mo>=</mo>
+    <mo>-</mo>
+    <munderover><mo>∑</mo> <mfrac linethickness="0pt"><mrow><mi>k</mi><mo>=</mo><mn>1</mn></mrow> <mrow><msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub><mo>≠</mo><mn>0</mn></mrow></mfrac> <mi>n</mi> </munderover>
+    <mrow>
+      <msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub>
+      <msub><mo form="prefix">log</mo> <mn>2</mn> </msub>
+      <mrow>
+        <mo>(</mo>
+        <msub><mi>p</mi> <mrow><mi>i</mi><mo>,</mo><mi>k</mi></mrow> </msub>
+        <mo>)</mo>
+      </mrow>
+    </mrow>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"            n
+Hᵢ =  -     ∑     pᵢ,ₖlog₂(pᵢ,ₖ)
+          k = 1
+         pᵢ,ₖ ≠ 0"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_multiline_eq(&result.trim(), &expected.trim());
     }
