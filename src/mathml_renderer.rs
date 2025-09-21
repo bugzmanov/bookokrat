@@ -359,6 +359,26 @@ impl MathMLParser {
                 self.process_square_root(node)
             }
 
+            "mtable" => {
+                // Table
+                self.process_table(node)
+            }
+
+            "mtr" => {
+                // Table row
+                self.process_table_row(node)
+            }
+
+            "mtd" => {
+                // Table data/cell
+                self.process_table_cell(node)
+            }
+
+            "mfenced" => {
+                // Fenced expression (with braces, brackets, etc.)
+                self.process_fenced(node)
+            }
+
             _ => {
                 // Default: concatenate children horizontally (like Python)
                 let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
@@ -491,7 +511,8 @@ impl MathMLParser {
                     .to_string();
 
                 // Only use flattened text if it's reasonably short (likely a simple subscript)
-                if flattened.len() <= 10 {
+                // Allow up to 20 characters for things like "left/right"
+                if flattened.len() <= 20 {
                     flattened
                 } else {
                     String::new() // Fall back to multiline rendering
@@ -512,11 +533,12 @@ impl MathMLParser {
                     return Ok(MathBox::new(&combined_text));
                 }
 
-                // Try LaTeX notation for simple subscripts (1-5 characters) when Unicode fails
-                if subscript_text.len() <= 5
-                    && subscript_text
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '-' || c == '+')
+                // Try LaTeX notation for subscripts when Unicode fails
+                // Allow longer text and more characters like '/' for expressions like "left/right"
+                if subscript_text.len() <= 20
+                    && subscript_text.chars().all(|c| {
+                        c.is_alphanumeric() || c == '-' || c == '+' || c == '/' || c == ' '
+                    })
                 {
                     let base_text = base.content[0]
                         .iter()
@@ -906,6 +928,297 @@ impl MathMLParser {
         }
 
         Ok(result)
+    }
+
+    /// Process a table element
+    fn process_table(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let mut rows = Vec::new();
+        let mut max_width = 0;
+
+        for child in node.children().filter(|n| n.is_element()) {
+            let tag = child.tag_name().name();
+            if tag == "mtr" {
+                let row_box = self.process_table_row(&child)?;
+                max_width = max_width.max(row_box.width);
+                rows.push(row_box);
+            }
+        }
+
+        if rows.is_empty() {
+            return Ok(MathBox::new(""));
+        }
+
+        // Check if this is a table with "where" clause (common in mathematical definitions)
+        let mut has_where_clause = false;
+        if rows.len() >= 2 {
+            // Check if second row contains "where" text
+            let mut row_idx = 0;
+            for child in node.children().filter(|n| n.is_element()) {
+                let tag = child.tag_name().name();
+                if tag == "mtr" {
+                    if row_idx == 1 {
+                        // Check second row for "where" text
+                        for td in child.children().filter(|n| n.is_element()) {
+                            let td_tag = td.tag_name().name();
+                            if td_tag == "mtd" {
+                                for elem_child in td.children() {
+                                    if let Some(text) = elem_child.text() {
+                                        if text.to_lowercase().contains("where") {
+                                            has_where_clause = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    row_idx += 1;
+                }
+            }
+        }
+
+        // Calculate total height, adding space if we have a where clause
+        let mut total_height = rows.iter().map(|r| r.height).sum::<usize>();
+        if has_where_clause && rows.len() >= 2 {
+            total_height += 1; // Add empty line between main equation and where clause
+        }
+
+        // Create result box with proper dimensions
+        let mut result = MathBox::create_empty(max_width, total_height, 0);
+
+        // Place each row
+        let mut y_offset = 0;
+        for (i, row) in rows.iter().enumerate() {
+            // Add empty line before "where" clause (second row)
+            if has_where_clause && i == 1 {
+                y_offset += 1;
+            }
+
+            // Center align if row is narrower than max width
+            let x_offset = (max_width.saturating_sub(row.width)) / 2;
+            for y in 0..row.height {
+                for x in 0..row.width {
+                    let ch = row.get_char(x, y);
+                    // Copy all characters, including spaces, to preserve row structure
+                    result.set_char(x + x_offset, y + y_offset, ch);
+                }
+            }
+            y_offset += row.height;
+        }
+
+        // Set baseline to middle of table
+        result.baseline = total_height / 2;
+
+        Ok(result)
+    }
+
+    /// Process a table row element
+    fn process_table_row(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let mut cells = Vec::new();
+
+        for child in node.children().filter(|n| n.is_element()) {
+            let tag = child.tag_name().name();
+            if tag == "mtd" {
+                let cell_box = self.process_table_cell(&child)?;
+                cells.push(cell_box);
+            }
+        }
+
+        if cells.is_empty() {
+            return Ok(MathBox::new(""));
+        }
+
+        // Concatenate cells horizontally with spacing
+        let mut boxes_with_spacing = Vec::new();
+        for (i, cell) in cells.iter().enumerate() {
+            boxes_with_spacing.push(cell.clone());
+            if i < cells.len() - 1 {
+                // Add spacing between cells
+                boxes_with_spacing.push(MathBox::new("  "));
+            }
+        }
+
+        Ok(self.horizontal_concat(boxes_with_spacing))
+    }
+
+    /// Process a table cell element
+    fn process_table_cell(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+
+        if !children.is_empty() {
+            // Process cell content
+            let mut boxes = Vec::new();
+            for child in &children {
+                let box_item = self.process_element(child)?;
+                if box_item.width > 0 {
+                    boxes.push(box_item);
+                }
+            }
+
+            if !boxes.is_empty() {
+                return Ok(self.horizontal_concat(boxes));
+            }
+        }
+
+        // Handle text content
+        if let Some(text) = node.text() {
+            return Ok(MathBox::new(text));
+        }
+
+        Ok(MathBox::new(""))
+    }
+
+    /// Process a fenced expression (with braces, brackets, etc.)
+    fn process_fenced(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        // Get opening and closing delimiters
+        let open_delim = node.attribute("open").unwrap_or("(");
+        let close_delim = node.attribute("close").unwrap_or(")");
+
+        // Process the content
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+        let content_box = if !children.is_empty() {
+            // Process all children
+            self.process_element(&children[0])?
+        } else {
+            MathBox::new("")
+        };
+
+        // Special handling for braces - need multi-line
+        if open_delim == "{" && content_box.height > 1 {
+            return Ok(self.create_multi_line_brace(&content_box));
+        }
+
+        // For single-line content, just add delimiters
+        if content_box.height == 1 {
+            let result_text = format!(
+                "{}{}{}",
+                open_delim,
+                content_box.content[0].iter().collect::<String>(),
+                close_delim
+            );
+            return Ok(MathBox::new(&result_text));
+        }
+
+        // For multi-line content with parentheses/brackets
+        Ok(self.create_multi_line_delimiters(&content_box, open_delim, close_delim))
+    }
+
+    /// Create a multi-line brace around content
+    fn create_multi_line_brace(&self, content: &MathBox) -> MathBox {
+        let height = content.height;
+        let width = content.width + 2; // Space for brace
+
+        let mut result = MathBox::create_empty(width, height, content.baseline);
+
+        // Draw left brace
+        if height == 1 {
+            result.set_char(0, 0, '{');
+        } else if height == 2 {
+            result.set_char(0, 0, '⎧');
+            result.set_char(0, 1, '⎩');
+        } else if height == 3 {
+            result.set_char(0, 0, '⎧');
+            result.set_char(0, 1, '⎨');
+            result.set_char(0, 2, '⎩');
+        } else {
+            // For larger braces
+            result.set_char(0, 0, '⎧');
+            for i in 1..height - 1 {
+                if i == height / 2 {
+                    result.set_char(0, i, '⎨');
+                } else {
+                    result.set_char(0, i, '⎪');
+                }
+            }
+            result.set_char(0, height - 1, '⎩');
+        }
+
+        // Copy content
+        for y in 0..content.height {
+            for x in 0..content.width {
+                let ch = content.get_char(x, y);
+                if ch != ' ' && ch != '\0' {
+                    result.set_char(x + 1, y, ch);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Create multi-line delimiters (parentheses, brackets) around content
+    fn create_multi_line_delimiters(
+        &self,
+        content: &MathBox,
+        open_delim: &str,
+        close_delim: &str,
+    ) -> MathBox {
+        let height = content.height;
+        let width = content.width + 2; // Space for delimiters
+
+        let mut result = MathBox::create_empty(width, height, content.baseline);
+
+        // Map delimiters to multi-line versions
+        if open_delim == "(" {
+            if height == 2 {
+                result.set_char(0, 0, '⎛');
+                result.set_char(0, 1, '⎝');
+            } else {
+                result.set_char(0, 0, '⎛');
+                for i in 1..height - 1 {
+                    result.set_char(0, i, '⎜');
+                }
+                result.set_char(0, height - 1, '⎝');
+            }
+        } else if open_delim == "[" {
+            if height == 2 {
+                result.set_char(0, 0, '⎡');
+                result.set_char(0, 1, '⎣');
+            } else {
+                result.set_char(0, 0, '⎡');
+                for i in 1..height - 1 {
+                    result.set_char(0, i, '⎢');
+                }
+                result.set_char(0, height - 1, '⎣');
+            }
+        }
+
+        // Copy content
+        for y in 0..content.height {
+            for x in 0..content.width {
+                let ch = content.get_char(x, y);
+                if ch != ' ' {
+                    result.set_char(x + 1, y, ch);
+                }
+            }
+        }
+
+        // Add closing delimiter
+        if close_delim == ")" {
+            if height == 2 {
+                result.set_char(width - 1, 0, '⎞');
+                result.set_char(width - 1, 1, '⎠');
+            } else {
+                result.set_char(width - 1, 0, '⎞');
+                for i in 1..height - 1 {
+                    result.set_char(width - 1, i, '⎟');
+                }
+                result.set_char(width - 1, height - 1, '⎠');
+            }
+        } else if close_delim == "]" {
+            if height == 2 {
+                result.set_char(width - 1, 0, '⎤');
+                result.set_char(width - 1, 1, '⎦');
+            } else {
+                result.set_char(width - 1, 0, '⎤');
+                for i in 1..height - 1 {
+                    result.set_char(width - 1, i, '⎥');
+                }
+                result.set_char(width - 1, height - 1, '⎦');
+            }
+        }
+
+        result
     }
 
     /// Check if a MathBox contains mathematical operators that need spacing
@@ -1730,5 +2043,155 @@ P(x₁,x₂,...,xₙ)     = ⎜──────────────⎟  = 
                       ⎝P(x₁,x₂,â¦,xₙ)⎠     ⎝ i = 1 P(xᵢ|x₁,...,xᵢ ₋ ₁)⎠"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected.trim());
+    }
+
+    fn assert_multiline_eq(actual: &str, expected: &str) {
+        let actual_lines: Vec<&str> = actual.lines().collect();
+        let expected_lines: Vec<&str> = expected.lines().collect();
+
+        if actual != expected {
+            println!("\n=== ASSERTION FAILED ===");
+            println!(
+                "Expected {} lines, got {} lines\n",
+                expected_lines.len(),
+                actual_lines.len()
+            );
+
+            let max_lines = actual_lines.len().max(expected_lines.len());
+            for i in 0..max_lines {
+                let actual_line = actual_lines.get(i).unwrap_or(&"<missing>");
+                let expected_line = expected_lines.get(i).unwrap_or(&"<missing>");
+
+                if actual_line != expected_line {
+                    println!("Line {} differs:", i + 1);
+                    println!("  Expected: {:?}", expected_line);
+                    println!("  Actual:   {:?}", actual_line);
+                } else {
+                    println!("Line {} matches: {:?}", i + 1, actual_line);
+                }
+            }
+
+            println!("\n=== FULL EXPECTED OUTPUT ===");
+            println!("{}", expected);
+            println!("\n=== FULL ACTUAL OUTPUT ===");
+            println!("{}", actual);
+            println!("=== END ===\n");
+
+            panic!("Multi-line strings don't match");
+        }
+    }
+
+    #[test]
+    fn test_complex_table_with_fenced_expression() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" display="block">
+  <mtable displaystyle="true">
+    <mtr>
+      <mtd columnalign="right">
+        <mrow>
+          <mi>J</mi>
+          <mo>(</mo>
+          <mi>k</mi>
+          <mo>,</mo>
+          <msub><mi>t</mi> <mi>k</mi> </msub>
+          <mo>)</mo>
+        </mrow>
+      </mtd>
+      <mtd columnalign="left">
+        <mrow>
+          <mo>=</mo>
+          <mfrac><msub><mi>m</mi> <mtext>left</mtext> </msub> <mi>m</mi></mfrac>
+          <mspace width="0.166667em"></mspace>
+          <msub><mtext>G</mtext> <mtext>left</mtext> </msub>
+          <mo>+</mo>
+          <mfrac><msub><mi>m</mi> <mtext>right</mtext> </msub> <mi>m</mi></mfrac>
+          <mspace width="0.166667em"></mspace>
+          <msub><mtext>G</mtext> <mtext>right</mtext> </msub>
+        </mrow>
+      </mtd>
+    </mtr>
+    <mtr>
+      <mtd columnalign="right">
+        <mrow>
+          <mtext>where</mtext>
+          <mspace width="1.em"></mspace>
+        </mrow>
+      </mtd>
+      <mtd columnalign="left">
+        <mfenced separators="" open="{" close="">
+          <mtable>
+            <mtr>
+              <mtd columnalign="left">
+                <mrow>
+                  <msub><mtext>G</mtext> <mtext>left/right</mtext> </msub>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>measures</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>the</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>impurity</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>of</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>the</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>left/right</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>subset</mtext>
+                </mrow>
+              </mtd>
+            </mtr>
+            <mtr>
+              <mtd columnalign="left">
+                <mrow>
+                  <msub><mi>m</mi> <mtext>left/right</mtext> </msub>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>is</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>the</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>number</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>of</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>instances</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>in</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>the</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>left/right</mtext>
+                  <mspace width="4.pt"></mspace>
+                  <mtext>subset</mtext>
+                </mrow>
+              </mtd>
+            </mtr>
+            <mtr>
+              <mtd columnalign="left">
+                <mrow>
+                  <mi>m</mi>
+                  <mo>=</mo>
+                  <msub><mi>m</mi> <mtext>left</mtext> </msub>
+                  <mo>+</mo>
+                  <msub><mi>m</mi> <mtext>right</mtext> </msub>
+                </mrow>
+              </mtd>
+            </mtr>
+          </mtable>
+        </mfenced>
+      </mtd>
+    </mtr>
+  </mtable>
+</math>
+        "#;
+
+        let expected = r#"                           m_left          m_right
+               J(k,tₖ)   = ────── G_left + ─────── G_right
+                             m                m
+        ⎧  G_left/right measures the impurity of the left/right subset
+where   ⎨m_left/right is the number of instances in the left/right subset
+        ⎩                      m = m_left + m_right"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_multiline_eq(&result.trim(), &expected.trim());
     }
 }

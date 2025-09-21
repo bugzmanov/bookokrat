@@ -45,10 +45,10 @@ Intermittent issues
     [ ] BUG: copy-paste copies wrong block & word selection(double click) and paragraph selection(triple click) got broken
     
  - Search
-     - Local to the chapter
-     - Quick search with jumps in books and navigation panel
-     - Global in the book
-     - Globali in the library
+     [x] Local to the chapter
+     [x] Quick search with jumps in books and navigation panel
+     [ ] Global in the book
+     [ ] Global in the library
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - logs/debug window
  - NOTES & comments

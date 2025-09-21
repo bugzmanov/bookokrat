@@ -128,6 +128,18 @@ class MathMLParser:
             # Summation and other special operators
             else:
                 return MathBox(text)
+
+        elif tag == 'mn':
+            # Number
+            return MathBox(elem.text or '')
+
+        elif tag == 'mtext':
+            # Text content
+            return MathBox(elem.text or '')
+
+        elif tag == 'mspace':
+            # Space element - return single space
+            return MathBox(' ')
         
         elif tag == 'mfrac':
             # Fraction
@@ -148,6 +160,22 @@ class MathMLParser:
         elif tag == 'msqrt':
             # Square root
             return self.process_square_root(elem)
+
+        elif tag == 'mtable':
+            # Table
+            return self.process_table(elem)
+
+        elif tag == 'mtr':
+            # Table row
+            return self.process_table_row(elem)
+
+        elif tag == 'mtd':
+            # Table data/cell
+            return self.process_table_cell(elem)
+
+        elif tag == 'mfenced':
+            # Fenced expression (with braces, brackets, etc.)
+            return self.process_fenced(elem)
         
         else:
             # Default: concatenate children horizontally
@@ -482,6 +510,224 @@ class MathMLParser:
         
         return result
 
+    def process_table(self, elem: ET.Element) -> MathBox:
+        """Process a table element."""
+        rows = []
+        max_width = 0
+
+        for child in elem:
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+            if tag == 'mtr':
+                row_box = self.process_table_row(child)
+                rows.append(row_box)
+                max_width = max(max_width, row_box.width)
+
+        if not rows:
+            return MathBox()
+
+        # Check if this is a table with "where" clause (common in mathematical definitions)
+        has_where_clause = False
+        if len(rows) >= 2:
+            # Check if second row contains "where" text
+            for child in elem:
+                tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+                if tag == 'mtr':
+                    for td in child:
+                        td_tag = td.tag.split('}')[-1] if '}' in td.tag else td.tag
+                        if td_tag == 'mtd':
+                            for elem_child in td:
+                                if hasattr(elem_child, 'text') and elem_child.text and 'where' in elem_child.text.lower():
+                                    has_where_clause = True
+                                    break
+
+        # Calculate total height, adding space if we have a where clause
+        total_height = sum(row.height for row in rows)
+        if has_where_clause and len(rows) >= 2:
+            total_height += 1  # Add empty line between main equation and where clause
+
+        # Create result box with proper dimensions
+        result = MathBox.create_empty(max_width, total_height, 0)
+
+        # Place each row
+        y_offset = 0
+        for i, row in enumerate(rows):
+            # Add empty line before "where" clause (second row)
+            if has_where_clause and i == 1:
+                y_offset += 1
+
+            # Center align if row is narrower than max width
+            x_offset = (max_width - row.width) // 2
+            for y in range(row.height):
+                for x in range(row.width):
+                    char = row.get_char(x, y)
+                    if char and char != ' ':
+                        result.set_char(x + x_offset, y + y_offset, char)
+            y_offset += row.height
+
+        # Set baseline to middle of table
+        result.baseline = total_height // 2
+
+        return result
+
+    def process_table_row(self, elem: ET.Element) -> MathBox:
+        """Process a table row element."""
+        cells = []
+
+        for child in elem:
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+            if tag == 'mtd':
+                cell_box = self.process_table_cell(child)
+                cells.append(cell_box)
+
+        if not cells:
+            return MathBox()
+
+        # Concatenate cells horizontally with spacing
+        boxes_with_spacing = []
+        for i, cell in enumerate(cells):
+            boxes_with_spacing.append(cell)
+            if i < len(cells) - 1:
+                # Add spacing between cells
+                boxes_with_spacing.append(MathBox('  '))
+
+        return self.horizontal_concat(boxes_with_spacing)
+
+    def process_table_cell(self, elem: ET.Element) -> MathBox:
+        """Process a table cell element."""
+        if len(elem) > 0:
+            # Process cell content
+            boxes = []
+            for child in elem:
+                box = self.process_element(child)
+                if box.width > 0:
+                    boxes.append(box)
+
+            if boxes:
+                return self.horizontal_concat(boxes)
+
+        # Handle text content
+        if elem.text:
+            return MathBox(elem.text)
+
+        return MathBox()
+
+    def process_fenced(self, elem: ET.Element) -> MathBox:
+        """Process a fenced expression (with braces, brackets, etc.)."""
+        # Get opening and closing delimiters
+        open_delim = elem.get('open', '(')
+        close_delim = elem.get('close', ')')
+
+        # Process the content
+        if len(elem) > 0:
+            # Process all children
+            content_box = self.process_element(elem[0])
+        else:
+            content_box = MathBox()
+
+        # Special handling for braces - need multi-line
+        if open_delim == '{' and content_box.height > 1:
+            return self.create_multi_line_brace(content_box)
+
+        # For single-line content, just add delimiters
+        if content_box.height == 1:
+            result_text = open_delim + ''.join(content_box.content[0]) + close_delim
+            return MathBox(result_text)
+
+        # For multi-line content with parentheses/brackets
+        return self.create_multi_line_delimiters(content_box, open_delim, close_delim)
+
+    def create_multi_line_brace(self, content: MathBox) -> MathBox:
+        """Create a multi-line brace around content."""
+        height = content.height
+        width = content.width + 2  # Space for brace
+
+        result = MathBox.create_empty(width, height, content.baseline)
+
+        # Draw left brace
+        if height == 1:
+            result.set_char(0, 0, '{')
+        elif height == 2:
+            result.set_char(0, 0, '⎧')
+            result.set_char(0, 1, '⎩')
+        elif height == 3:
+            result.set_char(0, 0, '⎧')
+            result.set_char(0, 1, '⎨')
+            result.set_char(0, 2, '⎩')
+        else:
+            # For larger braces
+            result.set_char(0, 0, '⎧')
+            for i in range(1, height - 1):
+                if i == height // 2:
+                    result.set_char(0, i, '⎨')
+                else:
+                    result.set_char(0, i, '⎪')
+            result.set_char(0, height - 1, '⎩')
+
+        # Copy content
+        for y in range(content.height):
+            for x in range(content.width):
+                char = content.get_char(x, y)
+                if char and char != ' ':
+                    result.set_char(x + 1, y, char)
+
+        return result
+
+    def create_multi_line_delimiters(self, content: MathBox, open_delim: str, close_delim: str) -> MathBox:
+        """Create multi-line delimiters (parentheses, brackets) around content."""
+        height = content.height
+        width = content.width + 2  # Space for delimiters
+
+        result = MathBox.create_empty(width, height, content.baseline)
+
+        # Map delimiters to multi-line versions
+        if open_delim == '(':
+            if height == 2:
+                result.set_char(0, 0, '⎛')
+                result.set_char(0, 1, '⎝')
+            else:
+                result.set_char(0, 0, '⎛')
+                for i in range(1, height - 1):
+                    result.set_char(0, i, '⎜')
+                result.set_char(0, height - 1, '⎝')
+        elif open_delim == '[':
+            if height == 2:
+                result.set_char(0, 0, '⎡')
+                result.set_char(0, 1, '⎣')
+            else:
+                result.set_char(0, 0, '⎡')
+                for i in range(1, height - 1):
+                    result.set_char(0, i, '⎢')
+                result.set_char(0, height - 1, '⎣')
+
+        # Copy content
+        for y in range(content.height):
+            for x in range(content.width):
+                char = content.get_char(x, y)
+                if char and char != ' ':
+                    result.set_char(x + 1, y, char)
+
+        # Add closing delimiter
+        if close_delim == ')':
+            if height == 2:
+                result.set_char(width - 1, 0, '⎞')
+                result.set_char(width - 1, 1, '⎠')
+            else:
+                result.set_char(width - 1, 0, '⎞')
+                for i in range(1, height - 1):
+                    result.set_char(width - 1, i, '⎟')
+                result.set_char(width - 1, height - 1, '⎠')
+        elif close_delim == ']':
+            if height == 2:
+                result.set_char(width - 1, 0, '⎤')
+                result.set_char(width - 1, 1, '⎦')
+            else:
+                result.set_char(width - 1, 0, '⎤')
+                for i in range(1, height - 1):
+                    result.set_char(width - 1, i, '⎥')
+                result.set_char(width - 1, height - 1, '⎦')
+
+        return result
+
 
 def mathml_to_ascii(html: str, use_unicode: bool = True) -> str:
     """Convert HTML with MathML to ASCII representation.
@@ -539,6 +785,114 @@ def main():
     result2 = mathml_to_ascii(simple_sqrt)
     print("Simple square root:")
     print(result2)
+    print()
+
+    # Complex table example with fenced expression
+    complex_table = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML" display="block">
+      <mtable displaystyle="true">
+        <mtr>
+          <mtd columnalign="right">
+            <mrow>
+              <mi>J</mi>
+              <mo>(</mo>
+              <mi>k</mi>
+              <mo>,</mo>
+              <msub><mi>t</mi> <mi>k</mi> </msub>
+              <mo>)</mo>
+            </mrow>
+          </mtd>
+          <mtd columnalign="left">
+            <mrow>
+              <mo>=</mo>
+              <mfrac><msub><mi>m</mi> <mtext>left</mtext> </msub> <mi>m</mi></mfrac>
+              <mspace width="0.166667em"></mspace>
+              <msub><mtext>G</mtext> <mtext>left</mtext> </msub>
+              <mo>+</mo>
+              <mfrac><msub><mi>m</mi> <mtext>right</mtext> </msub> <mi>m</mi></mfrac>
+              <mspace width="0.166667em"></mspace>
+              <msub><mtext>G</mtext> <mtext>right</mtext> </msub>
+            </mrow>
+          </mtd>
+        </mtr>
+        <mtr>
+          <mtd columnalign="right">
+            <mrow>
+              <mtext>where</mtext>
+              <mspace width="1.em"></mspace>
+            </mrow>
+          </mtd>
+          <mtd columnalign="left">
+            <mfenced separators="" open="{" close="">
+              <mtable>
+                <mtr>
+                  <mtd columnalign="left">
+                    <mrow>
+                      <msub><mtext>G</mtext> <mtext>left/right</mtext> </msub>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>measures</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>the</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>impurity</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>of</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>the</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>left/right</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>subset</mtext>
+                    </mrow>
+                  </mtd>
+                </mtr>
+                <mtr>
+                  <mtd columnalign="left">
+                    <mrow>
+                      <msub><mi>m</mi> <mtext>left/right</mtext> </msub>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>is</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>the</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>number</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>of</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>instances</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>in</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>the</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>left/right</mtext>
+                      <mspace width="4.pt"></mspace>
+                      <mtext>subset</mtext>
+                    </mrow>
+                  </mtd>
+                </mtr>
+                <mtr>
+                  <mtd columnalign="left">
+                    <mrow>
+                      <mi>m</mi>
+                      <mo>=</mo>
+                      <msub><mi>m</mi> <mtext>left</mtext> </msub>
+                      <mo>+</mo>
+                      <msub><mi>m</mi> <mtext>right</mtext> </msub>
+                    </mrow>
+                  </mtd>
+                </mtr>
+              </mtable>
+            </mfenced>
+          </mtd>
+        </mtr>
+      </mtable>
+    </math>
+    """
+
+    result3 = mathml_to_ascii(complex_table)
+    print("Complex table with fenced expression:")
+    print(result3)
 
 
 if __name__ == "__main__":
