@@ -48,6 +48,47 @@ impl TextGenerator {
         cleaned.trim().to_string()
     }
 
+    /// Convert HTML to clean text suitable for searching
+    /// This extracts all visible text from the HTML, removing tags and scripts
+    pub fn html_to_clean_text(&self, html_content: &str) -> String {
+        // Remove script and style tags and their contents
+        let script_re = Regex::new(r"(?s)<script[^>]*>.*?</script>").unwrap();
+        let style_re = Regex::new(r"(?s)<style[^>]*>.*?</style>").unwrap();
+
+        let mut content = script_re.replace_all(html_content, "").to_string();
+        content = style_re.replace_all(&content, "").to_string();
+
+        // Replace br tags with newlines
+        let br_re = Regex::new(r"<br\s*/?>").unwrap();
+        content = br_re.replace_all(&content, "\n").to_string();
+
+        // Replace paragraph and div tags with newlines
+        let block_re = Regex::new(r"</?(p|div|h[1-6]|li|tr)[^>]*>").unwrap();
+        content = block_re.replace_all(&content, "\n").to_string();
+
+        // Remove all remaining HTML tags
+        let tag_re = Regex::new(r"<[^>]+>").unwrap();
+        content = tag_re.replace_all(&content, "").to_string();
+
+        // Decode common HTML entities
+        content = content
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&nbsp;", " ");
+
+        // Clean up excessive whitespace while preserving paragraph structure
+        let lines: Vec<String> = content
+            .lines()
+            .map(|line| line.trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        lines.join("\n")
+    }
+
     /// Normalize href for comparison by removing relative path prefixes, OEBPS directory, and fragments
     pub fn normalize_href(&self, href: &str) -> String {
         let normalized = href

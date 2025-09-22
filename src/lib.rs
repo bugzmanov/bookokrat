@@ -1,6 +1,7 @@
 // Export modules for use in tests
 pub mod book_list;
 pub mod book_manager;
+pub mod book_search;
 pub mod book_stat;
 pub mod bookmark;
 pub mod event_source;
@@ -15,6 +16,7 @@ pub mod panic_handler;
 pub mod parsing;
 pub mod reading_history;
 pub mod search;
+pub mod search_engine;
 pub mod system_command;
 pub mod table;
 pub mod table_of_contents;

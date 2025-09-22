@@ -708,3 +708,4 @@ This architecture ensures that bold text, italic text, links, and other formatti
 ```toml
 fuzzy_matcher = "0.3.7"
 ```
+- the text we are working on is in unicode. we should never try byte manipulations to get chunks of it

@@ -43,6 +43,7 @@ roxmltree = "0.18"
 once_cell = "1.19"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
+fuzzy-matcher = "0.3"
 
 [dev-dependencies]
 bookrat = { path = ".", features = ["test-utils"] }

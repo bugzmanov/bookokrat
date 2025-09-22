@@ -1,4 +1,5 @@
 use crate::book_manager::BookManager;
+use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::BookStat;
 use crate::bookmark::Bookmarks;
 use crate::event_source::EventSource;
@@ -11,6 +12,7 @@ use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator::TextGenerator;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
+use crate::search_engine::SearchEngine;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::{SelectedTocItem, TocItem};
 use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
@@ -78,6 +80,9 @@ pub struct App {
     book_stat: BookStat,
     // Jump list for navigation history (Ctrl+O/Ctrl+I)
     jump_list: JumpList,
+    // Book-wide search
+    book_search: Option<BookSearch>,
+    search_engine: Option<Arc<Mutex<SearchEngine>>>,
 }
 
 pub trait VimNavMotions {
@@ -108,6 +113,7 @@ pub enum PopupWindow {
     ReadingHistory,
     BookStats,
     ImagePopup,
+    BookSearch,
 }
 
 #[derive(PartialEq, Debug)]
@@ -291,6 +297,8 @@ impl App {
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
             jump_list: JumpList::new(20),
+            book_search: None,
+            search_engine: None,
         };
 
         // Get actual terminal size on startup
@@ -485,7 +493,7 @@ impl App {
     // These methods should only be called by high-level actions above
 
     fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
-        let doc = self
+        let mut doc = self
             .book_manager
             .load_epub(path)
             .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
@@ -508,6 +516,9 @@ impl App {
             error!("Failed to load book in BookImages: {}", e);
             // Continue loading even if BookImages fails
         }
+
+        // Initialize search engine for the book
+        self.initialize_search_engine(&mut doc);
 
         // Don't restore bookmarks - just set to chapter 0
         self.current_chapter = 0;
@@ -539,6 +550,9 @@ impl App {
             error!("Failed to load book in BookImages: {}", e);
             // Continue loading even if BookImages fails
         }
+
+        // Initialize search engine for the book
+        self.initialize_search_engine(&mut doc);
 
         // Try to load bookmark
         if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
@@ -1848,6 +1862,24 @@ impl App {
             self.image_popup_area = None;
         }
 
+        // Render book search popup if active
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookSearch)
+        ) {
+            // First render a dimming overlay
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut book_search) = self.book_search {
+                book_search.render(f, f.area(), &OCEANIC_NEXT);
+            }
+        }
+
         // Render book statistics popup if active
         if matches!(
             self.focused_panel,
@@ -1933,6 +1965,9 @@ impl App {
                 }
                 FocusedPanel::Popup(PopupWindow::BookStats) => "j/k/Ctrl+d/u: Scroll | ESC: Close",
                 FocusedPanel::Popup(PopupWindow::ImagePopup) => "ESC/Any key: Close",
+                FocusedPanel::Popup(PopupWindow::BookSearch) => {
+                    "Space+f: Reopen | Space+F: New Search"
+                }
             };
             help_text.to_string()
         };
@@ -2020,6 +2055,22 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " f" => {
+                // Handle Space->f to open book search (reuse existing search)
+                if self.current_epub.is_some() {
+                    self.open_book_search(false); // Don't clear input
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " F" => {
+                // Handle Space->F to open book search (clear input)
+                if self.current_epub.is_some() {
+                    self.open_book_search(true); // Clear input for new search
+                }
+                self.key_sequence.clear();
+                true
+            }
             " d" => {
                 // Handle Space->d to show book statistics (document stats)
                 if self.is_main_panel(MainPanel::Content) && self.current_epub.is_some() {
@@ -2088,6 +2139,46 @@ impl App {
             self.image_popup = None;
             self.image_popup_area = None;
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+            return;
+        }
+
+        // If book search popup is shown, handle keys for it
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookSearch)
+        ) {
+            let action = if let Some(ref mut book_search) = self.book_search {
+                let action = book_search.handle_key_event(key);
+                // Update the search if needed
+                book_search.update();
+                action
+            } else {
+                None
+            };
+
+            // Handle the action outside of the borrow
+            if let Some(action) = action {
+                match action {
+                    BookSearchAction::JumpToChapter {
+                        chapter_index,
+                        line_number,
+                    } => {
+                        // Close the search popup
+                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+                        // Navigate to the selected chapter
+                        if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                            error!("Failed to navigate to chapter {}: {}", chapter_index, e);
+                        } else {
+                            // Scroll to the specific line
+                            self.text_reader.scroll_to_line(line_number);
+                        }
+                    }
+                    BookSearchAction::Close => {
+                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    }
+                }
+            }
             return;
         }
 
@@ -2225,6 +2316,37 @@ impl App {
                         self.handle_search_input('N');
                     }
                 }
+            }
+            KeyCode::Char('f') if !self.is_search_input_mode() => {
+                // Check if this completes a key sequence (Space+f)
+                if self.handle_key_sequence('f') {
+                    // Sequence was handled, do nothing more
+                }
+                // 'f' by itself doesn't do anything in content view
+            }
+            KeyCode::Char('F') if !self.is_search_input_mode() => {
+                // Check if this completes a key sequence (Space+F)
+                if self.handle_key_sequence('F') {
+                    // Sequence was handled, do nothing more
+                }
+                // 'F' by itself doesn't do anything in content view
+            }
+            KeyCode::Char('s') if !self.is_search_input_mode() => {
+                // Check if this completes a key sequence (Space+s for raw HTML)
+                if self.handle_key_sequence('s') {
+                    // Sequence was handled, do nothing more
+                }
+                // 's' by itself doesn't do anything in content view
+            }
+            KeyCode::Char('d')
+                if !self.is_search_input_mode()
+                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                // Check if this completes a key sequence (Space+d for stats)
+                if self.handle_key_sequence('d') {
+                    // Sequence was handled, do nothing more
+                }
+                // 'd' by itself doesn't do anything in content view
             }
             KeyCode::Char(c) if self.is_search_input_mode() => {
                 // We're typing a search query - handle ALL characters as input
@@ -2488,25 +2610,21 @@ impl App {
                     };
                 }
             }
-            KeyCode::Char('d') => {
-                // First check if this is part of a key sequence (e.g., Space+d)
-                if self.handle_key_sequence('d') {
-                    // Key was handled as part of a sequence
-                } else if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if matches!(
-                        self.focused_panel,
-                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                    ) {
-                        // Use VimNavMotions for reading history
-                        if let Some(ref mut history) = self.reading_history {
-                            history.handle_ctrl_d();
-                        }
-                    } else if self.is_main_panel(MainPanel::FileList) {
-                        // Use VimNavMotions for navigation panel
-                        self.navigation_panel.handle_ctrl_d();
-                    } else if let Some(visible_height) = screen_height {
-                        self.scroll_half_screen_down(visible_height);
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Handle Ctrl+d
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
+                    // Use VimNavMotions for reading history
+                    if let Some(ref mut history) = self.reading_history {
+                        history.handle_ctrl_d();
                     }
+                } else if self.is_main_panel(MainPanel::FileList) {
+                    // Use VimNavMotions for navigation panel
+                    self.navigation_panel.handle_ctrl_d();
+                } else if let Some(visible_height) = screen_height {
+                    self.scroll_half_screen_down(visible_height);
                 }
             }
             KeyCode::Char('u') => {
@@ -2525,12 +2643,6 @@ impl App {
                     } else if let Some(visible_height) = screen_height {
                         self.scroll_half_screen_up(visible_height);
                     }
-                }
-            }
-            KeyCode::Char('s') => {
-                // Check if this completes a key sequence (space-s for raw HTML)
-                if !self.handle_key_sequence('s') {
-                    // 's' by itself doesn't do anything if not part of a sequence
                 }
             }
             KeyCode::Char('g') => {
@@ -2584,6 +2696,167 @@ impl App {
         debug!("Terminal resize detected");
         // Tell the text reader to update its image picker with new font size
         self.text_reader.handle_terminal_resize();
+    }
+
+    fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
+        debug!("Initializing search engine for the book");
+
+        // Helper function to extract plain text from Markdown AST
+        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> String {
+            let mut lines = Vec::new();
+
+            for node in &doc.blocks {
+                extract_text_from_block(&node.block, &mut lines);
+            }
+
+            lines.join("\n")
+        }
+
+        fn extract_text_from_block(block: &crate::markdown::Block, lines: &mut Vec<String>) {
+            use crate::markdown::Block;
+
+            match block {
+                Block::Paragraph { content } | Block::Heading { content, .. } => {
+                    let plain_text = extract_text_from_text(content);
+                    if !plain_text.trim().is_empty() {
+                        lines.push(plain_text);
+                    }
+                }
+                Block::List { items, .. } => {
+                    for item in items {
+                        // ListItem content is Vec<Node>, so process each node
+                        for node in &item.content {
+                            extract_text_from_block(&node.block, lines);
+                        }
+                    }
+                }
+                Block::Quote { content } => {
+                    for node in content {
+                        extract_text_from_block(&node.block, lines);
+                    }
+                }
+                Block::CodeBlock { content, .. } => {
+                    lines.push(content.clone());
+                }
+                Block::Table { rows, header, .. } => {
+                    if let Some(header_row) = header {
+                        let row_text: Vec<String> = header_row
+                            .cells
+                            .iter()
+                            .map(|cell| extract_text_from_text(&cell.content))
+                            .collect();
+                        if !row_text.is_empty() {
+                            lines.push(row_text.join(" "));
+                        }
+                    }
+                    for row in rows {
+                        let row_text: Vec<String> = row
+                            .cells
+                            .iter()
+                            .map(|cell| extract_text_from_text(&cell.content))
+                            .collect();
+                        if !row_text.is_empty() {
+                            lines.push(row_text.join(" "));
+                        }
+                    }
+                }
+                Block::DefinitionList { items } => {
+                    for item in items {
+                        lines.push(extract_text_from_text(&item.term));
+                        // Process each definition (Vec<Vec<Node>>)
+                        for definition in &item.definitions {
+                            for node in definition {
+                                extract_text_from_block(&node.block, lines);
+                            }
+                        }
+                    }
+                }
+                Block::EpubBlock { content, .. } => {
+                    for node in content {
+                        extract_text_from_block(&node.block, lines);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fn extract_text_from_text(text: &crate::markdown::Text) -> String {
+            let mut result = String::new();
+
+            // Use the iter() method to access the content
+            for part in text.iter() {
+                match part {
+                    crate::markdown::TextOrInline::Text(text_node) => {
+                        result.push_str(&text_node.content);
+                    }
+                    crate::markdown::TextOrInline::Inline(inline) => match inline {
+                        crate::markdown::Inline::Link { text, .. } => {
+                            result.push_str(&extract_text_from_text(text));
+                        }
+                        crate::markdown::Inline::Image { alt_text, .. } => {
+                            result.push_str(alt_text);
+                        }
+                        crate::markdown::Inline::LineBreak => {
+                            result.push(' ');
+                        }
+                        _ => {}
+                    },
+                }
+            }
+
+            result
+        }
+
+        let mut search_engine = SearchEngine::new();
+        let mut chapters = Vec::new();
+
+        // Process all chapters to extract readable text
+        for chapter_index in 0..self.total_chapters {
+            if doc.set_current_page(chapter_index) {
+                if let Some((raw_html, _mime)) = doc.get_current_str() {
+                    // Extract chapter title
+                    let title = self
+                        .text_generator
+                        .extract_chapter_title(&raw_html)
+                        .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
+
+                    // Convert HTML to Markdown AST and extract clean text
+                    use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+                    let mut converter = HtmlToMarkdownConverter::new();
+                    let markdown_doc = converter.convert(&raw_html);
+
+                    // Extract plain text from the Markdown AST
+                    let clean_text = extract_text_from_markdown_doc(&markdown_doc);
+
+                    chapters.push((chapter_index, title, clean_text));
+                }
+            }
+        }
+
+        // Populate the search engine with chapters
+        search_engine.process_chapters(chapters);
+
+        // Create shared reference for search engine
+        let engine = Arc::new(Mutex::new(search_engine));
+        self.search_engine = Some(engine.clone());
+
+        // Create book search UI with the search engine
+        self.book_search = Some(BookSearch::new(engine));
+
+        debug!(
+            "Search engine initialized with {} chapters",
+            self.total_chapters
+        );
+    }
+
+    fn open_book_search(&mut self, clear_input: bool) {
+        if let Some(ref mut book_search) = self.book_search {
+            book_search.open(clear_input);
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::BookSearch);
+            debug!("Opened book search popup (clear_input: {})", clear_input);
+        } else {
+            warn!("Cannot open book search - search engine not initialized");
+        }
     }
 }
 
