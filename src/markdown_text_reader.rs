@@ -12,7 +12,7 @@ use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
 use image::{DynamicImage, GenericImageView};
-use log::{debug, warn};
+use log::{debug, info, warn};
 use ratatui::{
     Frame,
     layout::{Constraint, Rect},
@@ -325,6 +325,7 @@ impl MarkdownTextReader {
         for item in text.iter() {
             if let TextOrInline::Inline(Inline::Image { url, .. }) = item {
                 *images_processed += 1;
+                info!("Processing image #{}: {}", images_processed, url);
 
                 // Skip if already loaded
                 if self.embedded_images.borrow().contains_key(url) {
@@ -336,6 +337,10 @@ impl MarkdownTextReader {
                 if let Some((img_width, img_height)) =
                     book_images.get_image_size_with_context(url, chapter_path)
                 {
+                    info!(
+                        "Got image dimensions for {}: {}x{}",
+                        url, img_width, img_height
+                    );
                     // Skip very small images
                     if img_width < 64 || img_height < 64 {
                         warn!(
@@ -360,6 +365,7 @@ impl MarkdownTextReader {
                     );
 
                     images_to_load.push((url.clone(), height_cells));
+                    info!("Added image to load queue: {}", url);
                 } else {
                     warn!("Could not get dimensions for: {}", url);
                     self.embedded_images.borrow_mut().insert(
@@ -2570,6 +2576,10 @@ impl TextReaderTrait for MarkdownTextReader {
     fn preload_image_dimensions(&mut self, book_images: &BookImages) {
         // Extract images from the AST and preload their dimensions
         if let Some(doc) = self.markdown_document.clone() {
+            info!(
+                "Starting image dimension preload for document with {} blocks",
+                doc.blocks.len()
+            );
             self.background_loader.cancel_loading();
             let mut images_processed = 0;
 
@@ -2582,6 +2592,8 @@ impl TextReaderTrait for MarkdownTextReader {
                     &mut images_processed,
                 ));
             }
+
+            info!("Found {} images to load in document", images_to_load.len());
             //
             // Start background loading if we have images and a picker
             if !images_to_load.is_empty() {

@@ -531,14 +531,34 @@ impl App {
     }
 
     fn load_epub_internal(&mut self, path: &str) -> Result<()> {
-        let mut doc = self
-            .book_manager
-            .load_epub(path)
-            .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
+        info!("Starting load_epub_internal for path: {}", path);
+        let mut doc = self.book_manager.load_epub(path).map_err(|e| {
+            error!("Failed to load EPUB document: {}", e);
+            anyhow::anyhow!("Failed to load EPUB: {}", e)
+        })?;
 
         info!("Successfully loaded EPUB document");
         self.total_chapters = doc.get_num_pages();
-        info!("Total chapters: {}", self.total_chapters);
+        info!("Total chapters (spine items): {}", self.total_chapters);
+
+        // Log current position in spine
+        info!("Current spine position: {}", doc.get_current_page());
+
+        // Try to get current page content to verify it's accessible
+        match doc.get_current_str() {
+            Some((content, _mime)) => {
+                info!(
+                    "Current page content available, length: {} bytes",
+                    content.len()
+                );
+            }
+            None => {
+                error!(
+                    "WARNING: Current page content is NOT available at position {}",
+                    doc.get_current_page()
+                );
+            }
+        }
 
         let path_buf = std::path::PathBuf::from(path);
         if let Err(e) = self.image_storage.extract_images(&path_buf) {
@@ -569,14 +589,83 @@ impl App {
                     .restore_scroll_position(bookmark.scroll_offset);
             }
         } else {
+            info!("No bookmark found for {}, considering metadata skip", path);
             // Skip the first chapter if it's just metadata
             if self.total_chapters > 1 {
+                info!(
+                    "Book has {} chapters, attempting to skip metadata by moving to second chapter",
+                    self.total_chapters
+                );
+                info!(
+                    "Current position before go_next(): {}",
+                    doc.get_current_page()
+                );
+
+                // Try to see what content we have before moving
+                match doc.get_current_str() {
+                    Some((content, mime)) => {
+                        info!(
+                            "Content at position 0 exists, mime: {}, length: {} bytes",
+                            mime,
+                            content.len()
+                        );
+                        if content.len() < 500 {
+                            info!(
+                                "First page content (might be metadata): {}",
+                                &content[..content.len().min(200)]
+                            );
+                        }
+                    }
+                    None => {
+                        error!("No content at position 0 - this might cause navigation issues");
+                    }
+                }
+
                 if doc.go_next() {
                     self.current_chapter = 1;
-                    info!("Skipped metadata page, moved to chapter 2");
+                    info!(
+                        "Successfully moved to next chapter, new position: {}",
+                        doc.get_current_page()
+                    );
+
+                    // Verify we can get content at the new position
+                    match doc.get_current_str() {
+                        Some((content, mime)) => {
+                            info!(
+                                "Content at new position available, mime: {}, length: {} bytes",
+                                mime,
+                                content.len()
+                            );
+                        }
+                        None => {
+                            error!(
+                                "WARNING: No content at new position {} after go_next()",
+                                doc.get_current_page()
+                            );
+                        }
+                    }
                 } else {
-                    return Err(anyhow::anyhow!("Failed to move to next chapter"));
+                    error!("Failed to move to next chapter with go_next()");
+                    error!(
+                        "Current position: {}, Total chapters: {}",
+                        doc.get_current_page(),
+                        self.total_chapters
+                    );
+
+                    // Try alternative: set_current_page
+                    info!("Attempting fallback: set_current_page(1)");
+                    if doc.set_current_page(1) {
+                        self.current_chapter = 1;
+                        info!("Fallback successful: moved to chapter 1 using set_current_page");
+                    } else {
+                        error!("Fallback also failed - unable to navigate in this EPUB");
+                        // Don't fail completely - stay at chapter 0
+                        info!("Staying at chapter 0 as fallback");
+                        self.current_chapter = 0;
+                    }
                 }
+            } else {
+                info!("Book only has 1 chapter, staying at position 0");
             }
         }
 

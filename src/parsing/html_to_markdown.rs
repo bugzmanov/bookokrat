@@ -5,6 +5,7 @@ use crate::markdown::{
 use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
+use log::{debug, info};
 use markup5ever_rcdom::{NodeData, RcDom};
 use std::rc::Rc;
 
@@ -512,6 +513,7 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         if let Some(src) = self.get_attr_value(attrs, "src") {
+            info!("Found image during HTML->Markdown conversion: src={}", src);
             let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
             let title = self.get_attr_value(attrs, "title");
 
@@ -974,6 +976,7 @@ impl HtmlToMarkdownConverter {
                         "img" => {
                             // Handle images inline within the container
                             if let Some(src) = self.get_attr_value(attrs, "src") {
+                                info!("Found inline image in container: src={}", src);
                                 let alt_text =
                                     self.get_attr_value(attrs, "alt").unwrap_or_default();
                                 let title = self.get_attr_value(attrs, "title");
@@ -1505,6 +1508,21 @@ impl HtmlToMarkdownConverter {
                     self.collect_as_text(child, text, sup_context.clone());
                 }
             }
+            "img" => {
+                // Handle image elements
+                if let Some(src) = self.get_attr_value(attrs, "src") {
+                    info!("Found inline image in text context: src={}", src);
+                    let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
+                    let title = self.get_attr_value(attrs, "title");
+
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title,
+                    };
+                    text.push_inline(image_inline);
+                }
+            }
             _ => {
                 // Check if this element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
@@ -1608,6 +1626,21 @@ impl HtmlToMarkdownConverter {
                 };
                 for child in node.children.borrow().iter() {
                     self.collect_as_blocks(child, blocks, current_text, sup_context.clone());
+                }
+            }
+            "img" => {
+                // Handle image elements inside paragraphs and other blocks
+                if let Some(src) = self.get_attr_value(attrs, "src") {
+                    info!("Found inline image in block context: src={}", src);
+                    let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
+                    let title = self.get_attr_value(attrs, "title");
+
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title,
+                    };
+                    current_text.push_inline(image_inline);
                 }
             }
             _ => {

@@ -91,13 +91,64 @@ impl BookManager {
             self.create_fake_epub_from_html(path)
         } else {
             // For real EPUB files
+            info!("Attempting to load EPUB file: {}", path);
             match EpubDoc::new(path) {
-                Ok(doc) => {
-                    info!("Successfully loaded EPUB: {}", path);
+                Ok(mut doc) => {
+                    info!("Successfully created EpubDoc for: {}", path);
+
+                    // Log EPUB metadata
+                    let num_pages = doc.get_num_pages();
+                    let current_page = doc.get_current_page();
+                    info!(
+                        "EPUB spine details: {} pages, current position: {}",
+                        num_pages, current_page
+                    );
+
+                    // Try to get metadata
+                    if let Some(title) = doc.mdata("title") {
+                        info!("EPUB title: {}", title);
+                    }
+                    if let Some(author) = doc.mdata("creator") {
+                        info!("EPUB author: {}", author);
+                    }
+
+                    // Check if we can get content at position 0
+                    match doc.get_current_str() {
+                        Some((content, mime)) => {
+                            info!(
+                                "Initial content available at position 0, mime: {}, size: {} bytes",
+                                mime,
+                                content.len()
+                            );
+                        }
+                        None => {
+                            error!("WARNING: No content available at initial position 0");
+                            // Try to see what's in the spine
+                            info!("Attempting to get spine information...");
+                            let spine = &doc.spine;
+                            info!("Spine has {} items", spine.len());
+                            for (i, spine_item) in spine.iter().take(5).enumerate() {
+                                info!(
+                                    "  Spine[{}]: idref={}, linear={}",
+                                    i, spine_item.idref, spine_item.linear
+                                );
+                                // Check if this spine item exists in resources
+                                if let Some((path, mime)) = doc.resources.get(&spine_item.idref) {
+                                    info!("    -> Resource exists: {:?} ({})", path, mime);
+                                } else {
+                                    error!(
+                                        "    -> Resource NOT FOUND in resources map for idref: {}",
+                                        spine_item.idref
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     Ok(doc)
                 }
                 Err(e) => {
-                    error!("Failed to load EPUB {}: {}", path, e);
+                    error!("Failed to create EpubDoc for {}: {}", path, e);
                     Err(format!("Failed to load EPUB: {}", e))
                 }
             }

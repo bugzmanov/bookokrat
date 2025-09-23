@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use epub::doc::EpubDoc;
-use log::{debug, warn};
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::fs;
 use std::io::BufReader;
@@ -31,8 +31,10 @@ impl ImageStorage {
 
     pub fn extract_images(&self, epub_path: &Path) -> Result<()> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
+        info!("Starting image extraction for: {}", epub_path_str);
 
         if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
+            info!("Images already extracted for this book");
             return Ok(());
         }
 
@@ -72,6 +74,7 @@ impl ImageStorage {
             }
 
             if has_images {
+                info!("Found existing images in directory: {:?}", book_dir);
                 self.book_dirs
                     .lock()
                     .unwrap()
@@ -89,9 +92,13 @@ impl ImageStorage {
             .with_context(|| format!("Failed to parse EPUB: {:?}", epub_path))?;
 
         let resources = doc.resources.clone();
+        info!("Found {} resources in EPUB", resources.len());
 
+        let mut image_count = 0;
         for (id, (path, mime_type)) in resources.iter() {
             if is_image_mime_type(mime_type) {
+                image_count += 1;
+                debug!("Extracting image {}: {:?} ({})", id, path, mime_type);
                 if let Some((data, _mime)) = doc.get_resource(id) {
                     let image_path = book_dir.join(&path);
 
@@ -108,6 +115,7 @@ impl ImageStorage {
             }
         }
 
+        info!("Extracted {} images to {:?}", image_count, book_dir);
         self.book_dirs
             .lock()
             .unwrap()
