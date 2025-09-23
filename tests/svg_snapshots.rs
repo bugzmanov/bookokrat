@@ -3164,3 +3164,183 @@ fn test_lists_with_tables_svg() {
         create_test_failure_handler("test_lists_with_tables_svg"),
     );
 }
+
+#[test]
+fn test_content_search_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 35);
+
+    // Create HTML content with searchable text - word "programming" appears multiple times
+    let search_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Search Test Document</title>
+</head>
+<body>
+    <h1>Introduction to Programming</h1>
+
+    <p>Programming is the process of creating a set of instructions that tell a computer how to perform a task.
+    Programming can be done using a variety of computer programming languages, such as JavaScript, Python, and C++.</p>
+
+    <h2>Popular Programming Languages</h2>
+
+    <p>There are many programming languages available today. Some of the most popular programming languages include:</p>
+
+    <ul>
+        <li><strong>Python</strong>: Known for its simplicity and readability. Python is widely used in data science,
+        machine learning, and web development.</li>
+        <li><strong>JavaScript</strong>: The language of the web. JavaScript runs in browsers and enables interactive web pages.</li>
+        <li><strong>Java</strong>: A robust, object-oriented language used for enterprise applications.</li>
+        <li><strong>C++</strong>: A powerful systems programming language with fine control over hardware.</li>
+        <li><strong>Rust</strong>: A modern systems programming language focused on safety and performance.</li>
+    </ul>
+
+    <h2>Getting Started with Programming</h2>
+
+    <p>If you're new to programming, Python is often recommended as a first language. Python's syntax is clear and
+    intuitive, making it an excellent choice for beginners. Here's a simple Python example:</p>
+
+    <pre><code>def hello_world():
+    print("Hello, World!")
+
+hello_world()</code></pre>
+
+    <p>This simple program demonstrates a function definition in Python. The function hello_world prints a greeting
+    message when called.</p>
+
+    <h2>Programming Paradigms</h2>
+
+    <p>Different programming languages support different programming paradigms:</p>
+
+    <ol>
+        <li><em>Procedural Programming</em>: Programs are organized as procedures or functions.</li>
+        <li><em>Object-Oriented Programming</em>: Programs are organized around objects and classes.</li>
+        <li><em>Functional Programming</em>: Computation is treated as evaluation of mathematical functions.</li>
+        <li><em>Declarative Programming</em>: Programs describe what should be done, not how.</li>
+    </ol>
+
+    <p>Understanding these paradigms helps in choosing the right approach for your programming projects.</p>
+
+    <h2>The Future of Programming</h2>
+
+    <p>As technology evolves, so does programming. New languages emerge, existing languages evolve, and programming
+    practices continue to improve. Whether you're interested in web development, mobile apps, data science, or systems
+    programming, there's a programming language and tools suited for your needs.</p>
+
+    <p>Remember: the best programming language is the one that helps you solve your specific problem effectively.</p>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("search_test.html");
+    std::fs::write(&temp_html_path, search_content).unwrap();
+
+    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+
+    // Load the test document
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    // Initial draw to establish content
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Enter search mode with '/'
+    app.press_key(crossterm::event::KeyCode::Char('/'));
+
+    // Type search term "programming"
+    for ch in "programming".chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+
+    // Press Enter to confirm search
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw to show search results with highlighting
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_content_search.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/content_search.svg"),
+        "test_content_search_svg",
+        create_test_failure_handler("test_content_search_svg"),
+    );
+}
+
+#[test]
+fn test_toc_search_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 35);
+
+    // Create test books with fake book helper - this creates proper EPUB structure with TOC
+    let book_configs = vec![FakeBookConfig {
+        title: "Digital Frontier".to_string(),
+        chapter_count: 10,
+        words_per_chapter: 50,
+    }];
+
+    let (mut app, _temp_manager) = create_test_app_with_custom_fake_books(&book_configs);
+
+    // Select and open the book to show TOC
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Make sure we're focused on the TOC panel, not the content
+    // After opening a book, focus typically goes to content, so we need to switch back
+    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::FileList);
+
+    // Initial draw to show the TOC
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Enter search mode with '/' - this should search in the TOC
+    app.press_key(crossterm::event::KeyCode::Char('/'));
+
+    // Search for "chapter" which appears in TOC items
+    for ch in "chapter".chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+
+    // Press Enter to confirm search
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw to show TOC with search results highlighted
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_toc_search.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        &std::path::Path::new("tests/snapshots/toc_search.svg"),
+        "test_toc_search_svg",
+        create_test_failure_handler("test_toc_search_svg"),
+    );
+}
