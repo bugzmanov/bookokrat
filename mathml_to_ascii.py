@@ -159,7 +159,11 @@ class MathMLParser:
         elif tag == 'msup':
             # Superscript
             return self.process_superscript(elem)
-        
+
+        elif tag == 'msubsup':
+            # Both subscript and superscript
+            return self.process_subsup(elem)
+
         elif tag == 'munder':
             # Under (like sum with subscript)
             return self.process_under(elem)
@@ -199,23 +203,34 @@ class MathMLParser:
     def process_mrow(self, elem: ET.Element) -> MathBox:
         """Process an mrow (horizontal group) element."""
         boxes = []
-        
+
         # Process text before first child
         if elem.text and elem.text.strip():
             boxes.append(MathBox(elem.text.strip()))
-        
+
         # Process children
+        prev_child_tag = None
         for child in elem:
+            # Get the tag name
+            child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+
+            # Add spacing between fraction and summation
+            if prev_child_tag == 'mfrac' and child_tag in ['msubsup', 'munderover', 'munder', 'mover']:
+                boxes.append(MathBox('  '))  # Add two spaces
+
             child_box = self.process_element(child)
             if child_box.width > 0:  # Only add non-empty boxes
                 boxes.append(child_box)
+
             # Process text after each child (tail)
             if child.tail and child.tail.strip():
                 boxes.append(MathBox(child.tail.strip()))
-        
+
+            prev_child_tag = child_tag
+
         if not boxes:
             return MathBox()
-        
+
         return self.horizontal_concat(boxes)
     
     def process_fraction(self, elem: ET.Element) -> MathBox:
@@ -353,6 +368,88 @@ class MathMLParser:
         
         return result
     
+    def process_subsup(self, elem: ET.Element) -> MathBox:
+        """Process an element with both subscript and superscript."""
+        if len(elem) != 3:
+            return MathBox('?')
+
+        base = self.process_element(elem[0])
+        subscript = self.process_element(elem[1])
+        superscript = self.process_element(elem[2])
+
+        # Check if this is a summation operator
+        base_text = ''.join(''.join(row) for row in base.content).strip()
+        is_summation = '∑' in base_text
+
+        if is_summation:
+            # For summations, stack super/base/sub vertically and center
+            width = max(base.width, subscript.width, superscript.width)
+            height = superscript.height + base.height + subscript.height
+            baseline = superscript.height + base.baseline
+
+            # Create result box
+            result = MathBox.create_empty(width, height, baseline)
+
+            # Place superscript (centered above)
+            super_offset = (width - superscript.width) // 2
+            for y in range(superscript.height):
+                for x in range(superscript.width):
+                    result.set_char(x + super_offset, y, superscript.get_char(x, y))
+
+            # Place base (centered in middle)
+            base_offset = (width - base.width) // 2
+            for y in range(base.height):
+                for x in range(base.width):
+                    result.set_char(x + base_offset, superscript.height + y, base.get_char(x, y))
+
+            # Place subscript (centered below)
+            sub_offset = (width - subscript.width) // 2
+            for y in range(subscript.height):
+                for x in range(subscript.width):
+                    result.set_char(x + sub_offset, superscript.height + base.height + y, subscript.get_char(x, y))
+
+            return result
+        else:
+            # For regular base with both sub and superscript, arrange diagonally
+            # Try Unicode if possible for simple cases
+            if (base.height == 1 and subscript.height == 1 and superscript.height == 1):
+                base_text = ''.join(base.content[0]).strip()
+                sub_text = ''.join(subscript.content[0]).strip()
+                sup_text = ''.join(superscript.content[0]).strip()
+
+                unicode_sub = self.try_unicode_subscript(sub_text)
+                unicode_sup = self.try_unicode_superscript(sup_text)
+
+                if unicode_sub and unicode_sup:
+                    return MathBox(base_text + unicode_sub + unicode_sup)
+
+            # Fall back to multiline positioning
+            width = base.width + max(subscript.width, superscript.width)
+            height = superscript.height + base.height + subscript.height
+            baseline = superscript.height + base.baseline
+
+            # Create result box
+            result = MathBox.create_empty(width, height, baseline)
+
+            # Place base
+            for y in range(base.height):
+                for x in range(base.width):
+                    result.set_char(x, superscript.height + y, base.get_char(x, y))
+
+            # Place superscript (to the right and above)
+            for y in range(superscript.height):
+                for x in range(superscript.width):
+                    result.set_char(base.width + x, y, superscript.get_char(x, y))
+
+            # Place subscript (to the right and below)
+            sub_y_offset = superscript.height + base.height
+            for y in range(subscript.height):
+                for x in range(subscript.width):
+                    if sub_y_offset + y < height:
+                        result.set_char(base.width + x, sub_y_offset + y, subscript.get_char(x, y))
+
+            return result
+
     def process_superscript(self, elem: ET.Element) -> MathBox:
         """Process a superscript element."""
         if len(elem) != 2:
@@ -694,11 +791,26 @@ class MathMLParser:
         # Get opening and closing delimiters
         open_delim = elem.get('open', '(')
         close_delim = elem.get('close', ')')
+        separators = elem.get('separators', ',')
 
         # Process the content
         if len(elem) > 0:
-            # Process all children
-            content_box = self.process_element(elem[0])
+            # Process ALL children, not just the first one
+            boxes = []
+            for i, child in enumerate(elem):
+                child_box = self.process_element(child)
+                if child_box.width > 0:
+                    boxes.append(child_box)
+                    # Add separator between elements if specified
+                    if i < len(elem) - 1 and separators:
+                        # Only add separator if it's not empty
+                        if separators != '':
+                            boxes.append(MathBox(separators))
+
+            if boxes:
+                content_box = self.horizontal_concat(boxes)
+            else:
+                content_box = MathBox()
         else:
             content_box = MathBox()
 
@@ -997,6 +1109,35 @@ def main():
     result4 = mathml_to_ascii(entropy_formula)
     print("Entropy formula with summation:")
     print(result4)
+    print()
+
+    # RMSE formula example
+    rmse_formula = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML" alttext="RMSE left-parenthesis bold upper X comma bold y comma h right-parenthesis equals StartRoot StartFraction 1 Over m EndFraction sigma-summation Underscript i equals 1 Overscript m Endscripts left-parenthesis h left-parenthesis bold x Superscript left-parenthesis i right-parenthesis Baseline right-parenthesis minus y Superscript left-parenthesis i right-parenthesis Baseline right-parenthesis squared EndRoot" display="block">
+      <mrow>
+        <mtext>RMSE</mtext>
+        <mfenced separators="" open="(" close=")">
+          <mi>𝐗</mi>
+          <mo>,</mo>
+          <mi>𝐲</mi>
+          <mo>,</mo>
+          <mi>h</mi>
+        </mfenced>
+        <mo>=</mo>
+        <msqrt>
+          <mrow>
+            <mfrac><mn>1</mn> <mi>m</mi></mfrac>
+            <msubsup><mo>∑</mo> <mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow> <mi>m</mi> </msubsup>
+            <msup><mrow><mfenced separators="" open="(" close=")"><mi>h</mi><mfenced separators="" open="(" close=")"><msup><mrow><mi>𝐱</mi></mrow> <mfenced open="(" close=")"><mi>i</mi></mfenced> </msup></mfenced><mo>-</mo><msup><mrow><mi>y</mi></mrow> <mfenced open="(" close=")"><mi>i</mi></mfenced> </msup></mfenced></mrow> <mn>2</mn> </msup>
+          </mrow>
+        </msqrt>
+      </mrow>
+    </math>
+    """
+
+    result5 = mathml_to_ascii(rmse_formula)
+    print("RMSE formula:")
+    print(result5)
 
 
 if __name__ == "__main__":

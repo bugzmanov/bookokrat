@@ -423,7 +423,18 @@ impl MathMLParser {
         }
 
         // Process children
+        let mut prev_child_tag = None;
         for child in node.children().filter(|n| n.is_element()) {
+            // Get the tag name
+            let child_tag = child.tag_name().name();
+
+            // Add spacing between fraction and summation
+            if prev_child_tag == Some("mfrac")
+                && matches!(child_tag, "msubsup" | "munderover" | "munder" | "mover")
+            {
+                boxes.push(MathBox::new("  ")); // Add two spaces
+            }
+
             let child_box = self.process_element(&child)?;
             if child_box.width > 0 {
                 // Only add non-empty boxes
@@ -436,6 +447,8 @@ impl MathMLParser {
                     boxes.push(MathBox::new(trimmed));
                 }
             }
+
+            prev_child_tag = Some(child_tag);
         }
 
         if boxes.is_empty() {
@@ -787,43 +800,79 @@ impl MathMLParser {
         }
 
         // Fall back to multiline positioning
-        // Calculate dimensions - superscript above, base in middle, subscript below
-        let width = base.width.max(subscript.width).max(superscript.width);
-        let height = superscript.height + base.height + subscript.height;
-        let baseline = superscript.height + base.baseline;
+        if is_math_operator {
+            // For summations, stack super/base/sub vertically and center
+            let width = base.width.max(subscript.width).max(superscript.width);
+            let height = superscript.height + base.height + subscript.height;
+            let baseline = superscript.height + base.baseline;
 
-        // Create result box
-        let mut result = MathBox::create_empty(width, height, baseline);
+            // Create result box
+            let mut result = MathBox::create_empty(width, height, baseline);
 
-        // Place superscript (top, centered if needed)
-        let super_offset = (width.saturating_sub(superscript.width)) / 2;
-        for y in 0..superscript.height {
-            for x in 0..superscript.width {
-                result.set_char(x + super_offset, y, superscript.get_char(x, y));
+            // Place superscript (centered above)
+            let super_offset = (width.saturating_sub(superscript.width)) / 2;
+            for y in 0..superscript.height {
+                for x in 0..superscript.width {
+                    result.set_char(x + super_offset, y, superscript.get_char(x, y));
+                }
             }
-        }
 
-        // Place base (middle)
-        let base_offset = (width.saturating_sub(base.width)) / 2;
-        for y in 0..base.height {
-            for x in 0..base.width {
-                result.set_char(x + base_offset, superscript.height + y, base.get_char(x, y));
+            // Place base (centered in middle)
+            let base_offset = (width.saturating_sub(base.width)) / 2;
+            for y in 0..base.height {
+                for x in 0..base.width {
+                    result.set_char(x + base_offset, superscript.height + y, base.get_char(x, y));
+                }
             }
-        }
 
-        // Place subscript (bottom, centered if needed)
-        let sub_offset = (width.saturating_sub(subscript.width)) / 2;
-        for y in 0..subscript.height {
-            for x in 0..subscript.width {
-                result.set_char(
-                    x + sub_offset,
-                    superscript.height + base.height + y,
-                    subscript.get_char(x, y),
-                );
+            // Place subscript (centered below)
+            let sub_offset = (width.saturating_sub(subscript.width)) / 2;
+            for y in 0..subscript.height {
+                for x in 0..subscript.width {
+                    result.set_char(
+                        x + sub_offset,
+                        superscript.height + base.height + y,
+                        subscript.get_char(x, y),
+                    );
+                }
             }
-        }
 
-        Ok(result)
+            Ok(result)
+        } else {
+            // For regular base with both sub and superscript, arrange diagonally
+            let width = base.width + subscript.width.max(superscript.width);
+            let height = superscript.height + base.height + subscript.height;
+            let baseline = superscript.height + base.baseline;
+
+            // Create result box
+            let mut result = MathBox::create_empty(width, height, baseline);
+
+            // Place base
+            for y in 0..base.height {
+                for x in 0..base.width {
+                    result.set_char(x, superscript.height + y, base.get_char(x, y));
+                }
+            }
+
+            // Place superscript (to the right and above)
+            for y in 0..superscript.height {
+                for x in 0..superscript.width {
+                    result.set_char(base.width + x, y, superscript.get_char(x, y));
+                }
+            }
+
+            // Place subscript (to the right and below)
+            let sub_y_offset = superscript.height + base.height;
+            for y in 0..subscript.height {
+                for x in 0..subscript.width {
+                    if sub_y_offset + y < height {
+                        result.set_char(base.width + x, sub_y_offset + y, subscript.get_char(x, y));
+                    }
+                }
+            }
+
+            Ok(result)
+        }
     }
 
     /// Process an under element (like summation with subscript)
@@ -1185,12 +1234,30 @@ impl MathMLParser {
         // Get opening and closing delimiters
         let open_delim = node.attribute("open").unwrap_or("(");
         let close_delim = node.attribute("close").unwrap_or(")");
+        let separators = node.attribute("separators").unwrap_or(",");
 
         // Process the content
         let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
         let content_box = if !children.is_empty() {
-            // Process all children
-            self.process_element(&children[0])?
+            // Process ALL children, not just the first one
+            let mut boxes = Vec::new();
+            for (i, child) in children.iter().enumerate() {
+                let child_box = self.process_element(child)?;
+                if child_box.width > 0 {
+                    boxes.push(child_box);
+                    // Add separator between elements if specified
+                    if i < children.len() - 1 && !separators.is_empty() {
+                        // Only add separator if it's not empty
+                        boxes.push(MathBox::new(separators));
+                    }
+                }
+            }
+
+            if !boxes.is_empty() {
+                self.horizontal_concat(boxes)
+            } else {
+                MathBox::new("")
+            }
         } else {
             MathBox::new("")
         };
@@ -2333,6 +2400,39 @@ where   ⎨m_left/right is the number of instances in the left/right subset
 Hᵢ =  -     ∑     pᵢ,ₖlog₂(pᵢ,ₖ)
           k = 1
          pᵢ,ₖ ≠ 0"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_multiline_eq(&result.trim(), &expected.trim());
+    }
+
+    #[test]
+    fn test_rmse_formula() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML" alttext="RMSE left-parenthesis bold upper X comma bold y comma h right-parenthesis equals StartRoot StartFraction 1 Over m EndFraction sigma-summation Underscript i equals 1 Overscript m Endscripts left-parenthesis h left-parenthesis bold x Superscript left-parenthesis i right-parenthesis Baseline right-parenthesis minus y Superscript left-parenthesis i right-parenthesis Baseline right-parenthesis squared EndRoot" display="block">
+  <mrow>
+    <mtext>RMSE</mtext>
+    <mfenced separators="" open="(" close=")">
+      <mi>𝐗</mi>
+      <mo>,</mo>
+      <mi>𝐲</mi>
+      <mo>,</mo>
+      <mi>h</mi>
+    </mfenced>
+    <mo>=</mo>
+    <msqrt>
+      <mrow>
+        <mfrac><mn>1</mn> <mi>m</mi></mfrac>
+        <msubsup><mo>∑</mo> <mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow> <mi>m</mi> </msubsup>
+        <msup><mrow><mfenced separators="" open="(" close=")"><mi>h</mi><mfenced separators="" open="(" close=")"><msup><mrow><mi>𝐱</mi></mrow> <mfenced open="(" close=")"><mi>i</mi></mfenced> </msup></mfenced><mo>-</mo><msup><mrow><mi>y</mi></mrow> <mfenced open="(" close=")"><mi>i</mi></mfenced> </msup></mfenced></mrow> <mn>2</mn> </msup>
+      </mrow>
+    </msqrt>
+  </mrow>
+</math>
+        "#;
+
+        let expected = r#"                   ⟋───────────────────────────────
+                   ╱ 1     m
+RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
+                \╱   m   i = 1"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_multiline_eq(&result.trim(), &expected.trim());
     }
