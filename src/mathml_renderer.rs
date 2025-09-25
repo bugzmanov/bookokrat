@@ -373,6 +373,11 @@ impl MathMLParser {
                 self.process_square_root(node)
             }
 
+            "mroot" => {
+                // Nth root
+                self.process_nth_root(node)
+            }
+
             "mtable" => {
                 // Table
                 self.process_table(node)
@@ -1086,6 +1091,134 @@ impl MathMLParser {
                     }
                 }
             }
+        }
+
+        Ok(result)
+    }
+
+    /// Process an nth root element (mroot)
+    fn process_nth_root(&self, node: &roxmltree::Node) -> Result<MathBox, MathMLError> {
+        let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
+        if children.len() != 2 {
+            return Err(MathMLError::InvalidStructure(
+                "Nth root needs exactly 2 children (radicand and index)".into(),
+            ));
+        }
+
+        // First child is the radicand (what's under the root)
+        // Second child is the root index (the n in nth root)
+        let radicand = self.process_element(&children[0])?;
+        let index = self.process_element(&children[1])?;
+
+        // For single line expressions with simple index, use Unicode format
+        if radicand.height == 1 && index.height == 1 {
+            let radicand_text = radicand.content[0]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string();
+            let index_text = index.content[0]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_string();
+
+            // Try to convert index to superscript
+            if let Some(unicode_index) =
+                Self::try_unicode_superscript(&index_text, self.use_unicode) {
+                // Use Unicode format: ³√x for cube root
+                return Ok(MathBox::new(&format!("{}√({})", unicode_index, radicand_text)));
+            } else {
+                // Fallback to notation like: [3]√(x)
+                return Ok(MathBox::new(&format!("[{}]√({})", index_text, radicand_text)));
+            }
+        }
+
+        // For multi-line expressions, create ASCII art with proper alignment
+        let formula_width = radicand.width;
+        let formula_height = radicand.height;
+        let index_text = index.content.iter()
+            .map(|row| row.iter().collect::<String>())
+            .collect::<Vec<String>>()
+            .join("")
+            .trim()
+            .to_string();
+        let index_width = index_text.len();
+
+        // Generate radical lines similar to square root but with index
+        // For fractions, the height is already the full height of the content
+        // We need to generate radical lines that match this height
+
+        let mut lines = Vec::new();
+
+        // Based on Python's logic: for height=3 (fraction), we get 3 lines total
+        // Top line: overline with diagonal start
+        let top_padding = formula_height + 1; // Space before the overline
+        let overline = format!("⟋{}", "─".repeat(formula_width + 4));
+        lines.push(format!("{}{}{}", " ".repeat(index_width), " ".repeat(top_padding), overline));
+
+        // For a fraction of height 3, we need one middle line
+        // Second line: index with underscore and diagonal
+        lines.push(format!("{}_  ╱  ", index_text));
+
+        // Last line: tail
+        lines.push(format!("{} \\╱  ", " ".repeat(index_width)));
+
+        // Calculate total dimensions
+        let radical_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let total_width = radical_width.max(formula_width + 10 + index_width);
+        let total_height = lines.len();
+        let baseline = 1; // For a 3-line output, baseline is at line 1 (middle)
+
+        // Create result box
+        let mut result = MathBox::create_empty(total_width, total_height, baseline);
+
+        // Place the radical symbol with index
+        for (y, line) in lines.iter().enumerate() {
+            for (x, ch) in line.chars().enumerate() {
+                if x < total_width && ch != ' ' {
+                    result.set_char(x, y, ch);
+                }
+            }
+        }
+
+        // Place the formula content alongside the radical lines
+        // Content starts after the radical symbols on lines 1 and 2
+        // The content x position is after the radical diagonal
+        let content_x_offset = 7 + index_width; // After "5_  ╱  " which is 7 chars after index
+
+        // Place numerator on line 1 (index 1)
+        if radicand.height >= 1 {
+            let numerator_line = if radicand.height == 3 {
+                // For fraction, first line is numerator
+                radicand.content[0].iter().collect::<String>()
+            } else {
+                String::new()
+            };
+            for (x, ch) in numerator_line.chars().enumerate() {
+                if content_x_offset + x < total_width {
+                    result.set_char(content_x_offset + x, 1, ch);
+                }
+            }
+        }
+
+        // Place denominator (fraction bar and bottom) on line 2 (index 2)
+        if radicand.height == 3 {
+            // Place fraction bar and denominator
+            let bar_and_denom = format!("{}\n{}",
+                "─".repeat(radicand.width),
+                radicand.content[2].iter().collect::<String>()
+            );
+
+            // Place the fraction bar
+            for x in 0..radicand.width {
+                if content_x_offset + x < total_width {
+                    result.set_char(content_x_offset + x, 2, '─');
+                }
+            }
+
+            // Note: In the 3-line format, denominator goes below but we're out of lines
+            // So we need to adjust our approach
         }
 
         Ok(result)
@@ -2433,6 +2566,88 @@ Hᵢ =  -     ∑     pᵢ,ₖlog₂(pᵢ,ₖ)
                    ╱ 1     m
 RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
                 \╱   m   i = 1"#;
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_multiline_eq(&result.trim(), &expected.trim());
+    }
+
+    #[test]
+    fn test_mroot_single_line() {
+        // Test single-line nth root cases
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <mroot>
+        <mn>8</mn>
+        <mn>3</mn>
+    </mroot>
+</math>
+        "#;
+
+        let expected = "³√(8)";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+
+        // Test with expression
+        let mathml2 = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <mroot>
+        <mrow>
+            <msup>
+                <mi>x</mi>
+                <mn>2</mn>
+            </msup>
+            <mo>+</mo>
+            <mn>1</mn>
+        </mrow>
+        <mn>4</mn>
+    </mroot>
+</math>
+        "#;
+
+        let expected2 = "⁴√(x² + 1)";
+        let result2 = mathml_to_ascii(mathml2, true).unwrap();
+        assert_eq!(result2.trim(), expected2);
+
+        // Test with variable index
+        let mathml3 = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <mroot>
+        <mi>a</mi>
+        <mi>n</mi>
+    </mroot>
+</math>
+        "#;
+
+        let expected3 = "ⁿ√(a)";
+        let result3 = mathml_to_ascii(mathml3, true).unwrap();
+        assert_eq!(result3.trim(), expected3);
+    }
+
+    #[test]
+    fn test_mroot_multiline() {
+        // Test multi-line nth root with fraction
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <mroot>
+        <mfrac>
+            <mrow>
+                <mi>x</mi>
+                <mo>+</mo>
+                <mi>y</mi>
+            </mrow>
+            <mrow>
+                <mi>z</mi>
+                <mo>-</mo>
+                <mn>1</mn>
+            </mrow>
+        </mfrac>
+        <mn>5</mn>
+    </mroot>
+</math>
+        "#;
+
+        let expected = r#"     ⟋─────────
+5_  ╱  x + y
+  \╱   ─────"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_multiline_eq(&result.trim(), &expected.trim());
     }

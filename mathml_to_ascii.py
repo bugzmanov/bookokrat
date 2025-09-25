@@ -176,6 +176,10 @@ class MathMLParser:
             # Square root
             return self.process_square_root(elem)
 
+        elif tag == 'mroot':
+            # Nth root
+            return self.process_nth_root(elem)
+
         elif tag == 'mtable':
             # Table
             return self.process_table(elem)
@@ -649,7 +653,103 @@ class MathMLParser:
                         result.set_char(target_x, target_y, char)
         
         return result
-    
+
+    def process_nth_root(self, elem: ET.Element) -> MathBox:
+        """Process an nth root element (mroot)."""
+        if len(elem) != 2:
+            return MathBox('?')
+
+        # First child is the radicand (what's under the root)
+        # Second child is the root index (the n in nth root)
+        radicand = self.process_element(elem[0])
+        index = self.process_element(elem[1])
+
+        # For single line expressions with simple index, use Unicode format
+        if radicand.height == 1 and index.height == 1:
+            radicand_text = ''.join(radicand.content[0]).strip()
+            index_text = ''.join(index.content[0]).strip()
+
+            # Try to convert index to superscript
+            unicode_index = self.try_unicode_superscript(index_text)
+
+            if unicode_index:
+                # Use Unicode format: ³√x for cube root
+                return MathBox(f'{unicode_index}√({radicand_text})')
+            else:
+                # Fallback to notation like: [3]√(x)
+                return MathBox(f'[{index_text}]√({radicand_text})')
+
+        # For multi-line expressions, create ASCII art with proper alignment
+        formula_width = radicand.width
+        formula_height = radicand.height
+        index_text = ''.join(''.join(row) for row in index.content).strip()
+        index_width = len(index_text)
+
+        # Generate radical lines similar to square root
+        if formula_height < 3:
+            formula_height = 3  # Minimum height
+
+        lines = []
+
+        # Top line: overline with diagonal start
+        top_padding = formula_height + 1  # Space before the overline
+        overline = "⟋" + "─" * (formula_width + 4)
+        lines.append(" " * top_padding + overline)
+
+        # Middle diagonal lines
+        for i in range(1, formula_height - 2):
+            padding = formula_height + 1 - i
+            lines.append(" " * padding + "╱  ")
+
+        # Second to last line: connecting part
+        if formula_height > 2:
+            lines.append("_  ╱  ")
+
+        # Last line: tail
+        lines.append(" \\╱  ")
+
+        # Now prepend the index to the appropriate line
+        # The index should go on the line with the underscore "_"
+        modified_lines = []
+        for i, line in enumerate(lines):
+            if i == len(lines) - 2:  # Second to last line (the one with "_")
+                # Prepend the index right before the underscore
+                modified_lines.append(index_text + line)
+            else:
+                # Other lines need to be padded by index width
+                modified_lines.append(" " * index_width + line)
+
+        # Calculate total dimensions
+        radical_width = max(len(line) for line in modified_lines) if modified_lines else 0
+        total_width = max(radical_width, formula_width + 10 + index_width)
+        total_height = len(modified_lines)
+        baseline = radicand.baseline + 1
+
+        # Create result box
+        result = MathBox.create_empty(total_width, total_height, baseline)
+
+        # Place the radical symbol with index
+        for y, line in enumerate(modified_lines):
+            for x, char in enumerate(line):
+                if x < total_width and char != ' ':
+                    result.set_char(x, y, char)
+
+        # Place the formula content under the overline
+        # Content should start after the diagonal space AND index width
+        content_x_offset = formula_height + 3 + index_width  # Space for diagonal + index
+        content_y_offset = 1  # Below the overline
+
+        for y in range(radicand.height):
+            for x in range(radicand.width):
+                char = radicand.get_char(x, y)
+                if char and char != ' ':
+                    target_x = content_x_offset + x
+                    target_y = content_y_offset + y
+                    if target_x < total_width and target_y < total_height:
+                        result.set_char(target_x, target_y, char)
+
+        return result
+
     def horizontal_concat(self, boxes: List[MathBox]) -> MathBox:
         """Concatenate boxes horizontally, aligning at baseline."""
         # Filter out empty boxes
@@ -1109,6 +1209,84 @@ def main():
     result4 = mathml_to_ascii(entropy_formula)
     print("Entropy formula with summation:")
     print(result4)
+    print()
+
+    # Test nth root examples
+    cube_root = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML">
+        <mroot>
+            <mn>8</mn>
+            <mn>3</mn>
+        </mroot>
+    </math>
+    """
+
+    result_cube = mathml_to_ascii(cube_root)
+    print("Cube root of 8:")
+    print(result_cube)
+    print()
+
+    # Fourth root with expression
+    fourth_root = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML">
+        <mroot>
+            <mrow>
+                <msup>
+                    <mi>x</mi>
+                    <mn>2</mn>
+                </msup>
+                <mo>+</mo>
+                <mn>1</mn>
+            </mrow>
+            <mn>4</mn>
+        </mroot>
+    </math>
+    """
+
+    result_fourth = mathml_to_ascii(fourth_root)
+    print("Fourth root of (x² + 1):")
+    print(result_fourth)
+    print()
+
+    # Nth root with variable index
+    nth_root = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML">
+        <mroot>
+            <mi>a</mi>
+            <mi>n</mi>
+        </mroot>
+    </math>
+    """
+
+    result_nth = mathml_to_ascii(nth_root)
+    print("Nth root of a:")
+    print(result_nth)
+    print()
+
+    # Complex nth root with fraction inside
+    complex_nth_root = """
+    <math xmlns="http://www.w3.org/1998/Math/MathML">
+        <mroot>
+            <mfrac>
+                <mrow>
+                    <mi>x</mi>
+                    <mo>+</mo>
+                    <mi>y</mi>
+                </mrow>
+                <mrow>
+                    <mi>z</mi>
+                    <mo>-</mo>
+                    <mn>1</mn>
+                </mrow>
+            </mfrac>
+            <mn>5</mn>
+        </mroot>
+    </math>
+    """
+
+    result_complex_nth = mathml_to_ascii(complex_nth_root)
+    print("Fifth root of fraction:")
+    print(result_complex_nth)
     print()
 
     # RMSE formula example
