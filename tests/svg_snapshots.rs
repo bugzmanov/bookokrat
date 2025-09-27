@@ -2130,7 +2130,8 @@ fn test_book_reading_history_with_many_entries_svg() {
     }
 
     // Save using the production Bookmarks struct
-    let mut prod_bookmarks = bookrat::bookmarks::Bookmarks::with_file(&bookmark_path.to_string_lossy());
+    let mut prod_bookmarks =
+        bookrat::bookmarks::Bookmarks::with_file(&bookmark_path.to_string_lossy());
 
     // Add all the bookmarks using the production method
     for (path, bookmark) in books_map {

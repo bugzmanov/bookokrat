@@ -288,7 +288,7 @@ impl TableOfContents {
 
     /// Handle mouse click at the given position
     /// Returns true if an item was clicked
-    pub fn handle_mouse_click(&mut self, _x: u16, y: u16, area: Rect) -> bool {
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> bool {
         // Account for the border (1 line at top and bottom)
         if y > area.y && y < area.y + area.height - 1 {
             let relative_y = y - area.y - 1; // Subtract 1 for the top border
@@ -302,6 +302,36 @@ impl TableOfContents {
             // Check if the click is within the valid range
             let total_items = self.get_total_items();
             if new_index < total_items {
+                // Check if this is a click on an expand/collapse arrow
+                if new_index > 0 {
+                    // Skip the "Books List" item at index 0
+                    let toc_index = new_index - 1;
+                    if let Some(ref current_book_info) = self.current_book_info {
+                        if let Some((item, indent_level)) =
+                            self.get_toc_item_with_indent(&current_book_info.toc_items, toc_index)
+                        {
+                            // Check if this is a section with an arrow
+                            if matches!(item, TocItem::Section { .. }) {
+                                // Calculate arrow position: border + indent spaces + 1 for arrow
+                                // Each indent level adds 2 spaces
+                                let arrow_x = area.x + 1 + ((indent_level + 1) * 2) as u16;
+
+                                // Check if click is on or near the arrow (±1 position for error margin)
+                                if x >= arrow_x.saturating_sub(1) && x <= arrow_x + 1 {
+                                    // Toggle expansion instead of selecting
+                                    Self::toggle_expansion_at_index(
+                                        &mut self.current_book_info.as_mut().unwrap().toc_items,
+                                        toc_index,
+                                        &mut 0,
+                                    );
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Not an arrow click, select the item normally
                 self.selected_index = new_index;
                 self.list_state.select(Some(new_index));
                 return true;
@@ -329,6 +359,52 @@ impl TableOfContents {
             }
         }
         count
+    }
+
+    /// Get TOC item by flat index with its indent level
+    fn get_toc_item_with_indent<'a>(
+        &self,
+        toc_items: &'a [TocItem],
+        target_index: usize,
+    ) -> Option<(&'a TocItem, usize)> {
+        self.get_toc_item_with_indent_helper(toc_items, target_index, &mut 0, 0)
+    }
+
+    fn get_toc_item_with_indent_helper<'a>(
+        &self,
+        toc_items: &'a [TocItem],
+        target_index: usize,
+        current_index: &mut usize,
+        indent_level: usize,
+    ) -> Option<(&'a TocItem, usize)> {
+        for item in toc_items {
+            if *current_index == target_index {
+                return Some((item, indent_level));
+            }
+            *current_index += 1;
+
+            match item {
+                TocItem::Section {
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    if *is_expanded {
+                        if let Some(result) = self.get_toc_item_with_indent_helper(
+                            children,
+                            target_index,
+                            current_index,
+                            indent_level + 1,
+                        ) {
+                            return Some(result);
+                        }
+                    }
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+
+        None
     }
 
     /// Get TOC item by flat index
@@ -490,7 +566,7 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    let section_icon = if *is_expanded { "▼" } else { "▶" };
+                    let section_icon = if *is_expanded { "⌄" } else { "›" };
 
                     let is_active = self.is_item_active(item, &current_book.active_section);
                     let base_color = if is_active {
@@ -690,7 +766,7 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    let section_icon = if *is_expanded { "▼" } else { "▶" };
+                    let section_icon = if *is_expanded { "⌄" } else { "›" };
                     let indent = "  ".repeat(indent_level + 1);
                     items.push(format!("{}{} {}", indent, section_icon, title));
 
