@@ -1013,6 +1013,35 @@ impl HtmlToMarkdownConverter {
                                 content.push(Node::new(table, 0..0));
                             }
                         }
+                        "math" => {
+                            // Handle MathML elements - check if multiline to determine block vs inline
+                            let mathml_html = self.serialize_node_to_html(child);
+                            match mathml_to_ascii(&mathml_html, true) {
+                                Ok(ascii_math) => {
+                                    if ascii_math.contains('\n') {
+                                        // Multi-line math: flush text and create CodeBlock
+                                        self.flush_text_as_paragraph(
+                                            &mut current_text,
+                                            &mut content,
+                                        );
+
+                                        let code_block = Block::CodeBlock {
+                                            language: Some("math".to_string()),
+                                            content: ascii_math,
+                                        };
+                                        content.push(Node::new(code_block, 0..0));
+                                    } else {
+                                        // Single-line math: add as inline text
+                                        current_text.push_text(TextNode::new(ascii_math, None));
+                                    }
+                                }
+                                Err(e) => {
+                                    // Error case: add as text
+                                    let error_text = format!("Failed to parse math: {:?}", e);
+                                    current_text.push_text(TextNode::new(error_text, None));
+                                }
+                            }
+                        }
                         _ => {
                             let context = ProcessingContext {
                                 in_table: false,
