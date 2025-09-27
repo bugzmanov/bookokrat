@@ -1646,10 +1646,33 @@ impl App {
 
     /// Apply scroll events (positive for down, negative for up)
     fn apply_scroll(&mut self, scroll_amount: i32, column: u16) {
-        if self.has_active_popup() {
+        if scroll_amount == 0 {
             return;
         }
-        if scroll_amount == 0 {
+
+        // Handle BookSearch popup separately since it needs scrolling
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookSearch)
+        ) {
+            if let Some(ref mut book_search) = self.book_search {
+                // BookSearch takes full screen, so use terminal height
+                let search_height = self.terminal_height;
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        book_search.scroll_down(search_height);
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        book_search.scroll_up(search_height);
+                    }
+                }
+            }
+            return;
+        }
+
+        // Block scrolling for other popups
+        if self.has_active_popup() {
             return;
         }
 
@@ -1658,13 +1681,16 @@ impl App {
 
         if is_nav_panel {
             debug!("Applying scroll to navigation panel");
+            // Get approximate navigation panel height (using terminal height minus status bar)
+            let nav_panel_height = self.terminal_height.saturating_sub(2);
+
             if scroll_amount > 0 {
                 for _ in 0..scroll_amount.min(10) {
-                    self.navigation_panel.move_selection_down();
+                    self.navigation_panel.scroll_down(nav_panel_height);
                 }
             } else {
                 for _ in 0..(-scroll_amount).min(10) {
-                    self.navigation_panel.move_selection_up();
+                    self.navigation_panel.scroll_up(nav_panel_height);
                 }
             }
         } else {

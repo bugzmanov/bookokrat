@@ -237,6 +237,56 @@ impl BookSearch {
         }
     }
 
+    /// Scroll the view down while keeping cursor at same screen position if possible
+    pub fn scroll_down(&mut self, area_height: u16) {
+        if self.results.is_empty() {
+            return;
+        }
+
+        // Calculate visible height (accounting for borders and search input area)
+        let visible_height = area_height.saturating_sub(5) as usize; // Account for borders and input
+        let total_items = self.results.len();
+
+        // Calculate cursor position relative to viewport
+        let cursor_viewport_pos = self.selected_result.saturating_sub(self.scroll_offset);
+
+        // Check if we can scroll down
+        if self.scroll_offset + visible_height < total_items {
+            // Scroll viewport down by 1
+            self.scroll_offset += 1;
+
+            // Try to maintain cursor at same viewport position
+            let new_selected = (self.scroll_offset + cursor_viewport_pos).min(total_items - 1);
+            self.selected_result = new_selected;
+        } else if self.selected_result < total_items - 1 {
+            // Can't scroll viewport, but can move cursor down
+            self.selected_result += 1;
+        }
+    }
+
+    /// Scroll the view up while keeping cursor at same screen position if possible
+    pub fn scroll_up(&mut self, area_height: u16) {
+        if self.results.is_empty() {
+            return;
+        }
+
+        // Calculate cursor position relative to viewport
+        let cursor_viewport_pos = self.selected_result.saturating_sub(self.scroll_offset);
+
+        // Check if we can scroll up
+        if self.scroll_offset > 0 {
+            // Scroll viewport up by 1
+            self.scroll_offset -= 1;
+
+            // Try to maintain cursor at same viewport position
+            let new_selected = self.scroll_offset + cursor_viewport_pos;
+            self.selected_result = new_selected;
+        } else if self.selected_result > 0 {
+            // Can't scroll viewport, but can move cursor up
+            self.selected_result -= 1;
+        }
+    }
+
     fn update_scroll(&mut self) {
         // Scroll to keep selected result visible
         // If selected is before current scroll, scroll up to it

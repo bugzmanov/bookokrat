@@ -68,6 +68,30 @@ impl NavigationPanel {
         }
     }
 
+    /// Scroll the view down (for mouse scroll) while keeping cursor position stable
+    pub fn scroll_down(&mut self, area_height: u16) {
+        match self.mode {
+            NavigationMode::BookSelection => {
+                self.book_list.scroll_down(area_height);
+            }
+            NavigationMode::TableOfContents => {
+                self.table_of_contents.scroll_down(area_height);
+            }
+        }
+    }
+
+    /// Scroll the view up (for mouse scroll) while keeping cursor position stable
+    pub fn scroll_up(&mut self, area_height: u16) {
+        match self.mode {
+            NavigationMode::BookSelection => {
+                self.book_list.scroll_up(area_height);
+            }
+            NavigationMode::TableOfContents => {
+                self.table_of_contents.scroll_up(area_height);
+            }
+        }
+    }
+
     pub fn switch_to_toc_mode(&mut self, book_index: usize, book_info: CurrentBookInfo) {
         self.mode = NavigationMode::TableOfContents;
         self.current_book_index = Some(book_index);

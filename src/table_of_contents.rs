@@ -205,6 +205,56 @@ impl TableOfContents {
         }
     }
 
+    /// Scroll the view down while keeping cursor at same screen position if possible
+    pub fn scroll_down(&mut self, area_height: u16) {
+        self.manual_navigation = true;
+        if let Some(ref current_book_info) = self.current_book_info {
+            let visible_height = area_height.saturating_sub(2) as usize; // Account for borders
+            let total_items = self.count_visible_toc_items(&current_book_info.toc_items) + 1; // +1 for "<< books list"
+            let current_offset = self.list_state.offset();
+
+            let cursor_viewport_pos = self.selected_index.saturating_sub(current_offset);
+
+            if current_offset + visible_height < total_items {
+                let new_offset = current_offset + 1;
+
+                let new_selected = (new_offset + cursor_viewport_pos).min(total_items - 1);
+
+                self.selected_index = new_selected;
+                self.list_state.select(Some(self.selected_index));
+
+                self.list_state = ListState::default()
+                    .with_selected(Some(self.selected_index))
+                    .with_offset(new_offset);
+            } else if self.selected_index < total_items - 1 {
+                self.selected_index += 1;
+                self.list_state.select(Some(self.selected_index));
+            }
+        }
+    }
+
+    /// Scroll the view up while keeping cursor at same screen position if possible
+    pub fn scroll_up(&mut self, _area_height: u16) {
+        self.manual_navigation = true;
+        let current_offset = self.list_state.offset();
+        let cursor_viewport_pos = self.selected_index.saturating_sub(current_offset);
+
+        if current_offset > 0 {
+            let new_offset = current_offset - 1;
+
+            let new_selected = new_offset + cursor_viewport_pos;
+
+            self.selected_index = new_selected;
+            self.list_state.select(Some(self.selected_index));
+            self.list_state = ListState::default()
+                .with_selected(Some(self.selected_index))
+                .with_offset(new_offset);
+        } else if self.selected_index > 0 {
+            self.selected_index -= 1;
+            self.list_state.select(Some(self.selected_index));
+        }
+    }
+
     /// Clear the manual navigation flag when focus returns to content
     pub fn clear_manual_navigation(&mut self) {
         self.manual_navigation = false;
