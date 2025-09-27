@@ -785,7 +785,7 @@ impl App {
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
                 self.navigation_panel
                     .table_of_contents
-                    .set_current_book_info(book_info);
+                    .update_current_book_info_preserve_state(book_info);
             }
         } else {
             self.cached_current_book_info = None;
@@ -806,11 +806,23 @@ impl App {
             // Update active section
             cached_info.active_section = self.text_reader.get_active_section(self.current_chapter);
 
-            // Update the table of contents with the updated book info
+            // Get current chapter href
+            let current_chapter_href = if let Some(doc) = &self.current_epub {
+                Self::get_chapter_href(doc, self.current_chapter)
+            } else {
+                None
+            };
+            cached_info.current_chapter_href = current_chapter_href.clone();
+
+            // Update the table of contents navigation info without touching ToC structure
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
                 self.navigation_panel
                     .table_of_contents
-                    .set_current_book_info(cached_info.clone());
+                    .update_navigation_info(
+                        self.current_chapter,
+                        current_chapter_href,
+                        cached_info.active_section.clone(),
+                    );
 
                 // Update the active section and ensure it's visible
                 if let Some(area) = nav_area {

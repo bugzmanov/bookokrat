@@ -52,7 +52,7 @@ impl TocParser {
                 href: Some(clean_href),
                 anchor,
                 children,
-                is_expanded: true,
+                is_expanded: false,
             }
         }
     }
