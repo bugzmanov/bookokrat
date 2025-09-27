@@ -2160,10 +2160,10 @@ impl App {
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::FileList) => {
-                    "j/k: Navigate | Enter: Select | H: History | Tab: Switch | q: Quit"
+                    "j/k: Navigate | Enter: Select | Space+h: History | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | H: History | Tab: Switch | Space+o: Open | q: Quit"
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Space+h: History | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
                     "j/k: Navigate | Enter: Open | ESC: Close"
@@ -2278,7 +2278,8 @@ impl App {
             }
             " d" => {
                 // Handle Space->d to show book statistics (document stats)
-                if self.is_main_panel(MainPanel::Content) && self.current_epub.is_some() {
+                // Works from any panel as long as a book is open
+                if self.current_epub.is_some() {
                     // Calculate and show book statistics
                     if let Some(ref mut epub) = self.current_epub {
                         let terminal_size = (self.terminal_width, self.terminal_height);
@@ -2308,6 +2309,23 @@ impl App {
             " o" => {
                 // Handle Space->o to open current EPUB with system viewer
                 self.open_with_system_viewer();
+                self.key_sequence.clear();
+                true
+            }
+            " h" => {
+                // Handle Space->h to toggle reading history
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
+                    // Close history
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    self.reading_history = None;
+                } else {
+                    // Open history
+                    self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+                }
                 self.key_sequence.clear();
                 true
             }
@@ -2616,35 +2634,36 @@ impl App {
                 }
             }
             KeyCode::Char('h') => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history (could close history)
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_h();
+                // Check if this completes a key sequence (Space+h for reading history)
+                if !self.handle_key_sequence('h') {
+                    // 'h' by itself - handle normal navigation
+                    if matches!(
+                        self.focused_panel,
+                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                    ) {
+                        // Use VimNavMotions for reading history (could close history)
+                        if let Some(ref mut history) = self.reading_history {
+                            history.handle_h();
+                        }
+                    } else if self.is_main_panel(MainPanel::FileList) {
+                        // Use VimNavMotions for navigation panel
+                        self.navigation_panel.handle_h();
+                    } else {
+                        // Allow chapter navigation in content view
+                        let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                     }
-                } else if self.is_main_panel(MainPanel::FileList) {
-                    // Use VimNavMotions for navigation panel
-                    self.navigation_panel.handle_h();
-                } else {
-                    // Allow chapter navigation in content view
-                    let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                 }
             }
             KeyCode::Char('H') => {
-                // Toggle reading history
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Close history
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                    self.reading_history = None;
-                } else {
-                    // Open history
-                    self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+                // Fold all TOC items when in navigation panel
+                if self.is_main_panel(MainPanel::FileList) {
+                    self.navigation_panel.handle_shift_h();
+                }
+            }
+            KeyCode::Char('L') => {
+                // Unfold all TOC items when in navigation panel
+                if self.is_main_panel(MainPanel::FileList) {
+                    self.navigation_panel.handle_shift_l();
                 }
             }
             KeyCode::Char('i') => {
@@ -2770,27 +2789,30 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                // Check if this might be part of a key sequence (space-s for raw HTML)
-                if self.is_main_panel(MainPanel::Content) && !self.handle_key_sequence(' ') {
-                    // Space by itself in content view doesn't do anything, it's waiting for the next key
-                } else if self.is_main_panel(MainPanel::FileList)
-                    && self.navigation_panel.mode == NavigationMode::TableOfContents
-                {
-                    // Toggle section expansion when focused on file list and in TOC mode
-                    // Get the currently selected TOC item and toggle its expansion if it's a section
-                    if let Some(ref cached_info) = self.cached_current_book_info {
-                        if let Some(SelectedTocItem::TocItem(toc_item)) =
-                            self.navigation_panel.table_of_contents.get_selected_item()
-                        {
-                            // Clone the toc_items to avoid borrow issues
-                            let mut updated_toc_items = cached_info.toc_items.clone();
-                            if let Some(item) =
-                                Self::find_toc_item_mut(&mut updated_toc_items, toc_item.title())
+                // Check if this might be part of a key sequence
+                if !self.handle_key_sequence(' ') {
+                    // Space by itself - only toggle expansion in TOC mode
+                    if self.is_main_panel(MainPanel::FileList)
+                        && self.navigation_panel.mode == NavigationMode::TableOfContents
+                    {
+                        // Toggle section expansion when focused on file list and in TOC mode
+                        // Get the currently selected TOC item and toggle its expansion if it's a section
+                        if let Some(ref cached_info) = self.cached_current_book_info {
+                            if let Some(SelectedTocItem::TocItem(toc_item)) =
+                                self.navigation_panel.table_of_contents.get_selected_item()
                             {
-                                item.toggle_expansion();
-                                // Update the cached info with the modified toc_items
-                                if let Some(ref mut cached_info) = self.cached_current_book_info {
-                                    cached_info.toc_items = updated_toc_items;
+                                // Clone the toc_items to avoid borrow issues
+                                let mut updated_toc_items = cached_info.toc_items.clone();
+                                if let Some(item) = Self::find_toc_item_mut(
+                                    &mut updated_toc_items,
+                                    toc_item.title(),
+                                ) {
+                                    item.toggle_expansion();
+                                    // Update the cached info with the modified toc_items
+                                    if let Some(ref mut cached_info) = self.cached_current_book_info
+                                    {
+                                        cached_info.toc_items = updated_toc_items;
+                                    }
                                 }
                             }
                         }

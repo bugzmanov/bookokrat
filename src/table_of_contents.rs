@@ -60,6 +60,20 @@ impl TocItem {
             *is_expanded = !*is_expanded;
         }
     }
+
+    /// Collapse/fold this section (only applies to sections)
+    pub fn collapse(&mut self) {
+        if let TocItem::Section { is_expanded, .. } = self {
+            *is_expanded = false;
+        }
+    }
+
+    /// Expand/unfold this section (only applies to sections)
+    pub fn expand(&mut self) {
+        if let TocItem::Section { is_expanded, .. } = self {
+            *is_expanded = true;
+        }
+    }
 }
 
 pub struct TableOfContents {
@@ -295,6 +309,70 @@ impl TableOfContents {
         }
     }
 
+    /// Collapse/fold the currently selected item if it's an expanded section
+    pub fn collapse_selected(&mut self) {
+        if let Some(ref mut current_book_info) = self.current_book_info {
+            if self.selected_index > 0 {
+                // Subtract 1 to account for the back button
+                let target_index = self.selected_index - 1;
+                Self::set_expansion_at_index(
+                    &mut current_book_info.toc_items,
+                    target_index,
+                    &mut 0,
+                    false,
+                );
+            }
+        }
+    }
+
+    /// Expand/unfold the currently selected item if it's a collapsed section
+    pub fn expand_selected(&mut self) {
+        if let Some(ref mut current_book_info) = self.current_book_info {
+            if self.selected_index > 0 {
+                // Subtract 1 to account for the back button
+                let target_index = self.selected_index - 1;
+                Self::set_expansion_at_index(
+                    &mut current_book_info.toc_items,
+                    target_index,
+                    &mut 0,
+                    true,
+                );
+            }
+        }
+    }
+
+    /// Collapse/fold all sections in the table of contents
+    pub fn collapse_all(&mut self) {
+        if let Some(ref mut current_book_info) = self.current_book_info {
+            Self::set_all_expansion_state(&mut current_book_info.toc_items, false);
+        }
+    }
+
+    /// Expand/unfold all sections in the table of contents
+    pub fn expand_all(&mut self) {
+        if let Some(ref mut current_book_info) = self.current_book_info {
+            Self::set_all_expansion_state(&mut current_book_info.toc_items, true);
+        }
+    }
+
+    /// Helper to set expansion state for all sections
+    fn set_all_expansion_state(toc_items: &mut [TocItem], expand: bool) {
+        for item in toc_items {
+            match item {
+                TocItem::Section {
+                    is_expanded,
+                    children,
+                    ..
+                } => {
+                    *is_expanded = expand;
+                    // Recursively set expansion state for child sections
+                    Self::set_all_expansion_state(children, expand);
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+    }
+
     /// Helper to find and toggle expansion at a specific index
     fn toggle_expansion_at_index(
         toc_items: &mut [TocItem],
@@ -316,6 +394,47 @@ impl TableOfContents {
                 } => {
                     if *is_expanded {
                         if Self::toggle_expansion_at_index(children, target_index, current_index) {
+                            return true;
+                        }
+                    }
+                }
+                TocItem::Chapter { .. } => {}
+            }
+        }
+        false
+    }
+
+    /// Helper to find and set expansion state at a specific index
+    fn set_expansion_at_index(
+        toc_items: &mut [TocItem],
+        target_index: usize,
+        current_index: &mut usize,
+        expand: bool,
+    ) -> bool {
+        for item in toc_items {
+            if *current_index == target_index {
+                if expand {
+                    item.expand();
+                } else {
+                    item.collapse();
+                }
+                return true;
+            }
+            *current_index += 1;
+
+            match item {
+                TocItem::Section {
+                    children,
+                    is_expanded,
+                    ..
+                } => {
+                    if *is_expanded {
+                        if Self::set_expansion_at_index(
+                            children,
+                            target_index,
+                            current_index,
+                            expand,
+                        ) {
                             return true;
                         }
                     }

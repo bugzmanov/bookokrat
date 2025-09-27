@@ -123,6 +123,20 @@ impl NavigationPanel {
         }
     }
 
+    /// Handle uppercase H to collapse all TOC items
+    pub fn handle_shift_h(&mut self) {
+        if self.mode == NavigationMode::TableOfContents {
+            self.table_of_contents.collapse_all();
+        }
+    }
+
+    /// Handle uppercase L to expand all TOC items
+    pub fn handle_shift_l(&mut self) {
+        if self.mode == NavigationMode::TableOfContents {
+            self.table_of_contents.expand_all();
+        }
+    }
+
     /// Get the currently selected index based on the mode
     pub fn get_selected_action(&self) -> SelectedActionOwned {
         match self.mode {
@@ -177,9 +191,13 @@ impl NavigationPanel {
 
 impl VimNavMotions for NavigationPanel {
     fn handle_h(&mut self) {
-        // Left movement - switch back to book selection mode
+        // Left movement - collapse section in TOC mode, switch to book mode otherwise
         if self.mode == NavigationMode::TableOfContents {
-            self.switch_to_book_mode();
+            // Try to collapse the selected section first
+            self.table_of_contents.collapse_selected();
+            // Note: We don't switch to book mode here anymore - 'h' is for folding
+        } else {
+            // In book selection mode, h doesn't do anything special
         }
     }
 
@@ -194,9 +212,12 @@ impl VimNavMotions for NavigationPanel {
     }
 
     fn handle_l(&mut self) {
-        // Right movement - could be used to enter/select or expand sections
-        // This could be implemented to expand/collapse sections in TOC mode
-        // or to enter a book in book selection mode
+        // Right movement - expand section in TOC mode
+        if self.mode == NavigationMode::TableOfContents {
+            // Expand the selected section if it's collapsed
+            self.table_of_contents.expand_selected();
+        }
+        // In book selection mode, l doesn't do anything special
     }
 
     fn handle_ctrl_d(&mut self) {
