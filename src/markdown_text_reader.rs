@@ -41,6 +41,7 @@ struct RenderedLine {
     line_type: LineType,
     link_nodes: Vec<LinkInfo>,   // Links that are visible on this line
     node_anchor: Option<String>, // Anchor/id from the Node if present
+    node_index: Option<usize>,   // Index of the node in the document this line belongs to
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -201,6 +202,9 @@ pub struct MarkdownTextReader {
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
     background_loader: BackgroundImageLoader,
+
+    // Deferred node index to restore after rendering
+    pending_node_restore: Option<usize>,
 
     // Raw HTML mode
     show_raw_html: bool,
@@ -427,6 +431,7 @@ impl MarkdownTextReader {
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
             background_loader: BackgroundImageLoader::new(),
+            pending_node_restore: None,
             raw_html_content: None,
             show_raw_html: false,
             links: Vec::new(),
@@ -453,7 +458,7 @@ impl MarkdownTextReader {
         self.anchor_positions.clear();
 
         // Iterate through all blocks in the document
-        for (_node_idx, node) in doc.blocks.iter().enumerate() {
+        for (node_idx, node) in doc.blocks.iter().enumerate() {
             // Track anchors before rendering each block
             self.extract_and_track_anchors_from_node(node, total_height);
 
@@ -464,7 +469,8 @@ impl MarkdownTextReader {
                 width,
                 palette,
                 is_focused,
-                0, // indent level
+                0,              // indent level
+                Some(node_idx), // Pass the node index
             );
         }
 
@@ -532,6 +538,25 @@ impl MarkdownTextReader {
         }
     }
 
+    /// Helper to create a RenderedLine with node index
+    fn create_rendered_line(
+        spans: Vec<Span<'static>>,
+        raw_text: String,
+        line_type: LineType,
+        link_nodes: Vec<LinkInfo>,
+        node_anchor: Option<String>,
+        node_index: Option<usize>,
+    ) -> RenderedLine {
+        RenderedLine {
+            spans,
+            raw_text,
+            line_type,
+            link_nodes,
+            node_anchor,
+            node_index,
+        }
+    }
+
     fn render_node(
         &mut self,
         node: &Node,
@@ -541,12 +566,16 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
+        node_index: Option<usize>,
     ) {
         use MarkdownBlock::*;
 
         // Store the current node's anchor to add to the first line rendered for this node
         let current_node_anchor = node.id.clone();
         let initial_line_count = lines.len();
+
+        // Remember the starting line count to assign node_index to first line only
+        let start_lines_count = lines.len();
 
         match &node.block {
             Heading { level, content } => {
@@ -670,6 +699,19 @@ impl MarkdownTextReader {
                 }
             }
         }
+
+        // Set the node_index on the first line created for this node (if any)
+        if let Some(idx) = node_index {
+            if start_lines_count < lines.len() {
+                if let Some(line) = lines.get_mut(start_lines_count) {
+                    line.node_index = Some(idx);
+                    debug!(
+                        "Assigned node_index {} to line {} (line type: {:?})",
+                        idx, start_lines_count, line.line_type
+                    );
+                }
+            }
+        }
     }
 
     // Helper method to convert Text AST to plain string
@@ -758,6 +800,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
 
             self.raw_text_lines.push(wrapped_line.to_string());
@@ -784,6 +827,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
 
             self.raw_text_lines.push(decoration);
@@ -797,6 +841,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -864,6 +909,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Empty,
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -1040,6 +1086,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
 
             self.raw_text_lines.push(code_line.to_string());
@@ -1053,6 +1100,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1126,6 +1174,7 @@ impl MarkdownTextReader {
                                 palette,
                                 is_focused,
                                 indent + 1,
+                                None, // No separate node index for nested blocks
                             );
                         }
                     }
@@ -1139,6 +1188,7 @@ impl MarkdownTextReader {
                         palette,
                         is_focused,
                         indent + 1,
+                        None, // No separate node index for nested blocks
                     );
                 }
             }
@@ -1151,6 +1201,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1248,6 +1299,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Text, // Table widget handles its own styling
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             };
 
             lines.push(rendered_line);
@@ -1283,6 +1335,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1473,6 +1526,7 @@ impl MarkdownTextReader {
                         palette,
                         is_focused,
                         indent + 1,
+                        None, // No separate node index for nested blocks
                     );
                 }
             }
@@ -1485,6 +1539,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1513,6 +1568,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
 
         self.raw_text_lines.push(hr_line);
@@ -1525,6 +1581,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1593,7 +1650,8 @@ impl MarkdownTextReader {
                         width.saturating_sub(4), // Reduce width for indentation
                         palette,
                         is_focused,
-                        2, // 2 levels of indentation (4 spaces)
+                        2,    // 2 levels of indentation (4 spaces)
+                        None, // No separate node index for nested blocks
                     );
                 }
             }
@@ -1606,6 +1664,7 @@ impl MarkdownTextReader {
                     line_type: LineType::Empty,
                     link_nodes: vec![],
                     node_anchor: None,
+                    node_index: None,
                 });
                 self.raw_text_lines.push(String::new());
                 *total_height += 1;
@@ -1619,6 +1678,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1650,6 +1710,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
@@ -1661,6 +1722,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1688,7 +1750,8 @@ impl MarkdownTextReader {
                         width,
                         palette,
                         is_focused,
-                        0, // no indentation
+                        0,    // no indentation
+                        None, // No separate node index for footnote content
                     );
                 }
             }
@@ -1708,6 +1771,7 @@ impl MarkdownTextReader {
             line_type: LineType::HorizontalRule,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -1719,6 +1783,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1816,6 +1881,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Text,
                 link_nodes: line_links, // Captured links!
                 node_anchor: None,
+                node_index: None,
             });
 
             self.raw_text_lines.push(final_raw_text);
@@ -1830,6 +1896,7 @@ impl MarkdownTextReader {
                 line_type: LineType::Empty,
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -1992,6 +2059,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2060,6 +2128,7 @@ impl MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
+                node_index: None,
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync
@@ -2073,6 +2142,7 @@ impl MarkdownTextReader {
             line_type: LineType::Empty,
             link_nodes: vec![],
             node_anchor: None,
+            node_index: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2303,6 +2373,44 @@ impl VimNavMotions for MarkdownTextReader {
     }
 }
 
+impl MarkdownTextReader {
+    /// Actually perform the node restoration (called after rendering)
+    fn perform_node_restore(&mut self, node_index: usize) {
+        info!(
+            "perform_node_restore called with node_index={}, total lines={}",
+            node_index,
+            self.rendered_content.lines.len()
+        );
+
+        // Count how many lines have node indices
+        let lines_with_nodes = self
+            .rendered_content
+            .lines
+            .iter()
+            .filter(|line| line.node_index.is_some())
+            .count();
+        info!("Lines with node indices: {}", lines_with_nodes);
+
+        // Find the first line that belongs to this node
+        for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if let Some(node_idx) = line.node_index {
+                if node_idx >= node_index {
+                    // Found the node or a later one, scroll to this position
+                    self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
+                    info!("Restored to node {} at line {}", node_index, line_idx);
+                    return;
+                }
+            }
+        }
+
+        // Node not found, stay at current position
+        info!(
+            "Could not find node index {} in rendered content, staying at current position",
+            node_index
+        );
+    }
+}
+
 impl TextReaderTrait for MarkdownTextReader {
     fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
         // Parse HTML string to Markdown AST
@@ -2400,6 +2508,34 @@ impl TextReaderTrait for MarkdownTextReader {
 
     fn restore_scroll_position(&mut self, offset: usize) {
         self.scroll_offset = offset.min(self.get_max_scroll_offset());
+    }
+
+    /// Get the index of the first visible node in the viewport
+    fn get_current_node_index(&self) -> usize {
+        // Find the first visible line in the viewport
+        let visible_start = self.scroll_offset;
+
+        // Look through rendered lines to find the node index
+        for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line_idx >= visible_start {
+                if let Some(node_idx) = line.node_index {
+                    return node_idx;
+                }
+            }
+        }
+
+        0 // Default to first node
+    }
+
+    /// Restore scroll position to show a specific node
+    fn restore_to_node_index(&mut self, node_index: usize) {
+        info!(
+            "restore_to_node_index called with node_index={}, deferring until after render",
+            node_index
+        );
+
+        // Defer the restoration until after content is rendered
+        self.pending_node_restore = Some(node_index);
     }
 
     fn get_max_scroll_offset(&self) -> usize {
@@ -2797,6 +2933,12 @@ impl TextReaderTrait for MarkdownTextReader {
                 self.total_wrapped_lines = self.rendered_content.total_height;
                 self.last_width = width;
                 self.last_focus_state = is_focused;
+
+                // Check if we have a pending node restore after re-render
+                if let Some(node_index) = self.pending_node_restore.take() {
+                    self.perform_node_restore(node_index);
+                    debug!("Performed pending node restore for node {}", node_index);
+                }
 
                 // Check if we have a pending anchor scroll after re-render
                 if let Some(anchor_id) = self.pending_anchor_scroll.take() {

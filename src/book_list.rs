@@ -1,5 +1,4 @@
 use crate::book_manager::{BookInfo, BookManager};
-use crate::bookmark::Bookmarks;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::Base16Palette;
 use ratatui::{
@@ -102,7 +101,6 @@ impl BookList {
         area: Rect,
         is_focused: bool,
         palette: &Base16Palette,
-        _bookmarks: &Bookmarks,
         current_book_index: Option<usize>,
     ) {
         // Get focus-aware colors

@@ -7,8 +7,10 @@ pub struct JumpLocation {
     pub epub_path: String,
     /// Chapter index
     pub chapter_index: usize,
-    /// Scroll position within the chapter
+    /// Scroll position within the chapter (deprecated, kept for compatibility)
     pub scroll_position: usize,
+    /// Node index within the chapter (preferred over scroll position)
+    pub node_index: Option<usize>,
     /// Optional anchor/fragment identifier
     pub anchor: Option<String>,
 }
@@ -110,6 +112,7 @@ mod tests {
             epub_path: "book1.epub".to_string(),
             chapter_index: 0,
             scroll_position: 0,
+            node_index: None,
             anchor: None,
         };
 
@@ -117,6 +120,7 @@ mod tests {
             epub_path: "book1.epub".to_string(),
             chapter_index: 1,
             scroll_position: 100,
+            node_index: None,
             anchor: None,
         };
 
@@ -153,6 +157,7 @@ mod tests {
                 epub_path: format!("book{}.epub", i),
                 chapter_index: i,
                 scroll_position: i * 100,
+                node_index: None,
                 anchor: None,
             });
         }

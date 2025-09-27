@@ -1,7 +1,7 @@
 use crate::book_manager::BookManager;
 use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::BookStat;
-use crate::bookmark::Bookmarks;
+use crate::bookmarks::Bookmarks;
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
@@ -574,19 +574,65 @@ impl App {
         // Initialize search engine for the book
         self.initialize_search_engine(&mut doc);
 
+        // Variables to store position to restore after content is loaded
+        let mut scroll_to_restore = 0;
+        let mut node_to_restore = None;
+
         // Try to load bookmark
         if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
-            // Skip metadata page if needed
-            if bookmark.chapter > 0 {
-                for _ in 0..bookmark.chapter {
-                    if !doc.go_next() {
-                        error!("Failed to navigate to bookmarked chapter");
-                        break;
+            // Try to find the chapter by href first
+            let chapter_to_restore = if bookmark.chapter_href.starts_with("chapter_") {
+                // This is a legacy placeholder, try to extract the index
+                bookmark
+                    .chapter_href
+                    .strip_prefix("chapter_")
+                    .and_then(|s| s.parse::<usize>().ok())
+            } else {
+                // Try to find the chapter index by href
+                Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href)
+            };
+
+            if let Some(chapter_index) = chapter_to_restore {
+                // Use set_current_page for direct navigation (more reliable)
+                if doc.set_current_page(chapter_index) {
+                    self.current_chapter = chapter_index;
+                    info!(
+                        "Successfully restored to chapter {} (href: {})",
+                        chapter_index, bookmark.chapter_href
+                    );
+                } else {
+                    // Fallback: ensure we're within bounds
+                    let safe_chapter = chapter_index.min(self.total_chapters.saturating_sub(1));
+                    if doc.set_current_page(safe_chapter) {
+                        self.current_chapter = safe_chapter;
+                        warn!(
+                            "Restored to safe chapter {} instead of {} (href: {})",
+                            safe_chapter, chapter_index, bookmark.chapter_href
+                        );
+                    } else {
+                        self.current_chapter = 0;
+                        error!("Failed to restore bookmark, staying at chapter 0");
                     }
                 }
-                self.current_chapter = bookmark.chapter;
-                self.text_reader
-                    .restore_scroll_position(bookmark.scroll_offset);
+
+                // Store position to restore after content is loaded
+                // Prefer node index if available, fall back to scroll offset
+                if let Some(node_idx) = bookmark.node_index {
+                    node_to_restore = Some(node_idx);
+                    info!(
+                        "Will restore to node index {} after content loads",
+                        node_idx
+                    );
+                } else if let Some(scroll_offset) = bookmark.scroll_offset {
+                    scroll_to_restore = scroll_offset;
+                    info!(
+                        "Will restore scroll position to {} after content loads",
+                        scroll_offset
+                    );
+                }
+            } else {
+                warn!("Could not find chapter for href: {}", bookmark.chapter_href);
+                self.current_chapter = 0;
             }
         } else {
             info!("No bookmark found for {}, considering metadata skip", path);
@@ -673,6 +719,15 @@ impl App {
         self.current_file = Some(path.to_string());
         self.update_content();
         self.refresh_chapter_cache();
+
+        if let Some(node_idx) = node_to_restore {
+            self.text_reader.restore_to_node_index(node_idx);
+            info!("Restored to node index {}", node_idx);
+        } else if scroll_to_restore > 0 {
+            self.text_reader.restore_scroll_position(scroll_to_restore);
+            info!("Restored scroll position to {}", scroll_to_restore);
+        }
+
         Ok(())
     }
 
@@ -685,6 +740,25 @@ impl App {
             let spine_item = &doc.spine[chapter_index];
             if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
                 return Some(path.to_string_lossy().to_string());
+            }
+        }
+        None
+    }
+
+    /// Find chapter index by href/path
+    fn find_chapter_index_by_href(
+        doc: &EpubDoc<BufReader<std::fs::File>>,
+        target_href: &str,
+    ) -> Option<usize> {
+        for (index, spine_item) in doc.spine.iter().enumerate() {
+            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
+                let path_str = path.to_string_lossy();
+                if path_str == target_href
+                    || path_str.contains(target_href)
+                    || target_href.contains(&*path_str)
+                {
+                    return Some(index);
+                }
             }
         }
         None
@@ -755,11 +829,22 @@ impl App {
 
     pub fn save_bookmark_with_throttle(&mut self, force: bool) {
         if let Some(path) = &self.current_file {
+            // Get the chapter href from the current EPUB document
+            let chapter_href = if let Some(doc) = &self.current_epub {
+                Self::get_chapter_href(doc, self.current_chapter)
+                    .unwrap_or_else(|| format!("chapter_{}", self.current_chapter))
+            } else {
+                format!("chapter_{}", self.current_chapter)
+            };
+
+            // Update bookmark with href and node index
             self.bookmarks.update_bookmark(
                 path,
-                self.current_chapter,
-                self.text_reader.get_scroll_offset(),
-                self.total_chapters,
+                chapter_href,
+                Some(self.text_reader.get_scroll_offset()),
+                Some(self.text_reader.get_current_node_index()),
+                Some(self.current_chapter),
+                Some(self.total_chapters),
             );
 
             // Only save to disk if enough time has passed or if forced
@@ -1223,6 +1308,7 @@ impl App {
                 epub_path: current_file.clone(),
                 chapter_index: self.current_chapter,
                 scroll_position: self.text_reader.get_scroll_offset(),
+                node_index: Some(self.text_reader.get_current_node_index()),
                 anchor: None,
             };
             self.jump_list.push(current_location);
@@ -1676,10 +1762,15 @@ impl App {
             self.navigate_to_chapter(location.chapter_index)?;
         }
 
-        // Force restore scroll position after any content updates
+        // Force restore position after any content updates
         // This needs to happen AFTER navigate_to_chapter which resets scroll
-        self.text_reader
-            .restore_scroll_position(location.scroll_position);
+        // Prefer node index if available, fall back to scroll position
+        if let Some(node_idx) = location.node_index {
+            self.text_reader.restore_to_node_index(node_idx);
+        } else {
+            self.text_reader
+                .restore_scroll_position(location.scroll_position);
+        }
 
         // If there's an anchor, scroll to it
         if let Some(ref anchor) = location.anchor {
@@ -1891,7 +1982,6 @@ impl App {
             main_chunks[0],
             self.is_main_panel(MainPanel::FileList),
             &OCEANIC_NEXT,
-            &self.bookmarks,
             &self.book_manager,
         );
 

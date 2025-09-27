@@ -1,6 +1,5 @@
 use crate::book_list::BookList;
 use crate::book_manager::BookManager;
-use crate::bookmark::Bookmarks;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchState, SearchablePanel};
@@ -128,19 +127,12 @@ impl NavigationPanel {
         area: Rect,
         is_focused: bool,
         palette: &Base16Palette,
-        bookmarks: &Bookmarks,
         book_manager: &BookManager,
     ) {
         match self.mode {
             NavigationMode::BookSelection => {
-                self.book_list.render(
-                    f,
-                    area,
-                    is_focused,
-                    palette,
-                    bookmarks,
-                    self.current_book_index,
-                );
+                self.book_list
+                    .render(f, area, is_focused, palette, self.current_book_index);
             }
             NavigationMode::TableOfContents => {
                 if let Some(current_idx) = self.current_book_index {

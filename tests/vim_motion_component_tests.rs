@@ -1,5 +1,5 @@
 use bookrat::book_manager::{BookInfo, BookManager};
-use bookrat::bookmark::Bookmarks;
+use bookrat::bookmarks::Bookmarks;
 use bookrat::main_app::VimNavMotions;
 use bookrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
@@ -85,8 +85,7 @@ fn test_book_list_vim_motion_g() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::ephemeral();
-            nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
+            nav_panel.render(f, area, false, &palette, &book_manager);
         })
         .unwrap();
 
@@ -126,8 +125,7 @@ fn test_book_list_vim_motion_gg() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::ephemeral();
-            nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
+            nav_panel.render(f, area, false, &palette, &book_manager);
         })
         .unwrap();
 
@@ -190,8 +188,7 @@ fn test_navigation_panel_vim_motion_g() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::ephemeral();
-            nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
+            nav_panel.render(f, area, false, &palette, &book_manager);
         })
         .unwrap();
 
@@ -237,8 +234,7 @@ fn test_navigation_panel_vim_motion_gg() {
         .draw(|f| {
             let area = f.size();
             let palette = get_test_palette();
-            let bookmarks = Bookmarks::ephemeral();
-            nav_panel.render(f, area, false, &palette, &bookmarks, &book_manager);
+            nav_panel.render(f, area, false, &palette, &book_manager);
         })
         .unwrap();
 

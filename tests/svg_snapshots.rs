@@ -2091,152 +2091,64 @@ fn test_book_reading_history_with_many_entries_svg() {
         false,
     );
 
-    // Create bookmarks with interesting dates to show sorting
-    // We'll manually create a bookmarks file with specific timestamps
+    // Create bookmarks using the production format by manually crafting valid JSON
+    // This is the only way to create deterministic test data with specific timestamps
     use chrono::{DateTime, Duration, TimeZone, Utc};
     use std::collections::HashMap;
-
-    #[derive(serde::Serialize)]
-    struct TestBookmark {
-        chapter: usize,
-        scroll_offset: usize,
-        last_read: DateTime<Utc>,
-        total_chapters: usize,
-    }
-
-    #[derive(serde::Serialize)]
-    struct TestBookmarks {
-        books: HashMap<String, TestBookmark>,
-    }
-
-    let mut bookmarks = TestBookmarks {
-        books: HashMap::new(),
-    };
 
     // Use a fixed date for deterministic test output
     let now = Utc.with_ymd_and_hms(2024, 3, 15, 10, 0, 0).unwrap();
 
+    let mut books_map = HashMap::new();
+
     // Add books read today (most recent - should appear at top)
     for i in 0..10 {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: i * 2, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::hours(i as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
+        let bookmark = bookrat::bookmarks::Bookmark {
+            chapter_href: format!("chapter_{}.html", i * 2),
+            scroll_offset: Some(0),
+            node_index: None,
+            last_read: now - Duration::hours(i as i64),
+            chapter_index: Some(i * 2),
+            total_chapters: Some(10 + (i % 20)),
+        };
+        books_map.insert(book_path, bookmark);
     }
 
     // Add books read yesterday
     for i in 10..20 {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: (i - 10) * 3, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
+        let bookmark = bookrat::bookmarks::Bookmark {
+            chapter_href: format!("chapter_{}.html", (i - 10) * 3),
+            scroll_offset: Some(0),
+            node_index: None,
+            last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
+            chapter_index: Some((i - 10) * 3),
+            total_chapters: Some(10 + (i % 20)),
+        };
+        books_map.insert(book_path, bookmark);
+    }
+
+    // Save using the production Bookmarks struct
+    let mut prod_bookmarks = bookrat::bookmarks::Bookmarks::with_file(&bookmark_path.to_string_lossy());
+
+    // Add all the bookmarks using the production method
+    for (path, bookmark) in books_map {
+        prod_bookmarks.update_bookmark(
+            &path,
+            bookmark.chapter_href,
+            bookmark.scroll_offset,
+            bookmark.node_index,
+            bookmark.chapter_index,
+            bookmark.total_chapters,
         );
     }
 
-    // Add books read last week
-    for i in 20..30 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: (i - 20) + 5, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(7) - Duration::hours((i - 20) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Add books read last month
-    for i in 30..40 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: i % 15, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(30) - Duration::hours((i - 30) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Add books read 6 months ago
-    for i in 40..50 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: (i - 40) * 2, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(180) - Duration::hours((i - 40) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Add books read 1 year ago
-    for i in 50..60 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: i % 20, // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(365) - Duration::hours((i - 50) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Add books read 2 years ago
-    for i in 60..70 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: (i - 60), // Varying progress
-                scroll_offset: 0,
-                last_read: now - Duration::days(730) - Duration::hours((i - 60) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Add some very old books (5+ years)
-    for i in 70..100 {
-        let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        let years_ago = 5 + ((i - 70) / 10); // 5, 6, 7 years
-        bookmarks.books.insert(
-            book_path,
-            TestBookmark {
-                chapter: i % 25, // Varying progress
-                scroll_offset: 0,
-                last_read: now
-                    - Duration::days(365 * years_ago as i64)
-                    - Duration::hours((i - 70) as i64),
-                total_chapters: 10 + (i % 20), // Match the book_configs chapter counts
-            },
-        );
-    }
-
-    // Write the bookmarks to the file
-    let bookmarks_json = serde_json::to_string_pretty(&bookmarks).unwrap();
-    std::fs::write(&bookmark_path, bookmarks_json).unwrap();
+    // Save using production code
+    prod_bookmarks.save().unwrap();
 
     // Debug: print number of bookmarks created
-    println!("Created {} bookmarks", bookmarks.books.len());
+    println!("Created {} bookmarks using production code", 100);
 
     // Now reload the app to pick up the bookmarks
     app = bookrat::App::new_with_config(
@@ -2268,7 +2180,26 @@ fn test_book_reading_history_with_many_entries_svg() {
         svg_output.clone(),
         &std::path::Path::new("tests/snapshots/book_reading_history_many_entries.svg"),
         "test_book_reading_history_with_many_entries_svg",
-        create_test_failure_handler("test_book_reading_history_with_many_entries_svg"),
+        |expected,
+         actual,
+         snapshot_path,
+         expected_lines,
+         actual_lines,
+         diff_count,
+         first_diff_line| {
+            test_report::TestReport::add_failure(test_report::TestFailure {
+                test_name: "test_book_reading_history_with_many_entries_svg".to_string(),
+                expected,
+                actual,
+                line_stats: test_report::LineStats {
+                    expected_lines,
+                    actual_lines,
+                    diff_count,
+                    first_diff_line,
+                },
+                snapshot_path,
+            });
+        },
     );
 }
 

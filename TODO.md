@@ -7,12 +7,11 @@ ideas to implement:
          [ ] Alow mouse selection & stuff
      [x] Math Formulas 
         [ ] Potential improvements: simple devision should be 1 line
-        [ ] Bug: multiline math in lists
      [ ] Markdown
          [.] links support 
              [x] superscript links (footnotes)
              [ ] visited link tracking & styling
-             [ ] Internal links jumps history (to jump back)
+             [x] Internal links jumps history (to jump back)
              [x] external links
                 [ ] bug: link in tables is not clickable
              [x] internal links

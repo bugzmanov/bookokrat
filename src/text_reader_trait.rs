@@ -35,6 +35,8 @@ pub trait TextReaderTrait: VimNavMotions {
     fn get_scroll_offset(&self) -> usize;
     fn restore_scroll_position(&mut self, offset: usize);
     fn get_max_scroll_offset(&self) -> usize;
+    fn get_current_node_index(&self) -> usize;
+    fn restore_to_node_index(&mut self, node_index: usize);
 
     // Text selection
     fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect);

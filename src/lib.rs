@@ -3,7 +3,7 @@ pub mod book_list;
 pub mod book_manager;
 pub mod book_search;
 pub mod book_stat;
-pub mod bookmark;
+pub mod bookmarks;
 pub mod event_source;
 pub mod images;
 pub mod jump_list;

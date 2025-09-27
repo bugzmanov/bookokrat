@@ -3,18 +3,30 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize)]
+/// Bookmark format that uses chapter href instead of index
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Bookmark {
-    pub chapter: usize,
-    pub scroll_offset: usize,
+    pub chapter_href: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_offset: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_index: Option<usize>,
+
     pub last_read: chrono::DateTime<chrono::Utc>,
-    #[serde(default)]
-    pub total_chapters: usize,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapter_index: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_chapters: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Bookmarks {
     books: HashMap<String, Bookmark>,
+
     #[serde(skip)]
     file_path: Option<String>,
 }
@@ -48,9 +60,17 @@ impl Bookmarks {
         let path = Path::new(file_path);
         if path.exists() {
             let content = fs::read_to_string(path)?;
-            let mut bookmarks: Self = serde_json::from_str(&content)?;
-            bookmarks.file_path = Some(file_path.to_string());
-            Ok(bookmarks)
+
+            match serde_json::from_str::<Self>(&content) {
+                Ok(mut bookmarks) => {
+                    bookmarks.file_path = Some(file_path.to_string());
+                    Ok(bookmarks)
+                }
+                Err(e) => {
+                    log::error!("Failed to parse bookmarks file: {}", e);
+                    Err(anyhow::anyhow!("Failed to parse bookmarks: {}", e))
+                }
+            }
         } else {
             Ok(Self::with_file(file_path))
         }
@@ -63,10 +83,7 @@ impl Bookmarks {
                 fs::write(path, content)?;
                 Ok(())
             }
-            None => {
-                // Ephemeral bookmarks don't save to disk
-                Ok(())
-            }
+            None => Ok(()),
         }
     }
 
@@ -77,27 +94,32 @@ impl Bookmarks {
     pub fn get_most_recent(&self) -> Option<(String, &Bookmark)> {
         self.books
             .iter()
-            .max_by_key(|(_, bookmark)| bookmark.last_read)
+            .max_by_key(|(_, bookmark)| &bookmark.last_read)
             .map(|(path, bookmark)| (path.clone(), bookmark))
     }
 
     pub fn update_bookmark(
         &mut self,
         path: &str,
-        chapter: usize,
-        scroll_offset: usize,
-        total_chapters: usize,
+        chapter_href: String,
+        scroll_offset: Option<usize>,
+        node_index: Option<usize>,
+        chapter_index: Option<usize>,
+        total_chapters: Option<usize>,
     ) {
         self.books.insert(
             path.to_string(),
             Bookmark {
-                chapter,
+                chapter_href,
                 scroll_offset,
+                node_index,
                 last_read: chrono::Utc::now(),
+                chapter_index,
                 total_chapters,
             },
         );
-        // Only try to save if we have at least one bookmark and we're not ephemeral
+
+        // Save immediately if we have a file path
         if !self.books.is_empty() && self.file_path.is_some() {
             if let Err(e) = self.save() {
                 log::error!("Failed to save bookmark: {}", e);
@@ -107,5 +129,29 @@ impl Bookmarks {
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Bookmark)> {
         self.books.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bookmark_serialization() {
+        let bookmark = Bookmark {
+            chapter_href: "OEBPS/xhtml/chapter1.xhtml".to_string(),
+            scroll_offset: Some(100),
+            node_index: Some(5),
+            last_read: chrono::Utc::now(),
+            chapter_index: Some(1),
+            total_chapters: Some(10),
+        };
+
+        let json = serde_json::to_string(&bookmark).unwrap();
+        let deserialized: Bookmark = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(bookmark.chapter_href, deserialized.chapter_href);
+        assert_eq!(bookmark.scroll_offset, deserialized.scroll_offset);
+        assert_eq!(bookmark.node_index, deserialized.node_index);
     }
 }

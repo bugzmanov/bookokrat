@@ -1,4 +1,4 @@
-use crate::bookmark::Bookmarks;
+use crate::bookmarks::Bookmarks;
 use crate::main_app::VimNavMotions;
 use crate::theme::OCEANIC_NEXT;
 use chrono::{DateTime, Local, TimeZone};
@@ -33,7 +33,7 @@ impl ReadingHistory {
         let mut latest_access: HashMap<String, (DateTime<Local>, String, usize, usize)> =
             HashMap::new();
 
-        for (path, bookmark) in bookmarks.iter() {
+        for (path, bookmark_entry) in bookmarks.iter() {
             let title = path
                 .split('/')
                 .last()
@@ -41,21 +41,20 @@ impl ReadingHistory {
                 .trim_end_matches(".epub")
                 .to_string();
 
-            let local_time = Local.from_utc_datetime(&bookmark.last_read.naive_utc());
+            let local_time = Local.from_utc_datetime(&bookmark_entry.last_read.naive_utc());
+
+            // Get chapter info from bookmark
+            let chapter = bookmark_entry.chapter_index.unwrap_or(0);
+            let total_chapters = bookmark_entry.total_chapters.unwrap_or(0);
 
             latest_access
                 .entry(path.clone())
                 .and_modify(|e| {
                     if local_time > e.0 {
-                        *e = (
-                            local_time,
-                            title.clone(),
-                            bookmark.chapter,
-                            bookmark.total_chapters,
-                        );
+                        *e = (local_time, title.clone(), chapter, total_chapters);
                     }
                 })
-                .or_insert((local_time, title, bookmark.chapter, bookmark.total_chapters));
+                .or_insert((local_time, title, chapter, total_chapters));
         }
 
         // Convert to sorted list
