@@ -685,44 +685,68 @@ class MathMLParser:
         index_text = ''.join(''.join(row) for row in index.content).strip()
         index_width = len(index_text)
 
-        # Generate radical lines similar to square root
-        if formula_height < 3:
-            formula_height = 3  # Minimum height
+        # Generate radical lines for nth root
+        # We need exactly 5 lines for a fraction:
+        # 1. Overline
+        # 2. Diagonal for numerator
+        # 3. Diagonal for fraction bar
+        # 4. Diagonal with underscore for denominator (where index goes)
+        # 5. Bottom tail
 
         lines = []
 
-        # Top line: overline with diagonal start
-        top_padding = formula_height + 1  # Space before the overline
-        overline = "⟋" + "─" * (formula_width + 4)
-        lines.append(" " * top_padding + overline)
-
-        # Middle diagonal lines
-        for i in range(1, formula_height - 2):
-            padding = formula_height + 1 - i
-            lines.append(" " * padding + "╱  ")
-
-        # Second to last line: connecting part
-        if formula_height > 2:
+        # Use the EXACT SAME structure as square root!
+        # For fraction height 3, we need 4 lines total with proper padding
+        if formula_height == 3:
+            height = 4  # height + 1 for the overline, same as sqrt
+            # Line 1: overline (padding = height + 1 = 5 spaces)
+            lines.append(" " * 5 + "⟋" + "─" * (formula_width + 4))
+            # Line 2: diagonal for numerator (padding = height + 1 - 1 = 4)
+            lines.append(" " * 4 + "╱  ")
+            # Line 3: underscore + diagonal (this is where index goes)
             lines.append("_  ╱  ")
+            # Line 4: bottom tail
+            lines.append(" \\╱  ")
+        else:
+            # For other heights, generate dynamically
+            radical_line_height = formula_height + 2
+            # Top line: overline with diagonal start
+            top_padding = radical_line_height - 1
+            overline = "⟋" + "─" * (formula_width + 4)
+            lines.append(" " * top_padding + overline)
 
-        # Last line: tail
-        lines.append(" \\╱  ")
+            # Generate diagonal lines
+            for i in range(1, radical_line_height):
+                padding = radical_line_height - 1 - i
+                if i == radical_line_height - 1:
+                    # Last line: tail at the bottom
+                    lines.append(" " * padding + "\\╱  ")
+                elif i == radical_line_height - 2:
+                    # Second to last line: connecting part with underscore
+                    lines.append("_" + " " * padding + "╱  ")
+                else:
+                    # Middle diagonal lines
+                    lines.append(" " * (padding + 1) + "╱  ")
 
         # Now prepend the index to the appropriate line
         # The index should go on the line with the underscore "_"
         modified_lines = []
         for i, line in enumerate(lines):
-            if i == len(lines) - 2:  # Second to last line (the one with "_")
-                # Prepend the index right before the underscore
-                modified_lines.append(index_text + line)
+            # Find the line that starts with underscore
+            if line.lstrip().startswith("_"):
+                # This is the line with underscore - add index here WITH A SPACE
+                # The underscore line has no leading spaces, so add one space before index
+                modified_lines.append(" " + index_text + line)
             else:
-                # Other lines need to be padded by index width
-                modified_lines.append(" " * index_width + line)
+                # Other lines need to be padded by index width + 1 for alignment
+                modified_lines.append(" " * (index_width + 1) + line)
 
         # Calculate total dimensions
         radical_width = max(len(line) for line in modified_lines) if modified_lines else 0
         total_width = max(radical_width, formula_width + 10 + index_width)
-        total_height = len(modified_lines)
+        # Ensure total height is at least tall enough for the radicand content
+        # The radicand starts at y_offset=1 (below the overline)
+        total_height = max(len(modified_lines), 1 + radicand.height)
         baseline = radicand.baseline + 1
 
         # Create result box
@@ -735,8 +759,12 @@ class MathMLParser:
                     result.set_char(x, y, char)
 
         # Place the formula content under the overline
-        # Content should start after the diagonal space AND index width
-        content_x_offset = formula_height + 3 + index_width  # Space for diagonal + index
+        # Use SAME offset logic as square root!
+        if formula_height == 3:
+            # sqrt uses formula_height + 3, we add index_width + 1 for the space
+            content_x_offset = 7 + index_width  # 4 + 3 for sqrt logic, adjusted for index placement
+        else:
+            content_x_offset = formula_height + 3 + index_width + 1  # Adjusted for index
         content_y_offset = 1  # Below the overline
 
         for y in range(radicand.height):

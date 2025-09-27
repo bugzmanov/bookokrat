@@ -1125,19 +1125,28 @@ impl MathMLParser {
 
             // Try to convert index to superscript
             if let Some(unicode_index) =
-                Self::try_unicode_superscript(&index_text, self.use_unicode) {
+                Self::try_unicode_superscript(&index_text, self.use_unicode)
+            {
                 // Use Unicode format: ³√x for cube root
-                return Ok(MathBox::new(&format!("{}√({})", unicode_index, radicand_text)));
+                return Ok(MathBox::new(&format!(
+                    "{}√({})",
+                    unicode_index, radicand_text
+                )));
             } else {
                 // Fallback to notation like: [3]√(x)
-                return Ok(MathBox::new(&format!("[{}]√({})", index_text, radicand_text)));
+                return Ok(MathBox::new(&format!(
+                    "[{}]√({})",
+                    index_text, radicand_text
+                )));
             }
         }
 
         // For multi-line expressions, create ASCII art with proper alignment
         let formula_width = radicand.width;
         let formula_height = radicand.height;
-        let index_text = index.content.iter()
+        let index_text = index
+            .content
+            .iter()
             .map(|row| row.iter().collect::<String>())
             .collect::<Vec<String>>()
             .join("")
@@ -1145,36 +1154,80 @@ impl MathMLParser {
             .to_string();
         let index_width = index_text.len();
 
-        // Generate radical lines similar to square root but with index
-        // For fractions, the height is already the full height of the content
-        // We need to generate radical lines that match this height
-
         let mut lines = Vec::new();
 
-        // Based on Python's logic: for height=3 (fraction), we get 3 lines total
-        // Top line: overline with diagonal start
-        let top_padding = formula_height + 1; // Space before the overline
-        let overline = format!("⟋{}", "─".repeat(formula_width + 4));
-        lines.push(format!("{}{}{}", " ".repeat(index_width), " ".repeat(top_padding), overline));
+        // Use the EXACT SAME structure as square root!
+        // For fraction height 3, we need 4 lines total with proper padding
+        if formula_height == 3 {
+            let height = 4; // height + 1 for the overline, same as sqrt
+            // Line 1: overline (padding = height + 1 = 5 spaces)
+            lines.push(format!(
+                "{}{}",
+                " ".repeat(5),
+                format!("⟋{}", "─".repeat(formula_width + 4))
+            ));
+            // Line 2: diagonal for numerator (padding = height + 1 - 1 = 4)
+            lines.push(format!("{}╱  ", " ".repeat(4)));
+            // Line 3: underscore + diagonal (this is where index goes)
+            lines.push("_  ╱  ".to_string());
+            // Line 4: bottom tail
+            lines.push(" \\╱  ".to_string());
+        } else {
+            // For other heights, generate dynamically
+            let radical_line_height = formula_height + 2;
+            // Top line: overline with diagonal start
+            let top_padding = radical_line_height - 1;
+            let overline = format!("⟋{}", "─".repeat(formula_width + 4));
+            lines.push(format!("{}{}", " ".repeat(top_padding), overline));
 
-        // For a fraction of height 3, we need one middle line
-        // Second line: index with underscore and diagonal
-        lines.push(format!("{}_  ╱  ", index_text));
+            // Generate diagonal lines
+            for i in 1..radical_line_height {
+                let padding = radical_line_height - 1 - i;
+                if i == radical_line_height - 1 {
+                    // Last line: tail at the bottom
+                    lines.push(format!("{}\\╱  ", " ".repeat(padding)));
+                } else if i == radical_line_height - 2 {
+                    // Second to last line: connecting part with underscore
+                    lines.push(format!("_{}╱  ", " ".repeat(padding)));
+                } else {
+                    // Middle diagonal lines
+                    lines.push(format!("{}╱  ", " ".repeat(padding + 1)));
+                }
+            }
+        }
 
-        // Last line: tail
-        lines.push(format!("{} \\╱  ", " ".repeat(index_width)));
+        // Now prepend the index to the appropriate line
+        // The index should go on the line with the underscore "_"
+        let mut modified_lines = Vec::new();
+        for line in lines.iter() {
+            // Find the line that starts with underscore
+            if line.trim_start().starts_with("_") {
+                // This is the line with underscore - add index here WITH A SPACE
+                // The underscore line has no leading spaces, so add one space before index
+                modified_lines.push(format!(" {}{}", index_text, line));
+            } else {
+                // Other lines need to be padded by index width + 1 for alignment
+                modified_lines.push(format!("{}{}", " ".repeat(index_width + 1), line));
+            }
+        }
 
         // Calculate total dimensions
-        let radical_width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let radical_width = modified_lines
+            .iter()
+            .map(|l| l.chars().count())
+            .max()
+            .unwrap_or(0);
         let total_width = radical_width.max(formula_width + 10 + index_width);
-        let total_height = lines.len();
-        let baseline = 1; // For a 3-line output, baseline is at line 1 (middle)
+        // Ensure total height is at least tall enough for the radicand content
+        // The radicand starts at y_offset=1 (below the overline)
+        let total_height = modified_lines.len().max(1 + radicand.height);
+        let baseline = radicand.baseline + 1;
 
         // Create result box
         let mut result = MathBox::create_empty(total_width, total_height, baseline);
 
         // Place the radical symbol with index
-        for (y, line) in lines.iter().enumerate() {
+        for (y, line) in modified_lines.iter().enumerate() {
             for (x, ch) in line.chars().enumerate() {
                 if x < total_width && ch != ' ' {
                     result.set_char(x, y, ch);
@@ -1182,43 +1235,27 @@ impl MathMLParser {
             }
         }
 
-        // Place the formula content alongside the radical lines
-        // Content starts after the radical symbols on lines 1 and 2
-        // The content x position is after the radical diagonal
-        let content_x_offset = 7 + index_width; // After "5_  ╱  " which is 7 chars after index
+        // Place the formula content under the overline
+        // Use SAME offset logic as square root!
+        let content_x_offset = if formula_height == 3 {
+            // sqrt uses formula_height + 3, we add index_width + 1 for the space
+            7 + index_width // 4 + 3 for sqrt logic, adjusted for index placement
+        } else {
+            formula_height + 3 + index_width + 1 // Adjusted for index
+        };
+        let content_y_offset = 1; // Below the overline
 
-        // Place numerator on line 1 (index 1)
-        if radicand.height >= 1 {
-            let numerator_line = if radicand.height == 3 {
-                // For fraction, first line is numerator
-                radicand.content[0].iter().collect::<String>()
-            } else {
-                String::new()
-            };
-            for (x, ch) in numerator_line.chars().enumerate() {
-                if content_x_offset + x < total_width {
-                    result.set_char(content_x_offset + x, 1, ch);
-                }
-            }
-        }
-
-        // Place denominator (fraction bar and bottom) on line 2 (index 2)
-        if radicand.height == 3 {
-            // Place fraction bar and denominator
-            let bar_and_denom = format!("{}\n{}",
-                "─".repeat(radicand.width),
-                radicand.content[2].iter().collect::<String>()
-            );
-
-            // Place the fraction bar
+        for y in 0..radicand.height {
             for x in 0..radicand.width {
-                if content_x_offset + x < total_width {
-                    result.set_char(content_x_offset + x, 2, '─');
+                let ch = radicand.get_char(x, y);
+                if ch != ' ' && ch != '\0' {
+                    let target_x = content_x_offset + x;
+                    let target_y = content_y_offset + y;
+                    if target_x < total_width && target_y < total_height {
+                        result.set_char(target_x, target_y, ch);
+                    }
                 }
             }
-
-            // Note: In the 3-line format, denominator goes below but we're out of lines
-            // So we need to adjust our approach
         }
 
         Ok(result)
@@ -2645,10 +2682,12 @@ RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
 </math>
         "#;
 
-        let expected = r#"     ⟋─────────
-5_  ╱  x + y
-  \╱   ─────"#;
+        let expected = r#"
+       ⟋─────────
+      ╱ x + y
+ 5_  ╱  ─────
+   \╱   z - 1"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
-        assert_multiline_eq(&result.trim(), &expected.trim());
+        assert_multiline_eq(&result.trim_start(), &expected.trim_start());
     }
 }
