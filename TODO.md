@@ -39,15 +39,10 @@ ideas to implement:
          - "Show me similar concepts in other books"
          - Cross-reference technical books automatically
 
-[ ] Bug clicking in subchapter triggers image reaload
-
-Intermittent issues
-    [ ] BUG: copy-paste copies wrong block & word selection(double click) and paragraph selection(triple click) got broken
-    
  - Search
      [x] Local to the chapter
      [x] Quick search with jumps in books and navigation panel
-     [ ] Global in the book
+     [x] Global in the book
      [ ] Global in the library
  - Code formatting & coloring. Goal: Manning books should be nice to read
  - logs/debug window
@@ -61,19 +56,15 @@ Intermittent issues
      - copy images to clipboard
  - Images in iterm and sixt protocol
  - integration with GOODREADS
- - ASCII art animation
-
-Ideas to properly try:
- - Markdown proper parsing instead of regexp (like in basalt)
-
+ - ASCII art Logo & animations (eye candy)
+ 
+ - tmux + tape = to get claude to the position i want it to get to 
 
 bugs: 
 ---------------------
-Nested chapter should have better representation (now they are treate like one blob) 
-Internal links is not supported yet
-ctrl+o - for opening is a bad idea, since this is usually "go back" in vim
-without code block support comments like # are translated to header
-
+[ ] Bug clicking in subchapter triggers image reaload
+[ ] Dynamic reschaling breaks double and tripple click text selection
+[ ] Currently reading chpater in TOC highlitning is seriously broken
 
 
 Tools with cool ratatui UI: 

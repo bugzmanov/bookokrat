@@ -794,8 +794,9 @@ impl TableOfContents {
             match item {
                 TocItem::Chapter { title, .. } => {
                     // Render a simple chapter
-                    let is_active = self.is_item_active(item, &current_book.active_section);
-                    let base_color = if is_active {
+                    let should_highlight =
+                        self.should_highlight_item(item, &current_book.active_section);
+                    let base_color = if should_highlight {
                         palette.base_08
                     } else {
                         text_color // Dimmer for other chapters
@@ -832,8 +833,9 @@ impl TableOfContents {
                 } => {
                     let section_icon = if *is_expanded { "⌄" } else { "›" };
 
-                    let is_active = self.is_item_active(item, &current_book.active_section);
-                    let base_color = if is_active {
+                    let should_highlight =
+                        self.should_highlight_item(item, &current_book.active_section);
+                    let base_color = if should_highlight {
                         palette.base_08
                     } else {
                         palette.base_0d // Blue for sections
@@ -882,6 +884,48 @@ impl TableOfContents {
 
             *toc_item_index += 1;
         }
+    }
+
+    /// Check if this item or any of its collapsed descendants contains the active section
+    /// This ensures that collapsed sections containing the active item get highlighted
+    fn should_highlight_item(&self, item: &TocItem, active_section: &ActiveSection) -> bool {
+        // First check if this exact item is active
+        if self.is_item_active(item, active_section) {
+            return true;
+        }
+
+        // If this is a collapsed section, check if any descendant would be active
+        if let TocItem::Section {
+            children,
+            is_expanded,
+            ..
+        } = item
+        {
+            if !is_expanded {
+                // Section is collapsed - check if active item is inside
+                return self.contains_active_item(children, active_section);
+            }
+        }
+
+        false
+    }
+
+    /// Recursively check if any item in the tree contains the active section
+    fn contains_active_item(&self, items: &[TocItem], active_section: &ActiveSection) -> bool {
+        for item in items {
+            // Check if this item is active
+            if self.is_item_active(item, active_section) {
+                return true;
+            }
+
+            // Recursively check children
+            if let TocItem::Section { children, .. } = item {
+                if self.contains_active_item(children, active_section) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Check if a TOC item is active based on the current active section
