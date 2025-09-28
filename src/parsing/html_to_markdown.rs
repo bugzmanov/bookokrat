@@ -417,6 +417,10 @@ impl HtmlToMarkdownConverter {
             "dl" => {
                 self.handle_definition_list(attrs, node, document);
             }
+            "hr" => {
+                // Add a thematic break (horizontal rule)
+                document.blocks.push(Node::new(Block::ThematicBreak, 0..0));
+            }
             // Skip li, dt, dd at this level - they're handled within their containers
             "li" | "dt" | "dd" => {}
             _ => {

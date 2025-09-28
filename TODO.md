@@ -15,7 +15,7 @@ ideas to implement:
              [x] external links
                 [ ] bug: link in tables is not clickable
              [x] internal links
-         [ ] Horizontal rule
+         [x] Horizontal rule
          [x] Headers
          [ ] Blockquote
          [x] tables support
