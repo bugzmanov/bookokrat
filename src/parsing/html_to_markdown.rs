@@ -417,6 +417,9 @@ impl HtmlToMarkdownConverter {
             "dl" => {
                 self.handle_definition_list(attrs, node, document);
             }
+            "blockquote" => {
+                self.handle_blockquote(attrs, node, document);
+            }
             "hr" => {
                 // Add a thematic break (horizontal rule)
                 document.blocks.push(Node::new(Block::ThematicBreak, 0..0));
@@ -1211,6 +1214,22 @@ impl HtmlToMarkdownConverter {
             };
             let definition_list_node = Node::new_with_id(definition_list_block, 0..0, id);
             document.blocks.push(definition_list_node);
+        }
+    }
+
+    fn handle_blockquote(
+        &mut self,
+        _attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        // Extract the content of the blockquote as blocks
+        let content = self.extract_container_blocks(node);
+
+        // Create a Quote block containing the extracted content
+        if !content.is_empty() {
+            let quote_block = Block::Quote { content };
+            document.blocks.push(Node::new(quote_block, 0..0));
         }
     }
 
