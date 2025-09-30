@@ -17,7 +17,7 @@ ideas to implement:
              [x] internal links
          [x] Horizontal rule
          [x] Headers
-         [c] Blockquote
+         [x] Blockquote
          [x] tables support
          [x] bold & italic 
          [x] lists

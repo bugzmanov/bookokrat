@@ -1137,19 +1137,9 @@ impl HtmlToMarkdownConverter {
     }
 
     fn extract_definition_content(&mut self, dd_node: &Rc<markup5ever_rcdom::Node>) -> Vec<Node> {
-        let mut content = self.extract_container_blocks(dd_node);
-
-        // Ensure we always return at least one block (even if empty)
-        if content.is_empty() {
-            content.push(Node::new(
-                Block::Paragraph {
-                    content: Text::default(),
-                },
-                0..0,
-            ));
-        }
-
-        content
+        // Extract blocks from definition element
+        // Note: Can return empty Vec - definition list items can have empty definitions
+        self.extract_container_blocks(dd_node)
     }
 
     fn handle_definition_list(
@@ -1308,15 +1298,7 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // If no content was extracted, create a default empty paragraph
-        if content.is_empty() {
-            content.push(Node::new(
-                Block::Paragraph {
-                    content: Text::default(),
-                },
-                0..0,
-            ));
-        }
+        // Note: EpubBlock can have empty content vector - no need to add default paragraph
 
         // Extract the id attribute from the HTML element with epub:type
         let id = self.get_attr_value(attrs, "id");
