@@ -95,12 +95,11 @@ impl RichSpan {
 
 pub enum ImageLoadState {
     NotLoaded,
-
+    Loading,
     Loaded {
         image: Arc<DynamicImage>,
         protocol: StatefulProtocol,
     },
-
     Failed {
         reason: String,
     },
@@ -314,6 +313,17 @@ impl MarkdownTextReader {
                 }
                 vec
             }
+            EpubBlock { content, .. } => {
+                let mut vec = Vec::new();
+                for inner_node in content {
+                    vec.append(&mut self.extract_images_from_node(
+                        inner_node,
+                        book_images,
+                        images_processed,
+                    ));
+                }
+                vec
+            }
             _ => Vec::new(),
         }
     }
@@ -331,9 +341,17 @@ impl MarkdownTextReader {
                 *images_processed += 1;
                 info!("Processing image #{}: {}", images_processed, url);
 
-                // Skip if already loaded
-                if self.embedded_images.borrow().contains_key(url) {
-                    continue;
+                // Skip if already loaded or currently loading
+                if let Some(embedded_img) = self.embedded_images.borrow().get(url) {
+                    match embedded_img.state {
+                        ImageLoadState::Loaded { .. } | ImageLoadState::Loading => {
+                            debug!("Skipping image {} - already loaded or loading", url);
+                            continue;
+                        }
+                        ImageLoadState::NotLoaded | ImageLoadState::Failed { .. } => {
+                            // Need to (re)load this image
+                        }
+                    }
                 }
 
                 // Try to get image dimensions from book images with chapter context
@@ -2074,7 +2092,7 @@ impl MarkdownTextReader {
                 let status = match &embedded_image.state {
                     ImageLoadState::Loaded { .. } => LoadingStatus::Loaded,
                     ImageLoadState::Failed { .. } => LoadingStatus::Failed,
-                    ImageLoadState::NotLoaded => LoadingStatus::Loading,
+                    ImageLoadState::NotLoaded | ImageLoadState::Loading => LoadingStatus::Loading,
                 };
                 (height, status)
             } else {
@@ -2737,11 +2755,18 @@ impl TextReaderTrait for MarkdownTextReader {
                     let font_size = picker.font_size();
                     let (cell_width, cell_height) = (font_size.0, font_size.1);
                     self.background_loader.start_loading(
-                        images_to_load,
+                        images_to_load.clone(),
                         book_images,
                         cell_width,
                         cell_height,
                     );
+                    // Mark all images as loading
+                    for (img_src, _) in images_to_load.iter() {
+                        if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img_src)
+                        {
+                            img_state.state = ImageLoadState::Loading;
+                        }
+                    }
                 } else {
                     for (img, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {

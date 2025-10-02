@@ -65,7 +65,7 @@ bugs:
 [ ] Bug clicking in subchapter triggers image reaload
 [ ] Dynamic reschaling breaks double and tripple click text selection
 [ ] Currently reading chpater in TOC highlitning is seriously broken
-
+[ ] Code block selection with mouse selects wrong lines
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt
