@@ -27,6 +27,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tui_textarea::{Input, Key, TextArea};
 
 /// Pre-processed rendering structure
 struct RenderedContent {
@@ -237,6 +238,12 @@ pub struct MarkdownTextReader {
     /// Pre-built comment lookup for current chapter (paragraph_index -> Vec<Comment>)
     /// Built once when chapter is loaded to avoid repeated lookups during rendering
     current_chapter_comments: HashMap<usize, Vec<Comment>>,
+
+    /// Comment input state
+    comment_input_active: bool,
+    comment_textarea: Option<TextArea<'static>>,
+    comment_target_node_index: Option<usize>, // The node index where comment will be attached
+    comment_target_line: Option<usize>,       // The visual line where textarea should appear
 }
 
 /// Represents the active section being read
@@ -494,7 +501,132 @@ impl MarkdownTextReader {
             last_active_anchor: None,
             book_comments: None,
             current_chapter_comments: HashMap::new(),
+            comment_input_active: false,
+            comment_textarea: None,
+            comment_target_node_index: None,
+            comment_target_line: None,
         }
+    }
+
+    pub fn start_comment_input(&mut self) -> bool {
+        if !self.has_text_selection() {
+            return false;
+        }
+
+        if let Some((start, _end)) = self.text_selection.get_selection_range() {
+            let visual_line = start.line;
+
+            let mut node_index = None;
+            for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+                if idx == visual_line {
+                    node_index = line.node_index;
+                    break;
+                }
+            }
+
+            if let Some(node_idx) = node_index {
+                let mut last_line_of_node = visual_line;
+                for (idx, line) in self
+                    .rendered_content
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .skip(visual_line)
+                {
+                    if let Some(line_node_idx) = line.node_index {
+                        if line_node_idx != node_idx {
+                            break;
+                        }
+                    }
+                    last_line_of_node = idx;
+                }
+
+                let mut textarea = TextArea::default();
+                textarea.set_placeholder_text("Type your comment here...");
+
+                self.comment_input_active = true;
+                self.comment_textarea = Some(textarea);
+                self.comment_target_node_index = Some(node_idx);
+                self.comment_target_line = Some(last_line_of_node + 1);
+
+                self.text_selection.clear_selection();
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Handle input events when in comment mode
+    pub fn handle_comment_input(&mut self, input: Input) -> bool {
+        if !self.comment_input_active {
+            return false;
+        }
+
+        if let Some(textarea) = &mut self.comment_textarea {
+            match input {
+                Input { key: Key::Esc, .. } => {
+                    // Save the comment and exit comment mode
+                    self.save_comment();
+                    return true;
+                }
+                _ => {
+                    // Pass the input to the textarea
+                    textarea.input(input);
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn save_comment(&mut self) {
+        if let Some(textarea) = &self.comment_textarea {
+            let comment_text = textarea.lines().join("\n");
+
+            if !comment_text.trim().is_empty() {
+                if let Some(node_idx) = self.comment_target_node_index {
+                    if let Some(chapter_file) = &self.current_chapter_file {
+                        if let Some(comments_arc) = &self.book_comments {
+                            if let Ok(mut comments) = comments_arc.lock() {
+                                use chrono::Utc;
+
+                                let comment = Comment {
+                                    chapter_href: chapter_file.clone(),
+                                    paragraph_index: node_idx,
+                                    word_range: None, // For now, comment on whole paragraph
+                                    content: comment_text.clone(),
+                                    updated_at: Utc::now(),
+                                };
+
+                                if let Err(e) = comments.add_comment(comment) {
+                                    warn!("Failed to add comment: {}", e);
+                                } else {
+                                    debug!("Saved comment for node {}: {}", node_idx, comment_text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.rebuild_chapter_comments();
+
+        // Clear comment input state AFTER rebuilding so the re-render doesn't try to show textarea
+        self.comment_input_active = false;
+        self.comment_textarea = None;
+        self.comment_target_node_index = None;
+        self.comment_target_line = None;
+
+        self.cache_generation += 1;
+        debug!("Invalidated render cache");
+    }
+
+    /// Check if we're currently in comment input mode
+    pub fn is_comment_input_active(&self) -> bool {
+        self.comment_input_active
     }
 
     fn render_document_to_lines(
@@ -507,7 +639,8 @@ impl MarkdownTextReader {
         let mut lines = Vec::new();
         let mut total_height = 0;
 
-        // Clear previous anchor positions
+        // Clear previous state before re-rendering
+        self.raw_text_lines.clear();
         self.anchor_positions.clear();
 
         // Iterate through all blocks in the document
@@ -540,27 +673,21 @@ impl MarkdownTextReader {
         }
     }
 
-    /// Extract and track anchors from a node before rendering
     fn extract_and_track_anchors_from_node(&mut self, node: &Node, current_line: usize) {
-        // First, check if this node has an HTML ID attribute stored
         if let Some(html_id) = &node.id {
             self.anchor_positions.insert(html_id.clone(), current_line);
         }
 
-        // For headings, also generate the text-based anchor as fallback for compatibility
         match &node.block {
             MarkdownBlock::Heading { content, .. } => {
-                // Only generate text-based anchor if no HTML ID was present
                 if node.id.is_none() {
                     let heading_text = self.text_to_string(content);
                     let anchor_id = self.generate_heading_anchor(&heading_text);
                     self.anchor_positions.insert(anchor_id, current_line);
                 }
-                // Also extract inline anchors from heading content
                 self.extract_inline_anchors_from_text(content, current_line);
             }
             MarkdownBlock::Paragraph { content } => {
-                // Extract inline anchors from paragraph content
                 self.extract_inline_anchors_from_text(content, current_line);
             }
             _ => {}
@@ -588,25 +715,6 @@ impl MarkdownTextReader {
                 }
                 _ => {}
             }
-        }
-    }
-
-    /// Helper to create a RenderedLine with node index
-    fn create_rendered_line(
-        spans: Vec<Span<'static>>,
-        raw_text: String,
-        line_type: LineType,
-        link_nodes: Vec<LinkInfo>,
-        node_anchor: Option<String>,
-        node_index: Option<usize>,
-    ) -> RenderedLine {
-        RenderedLine {
-            spans,
-            raw_text,
-            line_type,
-            link_nodes,
-            node_anchor,
-            node_index,
         }
     }
 
@@ -911,16 +1019,13 @@ impl MarkdownTextReader {
         _is_focused: bool,
         indent: usize,
     ) {
-        // Format comment with metadata - more subtle
+        debug!("rendering comments!");
         let comment_header = format!("Note // {}", comment.updated_at.format("%m-%d-%y %H:%M"));
 
-        // Render the header
         lines.push(RenderedLine {
             spans: vec![Span::styled(
-                comment_header,
-                RatatuiStyle::default()
-                    .fg(palette.base_0e) // Gray color for metadata
-                    .add_modifier(Modifier::ITALIC),
+                comment_header.clone(),
+                RatatuiStyle::default().fg(palette.base_0e), // Purple text color
             )],
             raw_text: String::new(),
             line_type: LineType::Text,
@@ -928,38 +1033,28 @@ impl MarkdownTextReader {
             node_anchor: None,
             node_index: None,
         });
-        self.raw_text_lines.push(String::new());
+        self.raw_text_lines.push(comment_header);
         *total_height += 1;
 
-        // Render the comment content as quoted text
         let quote_prefix = "> ";
         let effective_width = width.saturating_sub(indent + quote_prefix.len());
 
-        // Wrap the comment content
         let wrapped_lines = textwrap::wrap(&comment.content, effective_width);
 
         for line in wrapped_lines {
-            let quoted_line = format!("{}{}", " ".repeat(indent), quote_prefix);
+            let quoted_line = format!("{}{}{}", " ".repeat(indent), quote_prefix, line);
             lines.push(RenderedLine {
-                spans: vec![
-                    Span::styled(
-                        quoted_line,
-                        RatatuiStyle::default().fg(palette.base_0e), // Gray color for quote marker
-                    ),
-                    Span::styled(
-                        line.to_string(),
-                        RatatuiStyle::default()
-                            .fg(palette.base_0e) // Regular text color
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ],
+                spans: vec![Span::styled(
+                    quoted_line.clone(),
+                    RatatuiStyle::default().fg(palette.base_0e), // Purple text color
+                )],
                 raw_text: line.to_string(),
                 line_type: LineType::Text,
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
             });
-            self.raw_text_lines.push(line.to_string());
+            self.raw_text_lines.push(quoted_line);
             *total_height += 1;
         }
 
@@ -1045,12 +1140,9 @@ impl MarkdownTextReader {
             *total_height += 1;
         }
 
-        // Check for comments on this paragraph - use pre-built lookup (no locks, no checks!)
         if let Some(node_idx) = node_index {
-            // Clone the comments to avoid borrow issues
             let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
             if let Some(paragraph_comments) = comments_to_render {
-                // Comments are already here, just render them
                 for comment in paragraph_comments {
                     self.render_comment_as_quote(
                         &comment,
@@ -2524,6 +2616,37 @@ impl VimNavMotions for MarkdownTextReader {
 }
 
 impl MarkdownTextReader {
+    /// Debug method to copy raw_text_lines with line numbers to clipboard
+    pub fn copy_raw_text_lines_to_clipboard(&self) -> Result<(), String> {
+        if self.raw_text_lines.is_empty() {
+            return Err("No content to copy".to_string());
+        }
+
+        // Create a debug output with line numbers
+        let mut debug_output = String::new();
+        debug_output.push_str(&format!(
+            "=== raw_text_lines debug (total {} lines) ===\n",
+            self.raw_text_lines.len()
+        ));
+
+        for (idx, line) in self.raw_text_lines.iter().enumerate() {
+            debug_output.push_str(&format!("{:4}: {}\n", idx, line));
+        }
+
+        use arboard::Clipboard;
+        let mut clipboard =
+            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+        clipboard
+            .set_text(debug_output)
+            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+
+        debug!(
+            "Copied raw_text_lines debug info to clipboard ({} lines)",
+            self.raw_text_lines.len()
+        );
+        Ok(())
+    }
+
     /// Actually perform the node restoration (called after rendering)
     fn perform_node_restore(&mut self, node_index: usize) {
         info!(
@@ -3151,7 +3274,37 @@ impl TextReaderTrait for MarkdownTextReader {
             palette.base_01
         };
 
+        // Check if we need to insert space for comment textarea
+        let mut textarea_lines_to_insert = 0;
+        let mut textarea_insert_position = None;
+
+        if self.comment_input_active {
+            if let Some(target_line) = self.comment_target_line {
+                if target_line >= self.scroll_offset && target_line < end_offset {
+                    textarea_insert_position = Some(target_line);
+
+                    let content_lines = if let Some(ref textarea) = self.comment_textarea {
+                        textarea.lines().len()
+                    } else {
+                        0
+                    };
+
+                    let min_lines = 3;
+                    let actual_content_lines = content_lines.max(min_lines);
+                    textarea_lines_to_insert = actual_content_lines + 2;
+                }
+            }
+        }
+
         for line_idx in self.scroll_offset..end_offset {
+            if let Some(insert_pos) = textarea_insert_position {
+                if line_idx == insert_pos {
+                    for _ in 0..textarea_lines_to_insert {
+                        visible_lines.push(Line::from(""));
+                    }
+                }
+            }
+
             if let Some(rendered_line) = self.rendered_content.lines.get(line_idx) {
                 let visual_line_idx = line_idx - self.scroll_offset;
 
@@ -3168,9 +3321,7 @@ impl TextReaderTrait for MarkdownTextReader {
                         false
                     };
 
-                // Skip rendering placeholder lines if the actual image is loaded
                 if skip_placeholder {
-                    // Add empty line instead of placeholder
                     visible_lines.push(Line::from(""));
                     continue;
                 }
@@ -3340,7 +3491,73 @@ impl TextReaderTrait for MarkdownTextReader {
             }
         }
 
-        // Text selection is already handled via apply_selection_highlighting in the visible_lines loop
+        if self.comment_input_active {
+            if let Some(ref mut textarea) = self.comment_textarea {
+                if let Some(target_line) = self.comment_target_line {
+                    if target_line >= self.scroll_offset
+                        && target_line < self.scroll_offset + self.visible_height
+                    {
+                        let visual_position = target_line - self.scroll_offset;
+
+                        let textarea_y = inner_area.y + visual_position as u16;
+
+                        if textarea_y < inner_area.y + inner_area.height {
+                            // Calculate dynamic height based on content (same as above)
+                            let content_lines = textarea.lines().len();
+                            let min_lines = 3;
+                            let actual_content_lines = content_lines.max(min_lines);
+                            // Add 2 for borders
+                            let desired_height = (actual_content_lines + 2) as u16;
+
+                            // Make sure it fits in the available space
+                            let textarea_height =
+                                desired_height.min(inner_area.y + inner_area.height - textarea_y);
+
+                            let textarea_rect = Rect {
+                                x: inner_area.x, // Use full width
+                                y: textarea_y,
+                                width: inner_area.width, // Full width
+                                height: textarea_height,
+                            };
+
+                            let clear_block =
+                                Block::default().style(RatatuiStyle::default().bg(palette.base_00));
+                            frame.render_widget(clear_block, textarea_rect);
+
+                            let padded_rect = Rect {
+                                x: inner_area.x + 2,
+                                y: textarea_y,
+                                width: inner_area.width.saturating_sub(4),
+                                height: textarea_height,
+                            };
+
+                            textarea.set_style(
+                                RatatuiStyle::default()
+                                    .fg(palette.base_05)
+                                    .bg(palette.base_00),
+                            );
+                            textarea.set_cursor_style(
+                                RatatuiStyle::default()
+                                    .fg(palette.base_00)
+                                    .bg(palette.base_05),
+                            );
+
+                            let block = Block::default()
+                                .borders(Borders::ALL)
+                                .title(" Add Comment ")
+                                .style(
+                                    RatatuiStyle::default()
+                                        .fg(palette.base_04)
+                                        .bg(palette.base_00),
+                                );
+                            textarea.set_block(block);
+
+                            frame.render_widget(&*textarea, padded_rect);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fn get_last_content_area(&self) -> Option<Rect> {

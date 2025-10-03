@@ -2187,7 +2187,7 @@ impl App {
                 }
             }
         } else if self.text_reader.has_text_selection() {
-            "c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
+            "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::FileList) => {
@@ -2325,6 +2325,18 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " z" => {
+                // Handle Space->z to copy raw_text_lines for debugging
+                if self.is_main_panel(MainPanel::Content) {
+                    if let Err(e) = self.text_reader.copy_raw_text_lines_to_clipboard() {
+                        debug!("Copy raw_text_lines failed: {}", e);
+                    } else {
+                        debug!("Successfully copied raw_text_lines to clipboard for debugging");
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             " c" => {
                 // Handle Space->c to copy entire chapter content
                 if self.is_main_panel(MainPanel::Content) {
@@ -2384,6 +2396,105 @@ impl App {
         screen_height: Option<usize>,
     ) {
         use crossterm::event::{KeyCode, KeyModifiers};
+
+        // If comment input is active, route all input to the text area
+        if self.text_reader.is_comment_input_active() {
+            use tui_textarea::{Input, Key as TextAreaKey};
+
+            // Convert crossterm key to tui_textarea input
+            let textarea_input = match key.code {
+                KeyCode::Char(c) => Input {
+                    key: TextAreaKey::Char(c),
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Backspace => Input {
+                    key: TextAreaKey::Backspace,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Enter => Input {
+                    key: TextAreaKey::Enter,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Left => Input {
+                    key: TextAreaKey::Left,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Right => Input {
+                    key: TextAreaKey::Right,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Up => Input {
+                    key: TextAreaKey::Up,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Down => Input {
+                    key: TextAreaKey::Down,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Tab => Input {
+                    key: TextAreaKey::Tab,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Delete => Input {
+                    key: TextAreaKey::Delete,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Home => Input {
+                    key: TextAreaKey::Home,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::End => Input {
+                    key: TextAreaKey::End,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::PageUp => Input {
+                    key: TextAreaKey::PageUp,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::PageDown => Input {
+                    key: TextAreaKey::PageDown,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                KeyCode::Esc => Input {
+                    key: TextAreaKey::Esc,
+                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
+                    alt: key.modifiers.contains(KeyModifiers::ALT),
+                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
+                },
+                _ => return, // Ignore other keys
+            };
+
+            // Pass the input to the text reader's comment handler
+            if self.text_reader.handle_comment_input(textarea_input) {
+                return;
+            }
+        }
 
         // If image popup is shown, close it on any key press
         if matches!(
@@ -2923,6 +3034,14 @@ impl App {
                     self.text_reader.handle_upper_g();
                 }
             }
+            KeyCode::Char('a') => {
+                // 'a' starts comment input if text is selected
+                if self.text_reader.has_text_selection() {
+                    if self.text_reader.start_comment_input() {
+                        debug!("Started comment input mode");
+                    }
+                }
+            }
             KeyCode::Char('c') => {
                 // Check if this completes a key sequence (space-c for copy chapter)
                 if !self.handle_key_sequence('c') {
@@ -2930,6 +3049,12 @@ impl App {
                     if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
                         debug!("Copy failed: {}", e);
                     }
+                }
+            }
+            KeyCode::Char('z') => {
+                // Check if this completes a key sequence (space-z for raw_text_lines)
+                if !self.handle_key_sequence('z') {
+                    // 'z' by itself doesn't do anything
                 }
             }
             KeyCode::Esc => {

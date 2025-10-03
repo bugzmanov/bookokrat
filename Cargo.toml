@@ -47,6 +47,7 @@ fuzzy-matcher = "0.3"
 serde_yaml = "0.9"
 md5 = "0.7"
 dirs = "5.0"
+tui-textarea = "0.7"
 
 [dev-dependencies]
 bookrat = { path = ".", features = ["test-utils"] }
