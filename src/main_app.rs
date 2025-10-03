@@ -2,6 +2,7 @@ use crate::book_manager::BookManager;
 use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::BookStat;
 use crate::bookmarks::Bookmarks;
+use crate::comments::BookComments;
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
@@ -573,6 +574,24 @@ impl App {
 
         // Initialize search engine for the book
         self.initialize_search_engine(&mut doc);
+
+        // Initialize book comments
+        let path_buf_for_comments = path_buf.clone();
+        match BookComments::new(&path_buf_for_comments) {
+            Ok(comments) => {
+                let comm_path = &comments.file_path.clone();
+                let comm_size = comments.get_all_comments().len();
+                let comments_arc = Arc::new(Mutex::new(comments));
+                self.text_reader.set_book_comments(comments_arc);
+                info!(
+                    "Initialized book comments for: {} from {:?} size {}",
+                    path, &comm_path, comm_size
+                );
+            }
+            Err(e) => {
+                warn!("Failed to initialize book comments: {}", e);
+            }
+        }
 
         // Variables to store position to restore after content is loaded
         let mut scroll_to_restore = 0;

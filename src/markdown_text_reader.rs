@@ -1,3 +1,4 @@
+use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::images::book_images::BookImages;
 use crate::images::image_placeholder::{ImagePlaceholder, ImagePlaceholderConfig, LoadingStatus};
@@ -24,7 +25,7 @@ use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, StatefulImage, picker::Picker};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Pre-processed rendering structure
@@ -229,6 +230,13 @@ pub struct MarkdownTextReader {
 
     /// Last active anchor for maintaining continuous highlighting
     last_active_anchor: Option<String>,
+
+    /// Book comments to display alongside paragraphs
+    book_comments: Option<Arc<Mutex<BookComments>>>,
+
+    /// Pre-built comment lookup for current chapter (paragraph_index -> Vec<Comment>)
+    /// Built once when chapter is loaded to avoid repeated lookups during rendering
+    current_chapter_comments: HashMap<usize, Vec<Comment>>,
 }
 
 /// Represents the active section being read
@@ -400,6 +408,31 @@ impl MarkdownTextReader {
         images_to_load
     }
 
+    pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
+        self.book_comments = Some(comments);
+        self.rebuild_chapter_comments();
+    }
+
+    /// Rebuild the comment lookup for the current chapter
+    /// Called when chapter changes or comments are updated
+    fn rebuild_chapter_comments(&mut self) {
+        self.current_chapter_comments.clear();
+
+        if let Some(chapter_file) = &self.current_chapter_file {
+            if let Some(comments_arc) = &self.book_comments {
+                if let Ok(comments) = comments_arc.lock() {
+                    // Get all comments for this chapter and group by paragraph index
+                    for comment in comments.get_chapter_comments(chapter_file) {
+                        self.current_chapter_comments
+                            .entry(comment.paragraph_index)
+                            .or_insert_with(Vec::new)
+                            .push(comment.clone());
+                    }
+                }
+            }
+        }
+    }
+
     pub fn new() -> Self {
         // Initialize image picker exactly like in TextReader
         let image_picker = match Picker::from_query_stdio() {
@@ -459,6 +492,8 @@ impl MarkdownTextReader {
             search_state: SearchState::new(),
             pending_anchor_scroll: None,
             last_active_anchor: None,
+            book_comments: None,
+            current_chapter_comments: HashMap::new(),
         }
     }
 
@@ -617,6 +652,7 @@ impl MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
+                    node_index,
                 );
             }
 
@@ -865,6 +901,81 @@ impl MarkdownTextReader {
         *total_height += 1;
     }
 
+    fn render_comment_as_quote(
+        &mut self,
+        comment: &Comment,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        _is_focused: bool,
+        indent: usize,
+    ) {
+        // Format comment with metadata - more subtle
+        let comment_header = format!("Note // {}", comment.updated_at.format("%m-%d-%y %H:%M"));
+
+        // Render the header
+        lines.push(RenderedLine {
+            spans: vec![Span::styled(
+                comment_header,
+                RatatuiStyle::default()
+                    .fg(palette.base_0e) // Gray color for metadata
+                    .add_modifier(Modifier::ITALIC),
+            )],
+            raw_text: String::new(),
+            line_type: LineType::Text,
+            link_nodes: vec![],
+            node_anchor: None,
+            node_index: None,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+
+        // Render the comment content as quoted text
+        let quote_prefix = "> ";
+        let effective_width = width.saturating_sub(indent + quote_prefix.len());
+
+        // Wrap the comment content
+        let wrapped_lines = textwrap::wrap(&comment.content, effective_width);
+
+        for line in wrapped_lines {
+            let quoted_line = format!("{}{}", " ".repeat(indent), quote_prefix);
+            lines.push(RenderedLine {
+                spans: vec![
+                    Span::styled(
+                        quoted_line,
+                        RatatuiStyle::default().fg(palette.base_0e), // Gray color for quote marker
+                    ),
+                    Span::styled(
+                        line.to_string(),
+                        RatatuiStyle::default()
+                            .fg(palette.base_0e) // Regular text color
+                            .add_modifier(Modifier::ITALIC),
+                    ),
+                ],
+                raw_text: line.to_string(),
+                line_type: LineType::Text,
+                link_nodes: vec![],
+                node_anchor: None,
+                node_index: None,
+            });
+            self.raw_text_lines.push(line.to_string());
+            *total_height += 1;
+        }
+
+        // Add empty line after comment
+        lines.push(RenderedLine {
+            spans: vec![Span::raw("")],
+            raw_text: String::new(),
+            line_type: LineType::Empty,
+            link_nodes: vec![],
+            node_anchor: None,
+            node_index: None,
+        });
+        self.raw_text_lines.push(String::new());
+        *total_height += 1;
+    }
+
     fn render_paragraph(
         &mut self,
         content: &MarkdownText,
@@ -874,6 +985,7 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
+        node_index: Option<usize>,
     ) {
         // First, check if this paragraph contains any images and separate them
         let mut current_rich_spans = Vec::new();
@@ -931,6 +1043,26 @@ impl MarkdownTextReader {
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
+        }
+
+        // Check for comments on this paragraph - use pre-built lookup (no locks, no checks!)
+        if let Some(node_idx) = node_index {
+            // Clone the comments to avoid borrow issues
+            let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
+            if let Some(paragraph_comments) = comments_to_render {
+                // Comments are already here, just render them
+                for comment in paragraph_comments {
+                    self.render_comment_as_quote(
+                        &comment,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        is_focused,
+                        indent,
+                    );
+                }
+            }
         }
     }
 
@@ -3241,6 +3373,8 @@ impl TextReaderTrait for MarkdownTextReader {
 
     fn set_current_chapter_file(&mut self, chapter_file: Option<String>) {
         self.current_chapter_file = chapter_file;
+        // Rebuild comment lookup when chapter changes
+        self.rebuild_chapter_comments();
     }
 
     fn get_current_chapter_file(&self) -> &Option<String> {

@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -28,9 +29,10 @@ impl Comment {
 }
 
 pub struct BookComments {
-    file_path: PathBuf,
+    pub file_path: PathBuf,
     comments: Vec<Comment>,
-    comments_by_chapter: HashMap<String, Vec<usize>>,
+    // Efficient two-level lookup: chapter_href -> paragraph_index -> comment indices
+    comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
 }
 
 impl BookComments {
@@ -61,7 +63,7 @@ impl BookComments {
         let mut book_comments = Self {
             file_path,
             comments: Vec::new(),
-            comments_by_chapter: HashMap::new(),
+            comments_by_location: HashMap::new(),
         };
 
         for comment in comments {
@@ -122,10 +124,28 @@ impl BookComments {
         self.save_to_disk()
     }
 
-    pub fn get_chapter_comments(&self, chapter_href: &str) -> Vec<&Comment> {
-        self.comments_by_chapter
+    /// Efficiently get comments for a specific paragraph in a chapter
+    pub fn get_paragraph_comments(
+        &self,
+        chapter_href: &str,
+        paragraph_index: usize,
+    ) -> Vec<&Comment> {
+        self.comments_by_location
             .get(chapter_href)
+            .and_then(|chapter_map| chapter_map.get(&paragraph_index))
             .map(|indices| indices.iter().map(|&i| &self.comments[i]).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn get_chapter_comments(&self, chapter_href: &str) -> Vec<&Comment> {
+        self.comments_by_location
+            .get(chapter_href)
+            .map(|chapter_map| {
+                chapter_map
+                    .values()
+                    .flat_map(|indices| indices.iter().map(|&i| &self.comments[i]))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -134,22 +154,30 @@ impl BookComments {
     }
 
     fn compute_book_hash(book_path: &Path) -> String {
-        let path_str = book_path.to_string_lossy();
-        let digest = md5::compute(path_str.as_bytes());
+        // Use only the filename, not the full path
+        let filename = book_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_else(|| {
+                // Fallback: use the full path if we can't get the filename
+                book_path.to_str().unwrap_or("unknown")
+            });
+
+        let digest = md5::compute(filename.as_bytes());
         format!("{:x}", digest)
     }
 
     fn get_comments_dir() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .context("Could not determine config directory")?
-            .join("bookrat")
-            .join("comments");
+        // Use current directory instead of config directory
+        let comments_dir = std::env::current_dir()
+            .context("Could not determine current directory")?
+            .join(".bookrat_comments");
 
-        if !config_dir.exists() {
-            fs::create_dir_all(&config_dir).context("Failed to create comments directory")?;
+        if !comments_dir.exists() {
+            fs::create_dir_all(&comments_dir).context("Failed to create comments directory")?;
         }
 
-        Ok(config_dir)
+        Ok(comments_dir)
     }
 
     fn load_from_file(file_path: &Path) -> Result<Vec<Comment>> {
@@ -183,17 +211,21 @@ impl BookComments {
 
     fn add_to_indices(&mut self, comment: &Comment) {
         let idx = self.comments.len();
-        self.comments_by_chapter
+        self.comments_by_location
             .entry(comment.chapter_href.clone())
+            .or_insert_with(HashMap::new)
+            .entry(comment.paragraph_index)
             .or_insert_with(Vec::new)
             .push(idx);
     }
 
     fn rebuild_indices(&mut self) {
-        self.comments_by_chapter.clear();
+        self.comments_by_location.clear();
         for (idx, comment) in self.comments.iter().enumerate() {
-            self.comments_by_chapter
+            self.comments_by_location
                 .entry(comment.chapter_href.clone())
+                .or_insert_with(HashMap::new)
+                .entry(comment.paragraph_index)
                 .or_insert_with(Vec::new)
                 .push(idx);
         }
