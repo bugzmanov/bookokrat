@@ -68,6 +68,11 @@ enum LineType {
     },
     HorizontalRule,
     Empty,
+    Comment {
+        chapter_href: String,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    },
 }
 
 /// Span that may contain link information
@@ -629,6 +634,50 @@ impl MarkdownTextReader {
         self.comment_input_active
     }
 
+    /// Get comment ID from current text selection
+    /// Returns the comment ID if any line in the selection is a comment line
+    pub fn get_comment_at_cursor(&self) -> Option<(String, usize, Option<(usize, usize)>)> {
+        if let Some((start, end)) = self.text_selection.get_selection_range() {
+            // Check all lines in the selection range
+            for line_idx in start.line..=end.line {
+                if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                    if let LineType::Comment {
+                        chapter_href,
+                        paragraph_index,
+                        word_range,
+                    } = &line.line_type
+                    {
+                        return Some((chapter_href.clone(), *paragraph_index, *word_range));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Delete comment at current selection
+    /// Returns true if a comment was deleted
+    pub fn delete_comment_at_cursor(&mut self) -> anyhow::Result<bool> {
+        if let Some((chapter_href, paragraph_index, word_range)) = self.get_comment_at_cursor() {
+            if let Some(comments_arc) = &self.book_comments {
+                let mut comments = comments_arc.lock().unwrap();
+                comments.delete_comment(&chapter_href, paragraph_index, word_range)?;
+
+                drop(comments);
+                self.rebuild_chapter_comments();
+
+                self.cache_generation += 1;
+
+                self.text_selection.clear_selection();
+
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
     fn render_document_to_lines(
         &mut self,
         doc: &Document,
@@ -638,6 +687,20 @@ impl MarkdownTextReader {
     ) -> RenderedContent {
         let mut lines = Vec::new();
         let mut total_height = 0;
+
+        // Debug assertion: raw_text_lines should be empty or we're accumulating garbage
+        #[cfg(debug_assertions)]
+        {
+            let old_count = self.raw_text_lines.len();
+            if old_count > 0 {
+                // This would have caused the bug - accumulating lines on re-render
+                debug_assert!(
+                    false,
+                    "BUG: raw_text_lines not cleared before render! Had {} old lines",
+                    old_count
+                );
+            }
+        }
 
         // Clear previous state before re-rendering
         self.raw_text_lines.clear();
@@ -664,6 +727,35 @@ impl MarkdownTextReader {
         self.links.clear();
         for rendered_line in &lines {
             self.links.extend(rendered_line.link_nodes.clone());
+        }
+
+        // Debug assertions to verify state consistency
+        #[cfg(debug_assertions)]
+        {
+            // Assert that raw_text_lines count matches non-empty lines in rendered content
+            let non_empty_lines = lines
+                .iter()
+                .filter(|l| !matches!(l.line_type, LineType::Empty))
+                .count();
+
+            // raw_text_lines should have roughly the same count as non-empty rendered lines
+            // (some types like HorizontalRule might not add to raw_text_lines)
+            let diff = (self.raw_text_lines.len() as i32 - non_empty_lines as i32).abs();
+            debug_assert!(
+                diff < 100, // Allow some difference for special line types
+                "raw_text_lines has {} lines but rendered content has {} non-empty lines - mismatch!",
+                self.raw_text_lines.len(),
+                non_empty_lines
+            );
+
+            // Assert lines and raw_text_lines are not empty if document has content
+            if !doc.blocks.is_empty() {
+                debug_assert!(
+                    !lines.is_empty(),
+                    "Rendered lines is empty despite document having {} blocks",
+                    doc.blocks.len()
+                );
+            }
         }
 
         RenderedContent {
@@ -1028,7 +1120,11 @@ impl MarkdownTextReader {
                 RatatuiStyle::default().fg(palette.base_0e), // Purple text color
             )],
             raw_text: String::new(),
-            line_type: LineType::Text,
+            line_type: LineType::Comment {
+                chapter_href: comment.chapter_href.clone(),
+                paragraph_index: comment.paragraph_index,
+                word_range: comment.word_range,
+            },
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
@@ -1049,7 +1145,11 @@ impl MarkdownTextReader {
                     RatatuiStyle::default().fg(palette.base_0e), // Purple text color
                 )],
                 raw_text: line.to_string(),
-                line_type: LineType::Text,
+                line_type: LineType::Comment {
+                    chapter_href: comment.chapter_href.clone(),
+                    paragraph_index: comment.paragraph_index,
+                    word_range: comment.word_range,
+                },
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
@@ -1062,7 +1162,11 @@ impl MarkdownTextReader {
         lines.push(RenderedLine {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
-            line_type: LineType::Empty,
+            line_type: LineType::Comment {
+                chapter_href: comment.chapter_href.clone(),
+                paragraph_index: comment.paragraph_index,
+                word_range: comment.word_range,
+            },
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,

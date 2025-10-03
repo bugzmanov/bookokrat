@@ -2710,8 +2710,20 @@ impl App {
                 // Check if this completes a key sequence (Space+d for stats)
                 if self.handle_key_sequence('d') {
                     // Sequence was handled, do nothing more
+                } else if !self.text_reader.is_comment_input_active() {
+                    // Try to delete comment at cursor
+                    match self.text_reader.delete_comment_at_cursor() {
+                        Ok(true) => {
+                            info!("Comment deleted successfully");
+                        }
+                        Ok(false) => {
+                            // Cursor not on a comment, ignore
+                        }
+                        Err(e) => {
+                            error!("Failed to delete comment: {}", e);
+                        }
+                    }
                 }
-                // 'd' by itself doesn't do anything in content view
             }
             KeyCode::Char(c) if self.is_search_input_mode() => {
                 // We're typing a search query - handle ALL characters as input
