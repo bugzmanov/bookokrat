@@ -249,6 +249,17 @@ pub struct MarkdownTextReader {
     comment_textarea: Option<TextArea<'static>>,
     comment_target_node_index: Option<usize>, // The node index where comment will be attached
     comment_target_line: Option<usize>,       // The visual line where textarea should appear
+    comment_edit_mode: Option<CommentEditMode>,
+}
+
+#[derive(Clone, Debug)]
+enum CommentEditMode {
+    Creating,
+    Editing {
+        chapter_href: String,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    },
 }
 
 /// Represents the active section being read
@@ -510,7 +521,56 @@ impl MarkdownTextReader {
             comment_textarea: None,
             comment_target_node_index: None,
             comment_target_line: None,
+            comment_edit_mode: None,
         }
+    }
+
+    /// Start editing an existing comment
+    fn start_editing_comment(
+        &mut self,
+        chapter_href: String,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    ) -> bool {
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(comments) = comments_arc.lock() {
+                let existing_content = comments
+                    .get_paragraph_comments(&chapter_href, paragraph_index)
+                    .iter()
+                    .find(|c| c.word_range == word_range)
+                    .map(|c| c.content.clone());
+
+                if let Some(content) = existing_content {
+                    let comment_start_line =
+                        self.find_comment_visual_line(&chapter_href, paragraph_index, word_range);
+
+                    if let Some(start_line) = comment_start_line {
+                        let mut textarea = TextArea::default();
+                        for line in content.lines() {
+                            textarea.insert_str(line);
+                            textarea.insert_newline();
+                        }
+
+                        self.comment_input_active = true;
+                        self.comment_textarea = Some(textarea);
+                        self.comment_target_node_index = Some(paragraph_index);
+                        self.comment_target_line = Some(start_line);
+                        self.comment_edit_mode = Some(CommentEditMode::Editing {
+                            chapter_href,
+                            paragraph_index,
+                            word_range,
+                        });
+
+                        self.cache_generation += 1;
+
+                        self.text_selection.clear_selection();
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
     }
 
     pub fn start_comment_input(&mut self) -> bool {
@@ -518,6 +578,12 @@ impl MarkdownTextReader {
             return false;
         }
 
+        // Check if selection includes a comment - if so, edit it
+        if let Some((chapter_href, paragraph_index, word_range)) = self.get_comment_at_cursor() {
+            return self.start_editing_comment(chapter_href, paragraph_index, word_range);
+        }
+
+        // Otherwise, create new comment
         if let Some((start, _end)) = self.text_selection.get_selection_range() {
             let visual_line = start.line;
 
@@ -553,6 +619,7 @@ impl MarkdownTextReader {
                 self.comment_textarea = Some(textarea);
                 self.comment_target_node_index = Some(node_idx);
                 self.comment_target_line = Some(last_line_of_node + 1);
+                self.comment_edit_mode = Some(CommentEditMode::Creating);
 
                 self.text_selection.clear_selection();
 
@@ -624,6 +691,7 @@ impl MarkdownTextReader {
         self.comment_textarea = None;
         self.comment_target_node_index = None;
         self.comment_target_line = None;
+        self.comment_edit_mode = None;
 
         self.cache_generation += 1;
         debug!("Invalidated render cache");
@@ -676,6 +744,47 @@ impl MarkdownTextReader {
         }
 
         Ok(false)
+    }
+
+    /// Find the visual line where a specific comment starts rendering
+    fn find_comment_visual_line(
+        &self,
+        chapter_href: &str,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    ) -> Option<usize> {
+        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if let LineType::Comment {
+                chapter_href: line_href,
+                paragraph_index: line_para,
+                word_range: line_range,
+            } = &line.line_type
+            {
+                if line_href == chapter_href
+                    && *line_para == paragraph_index
+                    && *line_range == word_range
+                {
+                    return Some(idx);
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if we're currently editing a specific comment
+    fn is_editing_this_comment(&self, comment: &Comment) -> bool {
+        if let Some(CommentEditMode::Editing {
+            chapter_href,
+            paragraph_index,
+            word_range,
+        }) = &self.comment_edit_mode
+        {
+            &comment.chapter_href == chapter_href
+                && comment.paragraph_index == *paragraph_index
+                && comment.word_range == *word_range
+        } else {
+            false
+        }
     }
 
     fn render_document_to_lines(
@@ -740,12 +849,28 @@ impl MarkdownTextReader {
 
             // raw_text_lines should have roughly the same count as non-empty rendered lines
             // (some types like HorizontalRule might not add to raw_text_lines)
+            // When in comment input mode, the textarea content may cause mismatches, so we allow more slack
+            let allowed_diff = if self.comment_input_active { 500 } else { 100 };
             let diff = (self.raw_text_lines.len() as i32 - non_empty_lines as i32).abs();
+
+            if diff >= allowed_diff {
+                debug!(
+                    "Mismatch detected: raw_text_lines={}, non_empty_lines={}, diff={}, comment_input_active={}, edit_mode={:?}",
+                    self.raw_text_lines.len(),
+                    non_empty_lines,
+                    diff,
+                    self.comment_input_active,
+                    self.comment_edit_mode
+                );
+            }
+
             debug_assert!(
-                diff < 100, // Allow some difference for special line types
-                "raw_text_lines has {} lines but rendered content has {} non-empty lines - mismatch!",
+                diff < allowed_diff,
+                "raw_text_lines has {} lines but rendered content has {} non-empty lines - mismatch! (comment_input_active={}, edit_mode={:?})",
                 self.raw_text_lines.len(),
-                non_empty_lines
+                non_empty_lines,
+                self.comment_input_active,
+                self.comment_edit_mode
             );
 
             // Assert lines and raw_text_lines are not empty if document has content
@@ -1111,6 +1236,11 @@ impl MarkdownTextReader {
         _is_focused: bool,
         indent: usize,
     ) {
+        // Skip rendering if we're currently editing this comment
+        if self.is_editing_this_comment(comment) {
+            return;
+        }
+
         debug!("rendering comments!");
         let comment_header = format!("Note // {}", comment.updated_at.format("%m-%d-%y %H:%M"));
 
@@ -1119,7 +1249,7 @@ impl MarkdownTextReader {
                 comment_header.clone(),
                 RatatuiStyle::default().fg(palette.base_0e), // Purple text color
             )],
-            raw_text: String::new(),
+            raw_text: comment_header.clone(),
             line_type: LineType::Comment {
                 chapter_href: comment.chapter_href.clone(),
                 paragraph_index: comment.paragraph_index,
@@ -3617,10 +3747,13 @@ impl TextReaderTrait for MarkdownTextReader {
                             let textarea_height =
                                 desired_height.min(inner_area.y + inner_area.height - textarea_y);
 
+                            // Shift left to align with paragraph text (inner_area.x already has +1 padding)
+                            let left_adjust = 2;
+
                             let textarea_rect = Rect {
-                                x: inner_area.x, // Use full width
+                                x: inner_area.x.saturating_sub(left_adjust),
                                 y: textarea_y,
-                                width: inner_area.width, // Full width
+                                width: inner_area.width + left_adjust,
                                 height: textarea_height,
                             };
 
@@ -3629,9 +3762,9 @@ impl TextReaderTrait for MarkdownTextReader {
                             frame.render_widget(clear_block, textarea_rect);
 
                             let padded_rect = Rect {
-                                x: inner_area.x + 2,
+                                x: textarea_rect.x + 2,
                                 y: textarea_y,
-                                width: inner_area.width.saturating_sub(4),
+                                width: textarea_rect.width.saturating_sub(4),
                                 height: textarea_height,
                             };
 
