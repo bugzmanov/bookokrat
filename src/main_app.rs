@@ -42,6 +42,23 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
+struct EpubBook {
+    file: String,
+    epub: EpubDoc<BufReader<std::fs::File>>,
+}
+impl EpubBook {
+    fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
+        Self {
+            file: file,
+            epub: doc,
+        }
+    }
+
+    fn total_chapters(&self) -> usize {
+        self.epub.get_num_pages()
+    }
+}
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
@@ -50,10 +67,8 @@ pub struct App {
     bookmarks: Bookmarks,
     image_storage: Arc<ImageStorage>,
     book_images: BookImages,
-    current_epub: Option<EpubDoc<BufReader<std::fs::File>>>,
+    current_book: Option<EpubBook>,
     current_chapter: usize,
-    total_chapters: usize,
-    current_file: Option<String>,
     current_chapter_title: Option<String>,
     pub focused_panel: FocusedPanel,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
@@ -63,7 +78,7 @@ pub struct App {
     last_click_position: Option<(u16, u16)>,
     click_count: u32,
     // Cached chapter information to avoid re-parsing on every render
-    cached_current_book_info: Option<CurrentBookInfo>,
+    cached_current_book_info: Option<CurrentBookInfo>, // TODO: this needs to be remove from here
     // Key sequence tracking for multi-key commands
     key_sequence: Vec<char>,
     last_key_time: Option<Instant>,
@@ -77,11 +92,9 @@ pub struct App {
     image_popup_area: Option<Rect>,
     last_terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
-    // Book statistics popup
     book_stat: BookStat,
     // Jump list for navigation history (Ctrl+O/Ctrl+I)
     jump_list: JumpList,
-    // Book-wide search
     book_search: Option<BookSearch>,
     search_engine: Option<Arc<Mutex<SearchEngine>>>,
 }
@@ -261,11 +274,6 @@ impl App {
         // Initialize book images abstraction
         let book_images = BookImages::new(image_storage.clone());
 
-        // let guard = pprof::ProfilerGuardBuilder::default()
-        //     .frequency(1000)
-        //     .blocklist(&["libc", "libgcc", "pthread", "vdso"])
-        //     .build()
-        //     .unwrap();
         let mut app = Self {
             book_manager,
             navigation_panel,
@@ -274,10 +282,8 @@ impl App {
             bookmarks,
             image_storage,
             book_images,
-            current_epub: None,
             current_chapter: 0,
-            total_chapters: 0,
-            current_file: None,
+            current_book: None,
             current_chapter_title: None,
             focused_panel: FocusedPanel::Main(MainPanel::FileList),
             system_command_executor: system_executor,
@@ -364,20 +370,16 @@ impl App {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
             let path = book_info.path.clone();
 
-            // Save bookmark for current file before switching
             self.save_bookmark_with_throttle(true);
 
-            // Load the EPUB document
             self.load_epub_internal(&path)?;
 
-            // Update UI state to reflect the opened book
             self.navigation_panel.current_book_index = Some(book_index);
             if let Some(book_info) = self.cached_current_book_info.clone() {
                 self.navigation_panel
                     .switch_to_toc_mode(book_index, book_info);
             }
 
-            // Switch focus to content after loading
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
             info!("Successfully opened book for reading: {}", path);
@@ -389,25 +391,20 @@ impl App {
 
     /// Navigate to a specific chapter - ensures all state is properly updated
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
-        if let Some(doc) = &mut self.current_epub {
-            if chapter_index < self.total_chapters {
-                if doc.set_current_page(chapter_index) {
-                    self.current_chapter = chapter_index;
+        if let Some(doc) = &mut self.current_book {
+            if doc.epub.set_current_page(chapter_index) {
+                self.current_chapter = chapter_index;
 
-                    self.text_reader.clear_active_anchor();
-                    self.update_content();
-                    self.update_current_chapter_in_cache();
-                    self.save_bookmark_with_throttle(true);
+                self.text_reader.clear_active_anchor();
+                self.update_content();
+                self.update_current_chapter_in_cache();
+                self.save_bookmark_with_throttle(true);
 
-                    Ok(())
-                } else {
-                    anyhow::bail!("Failed to navigate to chapter {}", chapter_index)
-                }
+                Ok(())
             } else {
                 anyhow::bail!(
-                    "Chapter index {} out of range (max: {})",
-                    chapter_index,
-                    self.total_chapters - 1
+                    "Failed to navigate to chapter {}. Chapter is out of the range",
+                    chapter_index
                 )
             }
         } else {
@@ -417,37 +414,29 @@ impl App {
 
     /// Navigate to next or previous chapter - maintains all state consistency
     pub fn navigate_chapter_relative(&mut self, direction: ChapterDirection) -> Result<()> {
-        if let Some(doc) = &mut self.current_epub {
+        if let Some(book) = &mut self.current_book {
             match direction {
                 ChapterDirection::Next => {
-                    if self.current_chapter < self.total_chapters - 1 {
-                        if doc.go_next() {
-                            self.current_chapter += 1;
-                            info!("Moving to next chapter: {}", self.current_chapter + 1);
-                            self.update_content();
-                            self.update_current_chapter_in_cache();
-                            self.save_bookmark_with_throttle(true);
-                            Ok(())
-                        } else {
-                            anyhow::bail!("Failed to move to next chapter")
-                        }
+                    if book.epub.go_next() {
+                        self.current_chapter += 1;
+                        info!("Moving to next chapter: {}", self.current_chapter + 1);
+                        self.update_content();
+                        self.update_current_chapter_in_cache();
+                        self.save_bookmark_with_throttle(true);
+                        Ok(())
                     } else {
                         info!("Already at last chapter");
                         Ok(())
                     }
                 }
                 ChapterDirection::Previous => {
-                    if self.current_chapter > 0 {
-                        if doc.go_prev() {
-                            self.current_chapter -= 1;
-                            info!("Moving to previous chapter: {}", self.current_chapter + 1);
-                            self.update_content();
-                            self.update_current_chapter_in_cache();
-                            self.save_bookmark_with_throttle(true);
-                            Ok(())
-                        } else {
-                            anyhow::bail!("Failed to move to previous chapter")
-                        }
+                    if book.epub.go_prev() {
+                        self.current_chapter -= 1;
+                        info!("Moving to previous chapter: {}", self.current_chapter + 1);
+                        self.update_content();
+                        self.update_current_chapter_in_cache();
+                        self.save_bookmark_with_throttle(true);
+                        Ok(())
                     } else {
                         info!("Already at first chapter");
                         Ok(())
@@ -480,14 +469,6 @@ impl App {
         self.open_book_for_reading(book_index)
     }
 
-    /// Legacy method for backward compatibility with tests
-    /// This maintains the old behavior while using the new high-level action internally
-    #[deprecated(note = "Use open_book_for_reading_by_path instead")]
-    pub fn load_epub(&mut self, path: &str) {
-        // For backward compatibility, ignore errors to match old behavior
-        let _ = self.open_book_for_reading_by_path(path);
-    }
-
     // =============================================================================
     // LOW-LEVEL INTERNAL METHODS
     // =============================================================================
@@ -499,94 +480,51 @@ impl App {
             .load_epub(path)
             .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
 
-        info!("Successfully loaded EPUB document (no bookmark restoration)");
-        self.total_chapters = doc.get_num_pages();
-        info!("Total chapters: {}", self.total_chapters);
-
-        // Extract images from the EPUB to the temp directory
         let path_buf = std::path::PathBuf::from(path);
         if let Err(e) = self.image_storage.extract_images(&path_buf) {
             error!("Failed to extract images from EPUB: {}", e);
-            // Continue loading even if image extraction fails
         } else {
             info!("Successfully extracted images from EPUB");
         }
 
-        // Load the book in BookImages abstraction
         if let Err(e) = self.book_images.load_book(&path_buf) {
             error!("Failed to load book in BookImages: {}", e);
-            // Continue loading even if BookImages fails
         }
 
-        // Initialize search engine for the book
         self.initialize_search_engine(&mut doc);
 
-        // Don't restore bookmarks - just set to chapter 0
         self.current_chapter = 0;
-
-        self.current_epub = Some(doc);
-        self.current_file = Some(path.to_string());
+        let book = EpubBook::new(path.to_string(), doc);
+        self.current_book = Some(book);
         self.update_content();
         self.refresh_chapter_cache();
         Ok(())
     }
 
     fn load_epub_internal(&mut self, path: &str) -> Result<()> {
-        info!("Starting load_epub_internal for path: {}", path);
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {}", e);
             anyhow::anyhow!("Failed to load EPUB: {}", e)
         })?;
 
-        info!("Successfully loaded EPUB document");
-        self.total_chapters = doc.get_num_pages();
-        info!("Total chapters (spine items): {}", self.total_chapters);
-
-        // Log current position in spine
-        info!("Current spine position: {}", doc.get_current_page());
-
-        // Try to get current page content to verify it's accessible
-        match doc.get_current_str() {
-            Some((content, _mime)) => {
-                info!(
-                    "Current page content available, length: {} bytes",
-                    content.len()
-                );
-            }
-            None => {
-                error!(
-                    "WARNING: Current page content is NOT available at position {}",
-                    doc.get_current_page()
-                );
-            }
-        }
+        info!(
+            "Successfully loaded EPUB document {}, total_chapter: {}, current position: {}",
+            path,
+            doc.get_num_pages(),
+            doc.get_current_page()
+        );
 
         let path_buf = std::path::PathBuf::from(path);
-        if let Err(e) = self.image_storage.extract_images(&path_buf) {
-            error!("Failed to extract images from EPUB: {}", e);
-        }
-
-        // Load the book in BookImages abstraction
         if let Err(e) = self.book_images.load_book(&path_buf) {
             error!("Failed to load book in BookImages: {}", e);
-            // Continue loading even if BookImages fails
         }
 
-        // Initialize search engine for the book
         self.initialize_search_engine(&mut doc);
 
-        // Initialize book comments
-        let path_buf_for_comments = path_buf.clone();
-        match BookComments::new(&path_buf_for_comments) {
+        match BookComments::new(&path_buf) {
             Ok(comments) => {
-                let comm_path = &comments.file_path.clone();
-                let comm_size = comments.get_all_comments().len();
                 let comments_arc = Arc::new(Mutex::new(comments));
                 self.text_reader.set_book_comments(comments_arc);
-                info!(
-                    "Initialized book comments for: {} from {:?} size {}",
-                    path, &comm_path, comm_size
-                );
             }
             Err(e) => {
                 warn!("Failed to initialize book comments: {}", e);
@@ -594,106 +532,36 @@ impl App {
         }
 
         // Variables to store position to restore after content is loaded
-        let mut scroll_to_restore = 0;
         let mut node_to_restore = None;
 
-        // Try to load bookmark
         if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
-            // Try to find the chapter by href first
-            let chapter_to_restore = if bookmark.chapter_href.starts_with("chapter_") {
-                // This is a legacy placeholder, try to extract the index
-                bookmark
-                    .chapter_href
-                    .strip_prefix("chapter_")
-                    .and_then(|s| s.parse::<usize>().ok())
-            } else {
-                // Try to find the chapter index by href
-                Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href)
-            };
+            let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
-                // Use set_current_page for direct navigation (more reliable)
                 if doc.set_current_page(chapter_index) {
                     self.current_chapter = chapter_index;
-                    info!(
-                        "Successfully restored to chapter {} (href: {})",
-                        chapter_index, bookmark.chapter_href
-                    );
                 } else {
                     // Fallback: ensure we're within bounds
-                    let safe_chapter = chapter_index.min(self.total_chapters.saturating_sub(1));
+                    let safe_chapter = chapter_index.min(doc.get_num_pages().saturating_sub(1));
                     if doc.set_current_page(safe_chapter) {
                         self.current_chapter = safe_chapter;
-                        warn!(
-                            "Restored to safe chapter {} instead of {} (href: {})",
-                            safe_chapter, chapter_index, bookmark.chapter_href
-                        );
                     } else {
                         self.current_chapter = 0;
                         error!("Failed to restore bookmark, staying at chapter 0");
                     }
                 }
 
-                // Store position to restore after content is loaded
-                // Prefer node index if available, fall back to scroll offset
                 if let Some(node_idx) = bookmark.node_index {
                     node_to_restore = Some(node_idx);
-                    info!(
-                        "Will restore to node index {} after content loads",
-                        node_idx
-                    );
-                } else if let Some(scroll_offset) = bookmark.scroll_offset {
-                    scroll_to_restore = scroll_offset;
-                    info!(
-                        "Will restore scroll position to {} after content loads",
-                        scroll_offset
-                    );
                 }
             } else {
                 warn!("Could not find chapter for href: {}", bookmark.chapter_href);
                 self.current_chapter = 0;
             }
         } else {
-            info!("No bookmark found for {}, considering metadata skip", path);
-            // Skip the first chapter if it's just metadata
-            if self.total_chapters > 1 {
-                info!(
-                    "Book has {} chapters, attempting to skip metadata by moving to second chapter",
-                    self.total_chapters
-                );
-                info!(
-                    "Current position before go_next(): {}",
-                    doc.get_current_page()
-                );
-
-                // Try to see what content we have before moving
-                match doc.get_current_str() {
-                    Some((content, mime)) => {
-                        info!(
-                            "Content at position 0 exists, mime: {}, length: {} bytes",
-                            mime,
-                            content.len()
-                        );
-                        if content.len() < 500 {
-                            info!(
-                                "First page content (might be metadata): {}",
-                                &content[..content.len().min(200)]
-                            );
-                        }
-                    }
-                    None => {
-                        error!("No content at position 0 - this might cause navigation issues");
-                    }
-                }
-
+            if doc.get_num_pages() > 1 {
                 if doc.go_next() {
                     self.current_chapter = 1;
-                    info!(
-                        "Successfully moved to next chapter, new position: {}",
-                        doc.get_current_page()
-                    );
-
-                    // Verify we can get content at the new position
                     match doc.get_current_str() {
                         Some((content, mime)) => {
                             info!(
@@ -714,7 +582,7 @@ impl App {
                     error!(
                         "Current position: {}, Total chapters: {}",
                         doc.get_current_page(),
-                        self.total_chapters
+                        doc.get_num_pages()
                     );
 
                     // Try alternative: set_current_page
@@ -729,24 +597,16 @@ impl App {
                         self.current_chapter = 0;
                     }
                 }
-            } else {
-                info!("Book only has 1 chapter, staying at position 0");
             }
         }
 
-        self.current_epub = Some(doc);
-        self.current_file = Some(path.to_string());
+        self.current_book = Some(EpubBook::new(path.to_string(), doc));
         self.update_content();
         self.refresh_chapter_cache();
 
         if let Some(node_idx) = node_to_restore {
             self.text_reader.restore_to_node_index(node_idx);
-            info!("Restored to node index {}", node_idx);
-        } else if scroll_to_restore > 0 {
-            self.text_reader.restore_scroll_position(scroll_to_restore);
-            info!("Restored scroll position to {}", scroll_to_restore);
         }
-
         Ok(())
     }
 
@@ -784,15 +644,15 @@ impl App {
     }
 
     fn refresh_chapter_cache(&mut self) {
-        if let (Some(current_file), Some(epub)) = (&self.current_file, &mut self.current_epub) {
-            let toc_items = self.text_generator.parse_toc_structure(epub);
+        if let Some(book) = &mut self.current_book {
+            let toc_items = self.text_generator.parse_toc_structure(&mut book.epub);
 
             let active_section = self.text_reader.get_active_section(self.current_chapter);
 
-            let current_chapter_href = Self::get_chapter_href(epub, self.current_chapter);
+            let current_chapter_href = Self::get_chapter_href(&book.epub, self.current_chapter);
 
             let book_info = CurrentBookInfo {
-                path: current_file.clone(),
+                path: book.file.clone(),
                 toc_items,
                 current_chapter: self.current_chapter,
                 current_chapter_href,
@@ -826,8 +686,8 @@ impl App {
             cached_info.active_section = self.text_reader.get_active_section(self.current_chapter);
 
             // Get current chapter href
-            let current_chapter_href = if let Some(doc) = &self.current_epub {
-                Self::get_chapter_href(doc, self.current_chapter)
+            let current_chapter_href = if let Some(book) = &self.current_book {
+                Self::get_chapter_href(&book.epub, self.current_chapter)
             } else {
                 None
             };
@@ -859,23 +719,18 @@ impl App {
     }
 
     pub fn save_bookmark_with_throttle(&mut self, force: bool) {
-        if let Some(path) = &self.current_file {
+        if let Some(book) = &self.current_book {
             // Get the chapter href from the current EPUB document
-            let chapter_href = if let Some(doc) = &self.current_epub {
-                Self::get_chapter_href(doc, self.current_chapter)
-                    .unwrap_or_else(|| format!("chapter_{}", self.current_chapter))
-            } else {
-                format!("chapter_{}", self.current_chapter)
-            };
+            let chapter_href = Self::get_chapter_href(&book.epub, self.current_chapter)
+                .unwrap_or_else(|| format!("chapter_{}", self.current_chapter));
 
             // Update bookmark with href and node index
             self.bookmarks.update_bookmark(
-                path,
+                &book.file,
                 chapter_href,
-                Some(self.text_reader.get_scroll_offset()),
                 Some(self.text_reader.get_current_node_index()),
                 Some(self.current_chapter),
-                Some(self.total_chapters),
+                Some(book.total_chapters()),
             );
 
             // Only save to disk if enough time has passed or if forced
@@ -898,8 +753,8 @@ impl App {
     }
 
     fn update_content(&mut self) {
-        if let Some(doc) = &mut self.current_epub {
-            let (content, title) = match doc.get_current_str() {
+        if let Some(book) = &mut self.current_book {
+            let (content, title) = match book.epub.get_current_str() {
                 Some((raw_html, _mime)) => {
                     let title = self.text_generator.extract_chapter_title(&raw_html);
                     (raw_html, title)
@@ -912,7 +767,7 @@ impl App {
 
             self.current_chapter_title = title.clone();
 
-            if let Some(chapter_file) = Self::get_chapter_href(doc, self.current_chapter) {
+            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, self.current_chapter) {
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
             } else {
@@ -921,10 +776,8 @@ impl App {
 
             self.text_reader.content_updated(content.len());
 
-            if self.current_file.is_some() {
-                self.text_reader.set_content_from_string(&content, title);
-                self.text_reader.preload_image_dimensions(&self.book_images);
-            }
+            self.text_reader.set_content_from_string(&content, title);
+            self.text_reader.preload_image_dimensions(&self.book_images);
         } else {
             error!("No EPUB document loaded");
             self.text_reader.content_updated(0);
@@ -1334,13 +1187,11 @@ impl App {
     /// Handle image click by creating or showing the image popup
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
         // Save current location to jump list before navigating
-        if let Some(current_file) = &self.current_file {
+        if let Some(EpubBook { epub, file }) = &self.current_book {
             let current_location = JumpLocation {
-                epub_path: current_file.clone(),
+                epub_path: file.clone(),
                 chapter_index: self.current_chapter,
-                scroll_position: self.text_reader.get_scroll_offset(),
-                node_index: Some(self.text_reader.get_current_node_index()),
-                anchor: None,
+                node_index: self.text_reader.get_current_node_index(),
             };
             self.jump_list.push(current_location);
         }
@@ -1408,8 +1259,7 @@ impl App {
                 }
             }
             None => {
-                // Legacy link handling - fallback for old LinkInfo without classification
-                self.handle_legacy_link_click(&link_info.url)
+                panic!("Should never happen")
             }
         }
     }
@@ -1458,40 +1308,6 @@ impl App {
         } else {
             debug!("Chapter file '{}' not found in TOC", chapter_file);
             Ok(false)
-        }
-    }
-
-    fn handle_legacy_link_click(&mut self, url: &str) -> std::io::Result<bool> {
-        debug!("Handling legacy link click for: {}", url);
-
-        // Check if it's an internal link (within the EPUB)
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            // Internal link - try to navigate to the chapter
-            if let Some(ref mut doc) = self.current_epub {
-                // Try to find the chapter with this href
-                let normalized_url = url.trim_start_matches('#');
-
-                // Search through spine for matching chapter
-                for i in 0..doc.get_num_pages() {
-                    if let Some(href) = Self::get_chapter_href(doc, i) {
-                        if href.contains(normalized_url) || normalized_url.contains(&href) {
-                            // Navigate to this chapter using existing navigation method
-                            if let Err(e) = self.navigate_to_chapter(i) {
-                                error!("Failed to navigate to chapter {}: {}", url, e);
-                                return Ok(false);
-                            }
-                            return Ok(true);
-                        }
-                    }
-                }
-
-                // If not found in spine, might be a fragment/anchor in current chapter
-                info!("Internal link not found in spine: {}", url);
-            }
-            Ok(false)
-        } else {
-            // External link - open in browser
-            self.handle_external_link(url)
         }
     }
 
@@ -1551,14 +1367,14 @@ impl App {
 
     /// Find the spine index for a given href
     fn find_spine_index_by_href(&self, href: &str) -> Option<usize> {
-        let doc = self.current_epub.as_ref()?;
+        let book = self.current_book.as_ref()?;
 
         // Normalize the href for comparison
         let normalized_href = self.text_generator.normalize_href(href);
 
         // Search through the spine
-        for (index, spine_item) in doc.spine.iter().enumerate() {
-            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
+        for (index, spine_item) in book.epub.spine.iter().enumerate() {
+            if let Some((path, _)) = book.epub.resources.get(&spine_item.idref) {
                 let path_str = path.to_string_lossy();
                 let normalized_path = self.text_generator.normalize_href(&path_str);
 
@@ -1780,15 +1596,15 @@ impl App {
     }
 
     pub fn open_with_system_viewer(&self) {
-        if let Some(path) = &self.current_file {
+        if let Some(book) = &self.current_book {
             info!(
                 "Opening EPUB with system viewer: {} at chapter {}",
-                path, self.current_chapter
+                book.file, self.current_chapter
             );
 
             match self
                 .system_command_executor
-                .open_file_at_chapter(path, self.current_chapter)
+                .open_file_at_chapter(&book.file, self.current_chapter)
             {
                 Ok(_) => info!(
                     "Successfully opened EPUB with system viewer at chapter {}",
@@ -1807,34 +1623,16 @@ impl App {
 
     /// Jump to a specific location from the jump list
     fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
-        // Check if we need to open a different book
-        if self.current_file.as_ref() != Some(&location.epub_path) {
-            // Open the book WITHOUT restoring bookmarks (we'll set our own position)
+        if self.current_book.as_ref().map(|x| &x.file) != Some(&location.epub_path) {
             self.load_epub_internal_without_bookmark(&location.epub_path)?;
         }
 
-        // Navigate to the chapter if needed
         if self.current_chapter != location.chapter_index {
-            // Navigate without triggering bookmark save
             self.navigate_to_chapter(location.chapter_index)?;
         }
 
-        // Force restore position after any content updates
-        // This needs to happen AFTER navigate_to_chapter which resets scroll
-        // Prefer node index if available, fall back to scroll position
-        if let Some(node_idx) = location.node_index {
-            self.text_reader.restore_to_node_index(node_idx);
-        } else {
-            self.text_reader
-                .restore_scroll_position(location.scroll_position);
-        }
+        self.text_reader.restore_to_node_index(location.node_index);
 
-        // If there's an anchor, scroll to it
-        if let Some(ref anchor) = location.anchor {
-            let _ = self.scroll_to_anchor(anchor);
-        }
-
-        // Save bookmark at the jumped-to location
         self.save_bookmark();
 
         Ok(())
@@ -2042,23 +1840,17 @@ impl App {
             &self.book_manager,
         );
 
-        // Render text content or default message
-        if self.current_epub.is_some() {
-            // Update wrapped lines based on current area dimensions
-            // self.text_reader
-            //     .update_wrapped_lines_if_needed(content, main_chunks[1]);
-
+        if let Some(ref book) = self.current_book {
             self.text_reader.render(
                 f,
                 main_chunks[1],
                 &self.current_chapter_title,
                 self.current_chapter,
-                self.total_chapters,
+                book.total_chapters(),
                 &OCEANIC_NEXT,
                 self.is_main_panel(MainPanel::Content),
             );
         } else {
-            // Render default content area when no EPUB is loaded
             self.render_default_content(f, main_chunks[1], "Select a file to view its content");
         }
 
@@ -2279,10 +2071,10 @@ impl App {
             }
             " s" => {
                 // Handle Space->s to show raw HTML source
-                if self.is_main_panel(MainPanel::Content) && self.current_epub.is_some() {
+                if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
                     // Get raw HTML content for current chapter
-                    if let Some(ref mut epub) = self.current_epub {
-                        if let Some((raw_html, _)) = epub.get_current_str() {
+                    if let Some(ref mut book) = self.current_book {
+                        if let Some((raw_html, _)) = book.epub.get_current_str() {
                             self.text_reader.set_raw_html(raw_html);
                             self.text_reader.toggle_raw_html();
                         }
@@ -2293,7 +2085,7 @@ impl App {
             }
             " f" => {
                 // Handle Space->f to open book search (reuse existing search)
-                if self.current_epub.is_some() {
+                if self.current_book.is_some() {
                     self.open_book_search(false); // Don't clear input
                 }
                 self.key_sequence.clear();
@@ -2301,7 +2093,7 @@ impl App {
             }
             " F" => {
                 // Handle Space->F to open book search (clear input)
-                if self.current_epub.is_some() {
+                if self.current_book.is_some() {
                     self.open_book_search(true); // Clear input for new search
                 }
                 self.key_sequence.clear();
@@ -2310,11 +2102,14 @@ impl App {
             " d" => {
                 // Handle Space->d to show book statistics (document stats)
                 // Works from any panel as long as a book is open
-                if self.current_epub.is_some() {
+                if self.current_book.is_some() {
                     // Calculate and show book statistics
-                    if let Some(ref mut epub) = self.current_epub {
+                    if let Some(ref mut book) = self.current_book {
                         let terminal_size = (self.terminal_width, self.terminal_height);
-                        if let Err(e) = self.book_stat.calculate_stats(epub, terminal_size) {
+                        if let Err(e) = self
+                            .book_stat
+                            .calculate_stats(&mut book.epub, terminal_size)
+                        {
                             error!("Failed to calculate book statistics: {}", e);
                         } else {
                             self.book_stat.show();
@@ -3042,7 +2837,7 @@ impl App {
                     }
                 } else if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_upper_g();
-                } else if self.current_epub.is_some() {
+                } else if self.current_book.is_some() {
                     self.text_reader.handle_upper_g();
                 }
             }
@@ -3206,7 +3001,7 @@ impl App {
         let mut chapters = Vec::new();
 
         // Process all chapters to extract readable text
-        for chapter_index in 0..self.total_chapters {
+        for chapter_index in 0..doc.get_num_pages() {
             if doc.set_current_page(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
                     // Extract chapter title
@@ -3237,11 +3032,6 @@ impl App {
 
         // Create book search UI with the search engine
         self.book_search = Some(BookSearch::new(engine));
-
-        debug!(
-            "Search engine initialized with {} chapters",
-            self.total_chapters
-        );
     }
 
     fn open_book_search(&mut self, clear_input: bool) {

@@ -664,10 +664,18 @@ impl MarkdownTextReader {
                             if let Ok(mut comments) = comments_arc.lock() {
                                 use chrono::Utc;
 
+                                // Get word_range from edit mode if editing, otherwise None
+                                let word_range = match &self.comment_edit_mode {
+                                    Some(CommentEditMode::Editing { word_range, .. }) => {
+                                        *word_range
+                                    }
+                                    _ => None,
+                                };
+
                                 let comment = Comment {
                                     chapter_href: chapter_file.clone(),
                                     paragraph_index: node_idx,
-                                    word_range: None, // For now, comment on whole paragraph
+                                    word_range,
                                     content: comment_text.clone(),
                                     updated_at: Utc::now(),
                                 };
@@ -1003,6 +1011,7 @@ impl MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
+                    node_index,
                 );
             }
 
@@ -1592,6 +1601,7 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
+        node_index: Option<usize>,
     ) {
         use crate::markdown::ListKind;
 
@@ -1632,12 +1642,16 @@ impl MarkdownTextReader {
                                 false,  // don't add empty line after
                             );
 
-                            // Update line types for all newly added lines
-                            for line in &mut lines[lines_before..] {
+                            // Update line types and node_index for all newly added lines
+                            for (i, line) in lines[lines_before..].iter_mut().enumerate() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
                                     indent,
                                 };
+                                // Set node_index only on the first line of the first item
+                                if i == 0 && idx == 0 {
+                                    line.node_index = node_index;
+                                }
                             }
                         }
                         _ => {
@@ -1670,7 +1684,40 @@ impl MarkdownTextReader {
             }
         }
 
-        // Add empty line after list
+        // Render comments for the list if it has a node_index
+        if let Some(node_idx) = node_index {
+            let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
+            if let Some(paragraph_comments) = comments_to_render {
+                if !paragraph_comments.is_empty() {
+                    // Add empty line before comments
+                    lines.push(RenderedLine {
+                        spans: vec![Span::raw("")],
+                        raw_text: String::new(),
+                        line_type: LineType::Empty,
+                        link_nodes: vec![],
+                        node_anchor: None,
+                        node_index: None,
+                    });
+                    self.raw_text_lines.push(String::new());
+                    *total_height += 1;
+
+                    for comment in paragraph_comments {
+                        self.render_comment_as_quote(
+                            &comment,
+                            lines,
+                            total_height,
+                            width,
+                            palette,
+                            is_focused,
+                            indent,
+                        );
+                    }
+                    return; // render_comment_as_quote already adds empty line after
+                }
+            }
+        }
+
+        // Add empty line after list (only if no comments were rendered)
         lines.push(RenderedLine {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
@@ -2883,38 +2930,14 @@ impl MarkdownTextReader {
 
     /// Actually perform the node restoration (called after rendering)
     fn perform_node_restore(&mut self, node_index: usize) {
-        info!(
-            "perform_node_restore called with node_index={}, total lines={}",
-            node_index,
-            self.rendered_content.lines.len()
-        );
-
-        // Count how many lines have node indices
-        let lines_with_nodes = self
-            .rendered_content
-            .lines
-            .iter()
-            .filter(|line| line.node_index.is_some())
-            .count();
-        info!("Lines with node indices: {}", lines_with_nodes);
-
-        // Find the first line that belongs to this node
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let Some(node_idx) = line.node_index {
                 if node_idx >= node_index {
-                    // Found the node or a later one, scroll to this position
                     self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
-                    info!("Restored to node {} at line {}", node_index, line_idx);
                     return;
                 }
             }
         }
-
-        // Node not found, stay at current position
-        info!(
-            "Could not find node index {} in rendered content, staying at current position",
-            node_index
-        );
     }
 }
 
@@ -3013,16 +3036,11 @@ impl TextReaderTrait for MarkdownTextReader {
         self.scroll_offset
     }
 
-    fn restore_scroll_position(&mut self, offset: usize) {
-        self.scroll_offset = offset.min(self.get_max_scroll_offset());
-    }
-
     /// Get the index of the first visible node in the viewport
+    /// TODO: this is expensive and yet being called often
     fn get_current_node_index(&self) -> usize {
-        // Find the first visible line in the viewport
         let visible_start = self.scroll_offset;
 
-        // Look through rendered lines to find the node index
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
             if line_idx >= visible_start {
                 if let Some(node_idx) = line.node_index {
@@ -3031,7 +3049,7 @@ impl TextReaderTrait for MarkdownTextReader {
             }
         }
 
-        0 // Default to first node
+        0
     }
 
     /// Restore scroll position to show a specific node
@@ -3050,14 +3068,10 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect) {
-        // Use the inner text area if available, otherwise fall back to the provided area
         let text_area = self.last_inner_text_area.unwrap_or(area);
 
-        // Use proper coordinate conversion like TextReader does
         if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            // Check if click is on a link first
             if self.get_link_at_position(line, column).is_some() {
-                // Don't start text selection if clicking on a link
                 debug!("Mouse down on link, skipping text selection");
                 return;
             }
@@ -3402,7 +3416,6 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn handle_terminal_resize(&mut self) {
-        // Clear caches on resize
         self.cache_generation += 1;
     }
 
@@ -3471,17 +3484,14 @@ impl TextReaderTrait for MarkdownTextReader {
                 debug!("No markdown_document to render!");
             }
         }
-        // Build the title
         let title_text = if let Some(title) = chapter_title {
             format!("[{}/{}] {}", current_chapter, total_chapters, title)
         } else {
             format!("Chapter {}/{}", current_chapter, total_chapters)
         };
 
-        // Calculate progress percentage
         let progress = self.calculate_progress("", width, self.visible_height);
 
-        // Create the border block
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
@@ -3542,10 +3552,8 @@ impl TextReaderTrait for MarkdownTextReader {
             if let Some(rendered_line) = self.rendered_content.lines.get(line_idx) {
                 let visual_line_idx = line_idx - self.scroll_offset;
 
-                // Check if this is an image placeholder with a loaded image
                 let skip_placeholder =
                     if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
-                        // Check if image is loaded
                         if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
                             matches!(embedded_image.state, ImageLoadState::Loaded { .. })
                         } else {
@@ -3560,9 +3568,7 @@ impl TextReaderTrait for MarkdownTextReader {
                     continue;
                 }
 
-                // Apply highlight if needed
                 let mut line_spans = if self.highlight_visual_line == Some(visual_line_idx) {
-                    // Apply highlight
                     rendered_line
                         .spans
                         .iter()
@@ -3574,7 +3580,6 @@ impl TextReaderTrait for MarkdownTextReader {
                     rendered_line.spans.clone()
                 };
 
-                // Apply text selection highlighting if needed
                 if self.text_selection.has_selection() {
                     let line_with_selection = self.text_selection.apply_selection_highlighting(
                         line_idx,
@@ -3584,7 +3589,6 @@ impl TextReaderTrait for MarkdownTextReader {
                     line_spans = line_with_selection.spans;
                 }
 
-                // Apply search highlighting after selection highlighting
                 line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
 
                 visible_lines.push(Line::from(line_spans));
@@ -3605,7 +3609,6 @@ impl TextReaderTrait for MarkdownTextReader {
         frame.render_widget(inner_text_paragraph, inner_area);
 
         // Second pass: Render images on top
-        // Create vertical margins
 
         let scroll_offset = self.scroll_offset;
         // Display all embedded images from the chapter (only if not showing raw HTML)
@@ -3620,11 +3623,9 @@ impl TextReaderTrait for MarkdownTextReader {
                     let image_start_line = embedded_image.lines_before_image;
                     let image_end_line = image_start_line + image_height_cells;
 
-                    // Check if image is in viewport
                     if scroll_offset < image_end_line
                         && scroll_offset + area_height > image_start_line
                     {
-                        // Check if image is loaded
                         if let ImageLoadState::Loaded {
                             ref image,
                             ref mut protocol,
@@ -3781,7 +3782,7 @@ impl TextReaderTrait for MarkdownTextReader {
 
                             let block = Block::default()
                                 .borders(Borders::ALL)
-                                .title(" Add Comment ")
+                                .title(" Add Note ")
                                 .style(
                                     RatatuiStyle::default()
                                         .fg(palette.base_04)

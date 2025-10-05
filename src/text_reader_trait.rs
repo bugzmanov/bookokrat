@@ -13,7 +13,7 @@ pub struct LinkInfo {
     pub line: usize,
     pub start_col: usize,
     pub end_col: usize,
-    pub link_type: Option<crate::markdown::LinkType>,
+    pub link_type: Option<crate::markdown::LinkType>, // todo: this should not be an option
     pub target_chapter: Option<String>,
     pub target_anchor: Option<String>,
 }
@@ -33,7 +33,6 @@ pub trait TextReaderTrait: VimNavMotions {
     fn scroll_half_screen_up(&mut self, screen_height: usize);
     fn scroll_half_screen_down(&mut self, screen_height: usize);
     fn get_scroll_offset(&self) -> usize;
-    fn restore_scroll_position(&mut self, offset: usize);
     fn get_max_scroll_offset(&self) -> usize;
     fn get_current_node_index(&self) -> usize;
     fn restore_to_node_index(&mut self, node_index: usize);

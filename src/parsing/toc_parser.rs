@@ -4,6 +4,7 @@ use std::io::{Read, Seek};
 
 pub struct TocParser;
 
+// todo all methods needs to be static
 impl TocParser {
     pub fn new() -> Self {
         Self

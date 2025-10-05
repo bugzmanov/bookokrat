@@ -1,22 +1,13 @@
 use std::collections::VecDeque;
 
-/// A jump location in the reading history
 #[derive(Debug, Clone, PartialEq)]
 pub struct JumpLocation {
-    /// Path to the EPUB file
     pub epub_path: String,
-    /// Chapter index
     pub chapter_index: usize,
-    /// Scroll position within the chapter (deprecated, kept for compatibility)
-    pub scroll_position: usize,
-    /// Node index within the chapter (preferred over scroll position)
-    pub node_index: Option<usize>,
-    /// Optional anchor/fragment identifier
-    pub anchor: Option<String>,
+    pub node_index: usize,
 }
 
 /// Jump list for navigation history (like vim's jump list)
-/// Maintains a circular buffer of jump locations with a current position pointer
 pub struct JumpList {
     /// The actual list of jump locations
     entries: VecDeque<JumpLocation>,
@@ -27,7 +18,6 @@ pub struct JumpList {
 }
 
 impl JumpList {
-    /// Create a new jump list with specified maximum size
     pub fn new(max_size: usize) -> Self {
         Self {
             entries: VecDeque::with_capacity(max_size),
@@ -36,8 +26,6 @@ impl JumpList {
         }
     }
 
-    /// Add a new jump location to the list
-    /// This clears any forward history (entries after current position)
     pub fn push(&mut self, location: JumpLocation) {
         if let Some(pos) = self.current_position {
             self.entries.truncate(pos + 1);
@@ -55,8 +43,6 @@ impl JumpList {
         self.current_position = None;
     }
 
-    /// Jump back in history (Ctrl+O in vim)
-    /// Returns the location to jump to, or None if at the beginning
     pub fn jump_back(&mut self) -> Option<JumpLocation> {
         match self.current_position {
             None => {
@@ -76,8 +62,6 @@ impl JumpList {
         }
     }
 
-    /// Jump forward in history (Ctrl+I in vim)
-    /// Returns the location to jump to, or None if at the newest entry
     pub fn jump_forward(&mut self) -> Option<JumpLocation> {
         match self.current_position {
             Some(pos) if pos < self.entries.len() - 1 => {
@@ -111,40 +95,29 @@ mod tests {
         let loc1 = JumpLocation {
             epub_path: "book1.epub".to_string(),
             chapter_index: 0,
-            scroll_position: 0,
-            node_index: None,
-            anchor: None,
+            node_index: 0,
         };
 
         let loc2 = JumpLocation {
             epub_path: "book1.epub".to_string(),
             chapter_index: 1,
-            scroll_position: 100,
-            node_index: None,
-            anchor: None,
+            node_index: 0,
         };
 
-        // Push first location (where we were before clicking link)
         list.push(loc1.clone());
 
-        // First jump back should return to loc1 (the saved position)
         assert_eq!(list.jump_back(), Some(loc1.clone()));
 
-        // Can't jump back further
         assert_eq!(list.jump_back(), None);
 
-        // Reset for next test
         list.clear();
         list.push(loc1.clone());
         list.push(loc2.clone());
 
-        // Now we have 2 entries, jump back should go to loc2 (most recent)
         assert_eq!(list.jump_back(), Some(loc2.clone()));
 
-        // Jump back again should go to loc1
         assert_eq!(list.jump_back(), Some(loc1.clone()));
 
-        // Jump forward should return to loc2
         assert_eq!(list.jump_forward(), Some(loc2.clone()));
     }
 
@@ -156,9 +129,7 @@ mod tests {
             list.push(JumpLocation {
                 epub_path: format!("book{}.epub", i),
                 chapter_index: i,
-                scroll_position: i * 100,
-                node_index: None,
-                anchor: None,
+                node_index: 0,
             });
         }
 

@@ -1,5 +1,5 @@
 ideas to implement:
- - Dimming should probably just use math instead of sticking to fixed palette
+ - [ ] Dimming should probably just use math instead of sticking to fixed palette
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
@@ -44,18 +44,20 @@ ideas to implement:
      [x] Quick search with jumps in books and navigation panel
      [x] Global in the book
      [ ] Global in the library
- - Code formatting & coloring. Goal: Manning books should be nice to read
- - logs/debug window
- - NOTES & comments
- - settings window
-     - make margins configurable + text color 
- - text cursor for reading ala vim normal mode
+ - [ ] Code formatting & coloring. Goal: Manning books should be nice to read
+ - [ ] User errors & info message
+ - [x] NOTES & comments
+     - [ ] List of comments
+        - [ ] Search in comments
+ - [ ] settings window
+     - [ ] make margins configurable + text color 
+ - [ ] text cursor for reading ala vim normal mode
 
  - images in ghosty terminal
      - images of various sized - needs larger size for large images
      - copy images to clipboard
- - Images in iterm and sixt protocol
- - integration with GOODREADS
+ - [ ] Images in iterm and sixt protocol
+ - [ ] integration with GOODREADS
  - ASCII art Logo & animations (eye candy)
  
  - tmux + tape = to get claude to the position i want it to get to 

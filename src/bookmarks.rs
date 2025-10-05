@@ -9,9 +9,6 @@ pub struct Bookmark {
     pub chapter_href: String,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub scroll_offset: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub node_index: Option<usize>,
 
     pub last_read: chrono::DateTime<chrono::Utc>,
@@ -102,7 +99,6 @@ impl Bookmarks {
         &mut self,
         path: &str,
         chapter_href: String,
-        scroll_offset: Option<usize>,
         node_index: Option<usize>,
         chapter_index: Option<usize>,
         total_chapters: Option<usize>,
@@ -111,7 +107,6 @@ impl Bookmarks {
             path.to_string(),
             Bookmark {
                 chapter_href,
-                scroll_offset,
                 node_index,
                 last_read: chrono::Utc::now(),
                 chapter_index,
@@ -135,23 +130,4 @@ impl Bookmarks {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_bookmark_serialization() {
-        let bookmark = Bookmark {
-            chapter_href: "OEBPS/xhtml/chapter1.xhtml".to_string(),
-            scroll_offset: Some(100),
-            node_index: Some(5),
-            last_read: chrono::Utc::now(),
-            chapter_index: Some(1),
-            total_chapters: Some(10),
-        };
-
-        let json = serde_json::to_string(&bookmark).unwrap();
-        let deserialized: Bookmark = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(bookmark.chapter_href, deserialized.chapter_href);
-        assert_eq!(bookmark.scroll_offset, deserialized.scroll_offset);
-        assert_eq!(bookmark.node_index, deserialized.node_index);
-    }
 }
