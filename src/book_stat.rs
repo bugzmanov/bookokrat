@@ -45,8 +45,7 @@ impl BookStat {
         self.terminal_size = terminal_size;
         self.chapter_stats.clear();
 
-        let toc_parser = TocParser::new();
-        let toc = toc_parser.parse_toc_structure(epub);
+        let toc = TocParser::parse_toc_structure(epub);
 
         let popup_height = terminal_size.1.saturating_sub(4) as usize;
         let text_width = terminal_size.0.saturating_sub(6) as usize;

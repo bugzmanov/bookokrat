@@ -68,6 +68,7 @@ bugs:
 [ ] Dynamic reschaling breaks double and tripple click text selection
 [ ] Currently reading chpater in TOC highlitning is seriously broken
 [ ] Code block selection with mouse selects wrong lines
+[ ] Adding comments doesn't move image down. it stays covering the text
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt

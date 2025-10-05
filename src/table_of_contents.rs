@@ -172,10 +172,8 @@ impl TableOfContents {
     ) {
         self.last_viewport_height = viewport_height;
 
-        // Decrement cooldown if active
         if self.manual_navigation_cooldown > 0 {
             self.manual_navigation_cooldown = self.manual_navigation_cooldown.saturating_sub(1);
-            // Keep manual navigation flag active during cooldown
             if self.manual_navigation_cooldown > 0 {
                 self.manual_navigation = true;
             } else {
@@ -184,17 +182,13 @@ impl TableOfContents {
         }
 
         if let Some(ref book_info) = self.current_book_info {
-            // Find the index of the active item in the flattened list
             if let Some(active_index) =
                 self.find_active_item_index(&book_info.toc_items, active_section)
             {
-                // Add 1 to account for the "Books List" item at the top
                 let active_index_with_header = active_index + 1;
                 self.active_item_index = Some(active_index_with_header);
 
-                // Only auto-scroll if user is not manually navigating and cooldown has expired
                 if !self.manual_navigation && self.manual_navigation_cooldown == 0 {
-                    // Ensure the active item is visible in the viewport
                     self.ensure_item_visible(active_index_with_header, viewport_height);
                 }
             }

@@ -11,6 +11,7 @@ use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use crate::parsing::text_generator::TextGenerator;
+use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
@@ -57,18 +58,20 @@ impl EpubBook {
     fn total_chapters(&self) -> usize {
         self.epub.get_num_pages()
     }
+
+    fn current_chapter(&self) -> usize {
+        self.epub.get_current_page()
+    }
 }
 
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
-    text_generator: TextGenerator,
     text_reader: MarkdownTextReader,
     bookmarks: Bookmarks,
     image_storage: Arc<ImageStorage>,
     book_images: BookImages,
     current_book: Option<EpubBook>,
-    current_chapter: usize,
     current_chapter_title: Option<String>,
     pub focused_panel: FocusedPanel,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
@@ -152,7 +155,6 @@ impl App {
 
     /// Check if we're in search mode
     fn is_in_search_mode(&self) -> bool {
-        // Check both navigation panel and content area for search mode
         self.navigation_panel.is_searching() || self.text_reader.is_searching()
     }
 
@@ -257,7 +259,6 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
-        let text_generator = crate::parsing::text_generator::TextGenerator::new();
 
         let text_reader = MarkdownTextReader::new();
 
@@ -277,12 +278,10 @@ impl App {
         let mut app = Self {
             book_manager,
             navigation_panel,
-            text_generator,
             text_reader,
             bookmarks,
             image_storage,
             book_images,
-            current_chapter: 0,
             current_book: None,
             current_chapter_title: None,
             focused_panel: FocusedPanel::Main(MainPanel::FileList),
@@ -393,8 +392,6 @@ impl App {
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
         if let Some(doc) = &mut self.current_book {
             if doc.epub.set_current_page(chapter_index) {
-                self.current_chapter = chapter_index;
-
                 self.text_reader.clear_active_anchor();
                 self.update_content();
                 self.update_current_chapter_in_cache();
@@ -418,8 +415,6 @@ impl App {
             match direction {
                 ChapterDirection::Next => {
                     if book.epub.go_next() {
-                        self.current_chapter += 1;
-                        info!("Moving to next chapter: {}", self.current_chapter + 1);
                         self.update_content();
                         self.update_current_chapter_in_cache();
                         self.save_bookmark_with_throttle(true);
@@ -431,8 +426,6 @@ impl App {
                 }
                 ChapterDirection::Previous => {
                     if book.epub.go_prev() {
-                        self.current_chapter -= 1;
-                        info!("Moving to previous chapter: {}", self.current_chapter + 1);
                         self.update_content();
                         self.update_current_chapter_in_cache();
                         self.save_bookmark_with_throttle(true);
@@ -493,7 +486,6 @@ impl App {
 
         self.initialize_search_engine(&mut doc);
 
-        self.current_chapter = 0;
         let book = EpubBook::new(path.to_string(), doc);
         self.current_book = Some(book);
         self.update_content();
@@ -538,15 +530,10 @@ impl App {
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
-                if doc.set_current_page(chapter_index) {
-                    self.current_chapter = chapter_index;
-                } else {
+                if !doc.set_current_page(chapter_index) {
                     // Fallback: ensure we're within bounds
                     let safe_chapter = chapter_index.min(doc.get_num_pages().saturating_sub(1));
-                    if doc.set_current_page(safe_chapter) {
-                        self.current_chapter = safe_chapter;
-                    } else {
-                        self.current_chapter = 0;
+                    if !doc.set_current_page(safe_chapter) {
                         error!("Failed to restore bookmark, staying at chapter 0");
                     }
                 }
@@ -556,12 +543,10 @@ impl App {
                 }
             } else {
                 warn!("Could not find chapter for href: {}", bookmark.chapter_href);
-                self.current_chapter = 0;
             }
         } else {
             if doc.get_num_pages() > 1 {
                 if doc.go_next() {
-                    self.current_chapter = 1;
                     match doc.get_current_str() {
                         Some((content, mime)) => {
                             info!(
@@ -588,13 +573,11 @@ impl App {
                     // Try alternative: set_current_page
                     info!("Attempting fallback: set_current_page(1)");
                     if doc.set_current_page(1) {
-                        self.current_chapter = 1;
                         info!("Fallback successful: moved to chapter 1 using set_current_page");
                     } else {
                         error!("Fallback also failed - unable to navigate in this EPUB");
                         // Don't fail completely - stay at chapter 0
                         info!("Staying at chapter 0 as fallback");
-                        self.current_chapter = 0;
                     }
                 }
             }
@@ -645,16 +628,16 @@ impl App {
 
     fn refresh_chapter_cache(&mut self) {
         if let Some(book) = &mut self.current_book {
-            let toc_items = self.text_generator.parse_toc_structure(&mut book.epub);
+            let toc_items = TocParser::parse_toc_structure(&mut book.epub);
 
-            let active_section = self.text_reader.get_active_section(self.current_chapter);
+            let active_section = self.text_reader.get_active_section(book.current_chapter());
 
-            let current_chapter_href = Self::get_chapter_href(&book.epub, self.current_chapter);
+            let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
 
             let book_info = CurrentBookInfo {
                 path: book.file.clone(),
                 toc_items,
-                current_chapter: self.current_chapter,
+                current_chapter: book.current_chapter(),
                 current_chapter_href,
                 active_section,
             };
@@ -672,44 +655,36 @@ impl App {
     }
 
     fn update_current_chapter_in_cache(&mut self) {
-        // Get the navigation area first to avoid borrow issues
-        let nav_area = if self.navigation_panel.mode == NavigationMode::TableOfContents {
-            Some(self.get_navigation_panel_area())
-        } else {
-            None
-        };
+        let nav_area = self.get_navigation_panel_area();
+        let toc_height = nav_area.height as usize;
 
         if let Some(ref mut cached_info) = self.cached_current_book_info {
-            cached_info.current_chapter = self.current_chapter;
-
-            // Update active section
-            cached_info.active_section = self.text_reader.get_active_section(self.current_chapter);
-
-            // Get current chapter href
-            let current_chapter_href = if let Some(book) = &self.current_book {
-                Self::get_chapter_href(&book.epub, self.current_chapter)
+            let (current_chapter_href, current_chapter) = if let Some(book) = &self.current_book {
+                cached_info.current_chapter = book.current_chapter();
+                cached_info.active_section =
+                    self.text_reader.get_active_section(book.current_chapter());
+                cached_info.current_chapter_href =
+                    Self::get_chapter_href(&book.epub, book.current_chapter());
+                (
+                    cached_info.current_chapter_href.clone(),
+                    book.current_chapter(),
+                )
             } else {
-                None
+                (None, 0) // TODO: this should never happen!
             };
-            cached_info.current_chapter_href = current_chapter_href.clone();
 
-            // Update the table of contents navigation info without touching ToC structure
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
                 self.navigation_panel
                     .table_of_contents
                     .update_navigation_info(
-                        self.current_chapter,
+                        current_chapter,
                         current_chapter_href,
                         cached_info.active_section.clone(),
                     );
 
-                // Update the active section and ensure it's visible
-                if let Some(area) = nav_area {
-                    let toc_height = area.height as usize;
-                    self.navigation_panel
-                        .table_of_contents
-                        .update_active_section(&cached_info.active_section, toc_height);
-                }
+                self.navigation_panel
+                    .table_of_contents
+                    .update_active_section(&cached_info.active_section, toc_height);
             }
         }
     }
@@ -720,16 +695,14 @@ impl App {
 
     pub fn save_bookmark_with_throttle(&mut self, force: bool) {
         if let Some(book) = &self.current_book {
-            // Get the chapter href from the current EPUB document
-            let chapter_href = Self::get_chapter_href(&book.epub, self.current_chapter)
-                .unwrap_or_else(|| format!("chapter_{}", self.current_chapter));
+            let chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter())
+                .unwrap_or_else(|| format!("chapter_{}", book.current_chapter()));
 
-            // Update bookmark with href and node index
             self.bookmarks.update_bookmark(
                 &book.file,
                 chapter_href,
                 Some(self.text_reader.get_current_node_index()),
-                Some(self.current_chapter),
+                Some(book.current_chapter()),
                 Some(book.total_chapters()),
             );
 
@@ -747,16 +720,11 @@ impl App {
         }
     }
 
-    fn update_highlight(&mut self) -> bool {
-        // Update highlight state in text reader
-        self.text_reader.update_highlight()
-    }
-
     fn update_content(&mut self) {
         if let Some(book) = &mut self.current_book {
             let (content, title) = match book.epub.get_current_str() {
                 Some((raw_html, _mime)) => {
-                    let title = self.text_generator.extract_chapter_title(&raw_html);
+                    let title = TextGenerator::extract_chapter_title(&raw_html);
                     (raw_html, title)
                 }
                 None => {
@@ -767,7 +735,7 @@ impl App {
 
             self.current_chapter_title = title.clone();
 
-            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, self.current_chapter) {
+            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, book.current_chapter()) {
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
             } else {
@@ -906,9 +874,9 @@ impl App {
                 break;
             }
 
-            // Safety check - if we're draining too many events, something might be wrong
             if drain_count > 20 {
-                debug!(
+                // Safety check
+                warn!(
                     "Warning: draining many events ({}), may indicate event accumulation issue",
                     drain_count
                 );
@@ -1187,10 +1155,10 @@ impl App {
     /// Handle image click by creating or showing the image popup
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
         // Save current location to jump list before navigating
-        if let Some(EpubBook { epub, file }) = &self.current_book {
+        if let Some(book) = &self.current_book {
             let current_location = JumpLocation {
-                epub_path: file.clone(),
-                chapter_index: self.current_chapter,
+                epub_path: book.file.clone(),
+                chapter_index: book.current_chapter(),
                 node_index: self.text_reader.get_current_node_index(),
             };
             self.jump_list.push(current_location);
@@ -1275,15 +1243,13 @@ impl App {
     }
 
     fn scroll_to_anchor(&mut self, anchor_id: &str) -> std::io::Result<bool> {
-        debug!("Searching for anchor: '{}'", anchor_id);
         if let Some(target_line) = self.text_reader.get_anchor_position(anchor_id) {
             self.text_reader.scroll_to_line(target_line);
             self.text_reader
                 .highlight_line_temporarily(target_line, Duration::from_secs(2));
-            debug!("Scrolled to anchor '{}' at line {}", anchor_id, target_line);
             Ok(true)
         } else {
-            debug!("Anchor '{}' not found in current chapter", anchor_id);
+            warn!("Anchor '{}' not found in current chapter", anchor_id);
             Ok(false)
         }
     }
@@ -1298,7 +1264,6 @@ impl App {
                 return Ok(false);
             }
 
-            // Store pending anchor scroll for after content loads
             if let Some(anchor) = anchor_id {
                 self.text_reader
                     .handle_pending_anchor_scroll(Some(anchor.clone()));
@@ -1306,7 +1271,7 @@ impl App {
 
             Ok(true)
         } else {
-            debug!("Chapter file '{}' not found in TOC", chapter_file);
+            warn!("Chapter file '{}' not found in TOC", chapter_file);
             Ok(false)
         }
     }
@@ -1367,18 +1332,29 @@ impl App {
 
     /// Find the spine index for a given href
     fn find_spine_index_by_href(&self, href: &str) -> Option<usize> {
+        fn normalize_href(href: &str) -> String {
+            let normalized = href
+                .trim_start_matches("../")
+                .trim_start_matches("./")
+                .trim_start_matches("OEBPS/");
+
+            // Remove fragment identifiers (e.g., "#ch1", "#tit") for matching
+            if let Some(fragment_pos) = normalized.find('#') {
+                normalized[..fragment_pos].to_string()
+            } else {
+                normalized.to_string()
+            }
+        }
+
         let book = self.current_book.as_ref()?;
 
-        // Normalize the href for comparison
-        let normalized_href = self.text_generator.normalize_href(href);
+        let normalized_href = normalize_href(href);
 
-        // Search through the spine
         for (index, spine_item) in book.epub.spine.iter().enumerate() {
             if let Some((path, _)) = book.epub.resources.get(&spine_item.idref) {
                 let path_str = path.to_string_lossy();
-                let normalized_path = self.text_generator.normalize_href(&path_str);
+                let normalized_path = normalize_href(&path_str);
 
-                // Check if the paths match
                 if normalized_path == normalized_href
                     || normalized_path.ends_with(&normalized_href)
                     || normalized_href.ends_with(&normalized_path)
@@ -1392,18 +1368,12 @@ impl App {
     }
 
     fn open_external_link(&mut self, url: &str) {
-        debug!("Opening external link: {}", url);
-
-        // Use the open crate to open the URL in the default browser
         if let Err(e) = open::that(url) {
             error!("Failed to open URL {}: {}", url, e);
         }
     }
 
     fn handle_image_click(&mut self, image_src: &str, terminal_size: Rect) {
-        debug!("Handling image click for: {}", image_src);
-
-        // Get the image picker - required for creating protocols
         let picker = match self.text_reader.get_image_picker() {
             Some(picker) => picker,
             None => {
@@ -1599,16 +1569,17 @@ impl App {
         if let Some(book) = &self.current_book {
             info!(
                 "Opening EPUB with system viewer: {} at chapter {}",
-                book.file, self.current_chapter
+                book.file,
+                book.current_chapter()
             );
 
             match self
                 .system_command_executor
-                .open_file_at_chapter(&book.file, self.current_chapter)
+                .open_file_at_chapter(&book.file, book.current_chapter())
             {
                 Ok(_) => info!(
                     "Successfully opened EPUB with system viewer at chapter {}",
-                    self.current_chapter
+                    book.current_chapter()
                 ),
                 Err(e) => error!("Failed to open EPUB with system viewer: {}", e),
             }
@@ -1627,7 +1598,7 @@ impl App {
             self.load_epub_internal_without_bookmark(&location.epub_path)?;
         }
 
-        if self.current_chapter != location.chapter_index {
+        if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(location.chapter_index) {
             self.navigate_to_chapter(location.chapter_index)?;
         }
 
@@ -1845,7 +1816,7 @@ impl App {
                 f,
                 main_chunks[1],
                 &self.current_chapter_title,
-                self.current_chapter,
+                book.current_chapter(),
                 book.total_chapters(),
                 &OCEANIC_NEXT,
                 self.is_main_panel(MainPanel::Content),
@@ -2738,34 +2709,8 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                // Check if this might be part of a key sequence
                 if !self.handle_key_sequence(' ') {
-                    // Space by itself - only toggle expansion in TOC mode
-                    if self.is_main_panel(MainPanel::FileList)
-                        && self.navigation_panel.mode == NavigationMode::TableOfContents
-                    {
-                        // Toggle section expansion when focused on file list and in TOC mode
-                        // Get the currently selected TOC item and toggle its expansion if it's a section
-                        if let Some(ref cached_info) = self.cached_current_book_info {
-                            if let Some(SelectedTocItem::TocItem(toc_item)) =
-                                self.navigation_panel.table_of_contents.get_selected_item()
-                            {
-                                // Clone the toc_items to avoid borrow issues
-                                let mut updated_toc_items = cached_info.toc_items.clone();
-                                if let Some(item) = Self::find_toc_item_mut(
-                                    &mut updated_toc_items,
-                                    toc_item.title(),
-                                ) {
-                                    item.toggle_expansion();
-                                    // Update the cached info with the modified toc_items
-                                    if let Some(ref mut cached_info) = self.cached_current_book_info
-                                    {
-                                        cached_info.toc_items = updated_toc_items;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // do nothing
                 }
             }
             KeyCode::Tab => {
@@ -2888,17 +2833,13 @@ impl App {
         self.text_reader.handle_terminal_resize();
     }
 
+    //todo this does extra parsing of a book. damn claude is dumb
     fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
-        debug!("Initializing search engine for the book");
-
-        // Helper function to extract plain text from Markdown AST
         fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> String {
             let mut lines = Vec::new();
-
             for node in &doc.blocks {
                 extract_text_from_block(&node.block, &mut lines);
             }
-
             lines.join("\n")
         }
 
@@ -2973,7 +2914,6 @@ impl App {
         fn extract_text_from_text(text: &crate::markdown::Text) -> String {
             let mut result = String::new();
 
-            // Use the iter() method to access the content
             for part in text.iter() {
                 match part {
                     crate::markdown::TextOrInline::Text(text_node) => {
@@ -3005,9 +2945,7 @@ impl App {
             if doc.set_current_page(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
                     // Extract chapter title
-                    let title = self
-                        .text_generator
-                        .extract_chapter_title(&raw_html)
+                    let title = TextGenerator::extract_chapter_title(&raw_html)
                         .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
 
                     // Convert HTML to Markdown AST and extract clean text
@@ -3038,7 +2976,6 @@ impl App {
         if let Some(ref mut book_search) = self.book_search {
             book_search.open(clear_input);
             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookSearch);
-            debug!("Opened book search popup (clear_input: {})", clear_input);
         } else {
             warn!("Cannot open book search - search engine not initialized");
         }
@@ -3141,7 +3078,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
         }
 
         if last_tick.elapsed() >= tick_rate {
-            let highlight_changed = app.update_highlight(); // Update highlight state
+            let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
             // Check for loaded images from background thread
             let images_loaded = app.text_reader.check_for_loaded_images();
             if images_loaded {

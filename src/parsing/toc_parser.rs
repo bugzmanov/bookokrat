@@ -6,12 +6,8 @@ pub struct TocParser;
 
 // todo all methods needs to be static
 impl TocParser {
-    pub fn new() -> Self {
-        Self
-    }
-
     /// Split href into path and anchor components
-    fn split_href_and_anchor(&self, href: &str) -> (String, Option<String>) {
+    fn split_href_and_anchor(href: &str) -> (String, Option<String>) {
         if let Some(hash_pos) = href.find('#') {
             let path = href[..hash_pos].to_string();
             let anchor = href[hash_pos + 1..].to_string();
@@ -21,22 +17,22 @@ impl TocParser {
         }
     }
 
-    pub fn parse_toc_structure<R: Read + Seek>(&self, doc: &mut EpubDoc<R>) -> Vec<TocItem> {
-        self.convert_navpoints_to_toc_items(&doc.toc)
+    pub fn parse_toc_structure<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocItem> {
+        Self::convert_navpoints_to_toc_items(&doc.toc)
     }
 
     /// Convert NavPoint structure to TocItem structure
-    fn convert_navpoints_to_toc_items(&self, navpoints: &[NavPoint]) -> Vec<TocItem> {
+    fn convert_navpoints_to_toc_items(navpoints: &[NavPoint]) -> Vec<TocItem> {
         navpoints
             .iter()
-            .map(|navpoint| self.convert_navpoint_to_toc_item(navpoint))
+            .map(|navpoint| Self::convert_navpoint_to_toc_item(navpoint))
             .collect()
     }
 
     /// Convert a single NavPoint to TocItem
-    fn convert_navpoint_to_toc_item(&self, navpoint: &NavPoint) -> TocItem {
+    fn convert_navpoint_to_toc_item(navpoint: &NavPoint) -> TocItem {
         let href = navpoint.content.to_string_lossy().to_string();
-        let (clean_href, anchor) = self.split_href_and_anchor(&href);
+        let (clean_href, anchor) = Self::split_href_and_anchor(&href);
 
         if navpoint.children.is_empty() {
             // No children, create a Chapter
@@ -47,7 +43,7 @@ impl TocParser {
             }
         } else {
             // Has children, create a Section
-            let children = self.convert_navpoints_to_toc_items(&navpoint.children);
+            let children = Self::convert_navpoints_to_toc_items(&navpoint.children);
             TocItem::Section {
                 title: navpoint.label.clone(),
                 href: Some(clean_href),
