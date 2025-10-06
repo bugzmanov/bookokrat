@@ -1430,7 +1430,6 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
     app.handle_mouse_event(mouse_drag_within_area, None);
-    let final_scroll = app.get_scroll_offset();
 
     // End selection
     let mouse_up = MouseEvent {
@@ -2106,7 +2105,6 @@ fn test_book_reading_history_with_many_entries_svg() {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
         let bookmark = bookrat::bookmarks::Bookmark {
             chapter_href: format!("chapter_{}.html", i * 2),
-            scroll_offset: Some(0),
             node_index: None,
             last_read: now - Duration::hours(i as i64),
             chapter_index: Some(i * 2),
@@ -2120,7 +2118,6 @@ fn test_book_reading_history_with_many_entries_svg() {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
         let bookmark = bookrat::bookmarks::Bookmark {
             chapter_href: format!("chapter_{}.html", (i - 10) * 3),
-            scroll_offset: Some(0),
             node_index: None,
             last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
             chapter_index: Some((i - 10) * 3),
@@ -2138,7 +2135,6 @@ fn test_book_reading_history_with_many_entries_svg() {
         prod_bookmarks.update_bookmark(
             &path,
             bookmark.chapter_href,
-            bookmark.scroll_offset,
             bookmark.node_index,
             bookmark.chapter_index,
             bookmark.total_chapters,

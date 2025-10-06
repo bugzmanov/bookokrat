@@ -178,7 +178,7 @@ fn test_navigation_panel_vim_motion_g() {
 
     // Switch to TOC mode with our test book
     let book_info = create_test_book_info_with_toc();
-    nav_panel.switch_to_toc_mode(0, book_info);
+    nav_panel.switch_to_toc_mode(book_info);
 
     // Test G (go to bottom)
     nav_panel.handle_upper_g();
@@ -219,7 +219,7 @@ fn test_navigation_panel_vim_motion_gg() {
 
     // Switch to TOC mode with our test book
     let book_info = create_test_book_info_with_toc();
-    nav_panel.switch_to_toc_mode(0, book_info);
+    nav_panel.switch_to_toc_mode(book_info);
 
     // Move down to middle to test gg from a non-top position
     for _ in 0..10 {

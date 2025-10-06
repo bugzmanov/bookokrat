@@ -80,8 +80,6 @@ pub struct App {
     last_click_time: Option<Instant>,
     last_click_position: Option<(u16, u16)>,
     click_count: u32,
-    // Cached chapter information to avoid re-parsing on every render
-    cached_current_book_info: Option<CurrentBookInfo>, // TODO: this needs to be remove from here
     // Key sequence tracking for multi-key commands
     key_sequence: Vec<char>,
     last_key_time: Option<Instant>,
@@ -291,7 +289,6 @@ impl App {
             last_click_time: None,
             last_click_position: None,
             click_count: 0,
-            cached_current_book_info: None,
             key_sequence: Vec::new(),
             last_key_time: None,
             terminal_width: 80,  // Default width, will be updated on render
@@ -371,13 +368,9 @@ impl App {
 
             self.save_bookmark_with_throttle(true);
 
-            self.load_epub_internal(&path)?;
+            self.load_epub(&path)?;
 
             self.navigation_panel.current_book_index = Some(book_index);
-            if let Some(book_info) = self.cached_current_book_info.clone() {
-                self.navigation_panel
-                    .switch_to_toc_mode(book_index, book_info);
-            }
 
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
@@ -467,7 +460,7 @@ impl App {
     // =============================================================================
     // These methods should only be called by high-level actions above
 
-    fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
+    pub fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
         let mut doc = self
             .book_manager
             .load_epub(path)
@@ -493,7 +486,7 @@ impl App {
         Ok(())
     }
 
-    fn load_epub_internal(&mut self, path: &str) -> Result<()> {
+    pub fn load_epub(&mut self, path: &str) -> Result<()> {
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {}", e);
             anyhow::anyhow!("Failed to load EPUB: {}", e)
@@ -641,16 +634,8 @@ impl App {
                 current_chapter_href,
                 active_section,
             };
-            self.cached_current_book_info = Some(book_info.clone());
 
-            // Update the table of contents with the new book info
-            if self.navigation_panel.mode == NavigationMode::TableOfContents {
-                self.navigation_panel
-                    .table_of_contents
-                    .update_current_book_info_preserve_state(book_info);
-            }
-        } else {
-            self.cached_current_book_info = None;
+            self.navigation_panel.switch_to_toc_mode(book_info);
         }
     }
 
@@ -658,20 +643,10 @@ impl App {
         let nav_area = self.get_navigation_panel_area();
         let toc_height = nav_area.height as usize;
 
-        if let Some(ref mut cached_info) = self.cached_current_book_info {
-            let (current_chapter_href, current_chapter) = if let Some(book) = &self.current_book {
-                cached_info.current_chapter = book.current_chapter();
-                cached_info.active_section =
-                    self.text_reader.get_active_section(book.current_chapter());
-                cached_info.current_chapter_href =
-                    Self::get_chapter_href(&book.epub, book.current_chapter());
-                (
-                    cached_info.current_chapter_href.clone(),
-                    book.current_chapter(),
-                )
-            } else {
-                (None, 0) // TODO: this should never happen!
-            };
+        if let Some(book) = &self.current_book {
+            let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
+            let current_chapter = book.current_chapter();
+            let active_selection = self.text_reader.get_active_section(book.current_chapter());
 
             if self.navigation_panel.mode == NavigationMode::TableOfContents {
                 self.navigation_panel
@@ -679,12 +654,12 @@ impl App {
                     .update_navigation_info(
                         current_chapter,
                         current_chapter_href,
-                        cached_info.active_section.clone(),
+                        active_selection.clone(),
                     );
 
                 self.navigation_panel
                     .table_of_contents
-                    .update_active_section(&cached_info.active_section, toc_height);
+                    .update_active_section(&active_selection, toc_height); // todo: double update is dumb
             }
         }
     }

@@ -71,15 +71,13 @@ mod tests {
 
     #[test]
     fn test_convert_flat_navpoints() {
-        let parser = TocParser::new();
-
         let navpoints = vec![
             create_test_navpoint("Chapter 1", "ch1.xhtml", vec![]),
             create_test_navpoint("Chapter 2", "ch2.xhtml#section", vec![]),
             create_test_navpoint("Chapter 3", "ch3.xhtml", vec![]),
         ];
 
-        let toc_items = parser.convert_navpoints_to_toc_items(&navpoints);
+        let toc_items = TocParser::convert_navpoints_to_toc_items(&navpoints);
 
         assert_eq!(toc_items.len(), 3);
 
@@ -114,8 +112,6 @@ mod tests {
 
     #[test]
     fn test_convert_hierarchical_navpoints() {
-        let parser = TocParser::new();
-
         let navpoints = vec![
             create_test_navpoint(
                 "Part 1",
@@ -133,7 +129,7 @@ mod tests {
             create_test_navpoint("Epilogue", "epilogue.xhtml", vec![]),
         ];
 
-        let toc_items = parser.convert_navpoints_to_toc_items(&navpoints);
+        let toc_items = TocParser::convert_navpoints_to_toc_items(&navpoints);
 
         assert_eq!(toc_items.len(), 3);
 
@@ -170,13 +166,11 @@ mod tests {
 
     #[test]
     fn test_split_href_and_anchor() {
-        let parser = TocParser::new();
-
-        let (href, anchor) = parser.split_href_and_anchor("chapter.xhtml#section1");
+        let (href, anchor) = TocParser::split_href_and_anchor("chapter.xhtml#section1");
         assert_eq!(href, "chapter.xhtml");
         assert_eq!(anchor, Some("section1".to_string()));
 
-        let (href, anchor) = parser.split_href_and_anchor("chapter.xhtml");
+        let (href, anchor) = TocParser::split_href_and_anchor("chapter.xhtml");
         assert_eq!(href, "chapter.xhtml");
         assert_eq!(anchor, None);
     }

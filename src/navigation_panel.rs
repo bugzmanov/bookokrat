@@ -92,18 +92,13 @@ impl NavigationPanel {
         }
     }
 
-    pub fn switch_to_toc_mode(&mut self, book_index: usize, book_info: CurrentBookInfo) {
+    pub fn switch_to_toc_mode(&mut self, book_info: CurrentBookInfo) {
         self.mode = NavigationMode::TableOfContents;
-        self.current_book_index = Some(book_index);
 
-        // Check if we already have a ToC for this book (same book index)
-        // If not, create a new one. If yes, update it while preserving expansion states.
         if self.table_of_contents.get_current_book_info().is_none() {
-            // First time opening this book's ToC - create new
             self.table_of_contents = TableOfContents::new();
             self.table_of_contents.set_current_book_info(book_info);
         } else {
-            // Update existing ToC while preserving expansion states
             self.table_of_contents
                 .update_current_book_info_preserve_state(book_info);
         }
