@@ -7,6 +7,7 @@ use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
+use crate::inputs::{ClickType, KeySeq, MouseTracker};
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
@@ -69,35 +70,22 @@ pub struct App {
     pub navigation_panel: NavigationPanel,
     text_reader: MarkdownTextReader,
     bookmarks: Bookmarks,
-    image_storage: Arc<ImageStorage>,
     book_images: BookImages,
     current_book: Option<EpubBook>,
-    current_chapter_title: Option<String>,
     pub focused_panel: FocusedPanel,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
     last_bookmark_save: std::time::Instant,
-    // Click tracking for double/triple-click detection
-    last_click_time: Option<Instant>,
-    last_click_position: Option<(u16, u16)>,
-    click_count: u32,
-    // Key sequence tracking for multi-key commands
-    key_sequence: Vec<char>,
-    last_key_time: Option<Instant>,
-    // Store terminal dimensions for calculating panel boundaries
+    mouse_tracker: MouseTracker,
+    key_sequence: KeySeq,
     terminal_width: u16,
     terminal_height: u16,
-    // Reading history
     reading_history: Option<ReadingHistory>,
-    // Image popup
     image_popup: Option<ImagePopup>,
-    image_popup_area: Option<Rect>,
     last_terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
     book_stat: BookStat,
-    // Jump list for navigation history (Ctrl+O/Ctrl+I)
     jump_list: JumpList,
     book_search: Option<BookSearch>,
-    search_engine: Option<Arc<Mutex<SearchEngine>>>,
 }
 
 pub trait VimNavMotions {
@@ -129,13 +117,6 @@ pub enum PopupWindow {
     BookStats,
     ImagePopup,
     BookSearch,
-}
-
-#[derive(PartialEq, Debug)]
-enum ClickType {
-    Single,
-    Double,
-    Triple,
 }
 
 impl App {
@@ -257,86 +238,58 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
-
         let text_reader = MarkdownTextReader::new();
-
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
-        // Initialize image storage in project temp directory
         let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
             error!("Failed to initialize image storage: {}. Using fallback.", e);
-            // Create a fallback image storage in system temp directory
             ImageStorage::new(std::env::temp_dir().join("bookrat_images"))
                 .expect("Failed to create fallback image storage")
         }));
 
-        // Initialize book images abstraction
         let book_images = BookImages::new(image_storage.clone());
+
+        let (term_width, term_hight) = if let Ok((width, height)) = crossterm::terminal::size() {
+            debug!("Initial terminal size: {}x{}", width, height);
+            (width, height)
+        } else {
+            (80, 24)
+        };
 
         let mut app = Self {
             book_manager,
             navigation_panel,
             text_reader,
             bookmarks,
-            image_storage,
             book_images,
             current_book: None,
-            current_chapter_title: None,
             focused_panel: FocusedPanel::Main(MainPanel::FileList),
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
-            // Initialize click tracking
-            last_click_time: None,
-            last_click_position: None,
-            click_count: 0,
-            key_sequence: Vec::new(),
-            last_key_time: None,
-            terminal_width: 80,  // Default width, will be updated on render
-            terminal_height: 24, // Default height, will be updated on render
+            mouse_tracker: MouseTracker::new(),
+            key_sequence: KeySeq::new(),
+            terminal_width: term_width,
+            terminal_height: term_hight,
             reading_history: None,
             image_popup: None,
-            image_popup_area: None,
             last_terminal_size: Rect::new(0, 0, 80, 24),
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
             jump_list: JumpList::new(20),
             book_search: None,
-            search_engine: None,
         };
 
-        // Get actual terminal size on startup
-        if let Ok((width, height)) = crossterm::terminal::size() {
-            app.terminal_width = width;
-            app.terminal_height = height;
-            debug!("Initial terminal size: {}x{}", width, height);
-        }
-
-        // Auto-load the most recently read book if available
-        if auto_load_recent {
-            if let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
-                // Check if the most recent book still exists in the managed books
-                if app.book_manager.contains_book(&recent_path) {
-                    info!("Auto-loading most recent book: {}", recent_path);
-
-                    // Find the book index before loading
-                    let book_index = app
-                        .book_manager
-                        .books
-                        .iter()
-                        .position(|book| book.path == recent_path);
-
-                    if let Some(idx) = book_index {
-                        // Use the high-level action method to ensure consistent state
-                        if let Err(e) = app.open_book_for_reading(idx) {
-                            error!("Failed to auto-load most recent book: {}", e);
-                        }
-                    }
+        if auto_load_recent && let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
+            if app.book_manager.contains_book(&recent_path) {
+                if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
+                    error!("Failed to auto-load most recent book: {}", e);
                 }
             }
         }
 
         app
     }
+
     fn toggle_profiling(&self) {
         let mut profiler_lock = self.profiler.lock().unwrap();
 
@@ -356,6 +309,7 @@ impl App {
             }
         }
     }
+
     // =============================================================================
     // HIGH-LEVEL APPLICATION ACTIONS
     // =============================================================================
@@ -367,18 +321,26 @@ impl App {
             let path = book_info.path.clone();
 
             self.save_bookmark_with_throttle(true);
-
-            self.load_epub(&path)?;
+            self.load_epub(&path, false)?;
 
             self.navigation_panel.current_book_index = Some(book_index);
-
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
-            info!("Successfully opened book for reading: {}", path);
             Ok(())
         } else {
             anyhow::bail!("Invalid book index: {}", book_index)
         }
+    }
+
+    pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
+        let book_index = self
+            .book_manager
+            .books
+            .iter()
+            .position(|book| book.path == path)
+            .ok_or_else(|| anyhow::anyhow!("Book not found in manager: {}", path))?;
+
+        self.open_book_for_reading(book_index)
     }
 
     /// Navigate to a specific chapter - ensures all state is properly updated
@@ -387,8 +349,8 @@ impl App {
             if doc.epub.set_current_page(chapter_index) {
                 self.text_reader.clear_active_anchor();
                 self.update_content();
-                self.update_current_chapter_in_cache();
-                self.save_bookmark_with_throttle(true);
+                self.update_toc_state();
+                self.save_bookmark_with_throttle(true); //save new location as a bookmark
 
                 Ok(())
             } else {
@@ -405,54 +367,24 @@ impl App {
     /// Navigate to next or previous chapter - maintains all state consistency
     pub fn navigate_chapter_relative(&mut self, direction: ChapterDirection) -> Result<()> {
         if let Some(book) = &mut self.current_book {
-            match direction {
-                ChapterDirection::Next => {
-                    if book.epub.go_next() {
-                        self.update_content();
-                        self.update_current_chapter_in_cache();
-                        self.save_bookmark_with_throttle(true);
-                        Ok(())
-                    } else {
-                        info!("Already at last chapter");
-                        Ok(())
-                    }
-                }
-                ChapterDirection::Previous => {
-                    if book.epub.go_prev() {
-                        self.update_content();
-                        self.update_current_chapter_in_cache();
-                        self.save_bookmark_with_throttle(true);
-                        Ok(())
-                    } else {
-                        info!("Already at first chapter");
-                        Ok(())
-                    }
-                }
+            if (direction == ChapterDirection::Next && book.epub.go_next())
+                || (direction == ChapterDirection::Previous && book.epub.go_prev())
+            {
+                self.update_content();
+                self.update_toc_state();
+                self.save_bookmark_with_throttle(true);
+                Ok(())
+            } else {
+                anyhow::bail!("Already at the end/beginning of the book")
             }
         } else {
             anyhow::bail!("No document loaded")
         }
     }
 
-    /// Switch back to book list mode - ensures clean state transition
     pub fn switch_to_book_list_mode(&mut self) {
         self.navigation_panel.switch_to_book_mode();
         self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
-        info!("Switched to book list mode");
-    }
-
-    /// Open a book for reading by path - for testing and compatibility
-    /// This method finds the book by path and uses the high-level action
-    pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
-        // Find the book index by path
-        let book_index = self
-            .book_manager
-            .books
-            .iter()
-            .position(|book| book.path == path)
-            .ok_or_else(|| anyhow::anyhow!("Book not found in manager: {}", path))?;
-
-        self.open_book_for_reading(book_index)
     }
 
     // =============================================================================
@@ -460,33 +392,7 @@ impl App {
     // =============================================================================
     // These methods should only be called by high-level actions above
 
-    pub fn load_epub_internal_without_bookmark(&mut self, path: &str) -> Result<()> {
-        let mut doc = self
-            .book_manager
-            .load_epub(path)
-            .map_err(|e| anyhow::anyhow!("Failed to load EPUB: {}", e))?;
-
-        let path_buf = std::path::PathBuf::from(path);
-        if let Err(e) = self.image_storage.extract_images(&path_buf) {
-            error!("Failed to extract images from EPUB: {}", e);
-        } else {
-            info!("Successfully extracted images from EPUB");
-        }
-
-        if let Err(e) = self.book_images.load_book(&path_buf) {
-            error!("Failed to load book in BookImages: {}", e);
-        }
-
-        self.initialize_search_engine(&mut doc);
-
-        let book = EpubBook::new(path.to_string(), doc);
-        self.current_book = Some(book);
-        self.update_content();
-        self.refresh_chapter_cache();
-        Ok(())
-    }
-
-    pub fn load_epub(&mut self, path: &str) -> Result<()> {
+    pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {}", e);
             anyhow::anyhow!("Failed to load EPUB: {}", e)
@@ -519,7 +425,7 @@ impl App {
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
 
-        if let Some(bookmark) = self.bookmarks.get_bookmark(path) {
+        if !ignore_bookmarks && let Some(bookmark) = self.bookmarks.get_bookmark(path) {
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
@@ -576,9 +482,11 @@ impl App {
             }
         }
 
-        self.current_book = Some(EpubBook::new(path.to_string(), doc));
+        let current_book = EpubBook::new(path.to_string(), doc);
+        self.switch_to_toc_mode(&current_book);
+
+        self.current_book = Some(current_book);
         self.update_content();
-        self.refresh_chapter_cache();
 
         if let Some(node_idx) = node_to_restore {
             self.text_reader.restore_to_node_index(node_idx);
@@ -619,27 +527,23 @@ impl App {
         None
     }
 
-    fn refresh_chapter_cache(&mut self) {
-        if let Some(book) = &mut self.current_book {
-            let toc_items = TocParser::parse_toc_structure(&mut book.epub);
+    fn switch_to_toc_mode(&mut self, book: &EpubBook) {
+        let toc_items = TocParser::parse_toc_structure(&book.epub);
+        let active_section = self.text_reader.get_active_section(book.current_chapter());
+        let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
 
-            let active_section = self.text_reader.get_active_section(book.current_chapter());
+        let book_info = CurrentBookInfo {
+            path: book.file.clone(),
+            toc_items,
+            current_chapter: book.current_chapter(),
+            current_chapter_href,
+            active_section,
+        };
 
-            let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
-
-            let book_info = CurrentBookInfo {
-                path: book.file.clone(),
-                toc_items,
-                current_chapter: book.current_chapter(),
-                current_chapter_href,
-                active_section,
-            };
-
-            self.navigation_panel.switch_to_toc_mode(book_info);
-        }
+        self.navigation_panel.switch_to_toc_mode(book_info);
     }
 
-    fn update_current_chapter_in_cache(&mut self) {
+    fn update_toc_state(&mut self) {
         let nav_area = self.get_navigation_panel_area();
         let toc_height = nav_area.height as usize;
 
@@ -648,19 +552,17 @@ impl App {
             let current_chapter = book.current_chapter();
             let active_selection = self.text_reader.get_active_section(book.current_chapter());
 
-            if self.navigation_panel.mode == NavigationMode::TableOfContents {
-                self.navigation_panel
-                    .table_of_contents
-                    .update_navigation_info(
-                        current_chapter,
-                        current_chapter_href,
-                        active_selection.clone(),
-                    );
+            self.navigation_panel
+                .table_of_contents
+                .update_navigation_info(
+                    current_chapter,
+                    current_chapter_href,
+                    active_selection.clone(),
+                );
 
-                self.navigation_panel
-                    .table_of_contents
-                    .update_active_section(&active_selection, toc_height); // todo: double update is dumb
-            }
+            self.navigation_panel
+                .table_of_contents
+                .update_active_section(&active_selection, toc_height); // todo: double update is dumb
         }
     }
 
@@ -708,8 +610,6 @@ impl App {
                 }
             };
 
-            self.current_chapter_title = title.clone();
-
             if let Some(chapter_file) = Self::get_chapter_href(&book.epub, book.current_chapter()) {
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
@@ -717,54 +617,36 @@ impl App {
                 self.text_reader.set_current_chapter_file(None);
             }
 
-            self.text_reader.content_updated(content.len());
-
             self.text_reader.set_content_from_string(&content, title);
             self.text_reader.preload_image_dimensions(&self.book_images);
         } else {
             error!("No EPUB document loaded");
-            self.text_reader.content_updated(0);
+            self.text_reader.clear_content();
         }
-    }
-
-    /// Toggle expansion of a section by its title
-    /// Find a TOC item by title and return a mutable reference
-    fn find_toc_item_mut<'a>(toc_items: &'a mut [TocItem], title: &str) -> Option<&'a mut TocItem> {
-        for item in toc_items {
-            if item.title() == title {
-                return Some(item);
-            }
-            if let TocItem::Section { children, .. } = item {
-                if let Some(found) = Self::find_toc_item_mut(children, title) {
-                    return Some(found);
-                }
-            }
-        }
-        None
     }
 
     pub fn scroll_down(&mut self) {
         self.text_reader.scroll_down();
         self.save_bookmark();
-        self.update_current_chapter_in_cache(); // This will update active section
+        self.update_toc_state(); // This will update active section
     }
 
     pub fn scroll_up(&mut self) {
         self.text_reader.scroll_up();
         self.save_bookmark();
-        self.update_current_chapter_in_cache(); // This will update active section
+        self.update_toc_state(); // This will update active section
     }
 
     pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_down(screen_height);
         self.save_bookmark();
-        self.update_current_chapter_in_cache(); // This will update active section
+        self.update_toc_state(); // This will update active section
     }
 
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_up(screen_height);
         self.save_bookmark();
-        self.update_current_chapter_in_cache(); // This will update active section
+        self.update_toc_state(); // This will update active section
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -775,8 +657,6 @@ impl App {
         event_source: Option<&mut dyn crate::event_source::EventSource>,
     ) {
         use std::time::Duration;
-
-        let start_time = std::time::Instant::now();
 
         // Extra validation for horizontal scrolls to prevent crossterm overflow bug
         if matches!(
@@ -816,7 +696,6 @@ impl App {
 
         // Store the initial mouse position to determine which area to scroll
         let initial_column = initial_mouse_event.column;
-        let initial_row = initial_mouse_event.row;
 
         // Count the initial event
         match initial_mouse_event.kind {
@@ -842,10 +721,6 @@ impl App {
 
             // Timeout circuit breaker - prevent infinite loops or excessive processing
             if batch_start_time.elapsed() > std::time::Duration::from_millis(100) {
-                debug!(
-                    "Batching timeout reached ({}ms), breaking out of event drain loop",
-                    batch_start_time.elapsed().as_millis()
-                );
                 break;
             }
 
@@ -883,25 +758,7 @@ impl App {
 
         let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
 
-        debug!(
-            "Batched mouse events: {} down, {} up, net: {}, drained: {} events at position ({}, {})",
-            scroll_down_count,
-            scroll_up_count,
-            net_scroll,
-            drain_count,
-            initial_column,
-            initial_row
-        );
-
         self.apply_scroll(net_scroll, initial_column);
-
-        let elapsed = start_time.elapsed();
-        if elapsed > std::time::Duration::from_millis(10) {
-            debug!(
-                "handle_mouse_event took {}ms for batched scroll",
-                elapsed.as_millis()
-            );
-        }
     }
 
     /// Handle non-scroll mouse events (clicks, drags, etc.)
@@ -913,61 +770,44 @@ impl App {
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ImagePopup)
                 ) {
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
                     // Check if click is outside the popup area
-                    if let Some(popup_area) = self.image_popup_area {
-                        let click_x = mouse_event.column;
-                        let click_y = mouse_event.row;
-
-                        // If click is outside popup area, close the popup
-                        if click_x < popup_area.x
-                            || click_x >= popup_area.x + popup_area.width
-                            || click_y < popup_area.y
-                            || click_y >= popup_area.y + popup_area.height
-                        {
+                    if let Some(ref popup) = self.image_popup {
+                        if popup.is_outside_popup_area(click_x, click_y) {
                             self.image_popup = None;
-                            self.image_popup_area = None;
-                            // Return to previous focus (content)
                             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                            debug!("Image popup closed via mouse click outside");
                         }
                     }
                     return; // Block all other interactions
                 }
 
-                // Check if reading history is shown next
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)
                 ) {
-                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+                    let click_type = self
+                        .mouse_tracker
+                        .detect_click_type(mouse_event.column, mouse_event.row);
 
                     if let Some(ref mut history) = self.reading_history {
                         match click_type {
-                            ClickType::Single => {
+                            ClickType::Single | ClickType::Triple => {
                                 history.handle_mouse_click(mouse_event.column, mouse_event.row);
                             }
                             ClickType::Double => {
                                 if history.handle_mouse_click(mouse_event.column, mouse_event.row) {
-                                    // Double-click acts as Enter - open the selected book
                                     if let Some(path) = history.selected_path() {
-                                        if let Some(book_index) =
-                                            self.book_manager.find_book_index_by_path(path)
-                                        {
-                                            // Close history and open the book
-                                            self.focused_panel =
-                                                FocusedPanel::Main(MainPanel::Content);
-                                            self.reading_history = None;
-                                            let _ = self.open_book_for_reading(book_index);
-                                        }
+                                        let ptmp = path.to_string();
+                                        let _ = self.open_book_for_reading_by_path(&ptmp);
+                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                                        self.reading_history = None;
                                     }
                                 }
                             }
-                            ClickType::Triple => {
-                                history.handle_mouse_click(mouse_event.column, mouse_event.row);
-                            }
                         }
                     }
-                    return; // Don't process other clicks when history is shown
+                    return;
                 }
 
                 let nav_panel_width = self.calculate_navigation_panel_width();
@@ -976,10 +816,12 @@ impl App {
                     self.text_reader.clear_selection();
 
                     let nav_area = self.get_navigation_panel_area();
-                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+                    let click_type = self
+                        .mouse_tracker
+                        .detect_click_type(mouse_event.column, mouse_event.row);
 
                     match click_type {
-                        ClickType::Single => {
+                        ClickType::Single | ClickType::Triple => {
                             self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
@@ -995,13 +837,6 @@ impl App {
                                 self.handle_navigation_panel_enter();
                             }
                         }
-                        ClickType::Triple => {
-                            self.navigation_panel.handle_mouse_click(
-                                mouse_event.column,
-                                mouse_event.row,
-                                nav_area,
-                            );
-                        }
                     }
                 } else {
                     // Click in content area (right 70% of screen)
@@ -1014,7 +849,9 @@ impl App {
                     }
 
                     let content_area = self.get_content_area_rect();
-                    let click_type = self.detect_click_type(mouse_event.column, mouse_event.row);
+                    let click_type = self
+                        .mouse_tracker
+                        .detect_click_type(mouse_event.column, mouse_event.row);
 
                     match click_type {
                         ClickType::Single => {
@@ -1051,7 +888,6 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                // Block if image popup is shown
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ImagePopup)
@@ -1067,33 +903,8 @@ impl App {
                         mouse_event.row,
                         content_area,
                     ) {
-                        // Directly handle the URL-based link without trying to find LinkInfo again
-                        if url.starts_with("http://") || url.starts_with("https://") {
-                            self.open_external_link(&url);
-                        } else {
-                            // Handle internal link by classifying the URL directly
-                            let (link_type, target_chapter, target_anchor) =
-                                crate::markdown::classify_link_href(&url);
-                            debug!(
-                                "Internal link clicked: url='{}', link_type={:?}, target_chapter={:?}, target_anchor={:?}",
-                                url, link_type, target_chapter, target_anchor
-                            );
-
-                            // Create a temporary LinkInfo for the link handling system
-                            let temp_link_info = LinkInfo {
-                                text: "".to_string(), // We don't need the text for navigation
-                                url: url.clone(),
-                                line: 0, // Not needed for navigation
-                                start_col: 0,
-                                end_col: 0,
-                                link_type: Some(link_type),
-                                target_chapter,
-                                target_anchor,
-                            };
-
-                            if let Err(e) = self.handle_link_click(&temp_link_info) {
-                                error!("Failed to handle link click: {}", e);
-                            }
+                        if let Err(e) = self.handle_link_click(&LinkInfo::from_url(url)) {
+                            error!("Failed to handle link click: {}", e);
                         }
                     }
                 }
@@ -1127,10 +938,10 @@ impl App {
         }
     }
 
-    /// Handle image click by creating or showing the image popup
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
-        // Save current location to jump list before navigating
-        if let Some(book) = &self.current_book {
+        if link_info.link_type != crate::markdown::LinkType::External
+            && let Some(book) = &self.current_book
+        {
             let current_location = JumpLocation {
                 epub_path: book.file.clone(),
                 chapter_index: book.current_chapter(),
@@ -1140,20 +951,25 @@ impl App {
         }
 
         match &link_info.link_type {
-            Some(crate::markdown::LinkType::External) => self.handle_external_link(&link_info.url),
-            Some(crate::markdown::LinkType::InternalAnchor) => {
+            crate::markdown::LinkType::External => {
+                if let Err(e) = open::that(&link_info.url) {
+                    error!("Failed to open external link: {}", e);
+                    Ok(false)
+                } else {
+                    Ok(true)
+                }
+            }
+            crate::markdown::LinkType::InternalAnchor => {
                 if let Some(anchor_id) = &link_info.target_anchor {
                     self.scroll_to_anchor(anchor_id)
                 } else {
                     Ok(false)
                 }
             }
-            Some(crate::markdown::LinkType::InternalChapter) => {
+            crate::markdown::LinkType::InternalChapter => {
                 if let Some(chapter_file) = &link_info.target_chapter {
-                    // Check if we're already in the target chapter
                     if let Some(current_chapter_file) = self.text_reader.get_current_chapter_file()
                     {
-                        // Normalize paths by extracting just the filename for comparison
                         let current_filename = std::path::Path::new(current_chapter_file)
                             .file_name()
                             .and_then(|f| f.to_str())
@@ -1163,35 +979,19 @@ impl App {
                             .and_then(|f| f.to_str())
                             .unwrap_or(chapter_file);
 
-                        debug!(
-                            "Comparing current chapter '{}' (filename: '{}') with target chapter '{}' (filename: '{}')",
-                            current_chapter_file, current_filename, chapter_file, target_filename
-                        );
                         if current_filename == target_filename {
-                            // Same chapter - just scroll to anchor if provided
                             if let Some(anchor_id) = &link_info.target_anchor {
-                                debug!(
-                                    "Same-chapter link: scrolling to anchor '{}' in current chapter",
-                                    anchor_id
-                                );
                                 self.scroll_to_anchor(anchor_id)
                             } else {
-                                // No anchor - nothing to do (already in the right chapter)
                                 Ok(true)
                             }
                         } else {
-                            // Different chapter - navigate to it
                             self.navigate_to_chapter_by_file(
                                 chapter_file,
                                 link_info.target_anchor.as_ref(),
                             )
                         }
                     } else {
-                        // No current chapter file info - try to navigate anyway
-                        debug!(
-                            "No current chapter file set - trying to navigate to '{}'",
-                            chapter_file
-                        );
                         self.navigate_to_chapter_by_file(
                             chapter_file,
                             link_info.target_anchor.as_ref(),
@@ -1201,19 +1001,6 @@ impl App {
                     Ok(false)
                 }
             }
-            None => {
-                panic!("Should never happen")
-            }
-        }
-    }
-
-    fn handle_external_link(&mut self, url: &str) -> std::io::Result<bool> {
-        debug!("Opening external link: {}", url);
-        if let Err(e) = open::that(url) {
-            error!("Failed to open external link: {}", e);
-            Ok(false)
-        } else {
-            Ok(true)
         }
     }
 
@@ -1251,6 +1038,7 @@ impl App {
         }
     }
 
+    /// todo: this is mislocated and feature envy including find_chapter_recursive
     /// Find chapter index by filename
     fn find_chapter_by_filename(&self, chapter_file: &str) -> Option<usize> {
         // Get the current book's TOC items
@@ -1276,14 +1064,11 @@ impl App {
                         || href_without_anchor.ends_with(&format!("/{}", filename))
                         || (filename.contains('/') && href_without_anchor.ends_with(filename))
                     {
-                        // Found the matching TOC item, now find its spine index
                         return self.find_spine_index_by_href(href);
                     }
                 }
                 TocItem::Section { href, children, .. } => {
-                    // Check if this section matches
                     if let Some(section_href) = href {
-                        // Strip any anchor from the href for comparison
                         let href_without_anchor =
                             section_href.split('#').next().unwrap_or(section_href);
 
@@ -1291,11 +1076,9 @@ impl App {
                             || href_without_anchor.ends_with(&format!("/{}", filename))
                             || (filename.contains('/') && href_without_anchor.ends_with(filename))
                         {
-                            // Found the matching section, find its spine index
                             return self.find_spine_index_by_href(section_href);
                         }
                     }
-                    // Recursively search children
                     if let Some(found) = self.find_chapter_recursive(children, filename) {
                         return Some(found);
                     }
@@ -1342,35 +1125,24 @@ impl App {
         None
     }
 
-    fn open_external_link(&mut self, url: &str) {
-        if let Err(e) = open::that(url) {
-            error!("Failed to open URL {}: {}", url, e);
-        }
-    }
-
     fn handle_image_click(&mut self, image_src: &str, terminal_size: Rect) {
         let picker = match self.text_reader.get_image_picker() {
             Some(picker) => picker,
             None => {
-                debug!("No image picker available for popup");
+                // image picker not available
                 return;
             }
         };
 
-        // Get the original image
         let original_image = if let Some(image) = self.text_reader.get_loaded_image(image_src) {
-            debug!("Using already loaded image for popup: {}", image_src);
             image
         } else if let Some(image) = self.book_images.get_image(image_src) {
-            debug!("Loading image directly for popup: {}", image_src);
             Arc::new(image)
         } else {
             debug!("Image not loaded and could not be loaded: {}", image_src);
             return;
         };
 
-        // Calculate the desired size for the popup (2x scale or max screen)
-        // terminal_size is already passed as parameter
         let font_size = picker.font_size();
         let (img_width, img_height) = original_image.dimensions();
 
@@ -1401,23 +1173,11 @@ impl App {
 
         // Pre-scale the image using fast_image_resize for better performance
         let prescaled_image = if final_width != img_width || final_height != img_height {
-            let resize_start = std::time::Instant::now();
             match self
                 .book_images
                 .resize_image_to(&original_image, final_width, final_height)
             {
-                Ok(resized) => {
-                    let resize_duration = resize_start.elapsed();
-                    debug!(
-                        "Pre-scaled image from {}x{} to {}x{} using fast_image_resize in {}ms",
-                        img_width,
-                        img_height,
-                        final_width,
-                        final_height,
-                        resize_duration.as_millis()
-                    );
-                    Arc::new(resized)
-                }
+                Ok(resized) => Arc::new(resized),
                 Err(e) => {
                     warn!(
                         "Failed to pre-scale image with fast_image_resize: {}, using original",
@@ -1432,7 +1192,6 @@ impl App {
 
         let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
         self.image_popup = Some(popup);
-        self.image_popup_area = None; // Will be set on render
         self.focused_panel = FocusedPanel::Popup(PopupWindow::ImagePopup);
     }
 
@@ -1526,7 +1285,6 @@ impl App {
 
     /// Calculate the content area rectangle for coordinate conversion
     fn get_content_area_rect(&self) -> Rect {
-        // Use the stored content area from the last render
         if let Some(area) = self.text_reader.get_last_content_area() {
             area
         } else {
@@ -1542,12 +1300,6 @@ impl App {
 
     pub fn open_with_system_viewer(&self) {
         if let Some(book) = &self.current_book {
-            info!(
-                "Opening EPUB with system viewer: {} at chapter {}",
-                book.file,
-                book.current_chapter()
-            );
-
             match self
                 .system_command_executor
                 .open_file_at_chapter(&book.file, book.current_chapter())
@@ -1567,10 +1319,9 @@ impl App {
         self.text_reader.get_scroll_offset()
     }
 
-    /// Jump to a specific location from the jump list
     fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
         if self.current_book.as_ref().map(|x| &x.file) != Some(&location.epub_path) {
-            self.load_epub_internal_without_bookmark(&location.epub_path)?;
+            self.load_epub(&location.epub_path, true)?;
         }
 
         if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(location.chapter_index) {
@@ -1629,17 +1380,14 @@ impl App {
         use crate::navigation_panel::SelectedActionOwned;
         match self.navigation_panel.get_selected_action() {
             SelectedActionOwned::BookIndex(index) => {
-                // Open the selected book
                 if let Err(e) = self.open_book_for_reading(index) {
                     error!("Failed to open book at index {}: {}", index, e);
                 }
             }
             SelectedActionOwned::BackToBooks => {
-                // Switch back to book selection mode
                 self.navigation_panel.switch_to_book_mode();
             }
             SelectedActionOwned::TocItem(toc_item) => {
-                // Check if this is a section or a chapter
                 match toc_item {
                     TocItem::Chapter { href, anchor, .. } => {
                         // Find the spine index for this href
@@ -1655,12 +1403,10 @@ impl App {
                             }
 
                             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                            // Clear manual navigation flag when jumping to content
                             self.navigation_panel
                                 .table_of_contents
                                 .clear_manual_navigation();
-                            // Update the cache to reflect the correct active section
-                            self.update_current_chapter_in_cache();
+                            self.update_toc_state();
                         } else {
                             error!("Could not find spine index for href: {}", href);
                         }
@@ -1682,7 +1428,7 @@ impl App {
                                 }
                                 self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                                 // Update the cache to reflect the correct active section
-                                self.update_current_chapter_in_cache();
+                                self.update_toc_state();
                             } else {
                                 error!(
                                     "Could not find spine index for section href: {}",
@@ -1704,65 +1450,16 @@ impl App {
         }
     }
 
-    fn detect_click_type(&mut self, column: u16, row: u16) -> ClickType {
-        const DOUBLE_CLICK_TIME_MS: u64 = 500; // Maximum time between clicks for double-click
-        const CLICK_DISTANCE_THRESHOLD: u16 = 3; // Maximum distance between clicks
-
-        let now = Instant::now();
-        let position = (column, row);
-
-        let is_within_time = if let Some(last_time) = self.last_click_time {
-            now.duration_since(last_time).as_millis() <= DOUBLE_CLICK_TIME_MS as u128
-        } else {
-            false
-        };
-
-        let is_within_distance = if let Some(last_pos) = self.last_click_position {
-            let distance_x = if column > last_pos.0 {
-                column - last_pos.0
-            } else {
-                last_pos.0 - column
-            };
-            let distance_y = if row > last_pos.1 {
-                row - last_pos.1
-            } else {
-                last_pos.1 - row
-            };
-            distance_x <= CLICK_DISTANCE_THRESHOLD && distance_y <= CLICK_DISTANCE_THRESHOLD
-        } else {
-            false
-        };
-
-        if is_within_time && is_within_distance {
-            self.click_count += 1;
-        } else {
-            self.click_count = 1;
-        }
-
-        self.last_click_time = Some(now);
-        self.last_click_position = Some(position);
-
-        match self.click_count {
-            2 => ClickType::Double,
-            3 => ClickType::Triple,
-            _ => ClickType::Single,
-        }
-    }
-
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
-        // Update auto-scroll state for continuous scrolling during text selection
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
-            // Save bookmark when auto-scrolling changes position
             self.save_bookmark();
         }
 
-        // Update terminal dimensions for mouse event calculations
         self.terminal_width = f.area().width;
         self.terminal_height = f.area().height;
         self.last_terminal_size = f.area();
 
-        // Clear the entire frame with the dark background first
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
         f.render_widget(background_block, f.area());
 
@@ -1771,13 +1468,11 @@ impl App {
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(f.area());
 
-        // Fixed layout: 30% file list, 70% content
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
             .split(chunks[0]);
 
-        // Delegate rendering to components
         self.navigation_panel.render(
             f,
             main_chunks[0],
@@ -1790,7 +1485,6 @@ impl App {
             self.text_reader.render(
                 f,
                 main_chunks[1],
-                &self.current_chapter_title,
                 book.current_chapter(),
                 book.total_chapters(),
                 &OCEANIC_NEXT,
@@ -1800,10 +1494,8 @@ impl App {
             self.render_default_content(f, main_chunks[1], "Select a file to view its content");
         }
 
-        // Draw help bar
         self.render_help_bar(f, chunks[1], fps_counter);
 
-        // Render reading history popup if active
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::ReadingHistory)
@@ -1821,7 +1513,6 @@ impl App {
             }
         }
 
-        // Render image popup if active
         if let Some(ref mut image_popup) = self.image_popup {
             let dim_block = Block::default().style(
                 Style::default()
@@ -1830,18 +1521,13 @@ impl App {
             );
             f.render_widget(dim_block, f.area());
 
-            let popup_area = image_popup.render(f, f.area());
-            self.image_popup_area = Some(popup_area);
-        } else {
-            self.image_popup_area = None;
+            image_popup.render(f, f.area());
         }
 
-        // Render book search popup if active
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::BookSearch)
         ) {
-            // First render a dimming overlay
             let dim_block = Block::default().style(
                 Style::default()
                     .bg(Color::Rgb(10, 10, 10))
@@ -1854,12 +1540,10 @@ impl App {
             }
         }
 
-        // Render book statistics popup if active
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::BookStats)
         ) {
-            // First render a dimming overlay
             let dim_block = Block::default().style(
                 Style::default()
                     .bg(Color::Rgb(10, 10, 10))
@@ -1892,9 +1576,7 @@ impl App {
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
         let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
 
-        // Check if we're in search mode
         let help_content = if self.is_in_search_mode() {
-            // Get the appropriate search state
             let search_state = if self.navigation_panel.is_searching() {
                 self.navigation_panel.get_search_state()
             } else {
@@ -1902,7 +1584,6 @@ impl App {
             };
             match search_state.mode {
                 SearchMode::InputMode => {
-                    // Show search input with cursor
                     let query = &search_state.query;
                     let match_info = if search_state.matches.is_empty() && !query.is_empty() {
                         "No matches"
@@ -1914,15 +1595,11 @@ impl App {
                     format!("/ {}█  {}  ESC: Cancel | Enter: Search", query, match_info)
                 }
                 SearchMode::NavigationMode => {
-                    // Show search navigation status
                     let query = &search_state.query;
                     let match_info = search_state.get_match_info();
                     format!("/{}  {}  n/N: Navigate | ESC: Exit", query, match_info)
                 }
-                _ => {
-                    // Shouldn't happen but fallback just in case
-                    "Search mode active".to_string()
-                }
+                _ => "Search mode active".to_string(),
             }
         } else if self.text_reader.has_text_selection() {
             "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
@@ -1965,30 +1642,9 @@ impl App {
         f.render_widget(help, area);
     }
 
-    /// Check if the key sequence has timed out
-    fn should_reset_key_sequence(&self) -> bool {
-        const KEY_SEQUENCE_TIMEOUT_MS: u64 = 1000; // 1 second timeout
-
-        if let Some(last_time) = self.last_key_time {
-            Instant::now().duration_since(last_time).as_millis() > KEY_SEQUENCE_TIMEOUT_MS as u128
-        } else {
-            false
-        }
-    }
-
     /// Handle a key sequence and return true if it was handled
     fn handle_key_sequence(&mut self, key_char: char) -> bool {
-        // Reset sequence if timed out
-        if self.should_reset_key_sequence() {
-            self.key_sequence.clear();
-        }
-
-        // Add the new key to the sequence
-        self.key_sequence.push(key_char);
-        self.last_key_time = Some(Instant::now());
-
-        // Check for known sequences
-        let sequence: String = self.key_sequence.iter().collect();
+        let sequence: String = self.key_sequence.handle_key(key_char);
 
         match sequence.as_str() {
             "gg" => {
@@ -2243,7 +1899,6 @@ impl App {
             FocusedPanel::Popup(PopupWindow::ImagePopup)
         ) {
             self.image_popup = None;
-            self.image_popup_area = None;
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
             return;
         }
@@ -2313,10 +1968,6 @@ impl App {
                     // Check if this completes a 'gg' sequence
                     if !self.handle_key_sequence('g') {
                         // 'g' by itself doesn't do anything, waiting for next key
-                    } else if self.key_sequence.len() == 2 && self.key_sequence == vec!['g', 'g'] {
-                        // Handle 'gg' - go to top
-                        self.book_stat.handle_gg();
-                        self.key_sequence.clear();
                     }
                     return;
                 }
@@ -2448,11 +2099,9 @@ impl App {
                 if !self.is_search_input_mode()
                     && !key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                // Check if this completes a key sequence (Space+d for stats)
                 if self.handle_key_sequence('d') {
                     // Sequence was handled, do nothing more
                 } else if !self.text_reader.is_comment_input_active() {
-                    // Try to delete comment at cursor
                     match self.text_reader.delete_comment_at_cursor() {
                         Ok(true) => {
                             info!("Comment deleted successfully");
@@ -2914,37 +2563,27 @@ impl App {
 
         let mut search_engine = SearchEngine::new();
         let mut chapters = Vec::new();
+        use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+        let mut converter = HtmlToMarkdownConverter::new();
 
         // Process all chapters to extract readable text
         for chapter_index in 0..doc.get_num_pages() {
             if doc.set_current_page(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
-                    // Extract chapter title
                     let title = TextGenerator::extract_chapter_title(&raw_html)
                         .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
 
-                    // Convert HTML to Markdown AST and extract clean text
-                    use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-                    let mut converter = HtmlToMarkdownConverter::new();
                     let markdown_doc = converter.convert(&raw_html);
 
-                    // Extract plain text from the Markdown AST
                     let clean_text = extract_text_from_markdown_doc(&markdown_doc);
-
                     chapters.push((chapter_index, title, clean_text));
                 }
             }
         }
 
-        // Populate the search engine with chapters
         search_engine.process_chapters(chapters);
 
-        // Create shared reference for search engine
-        let engine = Arc::new(Mutex::new(search_engine));
-        self.search_engine = Some(engine.clone());
-
-        // Create book search UI with the search engine
-        self.book_search = Some(BookSearch::new(engine));
+        self.book_search = Some(BookSearch::new(search_engine));
     }
 
     fn open_book_search(&mut self, clear_input: bool) {
@@ -2952,7 +2591,9 @@ impl App {
             book_search.open(clear_input);
             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookSearch);
         } else {
-            warn!("Cannot open book search - search engine not initialized");
+            error!(
+                "Cannot open book search - search engine not initialized. This should never happen"
+            );
         }
     }
 }

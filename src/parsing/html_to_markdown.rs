@@ -203,7 +203,7 @@ impl HtmlToMarkdownConverter {
                 text: link_text,
                 url: href,
                 title,
-                link_type: Some(link_type),
+                link_type: link_type,
                 target_chapter,
                 target_anchor,
             })
@@ -3157,7 +3157,7 @@ The protocol operates on multiple layers:
             {
                 assert_eq!(
                     *link_type,
-                    Some(crate::markdown::LinkType::External),
+                    crate::markdown::LinkType::External,
                     "NewsGuard link should be classified as External"
                 );
                 assert_eq!(
@@ -3191,7 +3191,7 @@ The protocol operates on multiple layers:
             {
                 assert_eq!(
                     *link_type,
-                    Some(crate::markdown::LinkType::InternalChapter),
+                    crate::markdown::LinkType::InternalChapter,
                     "Chapter link should be classified as InternalChapter"
                 );
                 assert_eq!(

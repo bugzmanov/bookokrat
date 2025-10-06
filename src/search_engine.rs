@@ -32,8 +32,6 @@ impl SearchEngine {
     }
 
     pub fn process_chapters(&mut self, chapters: Vec<(usize, String, String)>) {
-        debug!("Processing {} chapters for search indexing", chapters.len());
-
         self.chapters = chapters
             .into_iter()
             .map(|(index, title, content)| {
@@ -46,11 +44,6 @@ impl SearchEngine {
                 }
             })
             .collect();
-
-        debug!(
-            "Search engine ready with {} chapters indexed",
-            self.chapters.len()
-        );
     }
 
     pub fn search_fuzzy(&self, query: &str) -> Vec<BookSearchResult> {

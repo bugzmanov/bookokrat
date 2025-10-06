@@ -177,7 +177,6 @@ pub struct MarkdownTextReader {
 
     // Scrolling state
     scroll_offset: usize,
-    content_length: usize,
     last_scroll_time: Instant,
     scroll_speed: usize,
 
@@ -190,7 +189,6 @@ pub struct MarkdownTextReader {
     visible_height: usize,
 
     // Caching
-    cached_text_width: usize,
     cache_generation: u64,
     last_width: usize,
     last_focus_state: bool,
@@ -250,6 +248,7 @@ pub struct MarkdownTextReader {
     comment_target_node_index: Option<usize>, // The node index where comment will be attached
     comment_target_line: Option<usize>,       // The visual line where textarea should appear
     comment_edit_mode: Option<CommentEditMode>,
+    chapter_title: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -274,12 +273,11 @@ impl MarkdownTextReader {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        chapter_title: &Option<String>,
         current_chapter: usize,
         total_chapters: usize,
         palette: &Base16Palette,
     ) {
-        let title_text = if let Some(title) = chapter_title {
+        let title_text = if let Some(ref title) = self.chapter_title {
             format!(
                 "[{}/{}] {} [RAW HTML]",
                 current_chapter, total_chapters, title
@@ -485,14 +483,12 @@ impl MarkdownTextReader {
                 generation: 0,
             },
             scroll_offset: 0,
-            content_length: 0,
             last_scroll_time: Instant::now(),
             scroll_speed: 1,
             highlight_visual_line: None,
             highlight_end_time: Instant::now(),
             total_wrapped_lines: 0,
             visible_height: 0,
-            cached_text_width: 0,
             cache_generation: 0,
             last_width: 0,
             last_focus_state: false,
@@ -522,6 +518,7 @@ impl MarkdownTextReader {
             comment_target_node_index: None,
             comment_target_line: None,
             comment_edit_mode: None,
+            chapter_title: None,
         }
     }
 
@@ -1442,32 +1439,28 @@ impl MarkdownTextReader {
                         // Determine styling based on link type
                         let (link_color, link_modifier) = if is_focused {
                             match link_type {
-                                Some(crate::markdown::LinkType::External) => {
+                                crate::markdown::LinkType::External => {
                                     (palette.base_0c, Modifier::UNDERLINED) // Cyan + underlined
                                 }
-                                Some(crate::markdown::LinkType::InternalChapter) => {
+                                crate::markdown::LinkType::InternalChapter => {
                                     (palette.base_0b, Modifier::UNDERLINED | Modifier::BOLD) // Green + bold underlined
                                 }
-                                Some(crate::markdown::LinkType::InternalAnchor) => {
+                                crate::markdown::LinkType::InternalAnchor => {
                                     (palette.base_0a, Modifier::UNDERLINED | Modifier::ITALIC) // Yellow + italic underlined
-                                }
-                                None => {
-                                    (palette.base_0c, Modifier::UNDERLINED) // Default to external style
                                 }
                             }
                         } else {
                             // Unfocused state - use muted colors but maintain differentiation
                             match link_type {
-                                Some(crate::markdown::LinkType::External) => {
+                                crate::markdown::LinkType::External => {
                                     (palette.base_03, Modifier::UNDERLINED)
                                 }
-                                Some(crate::markdown::LinkType::InternalChapter) => {
+                                crate::markdown::LinkType::InternalChapter => {
                                     (palette.base_03, Modifier::UNDERLINED | Modifier::BOLD)
                                 }
-                                Some(crate::markdown::LinkType::InternalAnchor) => {
+                                crate::markdown::LinkType::InternalAnchor => {
                                     (palette.base_03, Modifier::UNDERLINED | Modifier::ITALIC)
                                 }
-                                None => (palette.base_03, Modifier::UNDERLINED),
                             }
                         };
 
@@ -2698,6 +2691,7 @@ impl MarkdownTextReader {
     }
 
     /// Get the currently active section based on viewport position
+    //todo: mut needs to be changed!
     pub fn get_active_section(&mut self, current_chapter: usize) -> ActiveSection {
         // Calculate middle of viewport
         let viewport_middle = self.scroll_offset + (self.visible_height / 2);
@@ -2942,37 +2936,29 @@ impl MarkdownTextReader {
 }
 
 impl TextReaderTrait for MarkdownTextReader {
-    fn set_content_from_string(&mut self, content: &str, _chapter_title: Option<String>) {
-        // Parse HTML string to Markdown AST
+    fn set_content_from_string(&mut self, content_raw_html: &str, chapter_title: Option<String>) {
+        self.clear_content();
+
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
         let mut converter = HtmlToMarkdownConverter::new();
-        let doc = converter.convert(content);
+        let doc = converter.convert(content_raw_html);
 
         self.markdown_document = Some(doc);
+        self.chapter_title = chapter_title;
 
-        self.links.clear();
-        self.embedded_tables.borrow_mut().clear();
-        self.raw_text_lines.clear();
-        self.scroll_offset = 0;
-        self.text_selection.clear_selection();
-
-        // Mark cache as invalid to force re-rendering
+        // force re-rendering
         self.cache_generation += 1;
-        debug!("Parsed HTML to Markdown AST in set_content_from_string");
     }
 
-    fn content_updated(&mut self, content_length: usize) {
-        self.content_length = content_length;
+    fn clear_content(&mut self) {
         self.scroll_offset = 0;
         self.text_selection.clear_selection();
 
         // IMPORTANT: Clear the markdown document so new content can be parsed
         self.markdown_document = None;
 
-        // Clear caches
         self.cache_generation += 1;
 
-        // Clear other state
         self.links.clear();
         self.embedded_tables.borrow_mut().clear();
         self.raw_text_lines.clear();
@@ -3423,7 +3409,6 @@ impl TextReaderTrait for MarkdownTextReader {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        chapter_title: &Option<String>,
         current_chapter: usize,
         total_chapters: usize,
         palette: &Base16Palette,
@@ -3434,14 +3419,7 @@ impl TextReaderTrait for MarkdownTextReader {
         self.visible_height = area.height.saturating_sub(3) as usize; // Account for borders and margin
 
         if self.show_raw_html {
-            self.render_raw_html(
-                frame,
-                area,
-                chapter_title,
-                current_chapter,
-                total_chapters,
-                palette,
-            );
+            self.render_raw_html(frame, area, current_chapter, total_chapters, palette);
             return;
         }
 
@@ -3484,7 +3462,7 @@ impl TextReaderTrait for MarkdownTextReader {
                 debug!("No markdown_document to render!");
             }
         }
-        let title_text = if let Some(title) = chapter_title {
+        let title_text = if let Some(ref title) = self.chapter_title {
             format!("[{}/{}] {}", current_chapter, total_chapters, title)
         } else {
             format!("Chapter {}/{}", current_chapter, total_chapters)

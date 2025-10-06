@@ -7,6 +7,7 @@ pub mod bookmarks;
 pub mod comments;
 pub mod event_source;
 pub mod images;
+pub mod inputs;
 pub mod jump_list;
 pub mod main_app;
 pub mod markdown;

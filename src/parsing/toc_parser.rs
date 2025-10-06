@@ -17,7 +17,7 @@ impl TocParser {
         }
     }
 
-    pub fn parse_toc_structure<R: Read + Seek>(doc: &mut EpubDoc<R>) -> Vec<TocItem> {
+    pub fn parse_toc_structure<R: Read + Seek>(doc: &EpubDoc<R>) -> Vec<TocItem> {
         Self::convert_navpoints_to_toc_items(&doc.toc)
     }
 

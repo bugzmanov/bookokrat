@@ -1,5 +1,6 @@
 ideas to implement:
  - [ ] Dimming should probably just use math instead of sticking to fixed palette
+ - [ ] status bar to show errors and warnings
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
@@ -47,6 +48,7 @@ ideas to implement:
  - [ ] Code formatting & coloring. Goal: Manning books should be nice to read
  - [ ] User errors & info message
  - [x] NOTES & comments
+     - [ ] Notes should support markdown (maybe)
      - [ ] List of comments
         - [ ] Search in comments
  - [ ] settings window
@@ -69,6 +71,8 @@ bugs:
 [ ] Currently reading chpater in TOC highlitning is seriously broken
 [ ] Code block selection with mouse selects wrong lines
 [ ] Adding comments doesn't move image down. it stays covering the text
+[ ] Book search when jumps from the list to the book drops in the wrong location
+[ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks) 
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt

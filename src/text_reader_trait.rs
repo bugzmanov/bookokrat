@@ -13,9 +13,26 @@ pub struct LinkInfo {
     pub line: usize,
     pub start_col: usize,
     pub end_col: usize,
-    pub link_type: Option<crate::markdown::LinkType>, // todo: this should not be an option
+    pub link_type: crate::markdown::LinkType,
     pub target_chapter: Option<String>,
     pub target_anchor: Option<String>,
+}
+
+impl LinkInfo {
+    pub fn from_url(url: String) -> Self {
+        let (link_type, target_chapter, target_anchor) = crate::markdown::classify_link_href(&url);
+
+        Self {
+            text: url.clone(),
+            url: url,
+            line: 0, // Not needed for navigation
+            start_col: 0,
+            end_col: 0,
+            link_type: link_type,
+            target_chapter,
+            target_anchor,
+        }
+    }
 }
 
 /// Trait defining the interface for text readers
@@ -25,7 +42,7 @@ pub trait TextReaderTrait: VimNavMotions {
     fn set_content_from_string(&mut self, content: &str, chapter_title: Option<String>);
 
     // Content updates
-    fn content_updated(&mut self, content_length: usize);
+    fn clear_content(&mut self);
 
     // Scrolling
     fn scroll_up(&mut self);
@@ -85,7 +102,6 @@ pub trait TextReaderTrait: VimNavMotions {
         &mut self,
         frame: &mut Frame,
         area: Rect,
-        chapter_title: &Option<String>,
         current_chapter: usize,
         total_chapters: usize,
         palette: &crate::theme::Base16Palette,

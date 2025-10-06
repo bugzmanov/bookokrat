@@ -18,6 +18,7 @@ pub struct ImagePopup {
     pub picker: Picker,
     pub is_loading: bool,
     pub load_start: Option<Instant>,
+    pub popup_area: Option<Rect>, // Check if this completes a key sequence (Space+d for stats)
 }
 
 impl ImagePopup {
@@ -29,10 +30,11 @@ impl ImagePopup {
             picker: picker.clone(),
             is_loading: true,
             load_start: Some(Instant::now()),
+            popup_area: None,
         }
     }
 
-    pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) -> Rect {
+    pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) {
         let render_start = Instant::now();
         self.load_start = Some(render_start.clone());
         let popup_area = self.calculate_optimal_popup_area(terminal_size);
@@ -151,7 +153,7 @@ impl ImagePopup {
         );
 
         // Return the popup area so the main app knows where the image is displayed
-        popup_area
+        self.popup_area = Some(popup_area)
     }
 
     /// Calculate the optimal popup area based on image dimensions and terminal size
@@ -188,6 +190,17 @@ impl ImagePopup {
             y: terminal_size.y + y_offset,
             width: popup_width,
             height: popup_height,
+        }
+    }
+
+    pub(crate) fn is_outside_popup_area(&self, click_x: u16, click_y: u16) -> bool {
+        if let Some(popup_area) = self.popup_area {
+            click_x < popup_area.x
+                || click_x >= popup_area.x + popup_area.width
+                || click_y < popup_area.y
+                || click_y >= popup_area.y + popup_area.height
+        } else {
+            false
         }
     }
 }

@@ -84,9 +84,9 @@ pub enum Inline {
         text: Text,
         url: String,
         title: Option<String>,
-        link_type: Option<LinkType>,    // NEW
-        target_chapter: Option<String>, // NEW
-        target_anchor: Option<String>,  // NEW
+        link_type: LinkType,
+        target_chapter: Option<String>,
+        target_anchor: Option<String>,
     },
     Image {
         alt_text: String,

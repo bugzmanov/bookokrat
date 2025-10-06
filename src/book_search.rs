@@ -10,7 +10,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub enum BookSearchAction {
@@ -36,7 +35,7 @@ pub struct BookSearch {
     scroll_offset: usize,
     visible_results: usize,
 
-    search_engine: Arc<Mutex<SearchEngine>>,
+    search_engine: SearchEngine,
     last_search_query: String,
 
     last_input_time: Instant,
@@ -47,7 +46,7 @@ pub struct BookSearch {
 }
 
 impl BookSearch {
-    pub fn new(search_engine: Arc<Mutex<SearchEngine>>) -> Self {
+    pub fn new(search_engine: SearchEngine) -> Self {
         Self {
             active: false,
             search_input: String::new(),
@@ -102,11 +101,7 @@ impl BookSearch {
         if query == self.last_search_query {
             return;
         }
-
-        debug!("Executing search for: {}", query);
-
-        let engine = self.search_engine.lock().unwrap();
-        self.results = engine.search_fuzzy(&query);
+        self.results = self.search_engine.search_fuzzy(&query);
         self.cached_results = Some(self.results.clone());
         self.last_search_query = query;
         self.selected_result = 0;
