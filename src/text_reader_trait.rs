@@ -55,11 +55,11 @@ pub trait TextReaderTrait: VimNavMotions {
     fn restore_to_node_index(&mut self, node_index: usize);
 
     // Text selection
-    fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect);
-    fn handle_mouse_drag(&mut self, x: u16, y: u16, area: Rect);
-    fn handle_mouse_up(&mut self, x: u16, y: u16, area: Rect) -> Option<String>;
-    fn handle_double_click(&mut self, x: u16, y: u16, area: Rect);
-    fn handle_triple_click(&mut self, x: u16, y: u16, area: Rect);
+    fn handle_mouse_down(&mut self, x: u16, y: u16);
+    fn handle_mouse_drag(&mut self, x: u16, y: u16);
+    fn handle_mouse_up(&mut self, x: u16, y: u16) -> Option<String>;
+    fn handle_double_click(&mut self, x: u16, y: u16);
+    fn handle_triple_click(&mut self, x: u16, y: u16);
     fn clear_selection(&mut self);
     fn copy_selection_to_clipboard(&self) -> Result<(), String>;
     fn copy_chapter_to_clipboard(&self) -> Result<(), String>;
@@ -68,7 +68,7 @@ pub trait TextReaderTrait: VimNavMotions {
     // Image handling
     fn preload_image_dimensions(&mut self, book_images: &BookImages);
     fn check_for_loaded_images(&mut self) -> bool;
-    fn check_image_click(&self, x: u16, y: u16, area: Rect) -> Option<String>;
+    fn check_image_click(&self, x: u16, y: u16) -> Option<String>;
     fn get_image_picker(&self) -> Option<&Picker>;
     fn get_loaded_image(&self, image_src: &str) -> Option<Arc<DynamicImage>>;
 

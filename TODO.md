@@ -67,12 +67,12 @@ ideas to implement:
 bugs: 
 ---------------------
 [ ] Bug clicking in subchapter triggers image reaload
-[ ] Dynamic reschaling breaks double and tripple click text selection
 [ ] Currently reading chpater in TOC highlitning is seriously broken
 [ ] Code block selection with mouse selects wrong lines
 [ ] Adding comments doesn't move image down. it stays covering the text
 [ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks) 
+[ ] Machine Learning Q and A - links not working. 
 
 Tools with cool ratatui UI: 
 - https://github.com/erikjuhani/basalt

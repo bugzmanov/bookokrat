@@ -275,8 +275,6 @@ impl App {
             last_bookmark_save: std::time::Instant::now(),
             mouse_tracker: MouseTracker::new(),
             key_sequence: KeySeq::new(),
-            // terminal_width: term_width,
-            // terminal_height: term_hight,
             reading_history: None,
             image_popup: None,
             terminal_size: terminal_size,
@@ -660,22 +658,12 @@ impl App {
     /// When event_source is provided, scroll events will be batched for smoother scrolling
     ///
     /// event_source = None is only for testing to simulate scroll signals
-    pub fn handle_mouse_event(
+    pub fn handle_and_drain_mouse_events(
         &mut self,
         initial_mouse_event: MouseEvent,
         event_source: Option<&mut dyn crate::event_source::EventSource>,
     ) {
         use std::time::Duration;
-
-        if matches!(
-            initial_mouse_event.kind,
-            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
-        ) {
-            if !self.is_valid_mouse_coordinates(initial_mouse_event.column, initial_mouse_event.row)
-            {
-                return;
-            }
-        }
 
         let is_scroll_event = matches!(
             initial_mouse_event.kind,
@@ -687,7 +675,7 @@ impl App {
             return;
         }
 
-        // Handle scroll events - with or without batching
+        // for testing: event_source is None -> don't need to drain events
         if event_source.is_none() {
             match initial_mouse_event.kind {
                 MouseEventKind::ScrollDown => self.apply_scroll(1, initial_mouse_event.column),
@@ -702,7 +690,6 @@ impl App {
         let mut scroll_down_count = 0;
         let mut scroll_up_count = 0;
 
-        // Store the initial mouse position to determine which area to scroll
         let initial_column = initial_mouse_event.column;
 
         // Count the initial event
@@ -742,19 +729,20 @@ impl App {
 
             match event_source.read() {
                 Ok(Event::Mouse(mouse_event)) => match mouse_event.kind {
-                    MouseEventKind::ScrollDown => scroll_down_count += 1,
-                    MouseEventKind::ScrollUp => scroll_up_count += 1,
                     MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
                         //ignore
                         break;
                     }
+                    MouseEventKind::ScrollDown => scroll_down_count += 1,
+                    MouseEventKind::ScrollUp => scroll_up_count += 1,
                     _ => {
                         self.handle_non_scroll_mouse_event(mouse_event);
                         break;
                     }
                 },
                 Ok(_) => {
-                    // Non-mouse event, stop draining
+                    // Non-mouse event, stop draining.
+                    // TODO: this event will be losts. in practice this doesn't happen
                     break;
                 }
                 Err(e) => {
@@ -817,7 +805,7 @@ impl App {
                     return;
                 }
 
-                let nav_panel_width = self.calculate_navigation_panel_width();
+                let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
                     self.text_reader.clear_selection();
@@ -855,7 +843,6 @@ impl App {
                             .clear_manual_navigation();
                     }
 
-                    let content_area = self.get_content_area_rect();
                     let click_type = self
                         .mouse_tracker
                         .detect_click_type(mouse_event.column, mouse_event.row);
@@ -863,33 +850,23 @@ impl App {
                     match click_type {
                         ClickType::Single => {
                             // Check if click is on a link first
-                            if let Some(image_src) = self.text_reader.check_image_click(
-                                mouse_event.column,
-                                mouse_event.row,
-                                content_area,
-                            ) {
+                            if let Some(image_src) = self
+                                .text_reader
+                                .check_image_click(mouse_event.column, mouse_event.row)
+                            {
                                 self.handle_image_click(&image_src, self.terminal_size);
                             } else {
-                                self.text_reader.handle_mouse_down(
-                                    mouse_event.column,
-                                    mouse_event.row,
-                                    content_area,
-                                );
+                                self.text_reader
+                                    .handle_mouse_down(mouse_event.column, mouse_event.row);
                             }
                         }
                         ClickType::Double => {
-                            self.text_reader.handle_double_click(
-                                mouse_event.column,
-                                mouse_event.row,
-                                content_area,
-                            );
+                            self.text_reader
+                                .handle_double_click(mouse_event.column, mouse_event.row);
                         }
                         ClickType::Triple => {
-                            self.text_reader.handle_triple_click(
-                                mouse_event.column,
-                                mouse_event.row,
-                                content_area,
-                            );
+                            self.text_reader
+                                .handle_triple_click(mouse_event.column, mouse_event.row);
                         }
                     }
                 }
@@ -902,14 +879,12 @@ impl App {
                     return;
                 }
 
-                let nav_panel_width = self.calculate_navigation_panel_width();
+                let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column >= nav_panel_width {
-                    let content_area = self.get_content_area_rect();
-                    if let Some(url) = self.text_reader.handle_mouse_up(
-                        mouse_event.column,
-                        mouse_event.row,
-                        content_area,
-                    ) {
+                    if let Some(url) = self
+                        .text_reader
+                        .handle_mouse_up(mouse_event.column, mouse_event.row)
+                    {
                         if let Err(e) = self.handle_link_click(&LinkInfo::from_url(url)) {
                             error!("Failed to handle link click: {}", e);
                         }
@@ -925,15 +900,11 @@ impl App {
                     return;
                 }
 
-                let nav_panel_width = self.calculate_navigation_panel_width();
+                let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column >= nav_panel_width {
-                    let content_area = self.get_content_area_rect();
                     let old_scroll_offset = self.text_reader.get_scroll_offset();
-                    self.text_reader.handle_mouse_drag(
-                        mouse_event.column,
-                        mouse_event.row,
-                        content_area,
-                    );
+                    self.text_reader
+                        .handle_mouse_drag(mouse_event.column, mouse_event.row);
                     if self.text_reader.get_scroll_offset() != old_scroll_offset {
                         self.save_bookmark();
                     }
@@ -1208,13 +1179,11 @@ impl App {
             return;
         }
 
-        // Handle BookSearch popup separately since it needs scrolling
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::BookSearch)
         ) {
             if let Some(ref mut book_search) = self.book_search {
-                // BookSearch takes full screen, so use terminal height
                 let search_height = self.terminal_size.height;
                 if scroll_amount > 0 {
                     for _ in 0..scroll_amount.min(10) {
@@ -1234,14 +1203,10 @@ impl App {
             return;
         }
 
-        let nav_panel_width = self.calculate_navigation_panel_width();
-        let is_nav_panel = column < nav_panel_width;
+        let is_nav_panel = column < self.nav_panel_width();
 
         if is_nav_panel {
-            debug!("Applying scroll to navigation panel");
-            // Get approximate navigation panel height (using terminal height minus status bar)
             let nav_panel_height = self.terminal_size.height.saturating_sub(2);
-
             if scroll_amount > 0 {
                 for _ in 0..scroll_amount.min(10) {
                     self.navigation_panel.scroll_down(nav_panel_height);
@@ -1252,7 +1217,6 @@ impl App {
                 }
             }
         } else {
-            debug!("Applying scroll to content area");
             if scroll_amount > 0 {
                 for _ in 0..scroll_amount.min(10) {
                     self.scroll_down();
@@ -1261,46 +1225,6 @@ impl App {
                 for _ in 0..(-scroll_amount).min(10) {
                     self.scroll_up();
                 }
-            }
-        }
-    }
-
-    /// Validate mouse coordinates to prevent crossterm overflow bug
-    pub fn is_valid_mouse_coordinates(&self, column: u16, row: u16) -> bool {
-        // Crossterm overflow bug occurs when coordinates are at edge values
-        // The bug happens when column or row is 0, which can cause underflow
-        // in crossterm's internal parsing logic
-        if column == 0 || row == 0 {
-            debug!(
-                "Invalid mouse coordinates detected: column={}, row={}",
-                column, row
-            );
-            return false;
-        }
-
-        // Also check for suspiciously high values that might indicate corruption
-        if column > 10000 || row > 10000 {
-            debug!(
-                "Suspiciously large mouse coordinates detected: column={}, row={}",
-                column, row
-            );
-            return false;
-        }
-
-        true
-    }
-
-    /// Calculate the content area rectangle for coordinate conversion
-    fn get_content_area_rect(&self) -> Rect {
-        if let Some(area) = self.text_reader.get_last_content_area() {
-            area
-        } else {
-            // Fallback to a reasonable default
-            Rect {
-                x: 40,
-                y: 1,
-                width: 80,
-                height: 20,
             }
         }
     }
@@ -1361,7 +1285,7 @@ impl App {
     }
 
     /// Calculate the navigation panel width based on stored terminal width
-    fn calculate_navigation_panel_width(&self) -> u16 {
+    fn nav_panel_width(&self) -> u16 {
         // 30% of terminal width, minimum 20 columns
         ((self.terminal_size.width * 30) / 100).max(20)
     }
@@ -2635,46 +2559,38 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
     let mut fps_counter = FPSCounter::new();
     let mut first_render = true; // Ensure we always render at least once on startup
     loop {
-        // Process all available events first before drawing
         let mut events_processed = 0;
         let mut should_quit = false;
         fps_counter.tick();
-        // Drain all available events without blocking
         while event_source.poll(Duration::from_millis(0))? && events_processed < 50 {
             let event = event_source.read()?;
             events_processed += 1;
 
             match event {
                 Event::Mouse(mouse_event) => {
-                    // Handle horizontal scroll events immediately without batching
                     match mouse_event.kind {
                         MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
                             // Completely ignore horizontal scroll events to prevent flooding
                         }
                         _ => {
-                            // Handle other mouse events with potential batching for rapid scrolling
-                            app.handle_mouse_event(mouse_event, Some(event_source));
+                            app.handle_and_drain_mouse_events(mouse_event, Some(event_source));
                         }
                     }
                 }
                 Event::Key(key) => {
                     match key.code {
                         KeyCode::Char('q') => {
-                            // Save bookmark before quitting
                             app.save_bookmark_with_throttle(true);
                             should_quit = true;
                         }
                         _ => {
-                            // Calculate screen height for half-screen scrolling commands
                             let visible_height =
                                 terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                            // Handle all keys through the common handler
                             app.handle_key_event_with_screen_height(key, Some(visible_height));
                         }
                     }
                 }
                 Event::Resize(_cols, _rows) => {
-                    // Terminal has been resized - need to update font size detection
                     app.handle_resize();
                 }
                 _ => {}
@@ -2685,10 +2601,8 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             }
         }
 
-        // Handle timing and check for loaded images
         let mut needs_redraw = events_processed > 0;
 
-        // Ensure we always render at least once on startup
         if first_render {
             needs_redraw = true;
             first_render = false;
@@ -2696,7 +2610,6 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 
         if last_tick.elapsed() >= tick_rate {
             let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
-            // Check for loaded images from background thread
             let images_loaded = app.text_reader.check_for_loaded_images();
             if images_loaded {
                 needs_redraw = true;
@@ -2706,11 +2619,9 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                 needs_redraw = true;
                 debug!("Highlight expired, forcing redraw");
             }
-            // Only redraw when something actually changed - no more forced redraws
             last_tick = std::time::Instant::now();
         }
 
-        // Draw if needed
         if needs_redraw {
             let draw_start = std::time::Instant::now();
             terminal.draw(|f| app.draw(f, &fps_counter))?;

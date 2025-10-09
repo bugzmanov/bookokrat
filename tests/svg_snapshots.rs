@@ -388,7 +388,7 @@ fn test_mouse_scroll_file_list_svg() {
     };
 
     // Apply mouse scroll event in file list
-    app.handle_mouse_event(mouse_event, None);
+    app.handle_and_drain_mouse_events(mouse_event, None);
 
     terminal
         .draw(|f| {
@@ -459,7 +459,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
 
     // Apply many scroll down events to test bounds checking
     for _ in 0..20 {
-        app.handle_mouse_event(mouse_event, None);
+        app.handle_and_drain_mouse_events(mouse_event, None);
     }
 
     terminal
@@ -551,7 +551,7 @@ fn test_mouse_event_batching_svg() {
     {
         let first_event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = first_event {
-            app.handle_mouse_event(mouse_event, Some(&mut event_source));
+            app.handle_and_drain_mouse_events(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -681,7 +681,7 @@ fn test_horizontal_scroll_handling_svg() {
     {
         let event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = event {
-            app.handle_mouse_event(mouse_event, Some(&mut event_source));
+            app.handle_and_drain_mouse_events(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -776,7 +776,7 @@ fn test_edge_case_mouse_coordinates_svg() {
     {
         let event = event_source.read().unwrap();
         if let crossterm::event::Event::Mouse(mouse_event) = event {
-            app.handle_mouse_event(mouse_event, Some(&mut event_source));
+            app.handle_and_drain_mouse_events(mouse_event, Some(&mut event_source));
         }
     }
 
@@ -866,9 +866,9 @@ fn test_text_selection_svg() {
     };
 
     // Apply the mouse events
-    app.handle_mouse_event(mouse_down, None);
-    app.handle_mouse_event(mouse_drag, None);
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_drag, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Redraw to show the selection
     terminal
@@ -953,9 +953,9 @@ fn test_text_selection_with_auto_scroll_svg() {
     };
 
     // Apply the mouse events to test auto-scroll
-    app.handle_mouse_event(mouse_down, None);
-    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_drag_beyond_bottom, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Redraw to show the selection and scroll state
     terminal
@@ -1028,7 +1028,7 @@ fn test_continuous_auto_scroll_down_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
 
     // Simulate continuous dragging beyond bottom - should keep scrolling
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1041,7 +1041,7 @@ fn test_continuous_auto_scroll_down_svg() {
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
-        app.handle_mouse_event(mouse_drag_beyond_bottom, None);
+        app.handle_and_drain_mouse_events(mouse_drag_beyond_bottom, None);
         scroll_offsets.push(app.get_scroll_offset());
         // Each drag should continue scrolling until we hit the bottom
         if i > 0 {
@@ -1071,7 +1071,7 @@ fn test_continuous_auto_scroll_down_svg() {
         row: 35,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Redraw to show final state
     terminal
@@ -1150,7 +1150,7 @@ fn test_continuous_auto_scroll_up_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
 
     // Simulate continuous dragging above top - should keep scrolling up
     let mouse_drag_above_top = MouseEvent {
@@ -1163,7 +1163,7 @@ fn test_continuous_auto_scroll_up_svg() {
     // Apply multiple drag events to simulate continuous scrolling
     let mut scroll_offsets = Vec::new();
     for i in 0..10 {
-        app.handle_mouse_event(mouse_drag_above_top, None);
+        app.handle_and_drain_mouse_events(mouse_drag_above_top, None);
         scroll_offsets.push(app.get_scroll_offset());
         // Each drag should continue scrolling until we hit the top
         if i > 0 {
@@ -1193,7 +1193,7 @@ fn test_continuous_auto_scroll_up_svg() {
         row: 2,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Redraw to show final state
     terminal
@@ -1266,7 +1266,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
 
     // Drag beyond bottom ONCE (simulating user holding mouse in position)
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1275,7 +1275,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
+    app.handle_and_drain_mouse_events(mouse_drag_beyond_bottom, None);
 
     // Now simulate multiple draw calls (which trigger auto-scroll updates)
     // This simulates the real-world scenario where the user holds the mouse
@@ -1322,7 +1322,7 @@ fn test_timer_based_auto_scroll_svg() {
         row: 35,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Final redraw
     terminal
@@ -1394,7 +1394,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 15,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_down, None);
+    app.handle_and_drain_mouse_events(mouse_down, None);
 
     // Drag beyond bottom to trigger auto-scroll
     let mouse_drag_beyond_bottom = MouseEvent {
@@ -1403,7 +1403,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 35, // Beyond the content area height
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_beyond_bottom, None);
+    app.handle_and_drain_mouse_events(mouse_drag_beyond_bottom, None);
     let scroll_after_auto = app.get_scroll_offset();
 
     // Move cursor back to within content area - auto-scroll should stop
@@ -1413,7 +1413,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 20, // Back within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_back_in_area, None);
+    app.handle_and_drain_mouse_events(mouse_drag_back_in_area, None);
     let scroll_after_return = app.get_scroll_offset();
 
     // Scroll should stop when cursor returns to content area
@@ -1429,7 +1429,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 25, // Still within content area
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_drag_within_area, None);
+    app.handle_and_drain_mouse_events(mouse_drag_within_area, None);
 
     // End selection
     let mouse_up = MouseEvent {
@@ -1438,7 +1438,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         row: 25,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Redraw to show final state
     terminal
@@ -1534,10 +1534,10 @@ fn test_double_click_word_selection_svg() {
     };
 
     // Apply the double-click sequence
-    app.handle_mouse_event(mouse_click1, None);
-    app.handle_mouse_event(mouse_up1, None);
-    app.handle_mouse_event(mouse_click2, None);
-    app.handle_mouse_event(mouse_up2, None);
+    app.handle_and_drain_mouse_events(mouse_click1, None);
+    app.handle_and_drain_mouse_events(mouse_up1, None);
+    app.handle_and_drain_mouse_events(mouse_click2, None);
+    app.handle_and_drain_mouse_events(mouse_up2, None);
 
     // Redraw to show the word selection
     terminal
@@ -1647,12 +1647,12 @@ fn test_triple_click_paragraph_selection_svg() {
     };
 
     // Apply the triple-click sequence
-    app.handle_mouse_event(mouse_click1, None);
-    app.handle_mouse_event(mouse_up1, None);
-    app.handle_mouse_event(mouse_click2, None);
-    app.handle_mouse_event(mouse_up2, None);
-    app.handle_mouse_event(mouse_click3, None);
-    app.handle_mouse_event(mouse_up3, None);
+    app.handle_and_drain_mouse_events(mouse_click1, None);
+    app.handle_and_drain_mouse_events(mouse_up1, None);
+    app.handle_and_drain_mouse_events(mouse_click2, None);
+    app.handle_and_drain_mouse_events(mouse_up2, None);
+    app.handle_and_drain_mouse_events(mouse_click3, None);
+    app.handle_and_drain_mouse_events(mouse_up3, None);
 
     // Redraw to show the paragraph selection
     terminal
@@ -1729,7 +1729,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         row: 12,    // Where book text should be displayed
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_click_on_text, None);
+    app.handle_and_drain_mouse_events(mouse_click_on_text, None);
 
     // Complete the click with mouse up
     let mouse_up = MouseEvent {
@@ -1738,7 +1738,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         row: 12,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
-    app.handle_mouse_event(mouse_up, None);
+    app.handle_and_drain_mouse_events(mouse_up, None);
 
     // Draw to see the current state
     terminal

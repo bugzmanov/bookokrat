@@ -3053,24 +3053,23 @@ impl TextReaderTrait for MarkdownTextReader {
         self.total_wrapped_lines.saturating_sub(self.visible_height)
     }
 
-    fn handle_mouse_down(&mut self, x: u16, y: u16, area: Rect) {
-        let text_area = self.last_inner_text_area.unwrap_or(area);
+    fn handle_mouse_down(&mut self, x: u16, y: u16) {
+        if let Some(text_area) = self.last_inner_text_area {
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                if self.get_link_at_position(line, column).is_some() {
+                    debug!("Mouse down on link, skipping text selection");
+                    return;
+                }
 
-        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            if self.get_link_at_position(line, column).is_some() {
-                debug!("Mouse down on link, skipping text selection");
-                return;
+                self.text_selection.start_selection(line, column);
             }
-
-            self.text_selection.start_selection(line, column);
-            debug!("Started text selection at line {}, column {}", line, column);
         }
     }
 
-    fn handle_mouse_drag(&mut self, x: u16, y: u16, area: Rect) {
-        if self.text_selection.is_selecting {
+    fn handle_mouse_drag(&mut self, x: u16, y: u16) {
+        if self.text_selection.is_selecting && self.last_inner_text_area.is_some() {
             // Use the inner text area if available, otherwise fall back to the provided area
-            let text_area = self.last_inner_text_area.unwrap_or(area);
+            let text_area = self.last_inner_text_area.unwrap();
 
             // Always try to update text selection first, regardless of auto-scroll
             if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
@@ -3098,65 +3097,44 @@ impl TextReaderTrait for MarkdownTextReader {
         }
     }
 
-    fn handle_mouse_up(&mut self, x: u16, y: u16, area: Rect) -> Option<String> {
+    fn handle_mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
         self.auto_scroll_active = false;
 
-        // Use the inner text area if available, otherwise fall back to the provided area
-        let text_area = self.last_inner_text_area.unwrap_or(area);
+        let text_area = self.last_inner_text_area?;
 
-        // Always check for link clicks first, regardless of selection state
         if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            // Check if click is on a link
             if let Some(link) = self.get_link_at_position(line, column) {
                 let url = link.url.clone();
-                debug!("Link clicked: {}", url);
-                // Clear any selection and return the link
                 self.text_selection.clear_selection();
                 return Some(url);
-            } else {
-                debug!("links not found");
             }
         }
 
-        // Handle text selection if we were selecting
         if self.text_selection.is_selecting {
             self.text_selection.end_selection();
-            if self.text_selection.has_selection() {
-                debug!("Text selection completed");
-            }
         }
 
-        // Check for image click (pass the original area as it uses inner text area internally)
-        self.check_image_click(x, y, area)
+        self.check_image_click(x, y)
     }
 
-    fn handle_double_click(&mut self, x: u16, y: u16, area: Rect) {
-        // Use the inner text area if available, otherwise fall back to the provided area
-        let text_area = self.last_inner_text_area.unwrap_or(area);
-
-        // Use proper coordinate conversion like TextReader does
-        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            // Select word at position
-            if line < self.raw_text_lines.len() {
-                self.text_selection
-                    .select_word_at(line, column, &self.raw_text_lines);
-                debug!("Selected word at line {}, column {}", line, column);
+    fn handle_double_click(&mut self, x: u16, y: u16) {
+        if let Some(text_area) = self.last_inner_text_area {
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                if line < self.raw_text_lines.len() {
+                    self.text_selection
+                        .select_word_at(line, column, &self.raw_text_lines);
+                }
             }
         }
     }
 
-    fn handle_triple_click(&mut self, x: u16, y: u16, area: Rect) {
-        // Use the inner text area if available, otherwise fall back to the provided area
-        let text_area = self.last_inner_text_area.unwrap_or(area);
-
-        // Use proper coordinate conversion like TextReader does
-        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-            // Select entire paragraph/line
-            if line < self.raw_text_lines.len() {
-                // For paragraph selection, we use the calculated column
-                self.text_selection
-                    .select_paragraph_at(line, column, &self.raw_text_lines);
-                debug!("Selected paragraph at line {}", line);
+    fn handle_triple_click(&mut self, x: u16, y: u16) {
+        if let Some(text_area) = self.last_inner_text_area {
+            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                if line < self.raw_text_lines.len() {
+                    self.text_selection
+                        .select_paragraph_at(line, column, &self.raw_text_lines);
+                }
             }
         }
     }
@@ -3303,7 +3281,7 @@ impl TextReaderTrait for MarkdownTextReader {
         any_loaded
     }
 
-    fn check_image_click(&self, x: u16, y: u16, _area: Rect) -> Option<String> {
+    fn check_image_click(&self, x: u16, y: u16) -> Option<String> {
         // Use the inner text area if available
         let text_area = self.last_inner_text_area?;
 
