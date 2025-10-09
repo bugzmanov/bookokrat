@@ -65,6 +65,15 @@ impl EpubBook {
     }
 }
 
+struct UIComponents {
+    pub navigation_panel: NavigationPanel,
+    text_reader: MarkdownTextReader,
+    reading_history: Option<ReadingHistory>,
+    image_popup: Option<ImagePopup>,
+    book_stat: BookStat,
+    book_search: Option<BookSearch>,
+}
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
@@ -77,11 +86,9 @@ pub struct App {
     last_bookmark_save: std::time::Instant,
     mouse_tracker: MouseTracker,
     key_sequence: KeySeq,
-    terminal_width: u16,
-    terminal_height: u16,
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
-    last_terminal_size: Rect,
+    terminal_size: Rect,
     profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
     book_stat: BookStat,
     jump_list: JumpList,
@@ -249,11 +256,11 @@ impl App {
 
         let book_images = BookImages::new(image_storage.clone());
 
-        let (term_width, term_hight) = if let Ok((width, height)) = crossterm::terminal::size() {
+        let terminal_size = if let Ok((width, height)) = crossterm::terminal::size() {
             debug!("Initial terminal size: {}x{}", width, height);
-            (width, height)
+            Rect::new(0, 0, width, height)
         } else {
-            (80, 24)
+            Rect::new(0, 0, 80, 24)
         };
 
         let mut app = Self {
@@ -268,11 +275,11 @@ impl App {
             last_bookmark_save: std::time::Instant::now(),
             mouse_tracker: MouseTracker::new(),
             key_sequence: KeySeq::new(),
-            terminal_width: term_width,
-            terminal_height: term_hight,
+            // terminal_width: term_width,
+            // terminal_height: term_hight,
             reading_history: None,
             image_popup: None,
-            last_terminal_size: Rect::new(0, 0, 80, 24),
+            terminal_size: terminal_size,
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
             jump_list: JumpList::new(20),
@@ -651,6 +658,8 @@ impl App {
 
     /// Handle a mouse event with optional batching for scroll events
     /// When event_source is provided, scroll events will be batched for smoother scrolling
+    ///
+    /// event_source = None is only for testing to simulate scroll signals
     pub fn handle_mouse_event(
         &mut self,
         initial_mouse_event: MouseEvent,
@@ -658,7 +667,6 @@ impl App {
     ) {
         use std::time::Duration;
 
-        // Extra validation for horizontal scrolls to prevent crossterm overflow bug
         if matches!(
             initial_mouse_event.kind,
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight
@@ -750,7 +758,7 @@ impl App {
                     break;
                 }
                 Err(e) => {
-                    debug!("Error reading event during batching: {:?}", e);
+                    warn!("Error reading event during batching: {:?}", e);
                     break;
                 }
             }
@@ -772,7 +780,6 @@ impl App {
                 ) {
                     let click_x = mouse_event.column;
                     let click_y = mouse_event.row;
-                    // Check if click is outside the popup area
                     if let Some(ref popup) = self.image_popup {
                         if popup.is_outside_popup_area(click_x, click_y) {
                             self.image_popup = None;
@@ -861,7 +868,7 @@ impl App {
                                 mouse_event.row,
                                 content_area,
                             ) {
-                                self.handle_image_click(&image_src, self.last_terminal_size);
+                                self.handle_image_click(&image_src, self.terminal_size);
                             } else {
                                 self.text_reader.handle_mouse_down(
                                     mouse_event.column,
@@ -1208,7 +1215,7 @@ impl App {
         ) {
             if let Some(ref mut book_search) = self.book_search {
                 // BookSearch takes full screen, so use terminal height
-                let search_height = self.terminal_height;
+                let search_height = self.terminal_size.height;
                 if scroll_amount > 0 {
                     for _ in 0..scroll_amount.min(10) {
                         book_search.scroll_down(search_height);
@@ -1233,7 +1240,7 @@ impl App {
         if is_nav_panel {
             debug!("Applying scroll to navigation panel");
             // Get approximate navigation panel height (using terminal height minus status bar)
-            let nav_panel_height = self.terminal_height.saturating_sub(2);
+            let nav_panel_height = self.terminal_size.height.saturating_sub(2);
 
             if scroll_amount > 0 {
                 for _ in 0..scroll_amount.min(10) {
@@ -1356,18 +1363,17 @@ impl App {
     /// Calculate the navigation panel width based on stored terminal width
     fn calculate_navigation_panel_width(&self) -> u16 {
         // 30% of terminal width, minimum 20 columns
-        ((self.terminal_width * 30) / 100).max(20)
+        ((self.terminal_size.width * 30) / 100).max(20)
     }
 
     /// Get the navigation panel area based on current terminal size
     fn get_navigation_panel_area(&self) -> Rect {
         use ratatui::layout::{Constraint, Direction, Layout};
         // Calculate the same layout as in render
-        let full_area = Rect::new(0, 0, self.terminal_width, self.terminal_height);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(full_area);
+            .split(self.terminal_size.clone());
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -1456,9 +1462,7 @@ impl App {
             self.save_bookmark();
         }
 
-        self.terminal_width = f.area().width;
-        self.terminal_height = f.area().height;
-        self.last_terminal_size = f.area();
+        self.terminal_size = f.area();
 
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
         f.render_widget(background_block, f.area());
@@ -1702,12 +1706,9 @@ impl App {
                 true
             }
             " d" => {
-                // Handle Space->d to show book statistics (document stats)
-                // Works from any panel as long as a book is open
                 if self.current_book.is_some() {
-                    // Calculate and show book statistics
                     if let Some(ref mut book) = self.current_book {
-                        let terminal_size = (self.terminal_width, self.terminal_height);
+                        let terminal_size = (self.terminal_size.width, self.terminal_size.height);
                         if let Err(e) = self
                             .book_stat
                             .calculate_stats(&mut book.epub, terminal_size)
