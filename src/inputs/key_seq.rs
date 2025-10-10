@@ -28,6 +28,10 @@ impl KeySeq {
             self.key_sequence.clear();
         }
 
+        if self.key_sequence.len() == 2 {
+            self.key_sequence.remove(0);
+        }
+
         self.key_sequence.push(key_char);
         self.last_key_time = Some(Instant::now());
 

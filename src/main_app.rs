@@ -1,13 +1,13 @@
 use crate::book_manager::BookManager;
 use crate::book_search::{BookSearch, BookSearchAction};
-use crate::book_stat::BookStat;
+use crate::book_stat::{BookStat, BookStatAction};
 use crate::bookmarks::Bookmarks;
 use crate::comments::BookComments;
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
 use crate::images::image_storage::ImageStorage;
-use crate::inputs::{ClickType, KeySeq, MouseTracker};
+use crate::inputs::{ClickType, KeySeq, MouseTracker, map_keys_to_input};
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
@@ -1721,100 +1721,10 @@ impl App {
 
         // If comment input is active, route all input to the text area
         if self.text_reader.is_comment_input_active() {
-            use tui_textarea::{Input, Key as TextAreaKey};
-
-            // Convert crossterm key to tui_textarea input
-            let textarea_input = match key.code {
-                KeyCode::Char(c) => Input {
-                    key: TextAreaKey::Char(c),
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Backspace => Input {
-                    key: TextAreaKey::Backspace,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Enter => Input {
-                    key: TextAreaKey::Enter,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Left => Input {
-                    key: TextAreaKey::Left,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Right => Input {
-                    key: TextAreaKey::Right,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Up => Input {
-                    key: TextAreaKey::Up,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Down => Input {
-                    key: TextAreaKey::Down,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Tab => Input {
-                    key: TextAreaKey::Tab,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Delete => Input {
-                    key: TextAreaKey::Delete,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Home => Input {
-                    key: TextAreaKey::Home,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::End => Input {
-                    key: TextAreaKey::End,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::PageUp => Input {
-                    key: TextAreaKey::PageUp,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::PageDown => Input {
-                    key: TextAreaKey::PageDown,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                KeyCode::Esc => Input {
-                    key: TextAreaKey::Esc,
-                    ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-                    alt: key.modifiers.contains(KeyModifiers::ALT),
-                    shift: key.modifiers.contains(KeyModifiers::SHIFT),
-                },
-                _ => return, // Ignore other keys
-            };
-
-            // Pass the input to the text reader's comment handler
-            if self.text_reader.handle_comment_input(textarea_input) {
-                return;
+            if let Some(input) = map_keys_to_input(key) {
+                if self.text_reader.handle_comment_input(input) {
+                    return;
+                }
             }
         }
 
@@ -1834,10 +1744,7 @@ impl App {
             FocusedPanel::Popup(PopupWindow::BookSearch)
         ) {
             let action = if let Some(ref mut book_search) = self.book_search {
-                let action = book_search.handle_key_event(key);
-                // Update the search if needed
-                book_search.update();
-                action
+                book_search.handle_key_event(key)
             } else {
                 None
             };
@@ -1849,14 +1756,10 @@ impl App {
                         chapter_index,
                         line_number,
                     } => {
-                        // Close the search popup
                         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-
-                        // Navigate to the selected chapter
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {}: {}", chapter_index, e);
                         } else {
-                            // Scroll to the specific line
                             self.text_reader.scroll_to_line(line_number);
                         }
                     }
@@ -1873,65 +1776,21 @@ impl App {
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::BookStats)
         ) {
-            if self.book_stat.handle_key(key) {
-                if !self.book_stat.is_visible() {
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                }
-                return;
-            }
-            // Handle vim navigation keys for book stat
-            match key.code {
-                KeyCode::Char('j') => {
-                    self.book_stat.handle_j();
-                    return;
-                }
-                KeyCode::Char('k') => {
-                    self.book_stat.handle_k();
-                    return;
-                }
-                KeyCode::Char('g') => {
-                    // Check if this completes a 'gg' sequence
-                    if !self.handle_key_sequence('g') {
-                        // 'g' by itself doesn't do anything, waiting for next key
-                    }
-                    return;
-                }
-                KeyCode::Char('G') => {
-                    // Go to bottom
-                    self.book_stat.handle_upper_g();
-                    return;
-                }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Scroll half page down
-                    self.book_stat.handle_ctrl_d();
-                    return;
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    // Scroll half page up
-                    self.book_stat.handle_ctrl_u();
-                    return;
-                }
-                KeyCode::Esc => {
+            match self.book_stat.handle_key(key, &mut self.key_sequence) {
+                Some(BookStatAction::Close) => {
                     self.book_stat.hide();
                     self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                    return;
                 }
-                KeyCode::Enter => {
-                    // Jump to selected chapter
-                    if let Some(chapter_index) = self.book_stat.get_selected_chapter_index() {
-                        // Hide the statistics popup
-                        self.book_stat.hide();
-                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-
-                        // Navigate to the selected chapter
-                        if let Err(e) = self.navigate_to_chapter(chapter_index) {
-                            error!("Failed to navigate to chapter {}: {}", chapter_index, e);
-                        }
+                Some(BookStatAction::JumpToChapter { chapter_index }) => {
+                    self.book_stat.hide();
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                        error!("Failed to navigate to chapter {}: {}", chapter_index, e);
                     }
-                    return;
                 }
-                _ => {}
+                None => {}
             }
+            return;
         }
 
         // For non-character keys or keys with modifiers (except shift), clear any pending sequence
@@ -2000,21 +1859,16 @@ impl App {
                 }
             }
             KeyCode::Char('f') if !self.is_search_input_mode() => {
-                // Check if this completes a key sequence (Space+f)
-                if self.handle_key_sequence('f') {
-                    // Sequence was handled, do nothing more
-                }
+                if self.handle_key_sequence('f') {}
                 // 'f' by itself doesn't do anything in content view
             }
             KeyCode::Char('F') if !self.is_search_input_mode() => {
-                // Check if this completes a key sequence (Space+F)
                 if self.handle_key_sequence('F') {
                     // Sequence was handled, do nothing more
                 }
                 // 'F' by itself doesn't do anything in content view
             }
             KeyCode::Char('s') if !self.is_search_input_mode() => {
-                // Check if this completes a key sequence (Space+s for raw HTML)
                 if self.handle_key_sequence('s') {
                     // Sequence was handled, do nothing more
                 }

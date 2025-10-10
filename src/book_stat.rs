@@ -1,8 +1,10 @@
+use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::parsing::toc_parser::TocParser;
 use anyhow::Result;
+use crossterm::event::KeyModifiers;
 use epub::doc::EpubDoc;
 use log::{debug, error};
 use ratatui::Frame;
@@ -25,6 +27,11 @@ struct ChapterStat {
     screens: usize,
     chapter_index: usize, // The actual chapter index in the EPUB
     is_top_level: bool,   // Whether this is a top-level chapter or nested section
+}
+
+pub enum BookStatAction {
+    JumpToChapter { chapter_index: usize },
+    Close,
 }
 
 impl BookStat {
@@ -416,16 +423,44 @@ impl BookStat {
         frame.render_widget(help, help_area);
     }
 
-    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    pub fn handle_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        key_seq: &mut KeySeq,
+    ) -> Option<BookStatAction> {
         use crossterm::event::KeyCode;
 
-        match key.code {
-            KeyCode::Esc => {
-                self.hide();
-                true
+        return match key.code {
+            KeyCode::Char('j') => {
+                self.handle_j();
+                None
             }
-            _ => false,
-        }
+            KeyCode::Char('k') => {
+                self.handle_k();
+                None
+            }
+            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
+                self.handle_gg();
+                None
+            }
+            KeyCode::Char('G') => {
+                self.handle_upper_g();
+                None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_d();
+                None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_u();
+                None
+            }
+            KeyCode::Esc => Some(BookStatAction::Close),
+            KeyCode::Enter => Some(BookStatAction::JumpToChapter {
+                chapter_index: self.get_selected_chapter_index().unwrap_or(0),
+            }),
+            _ => None,
+        };
     }
 }
 

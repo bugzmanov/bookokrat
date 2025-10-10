@@ -636,12 +636,10 @@ impl MarkdownTextReader {
         if let Some(textarea) = &mut self.comment_textarea {
             match input {
                 Input { key: Key::Esc, .. } => {
-                    // Save the comment and exit comment mode
                     self.save_comment();
                     return true;
                 }
                 _ => {
-                    // Pass the input to the textarea
                     textarea.input(input);
                     return true;
                 }

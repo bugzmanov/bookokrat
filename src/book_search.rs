@@ -110,7 +110,11 @@ impl BookSearch {
 
     pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<BookSearchAction> {
         match self.focus_mode {
-            FocusMode::Input => self.handle_input_key(key),
+            FocusMode::Input => {
+                let action = self.handle_input_key(key);
+                self.update();
+                action
+            }
             FocusMode::Results => self.handle_results_key(key),
         }
     }
