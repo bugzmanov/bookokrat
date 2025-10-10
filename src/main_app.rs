@@ -1810,6 +1810,30 @@ impl App {
             return;
         }
 
+        if self.is_search_input_mode() {
+            match key.code {
+                KeyCode::Char(c) => {
+                    self.handle_search_input(c);
+                }
+                KeyCode::Backspace => {
+                    self.handle_search_backspace();
+                }
+                KeyCode::Enter => {
+                    // Handle Enter in search mode
+                    if self.navigation_panel.is_searching() {
+                        self.navigation_panel.confirm_search();
+                    } else if self.text_reader.is_searching() {
+                        self.text_reader.confirm_search();
+                    }
+                }
+                KeyCode::Esc => {
+                    self.cancel_current_search();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // For non-character keys or keys with modifiers (except shift), clear any pending sequence
         match &key.code {
             KeyCode::Char(_)
@@ -1826,23 +1850,18 @@ impl App {
 
         match key.code {
             KeyCode::Char('/') => {
-                // Start search when '/' is pressed
                 if self.is_main_panel(MainPanel::FileList) {
-                    // Start search in navigation panel (book list or TOC)
                     self.navigation_panel.start_search();
                 } else if self.is_main_panel(MainPanel::Content) {
-                    // Start search in content area
                     self.text_reader.start_search();
                 }
             }
             KeyCode::Char('n') if self.is_in_search_mode() => {
-                // Handle 'n' in search mode - next match
                 if self.navigation_panel.is_searching() {
                     let search_state = self.navigation_panel.get_search_state();
                     if search_state.mode == SearchMode::NavigationMode {
                         self.navigation_panel.next_match();
                     } else {
-                        // In input mode, 'n' is just a regular character
                         self.handle_search_input('n');
                     }
                 } else if self.text_reader.is_searching() {
@@ -1850,19 +1869,16 @@ impl App {
                     if search_state.mode == SearchMode::NavigationMode {
                         self.text_reader.next_match();
                     } else {
-                        // In input mode, 'n' is just a regular character
                         self.handle_search_input('n');
                     }
                 }
             }
             KeyCode::Char('N') if self.is_in_search_mode() => {
-                // Handle 'N' in search mode - previous match
                 if self.navigation_panel.is_searching() {
                     let search_state = self.navigation_panel.get_search_state();
                     if search_state.mode == SearchMode::NavigationMode {
                         self.navigation_panel.previous_match();
                     } else {
-                        // In input mode, 'N' is just a regular character
                         self.handle_search_input('N');
                     }
                 } else if self.text_reader.is_searching() {
@@ -1870,31 +1886,27 @@ impl App {
                     if search_state.mode == SearchMode::NavigationMode {
                         self.text_reader.previous_match();
                     } else {
-                        // In input mode, 'N' is just a regular character
                         self.handle_search_input('N');
                     }
                 }
             }
-            KeyCode::Char('f') if !self.is_search_input_mode() => {
+            KeyCode::Char('f') => {
                 if self.handle_key_sequence('f') {}
                 // 'f' by itself doesn't do anything in content view
             }
-            KeyCode::Char('F') if !self.is_search_input_mode() => {
+            KeyCode::Char('F') => {
                 if self.handle_key_sequence('F') {
                     // Sequence was handled, do nothing more
                 }
                 // 'F' by itself doesn't do anything in content view
             }
-            KeyCode::Char('s') if !self.is_search_input_mode() => {
+            KeyCode::Char('s') => {
                 if self.handle_key_sequence('s') {
                     // Sequence was handled, do nothing more
                 }
                 // 's' by itself doesn't do anything in content view
             }
-            KeyCode::Char('d')
-                if !self.is_search_input_mode()
-                    && !key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
+            KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.handle_key_sequence('d') {
                     // Sequence was handled, do nothing more
                 } else if !self.text_reader.is_comment_input_active() {
@@ -1911,36 +1923,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char(c) if self.is_search_input_mode() => {
-                // We're typing a search query - handle ALL characters as input
-                self.handle_search_input(c);
-            }
-            KeyCode::Backspace if self.is_search_input_mode() => {
-                // Handle backspace when typing search query
-                self.handle_search_backspace();
-            }
-            KeyCode::Enter if self.is_in_search_mode() => {
-                // Handle Enter in search mode
-                if self.navigation_panel.is_searching() {
-                    let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
-                        // Confirm search and switch to navigation mode
-                        self.navigation_panel.confirm_search();
-                    } else {
-                        // In NavigationMode, Enter selects the current item
-                        self.handle_navigation_panel_enter();
-                    }
-                } else if self.text_reader.is_searching() {
-                    let search_state = self.text_reader.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
-                        // Confirm search and switch to navigation mode
-                        self.text_reader.confirm_search();
-                    }
-                    // In NavigationMode for content, Enter doesn't do anything special
-                }
-            }
             KeyCode::Esc if self.is_in_search_mode() => {
-                // Handle Escape in search mode
                 self.cancel_current_search();
             }
             KeyCode::Char('j') => {
@@ -1958,36 +1941,28 @@ impl App {
                 }
             }
             KeyCode::Char('h') => {
-                // Check if this completes a key sequence (Space+h for reading history)
                 if !self.handle_key_sequence('h') {
-                    // 'h' by itself - handle normal navigation
                     if self.is_main_panel(MainPanel::FileList) {
-                        // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_h();
                     } else {
-                        // Allow chapter navigation in content view
                         let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                     }
                 }
             }
             KeyCode::Char('H') => {
-                // Fold all TOC items when in navigation panel
                 if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_shift_h();
                 }
             }
             KeyCode::Char('L') => {
-                // Unfold all TOC items when in navigation panel
                 if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_shift_l();
                 }
             }
             KeyCode::Char('i') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    // Ctrl+I: Jump forward in history (vim-style)
                     self.jump_forward();
                 }
-                // 'i' by itself doesn't do anything
             }
             KeyCode::Char('l') => {
                 if self.is_main_panel(MainPanel::FileList) {
@@ -2013,23 +1988,30 @@ impl App {
                 // Handle selection based on what's currently selected
                 match self.navigation_panel.mode {
                     NavigationMode::TableOfContents => {
-                        // Handle TOC selection
                         match self.navigation_panel.table_of_contents.get_selected_item() {
                             Some(SelectedTocItem::BackToBooks) => {
-                                // Switch back to book list mode
                                 self.switch_to_book_list_mode();
                             }
-                            Some(SelectedTocItem::TocItem(toc_item)) => {
-                                // Check if this is a section or a chapter
-                                match toc_item {
-                                    TocItem::Chapter { href, anchor, .. } => {
+                            Some(SelectedTocItem::TocItem(toc_item)) => match toc_item {
+                                TocItem::Chapter { href, anchor, .. } => {
+                                    if let Some(chapter_index) = self.find_spine_index_by_href(href)
+                                    {
+                                        let anchor_id = anchor.clone();
+                                        let _ = self.navigate_to_chapter(chapter_index);
+                                        if let Some(anchor_id) = anchor_id {
+                                            self.text_reader
+                                                .handle_pending_anchor_scroll(Some(anchor_id));
+                                        }
+                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                                    }
+                                }
+                                TocItem::Section { href, anchor, .. } => {
+                                    if let Some(href_str) = href {
                                         if let Some(chapter_index) =
-                                            self.find_spine_index_by_href(href)
+                                            self.find_spine_index_by_href(href_str)
                                         {
                                             let anchor_id = anchor.clone();
-                                            // Navigate to the chapter
                                             let _ = self.navigate_to_chapter(chapter_index);
-                                            // If there's an anchor, scroll to it after navigation
                                             if let Some(anchor_id) = anchor_id {
                                                 self.text_reader
                                                     .handle_pending_anchor_scroll(Some(anchor_id));
@@ -2037,38 +2019,17 @@ impl App {
                                             self.focused_panel =
                                                 FocusedPanel::Main(MainPanel::Content);
                                         }
-                                    }
-                                    TocItem::Section { href, anchor, .. } => {
-                                        if let Some(href_str) = href {
-                                            if let Some(chapter_index) =
-                                                self.find_spine_index_by_href(href_str)
-                                            {
-                                                let anchor_id = anchor.clone();
-                                                // This section has content - navigate to it
-                                                let _ = self.navigate_to_chapter(chapter_index);
-                                                // If there's an anchor, scroll to it after navigation
-                                                if let Some(anchor_id) = anchor_id {
-                                                    self.text_reader.handle_pending_anchor_scroll(
-                                                        Some(anchor_id),
-                                                    );
-                                                }
-                                                self.focused_panel =
-                                                    FocusedPanel::Main(MainPanel::Content);
-                                            }
-                                        } else {
-                                            // This section has no content - just toggle expansion
-                                            self.navigation_panel
-                                                .table_of_contents
-                                                .toggle_selected_expansion();
-                                        }
+                                    } else {
+                                        self.navigation_panel
+                                            .table_of_contents
+                                            .toggle_selected_expansion();
                                     }
                                 }
-                            }
+                            },
                             None => {}
                         }
                     }
                     NavigationMode::BookSelection => {
-                        // Select book from file list using high-level action
                         let book_index = self.navigation_panel.get_selected_book_index();
                         let _ = self.open_book_for_reading(book_index);
                     }
