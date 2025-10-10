@@ -1577,20 +1577,7 @@ impl App {
         match sequence.as_str() {
             "gg" => {
                 // Handle 'gg' motion - go to top
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_gg();
-                    }
-                } else if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::BookStats)
-                ) {
-                    self.book_stat.handle_gg();
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_gg();
                 } else {
                     self.text_reader.handle_gg();
@@ -1793,6 +1780,36 @@ impl App {
             return;
         }
 
+        // If reading history popup is shown, handle keys for it
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ReadingHistory)
+        ) {
+            let action = if let Some(ref mut history) = self.reading_history {
+                history.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(action) = action {
+                use crate::reading_history::ReadingHistoryAction;
+                match action {
+                    ReadingHistoryAction::Close => {
+                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        self.reading_history = None;
+                    }
+                    ReadingHistoryAction::OpenBook { path } => {
+                        if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
+                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                            self.reading_history = None;
+                            let _ = self.open_book_for_reading(book_index);
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         // For non-character keys or keys with modifiers (except shift), clear any pending sequence
         match &key.code {
             KeyCode::Char(_)
@@ -1927,30 +1944,14 @@ impl App {
                 self.cancel_current_search();
             }
             KeyCode::Char('j') => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_j();
-                    }
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_j();
                 } else {
                     self.scroll_down();
                 }
             }
             KeyCode::Char('k') => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_k();
-                    }
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.move_selection_up();
                 } else {
                     self.scroll_up();
@@ -1960,15 +1961,7 @@ impl App {
                 // Check if this completes a key sequence (Space+h for reading history)
                 if !self.handle_key_sequence('h') {
                     // 'h' by itself - handle normal navigation
-                    if matches!(
-                        self.focused_panel,
-                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                    ) {
-                        // Use VimNavMotions for reading history (could close history)
-                        if let Some(ref mut history) = self.reading_history {
-                            history.handle_h();
-                        }
-                    } else if self.is_main_panel(MainPanel::FileList) {
+                    if self.is_main_panel(MainPanel::FileList) {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_h();
                     } else {
@@ -1997,15 +1990,7 @@ impl App {
                 // 'i' by itself doesn't do anything
             }
             KeyCode::Char('l') => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history (could select/enter)
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_l();
-                    }
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     // Use VimNavMotions for navigation panel (future: could expand/enter)
                     self.navigation_panel.handle_l();
                 } else {
@@ -2025,43 +2010,41 @@ impl App {
                 self.toggle_profiling();
             }
             KeyCode::Enter => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Handle selection from reading history
-                    if let Some(ref history) = self.reading_history {
-                        if let Some(path) = history.selected_path() {
-                            // Find the book index by path
-                            if let Some(book_index) =
-                                self.book_manager.find_book_index_by_path(path)
-                            {
-                                // Close history and open the book
-                                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                                self.reading_history = None;
-                                let _ = self.open_book_for_reading(book_index);
+                // Handle selection based on what's currently selected
+                match self.navigation_panel.mode {
+                    NavigationMode::TableOfContents => {
+                        // Handle TOC selection
+                        match self.navigation_panel.table_of_contents.get_selected_item() {
+                            Some(SelectedTocItem::BackToBooks) => {
+                                // Switch back to book list mode
+                                self.switch_to_book_list_mode();
                             }
-                        }
-                    }
-                } else {
-                    // Handle selection based on what's currently selected
-                    match self.navigation_panel.mode {
-                        NavigationMode::TableOfContents => {
-                            // Handle TOC selection
-                            match self.navigation_panel.table_of_contents.get_selected_item() {
-                                Some(SelectedTocItem::BackToBooks) => {
-                                    // Switch back to book list mode
-                                    self.switch_to_book_list_mode();
-                                }
-                                Some(SelectedTocItem::TocItem(toc_item)) => {
-                                    // Check if this is a section or a chapter
-                                    match toc_item {
-                                        TocItem::Chapter { href, anchor, .. } => {
+                            Some(SelectedTocItem::TocItem(toc_item)) => {
+                                // Check if this is a section or a chapter
+                                match toc_item {
+                                    TocItem::Chapter { href, anchor, .. } => {
+                                        if let Some(chapter_index) =
+                                            self.find_spine_index_by_href(href)
+                                        {
+                                            let anchor_id = anchor.clone();
+                                            // Navigate to the chapter
+                                            let _ = self.navigate_to_chapter(chapter_index);
+                                            // If there's an anchor, scroll to it after navigation
+                                            if let Some(anchor_id) = anchor_id {
+                                                self.text_reader
+                                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                                            }
+                                            self.focused_panel =
+                                                FocusedPanel::Main(MainPanel::Content);
+                                        }
+                                    }
+                                    TocItem::Section { href, anchor, .. } => {
+                                        if let Some(href_str) = href {
                                             if let Some(chapter_index) =
-                                                self.find_spine_index_by_href(href)
+                                                self.find_spine_index_by_href(href_str)
                                             {
                                                 let anchor_id = anchor.clone();
-                                                // Navigate to the chapter
+                                                // This section has content - navigate to it
                                                 let _ = self.navigate_to_chapter(chapter_index);
                                                 // If there's an anchor, scroll to it after navigation
                                                 if let Some(anchor_id) = anchor_id {
@@ -2072,42 +2055,22 @@ impl App {
                                                 self.focused_panel =
                                                     FocusedPanel::Main(MainPanel::Content);
                                             }
-                                        }
-                                        TocItem::Section { href, anchor, .. } => {
-                                            if let Some(href_str) = href {
-                                                if let Some(chapter_index) =
-                                                    self.find_spine_index_by_href(href_str)
-                                                {
-                                                    let anchor_id = anchor.clone();
-                                                    // This section has content - navigate to it
-                                                    let _ = self.navigate_to_chapter(chapter_index);
-                                                    // If there's an anchor, scroll to it after navigation
-                                                    if let Some(anchor_id) = anchor_id {
-                                                        self.text_reader
-                                                            .handle_pending_anchor_scroll(Some(
-                                                                anchor_id,
-                                                            ));
-                                                    }
-                                                    self.focused_panel =
-                                                        FocusedPanel::Main(MainPanel::Content);
-                                                }
-                                            } else {
-                                                // This section has no content - just toggle expansion
-                                                self.navigation_panel
-                                                    .table_of_contents
-                                                    .toggle_selected_expansion();
-                                            }
+                                        } else {
+                                            // This section has no content - just toggle expansion
+                                            self.navigation_panel
+                                                .table_of_contents
+                                                .toggle_selected_expansion();
                                         }
                                     }
                                 }
-                                None => {}
                             }
+                            None => {}
                         }
-                        NavigationMode::BookSelection => {
-                            // Select book from file list using high-level action
-                            let book_index = self.navigation_panel.get_selected_book_index();
-                            let _ = self.open_book_for_reading(book_index);
-                        }
+                    }
+                    NavigationMode::BookSelection => {
+                        // Select book from file list using high-level action
+                        let book_index = self.navigation_panel.get_selected_book_index();
+                        let _ = self.open_book_for_reading(book_index);
                     }
                 }
             }
@@ -2136,15 +2099,7 @@ impl App {
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Handle Ctrl+d
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Use VimNavMotions for reading history
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_ctrl_d();
-                    }
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     // Use VimNavMotions for navigation panel
                     self.navigation_panel.handle_ctrl_d();
                 } else if let Some(visible_height) = screen_height {
@@ -2153,15 +2108,7 @@ impl App {
             }
             KeyCode::Char('u') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if matches!(
-                        self.focused_panel,
-                        FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                    ) {
-                        // Use VimNavMotions for reading history
-                        if let Some(ref mut history) = self.reading_history {
-                            history.handle_ctrl_u();
-                        }
-                    } else if self.is_main_panel(MainPanel::FileList) {
+                    if self.is_main_panel(MainPanel::FileList) {
                         // Use VimNavMotions for navigation panel
                         self.navigation_panel.handle_ctrl_u();
                     } else if let Some(visible_height) = screen_height {
@@ -2176,14 +2123,7 @@ impl App {
                 }
             }
             KeyCode::Char('G') => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    if let Some(ref mut history) = self.reading_history {
-                        history.handle_upper_g();
-                    }
-                } else if self.is_main_panel(MainPanel::FileList) {
+                if self.is_main_panel(MainPanel::FileList) {
                     self.navigation_panel.handle_upper_g();
                 } else if self.current_book.is_some() {
                     self.text_reader.handle_upper_g();
@@ -2213,14 +2153,7 @@ impl App {
                 }
             }
             KeyCode::Esc => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Close reading history
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                    self.reading_history = None;
-                } else if self.text_reader.has_text_selection() {
+                if self.text_reader.has_text_selection() {
                     // Clear text selection when ESC is pressed
                     self.text_reader.clear_selection();
                     debug!("Text selection cleared via ESC key");

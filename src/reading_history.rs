@@ -1,4 +1,5 @@
 use crate::bookmarks::Bookmarks;
+use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::theme::OCEANIC_NEXT;
 use chrono::{DateTime, Local, TimeZone};
@@ -11,6 +12,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState},
 };
 use std::collections::HashMap;
+
+pub enum ReadingHistoryAction {
+    OpenBook { path: String },
+    Close,
+}
 
 pub struct ReadingHistory {
     items: Vec<HistoryItem>,
@@ -297,6 +303,62 @@ impl VimNavMotions for ReadingHistory {
         if !self.items.is_empty() {
             let last_index = self.items.len() - 1;
             self.state.select(Some(last_index));
+        }
+    }
+}
+
+impl ReadingHistory {
+    pub fn handle_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        key_seq: &mut KeySeq,
+    ) -> Option<ReadingHistoryAction> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
+            KeyCode::Char('j') => {
+                self.handle_j();
+                None
+            }
+            KeyCode::Char('k') => {
+                self.handle_k();
+                None
+            }
+            KeyCode::Char('h') => {
+                self.handle_h();
+                None
+            }
+            KeyCode::Char('l') => {
+                self.handle_l();
+                None
+            }
+            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
+                self.handle_gg();
+                None
+            }
+            KeyCode::Char('G') => {
+                self.handle_upper_g();
+                None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_d();
+                None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_u();
+                None
+            }
+            KeyCode::Esc => Some(ReadingHistoryAction::Close),
+            KeyCode::Enter => {
+                if let Some(path) = self.selected_path() {
+                    Some(ReadingHistoryAction::OpenBook {
+                        path: path.to_string(),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 }
