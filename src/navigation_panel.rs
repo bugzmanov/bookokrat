@@ -1,11 +1,25 @@
 use crate::book_list::BookList;
 use crate::book_manager::BookManager;
+use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
-use crate::search::{SearchState, SearchablePanel};
+use crate::search::{SearchMode, SearchState, SearchablePanel};
 use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect};
+
+pub enum NavigationPanelAction {
+    SelectBook {
+        book_index: usize,
+    },
+    NavigateToChapter {
+        href: String,
+        anchor: Option<String>,
+    },
+    ToggleSection,
+    SwitchToBookList,
+    Bypass, // when the component assumes the upper layer should handle the action
+}
 
 pub enum SelectedActionOwned {
     None,
@@ -190,6 +204,114 @@ impl NavigationPanel {
                     }
                 }
             }
+        }
+    }
+
+    pub fn handle_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        key_seq: &mut KeySeq,
+    ) -> Option<NavigationPanelAction> {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
+            KeyCode::Tab => Some(NavigationPanelAction::Bypass),
+            KeyCode::Char('/') => {
+                self.start_search();
+                None
+            }
+            KeyCode::Char('j') => {
+                self.handle_j();
+                None
+            }
+            KeyCode::Char('k') => {
+                self.move_selection_up();
+                None
+            }
+            KeyCode::Char('h') => {
+                self.handle_h();
+                None
+            }
+            KeyCode::Char('l') => {
+                self.handle_l();
+                None
+            }
+            KeyCode::Char('H') => {
+                self.handle_shift_h();
+                None
+            }
+            KeyCode::Char('L') => {
+                self.handle_shift_l();
+                None
+            }
+            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
+                self.handle_gg();
+                None
+            }
+            KeyCode::Char('G') => {
+                self.handle_upper_g();
+                None
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_d();
+                None
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_u();
+                None
+            }
+            KeyCode::Char('n') if self.is_searching() => {
+                let search_state = self.get_search_state();
+                if search_state.mode == SearchMode::NavigationMode {
+                    self.next_match();
+                }
+                None
+            }
+            KeyCode::Char('N') if self.is_searching() => {
+                let search_state = self.get_search_state();
+                if search_state.mode == SearchMode::NavigationMode {
+                    self.previous_match();
+                }
+                None
+            }
+            KeyCode::Enter => {
+                // Handle Enter key based on current mode
+                match self.mode {
+                    NavigationMode::BookSelection => {
+                        let book_index = self.get_selected_book_index();
+                        Some(NavigationPanelAction::SelectBook { book_index })
+                    }
+                    NavigationMode::TableOfContents => {
+                        match self.table_of_contents.get_selected_item() {
+                            Some(SelectedTocItem::BackToBooks) => {
+                                Some(NavigationPanelAction::SwitchToBookList)
+                            }
+                            Some(SelectedTocItem::TocItem(toc_item)) => match toc_item {
+                                TocItem::Chapter { href, anchor, .. } => {
+                                    Some(NavigationPanelAction::NavigateToChapter {
+                                        href: href.clone(),
+                                        anchor: anchor.clone(),
+                                    })
+                                }
+                                TocItem::Section { href, anchor, .. } => {
+                                    if let Some(href_str) = href {
+                                        Some(NavigationPanelAction::NavigateToChapter {
+                                            href: href_str.clone(),
+                                            anchor: anchor.clone(),
+                                        })
+                                    } else {
+                                        None
+                                        // // Section has no content - just toggle expansion
+                                        // Some(NavigationPanelAction::ToggleSection)
+                                    }
+                                }
+                            },
+                            None => None,
+                        }
+                    }
+                }
+            }
+            _ => None,
         }
     }
 }

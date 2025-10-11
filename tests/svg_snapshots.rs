@@ -48,12 +48,15 @@ enum KeyAction {
 
 impl TestKeyEventHandler for App {
     fn press_key(&mut self, key: crossterm::event::KeyCode) {
-        self.handle_key_event(crossterm::event::KeyEvent {
-            code: key,
-            modifiers: crossterm::event::KeyModifiers::empty(),
-            kind: crossterm::event::KeyEventKind::Press,
-            state: crossterm::event::KeyEventState::NONE,
-        });
+        self.handle_key_event_with_screen_height(
+            crossterm::event::KeyEvent {
+                code: key,
+                modifiers: crossterm::event::KeyModifiers::empty(),
+                kind: crossterm::event::KeyEventKind::Press,
+                state: crossterm::event::KeyEventState::NONE,
+            },
+            None,
+        );
     }
 
     fn press_keys(&mut self, keys: &[crossterm::event::KeyCode]) {
@@ -1798,7 +1801,7 @@ fn test_toc_navigation_bug_svg() {
     }
 
     // Start with file list panel focused to show the TOC
-    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::FileList);
+    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::NavigationList);
 
     // Draw initial state - should show book with expanded TOC
     terminal
@@ -3231,7 +3234,7 @@ fn test_toc_search_svg() {
 
     // Make sure we're focused on the TOC panel, not the content
     // After opening a book, focus typically goes to content, so we need to switch back
-    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::FileList);
+    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::NavigationList);
 
     // Initial draw to show the TOC
     terminal

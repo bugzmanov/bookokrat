@@ -10,14 +10,14 @@ use crate::images::image_storage::ImageStorage;
 use crate::inputs::{ClickType, KeySeq, MouseTracker, map_keys_to_input};
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
-use crate::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
+use crate::navigation_panel::{CurrentBookInfo, NavigationPanel};
 use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
-use crate::table_of_contents::{SelectedTocItem, TocItem};
+use crate::table_of_contents::TocItem;
 use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::theme::OCEANIC_NEXT;
 use image::GenericImageView;
@@ -65,13 +65,9 @@ impl EpubBook {
     }
 }
 
-struct UIComponents {
-    pub navigation_panel: NavigationPanel,
-    text_reader: MarkdownTextReader,
-    reading_history: Option<ReadingHistory>,
-    image_popup: Option<ImagePopup>,
-    book_stat: BookStat,
-    book_search: Option<BookSearch>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppAction {
+    Quit,
 }
 
 pub struct App {
@@ -1577,12 +1573,8 @@ impl App {
         match sequence.as_str() {
             "gg" => {
                 // Handle 'gg' motion - go to top
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.handle_gg();
-                } else {
-                    self.text_reader.handle_gg();
-                    self.save_bookmark();
-                }
+                self.text_reader.handle_gg();
+                self.save_bookmark();
                 self.key_sequence.clear();
                 true
             }
@@ -1693,24 +1685,19 @@ impl App {
         }
     }
 
-    /// Handle a single key event - useful for testing
-    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) {
-        self.handle_key_event_with_screen_height(key, None);
-    }
-
     /// Handle a single key event with optional screen height for half-screen scrolling
     pub fn handle_key_event_with_screen_height(
         &mut self,
         key: crossterm::event::KeyEvent,
         screen_height: Option<usize>,
-    ) {
+    ) -> Option<AppAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         // If comment input is active, route all input to the text area
         if self.text_reader.is_comment_input_active() {
             if let Some(input) = map_keys_to_input(key) {
                 if self.text_reader.handle_comment_input(input) {
-                    return;
+                    return None;
                 }
             }
         }
@@ -1722,14 +1709,11 @@ impl App {
         ) {
             self.image_popup = None;
             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-            return;
+            return None;
         }
 
         // If book search popup is shown, handle keys for it
-        if matches!(
-            self.focused_panel,
-            FocusedPanel::Popup(PopupWindow::BookSearch)
-        ) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::BookSearch) {
             let action = if let Some(ref mut book_search) = self.book_search {
                 book_search.handle_key_event(key)
             } else {
@@ -1755,14 +1739,11 @@ impl App {
                     }
                 }
             }
-            return;
+            return None;
         }
 
         // If book stat popup is shown, handle keys for it
-        if matches!(
-            self.focused_panel,
-            FocusedPanel::Popup(PopupWindow::BookStats)
-        ) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::BookStats) {
             match self.book_stat.handle_key(key, &mut self.key_sequence) {
                 Some(BookStatAction::Close) => {
                     self.book_stat.hide();
@@ -1777,14 +1758,11 @@ impl App {
                 }
                 None => {}
             }
-            return;
+            return None;
         }
 
         // If reading history popup is shown, handle keys for it
-        if matches!(
-            self.focused_panel,
-            FocusedPanel::Popup(PopupWindow::ReadingHistory)
-        ) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ReadingHistory) {
             let action = if let Some(ref mut history) = self.reading_history {
                 history.handle_key(key, &mut self.key_sequence)
             } else {
@@ -1807,17 +1785,15 @@ impl App {
                     }
                 }
             }
-            return;
+            return None;
         }
 
         if self.is_search_input_mode() {
             match key.code {
-                KeyCode::Char(c) => {
-                    self.handle_search_input(c);
-                }
-                KeyCode::Backspace => {
-                    self.handle_search_backspace();
-                }
+                KeyCode::Char(c) => self.handle_search_input(c),
+                KeyCode::Backspace => self.handle_search_backspace(),
+                KeyCode::Esc => self.cancel_current_search(),
+
                 KeyCode::Enter => {
                     // Handle Enter in search mode
                     if self.navigation_panel.is_searching() {
@@ -1826,42 +1802,67 @@ impl App {
                         self.text_reader.confirm_search();
                     }
                 }
-                KeyCode::Esc => {
-                    self.cancel_current_search();
-                }
                 _ => {}
             }
-            return;
+            return None;
         }
 
-        // For non-character keys or keys with modifiers (except shift), clear any pending sequence
-        match &key.code {
-            KeyCode::Char(_)
-                if !key.modifiers.contains(KeyModifiers::CONTROL)
-                    && !key.modifiers.contains(KeyModifiers::ALT) =>
-            {
-                // Character keys without Ctrl/Alt can be part of sequences
+        // If navigation panel (file list) has focus, handle keys for it
+        if self.is_main_panel(MainPanel::FileList) && !self.is_search_input_mode() {
+            let action = self
+                .navigation_panel
+                .handle_key(key, &mut self.key_sequence);
+            let mut bypass = false;
+            if let Some(action) = action {
+                use crate::navigation_panel::NavigationPanelAction;
+                match action {
+                    NavigationPanelAction::Bypass => {
+                        bypass = true;
+                    }
+                    NavigationPanelAction::SelectBook { book_index } => {
+                        let _ = self.open_book_for_reading(book_index);
+                    }
+                    NavigationPanelAction::SwitchToBookList => {
+                        self.switch_to_book_list_mode();
+                    }
+                    NavigationPanelAction::NavigateToChapter { href, anchor } => {
+                        if let Some(chapter_index) = self.find_spine_index_by_href(&href) {
+                            let _ = self.navigate_to_chapter(chapter_index);
+                            if let Some(anchor_id) = anchor {
+                                self.text_reader
+                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                            }
+                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        }
+                    }
+                    NavigationPanelAction::ToggleSection => {
+                        self.navigation_panel
+                            .table_of_contents
+                            .toggle_selected_expansion();
+                    }
+                }
             }
-            _ => {
-                // Any other key clears the sequence
-                self.key_sequence.clear();
+
+            if key.code == KeyCode::Char('q') {
+                self.save_bookmark_with_throttle(true);
+                return Some(AppAction::Quit);
+            }
+
+            if !bypass {
+                return None;
             }
         }
 
         match key.code {
             KeyCode::Char('/') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.start_search();
-                } else if self.is_main_panel(MainPanel::Content) {
+                if self.is_main_panel(MainPanel::Content) {
                     self.text_reader.start_search();
                 }
             }
             KeyCode::Char('n') if self.is_in_search_mode() => {
                 if self.navigation_panel.is_searching() {
                     let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::NavigationMode {
-                        self.navigation_panel.next_match();
-                    } else {
+                    if search_state.mode == SearchMode::InputMode {
                         self.handle_search_input('n');
                     }
                 } else if self.text_reader.is_searching() {
@@ -1876,9 +1877,7 @@ impl App {
             KeyCode::Char('N') if self.is_in_search_mode() => {
                 if self.navigation_panel.is_searching() {
                     let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::NavigationMode {
-                        self.navigation_panel.previous_match();
-                    } else {
+                    if search_state.mode == SearchMode::InputMode {
                         self.handle_search_input('N');
                     }
                 } else if self.text_reader.is_searching() {
@@ -1890,25 +1889,14 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('f') => {
-                if self.handle_key_sequence('f') {}
-                // 'f' by itself doesn't do anything in content view
-            }
-            KeyCode::Char('F') => {
-                if self.handle_key_sequence('F') {
-                    // Sequence was handled, do nothing more
-                }
-                // 'F' by itself doesn't do anything in content view
-            }
-            KeyCode::Char('s') => {
-                if self.handle_key_sequence('s') {
-                    // Sequence was handled, do nothing more
-                }
-                // 's' by itself doesn't do anything in content view
-            }
+            KeyCode::Char('f') => if self.handle_key_sequence('f') {},
+            KeyCode::Char('F') => if self.handle_key_sequence('F') {},
+            KeyCode::Char('s') => if self.handle_key_sequence('s') {},
+            KeyCode::Char(' ') => if !self.handle_key_sequence(' ') {},
+            KeyCode::Char('g') => if !self.handle_key_sequence('g') {},
+
             KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.handle_key_sequence('d') {
-                    // Sequence was handled, do nothing more
                 } else if !self.text_reader.is_comment_input_active() {
                     match self.text_reader.delete_comment_at_cursor() {
                         Ok(true) => {
@@ -1923,129 +1911,36 @@ impl App {
                     }
                 }
             }
-            KeyCode::Esc if self.is_in_search_mode() => {
-                self.cancel_current_search();
-            }
             KeyCode::Char('j') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.handle_j();
-                } else {
-                    self.scroll_down();
-                }
+                self.scroll_down();
             }
             KeyCode::Char('k') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.move_selection_up();
-                } else {
-                    self.scroll_up();
-                }
+                self.scroll_up();
             }
             KeyCode::Char('h') => {
                 if !self.handle_key_sequence('h') {
-                    if self.is_main_panel(MainPanel::FileList) {
-                        self.navigation_panel.handle_h();
-                    } else {
-                        let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
-                    }
-                }
-            }
-            KeyCode::Char('H') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.handle_shift_h();
-                }
-            }
-            KeyCode::Char('L') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.handle_shift_l();
-                }
-            }
-            KeyCode::Char('i') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.jump_forward();
+                    let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                 }
             }
             KeyCode::Char('l') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    // Use VimNavMotions for navigation panel (future: could expand/enter)
-                    self.navigation_panel.handle_l();
-                } else {
-                    // Allow chapter navigation in content view
-                    let _ = self.navigate_chapter_relative(ChapterDirection::Next);
-                }
+                let _ = self.navigate_chapter_relative(ChapterDirection::Next);
+            }
+            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_forward();
             }
             KeyCode::Char('o') => {
                 if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    // Ctrl+O: Jump back in history (vim-style)
                     self.jump_back();
                 } else if !self.handle_key_sequence('o') {
-                    // 'o' is part of Space+o sequence or does nothing by itself
                 }
             }
             KeyCode::Char('p') => {
                 self.toggle_profiling();
             }
-            KeyCode::Enter => {
-                // Handle selection based on what's currently selected
-                match self.navigation_panel.mode {
-                    NavigationMode::TableOfContents => {
-                        match self.navigation_panel.table_of_contents.get_selected_item() {
-                            Some(SelectedTocItem::BackToBooks) => {
-                                self.switch_to_book_list_mode();
-                            }
-                            Some(SelectedTocItem::TocItem(toc_item)) => match toc_item {
-                                TocItem::Chapter { href, anchor, .. } => {
-                                    if let Some(chapter_index) = self.find_spine_index_by_href(href)
-                                    {
-                                        let anchor_id = anchor.clone();
-                                        let _ = self.navigate_to_chapter(chapter_index);
-                                        if let Some(anchor_id) = anchor_id {
-                                            self.text_reader
-                                                .handle_pending_anchor_scroll(Some(anchor_id));
-                                        }
-                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                                    }
-                                }
-                                TocItem::Section { href, anchor, .. } => {
-                                    if let Some(href_str) = href {
-                                        if let Some(chapter_index) =
-                                            self.find_spine_index_by_href(href_str)
-                                        {
-                                            let anchor_id = anchor.clone();
-                                            let _ = self.navigate_to_chapter(chapter_index);
-                                            if let Some(anchor_id) = anchor_id {
-                                                self.text_reader
-                                                    .handle_pending_anchor_scroll(Some(anchor_id));
-                                            }
-                                            self.focused_panel =
-                                                FocusedPanel::Main(MainPanel::Content);
-                                        }
-                                    } else {
-                                        self.navigation_panel
-                                            .table_of_contents
-                                            .toggle_selected_expansion();
-                                    }
-                                }
-                            },
-                            None => {}
-                        }
-                    }
-                    NavigationMode::BookSelection => {
-                        let book_index = self.navigation_panel.get_selected_book_index();
-                        let _ = self.open_book_for_reading(book_index);
-                    }
-                }
-            }
-            KeyCode::Char(' ') => {
-                if !self.handle_key_sequence(' ') {
-                    // do nothing
-                }
-            }
             KeyCode::Tab => {
-                // Switch focus between panels (only works in main panels, not popups)
                 if !self.has_active_popup() {
                     self.focused_panel = match self.focused_panel {
                         FocusedPanel::Main(MainPanel::FileList) => {
-                            // Clear manual navigation flag when leaving TOC
                             self.navigation_panel
                                 .table_of_contents
                                 .clear_manual_navigation();
@@ -2059,39 +1954,22 @@ impl App {
                 }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Handle Ctrl+d
-                if self.is_main_panel(MainPanel::FileList) {
-                    // Use VimNavMotions for navigation panel
-                    self.navigation_panel.handle_ctrl_d();
-                } else if let Some(visible_height) = screen_height {
+                if let Some(visible_height) = screen_height {
                     self.scroll_half_screen_down(visible_height);
                 }
             }
-            KeyCode::Char('u') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if self.is_main_panel(MainPanel::FileList) {
-                        // Use VimNavMotions for navigation panel
-                        self.navigation_panel.handle_ctrl_u();
-                    } else if let Some(visible_height) = screen_height {
-                        self.scroll_half_screen_up(visible_height);
-                    }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_half_screen_up(visible_height);
                 }
             }
-            KeyCode::Char('g') => {
-                // Check if this completes a key sequence
-                if !self.handle_key_sequence('g') {
-                    // 'g' by itself doesn't do anything, it's waiting for the next key
-                }
-            }
+
             KeyCode::Char('G') => {
-                if self.is_main_panel(MainPanel::FileList) {
-                    self.navigation_panel.handle_upper_g();
-                } else if self.current_book.is_some() {
+                if self.current_book.is_some() {
                     self.text_reader.handle_upper_g();
                 }
             }
             KeyCode::Char('a') => {
-                // 'a' starts comment input if text is selected
                 if self.text_reader.has_text_selection() {
                     if self.text_reader.start_comment_input() {
                         debug!("Started comment input mode");
@@ -2099,34 +1977,30 @@ impl App {
                 }
             }
             KeyCode::Char('c') => {
-                // Check if this completes a key sequence (space-c for copy chapter)
                 if !self.handle_key_sequence('c') {
-                    // 'c' by itself copies selected text
                     if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
-                        debug!("Copy failed: {}", e);
+                        error!("Copy failed: {}", e);
                     }
                 }
             }
-            KeyCode::Char('z') => {
-                // Check if this completes a key sequence (space-z for raw_text_lines)
-                if !self.handle_key_sequence('z') {
-                    // 'z' by itself doesn't do anything
-                }
+            KeyCode::Char('q') => {
+                self.save_bookmark_with_throttle(true);
+                return Some(AppAction::Quit);
             }
             KeyCode::Esc => {
                 if self.text_reader.has_text_selection() {
-                    // Clear text selection when ESC is pressed
                     self.text_reader.clear_selection();
-                    debug!("Text selection cleared via ESC key");
+                } else if self.is_in_search_mode() {
+                    self.cancel_current_search();
                 }
             }
             _ => {}
         }
+        return None;
     }
 
     pub fn handle_resize(&mut self) {
-        debug!("Terminal resize detected");
-        // Tell the text reader to update its image picker with new font size
+        // text reader needs to update image picker and line wraps
         self.text_reader.handle_terminal_resize();
     }
 
@@ -2326,16 +2200,11 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                     }
                 }
                 Event::Key(key) => {
-                    match key.code {
-                        KeyCode::Char('q') => {
-                            app.save_bookmark_with_throttle(true);
-                            should_quit = true;
-                        }
-                        _ => {
-                            let visible_height =
-                                terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                            app.handle_key_event_with_screen_height(key, Some(visible_height));
-                        }
+                    let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                    if app.handle_key_event_with_screen_height(key, Some(visible_height))
+                        == Some(AppAction::Quit)
+                    {
+                        should_quit = true;
                     }
                 }
                 Event::Resize(_cols, _rows) => {
