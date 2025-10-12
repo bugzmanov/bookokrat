@@ -91,9 +91,6 @@ pub trait TextReaderTrait: VimNavMotions {
     fn toggle_raw_html(&mut self);
     fn set_raw_html(&mut self, html: String);
 
-    // Progress tracking
-    fn calculate_progress(&self, content: &str, width: usize, height: usize) -> u32;
-
     // Terminal handling
     fn handle_terminal_resize(&mut self);
 
@@ -107,7 +104,4 @@ pub trait TextReaderTrait: VimNavMotions {
         palette: &crate::theme::Base16Palette,
         is_focused: bool,
     );
-
-    // State access (needed by main_app)
-    fn get_last_content_area(&self) -> Option<Rect>;
 }

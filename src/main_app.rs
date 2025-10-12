@@ -34,7 +34,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyCode, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -66,7 +66,7 @@ impl EpubBook {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AppAction {
+pub enum AppAction {
     Quit,
 }
 

@@ -27,10 +27,6 @@ impl TextSelection {
     }
 
     pub fn start_selection(&mut self, line: usize, column: usize) {
-        debug!(
-            "Starting text selection at line: {}, column: {}",
-            line, column
-        );
         self.start = Some(SelectionPoint { line, column });
         self.end = Some(SelectionPoint { line, column });
         self.is_selecting = true;
@@ -38,21 +34,15 @@ impl TextSelection {
 
     pub fn update_selection(&mut self, line: usize, column: usize) {
         if self.is_selecting {
-            debug!(
-                "Updating text selection to line: {}, column: {}",
-                line, column
-            );
             self.end = Some(SelectionPoint { line, column });
         }
     }
 
     pub fn end_selection(&mut self) {
-        debug!("Ending text selection");
         self.is_selecting = false;
     }
 
     pub fn clear_selection(&mut self) {
-        debug!("Clearing text selection");
         self.start = None;
         self.end = None;
         self.is_selecting = false;
@@ -60,7 +50,6 @@ impl TextSelection {
 
     pub fn has_selection(&self) -> bool {
         if let (Some(start), Some(end)) = (&self.start, &self.end) {
-            // Only consider it a selection if start and end are different
             // This prevents flickering when just clicking (start == end)
             start.line != end.line || start.column != end.column
         } else {
@@ -70,7 +59,6 @@ impl TextSelection {
 
     pub fn get_selection_range(&self) -> Option<(SelectionPoint, SelectionPoint)> {
         if let (Some(start), Some(end)) = (&self.start, &self.end) {
-            // Normalize the selection so start is always before end
             if start.line < end.line || (start.line == end.line && start.column <= end.column) {
                 Some((start.clone(), end.clone()))
             } else {
@@ -130,7 +118,6 @@ impl TextSelection {
                         selected_text.push_str(&selected_part);
                     }
 
-                    // Add newline except for the last line
                     if line_idx < end.line {
                         selected_text.push('\n');
                     }
@@ -166,21 +153,17 @@ impl TextSelection {
             let span_chars: Vec<char> = span_text.chars().collect();
             let span_end_column = current_column + span_chars.len();
 
-            // Check if any part of this span is selected
             let has_selection_in_span = (current_column..span_end_column)
                 .any(|col| self.is_point_in_selection(line_idx, col));
 
             if !has_selection_in_span {
-                // No selection in this span, keep it as is
                 result_spans.push(span);
             } else {
-                // Split the span into selected and unselected parts
                 let mut i = 0;
                 while i < span_chars.len() {
                     let char_column = current_column + i;
                     let is_selected = self.is_point_in_selection(line_idx, char_column);
 
-                    // Find the extent of the current selection state
                     let mut j = i + 1;
                     while j < span_chars.len() {
                         let next_char_column = current_column + j;
@@ -192,7 +175,6 @@ impl TextSelection {
                         j += 1;
                     }
 
-                    // Create a span for this segment
                     let segment_text: String = span_chars[i..j].iter().collect();
                     let segment_style = if is_selected {
                         span.style.bg(selection_bg_color)
@@ -213,20 +195,15 @@ impl TextSelection {
 
     /// Select word at the given position
     pub fn select_word_at(&mut self, line: usize, column: usize, lines: &[String]) {
-        debug!("Selecting word at line: {}, column: {}", line, column);
-
         if let Some(line_text) = lines.get(line) {
             let chars: Vec<char> = line_text.chars().collect();
 
             if column >= chars.len() {
-                // Click beyond end of line, select nothing
                 return;
             }
 
-            // Find word boundaries
             let (word_start, word_end) = self.find_word_boundaries(&chars, column);
 
-            // Set selection to the word boundaries
             self.start = Some(SelectionPoint {
                 line,
                 column: word_start,
@@ -235,29 +212,22 @@ impl TextSelection {
                 line,
                 column: word_end,
             });
-            self.is_selecting = false; // Word selection is complete
-
-            debug!("Selected word from column {} to {}", word_start, word_end);
+            self.is_selecting = false;
         }
     }
 
     /// Select paragraph at the given position
     pub fn select_paragraph_at(&mut self, line: usize, column: usize, lines: &[String]) {
-        debug!("Selecting paragraph at line: {}, column: {}", line, column);
-
         if line >= lines.len() {
             return;
         }
 
-        // Find paragraph boundaries (empty lines or start/end of content)
         let (para_start, para_end) = self.find_paragraph_boundaries(lines, line);
 
-        // Set selection to the paragraph boundaries
         self.start = Some(SelectionPoint {
             line: para_start,
             column: 0,
         });
-        // Select to the end of the last line in the paragraph
         let end_column = if let Some(last_line) = lines.get(para_end) {
             last_line.chars().count()
         } else {
@@ -267,12 +237,7 @@ impl TextSelection {
             line: para_end,
             column: end_column,
         });
-        self.is_selecting = false; // Paragraph selection is complete
-
-        debug!(
-            "Selected paragraph from line {} to line {}",
-            para_start, para_end
-        );
+        self.is_selecting = false;
     }
 
     /// Find word boundaries around the given column position
@@ -281,22 +246,18 @@ impl TextSelection {
             return (column, column);
         }
 
-        // Check if we're on a word character
         let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-';
 
         let clicked_char = chars[column];
         if !is_word_char(clicked_char) {
-            // Not on a word character, select just this character
             return (column, column + 1);
         }
 
-        // Find start of word (move left while we're on word characters)
         let mut start = column;
         while start > 0 && is_word_char(chars[start - 1]) {
             start -= 1;
         }
 
-        // Find end of word (move right while we're on word characters)
         let mut end = column;
         while end < chars.len() && is_word_char(chars[end]) {
             end += 1;
@@ -311,7 +272,6 @@ impl TextSelection {
             return (line, line);
         }
 
-        // Find start of paragraph (move up while lines are not empty)
         let mut start = line;
         while start > 0 {
             let prev_line = &lines[start - 1];
@@ -321,7 +281,6 @@ impl TextSelection {
             start -= 1;
         }
 
-        // Find end of paragraph (move down while lines are not empty)
         let mut end = line;
         while end < lines.len() {
             let current_line = &lines[end];
@@ -331,7 +290,6 @@ impl TextSelection {
             end += 1;
         }
 
-        // Ensure we don't go beyond the last line
         if end > 0 && end <= lines.len() {
             end -= 1; // Move back to the last non-empty line
         }
@@ -348,19 +306,16 @@ impl TextSelection {
         content_area_x: u16,
         content_area_y: u16,
     ) -> Option<(usize, usize)> {
-        // Convert screen coordinates to content-relative coordinates
         if screen_y < content_area_y {
             return None;
         }
 
         let relative_y = (screen_y - content_area_y) as usize;
 
-        // Account for scroll offset
         let line = relative_y + scroll_offset;
 
-        // Handle column position - if click is to the left of content area, start from beginning of line
         let column = if screen_x < content_area_x {
-            0 // Click on left margin - start from beginning of line
+            0
         } else {
             (screen_x - content_area_x) as usize
         };
@@ -473,19 +428,15 @@ mod tests {
     fn test_screen_to_text_coords() {
         let selection = TextSelection::new();
 
-        // Test coordinate conversion
         let result = selection.screen_to_text_coords(15, 10, 5, 10, 5);
         assert_eq!(result, Some((10, 5))); // (relative_y + scroll_offset, relative_x)
 
-        // Test coordinates outside content area (above)
         let result = selection.screen_to_text_coords(15, 3, 5, 10, 5);
         assert_eq!(result, None);
 
-        // Test clicking on left margin - should start from beginning of line
         let result = selection.screen_to_text_coords(5, 10, 5, 10, 5);
         assert_eq!(result, Some((10, 0))); // Click on left margin -> column 0
 
-        // Test clicking far to the left
         let result = selection.screen_to_text_coords(0, 10, 5, 10, 5);
         assert_eq!(result, Some((10, 0))); // Still column 0
     }

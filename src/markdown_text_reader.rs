@@ -46,6 +46,20 @@ struct RenderedLine {
     node_index: Option<usize>,   // Index of the node in the document this line belongs to
 }
 
+impl RenderedLine {
+    //todo: this is "expensive"
+    fn empty() -> Self {
+        Self {
+            spans: Vec::new(),
+            raw_text: String::new(),
+            line_type: LineType::Text,
+            link_nodes: Vec::new(),
+            node_anchor: None,
+            node_index: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum LineType {
     Text,
@@ -59,9 +73,6 @@ enum LineType {
     ListItem {
         kind: crate::markdown::ListKind,
         indent: usize,
-    },
-    TableRow {
-        is_header: bool,
     },
     ImagePlaceholder {
         src: String,
@@ -309,23 +320,16 @@ impl MarkdownTextReader {
         &mut self,
         node: &Node,
         book_images: &BookImages,
-        images_processed: &mut usize,
     ) -> Vec<(String, u16)> {
         use MarkdownBlock::*;
         match &node.block {
             Paragraph { content } => {
-                return self.extract_images_from_text(content, book_images, images_processed);
+                return self.extract_images_from_text(content, book_images);
             }
-            Quote {
-                content: quote_content,
-            } => {
+            Quote { content } => {
                 let mut vec = Vec::new();
-                for inner_node in quote_content {
-                    vec.append(&mut self.extract_images_from_node(
-                        inner_node,
-                        book_images,
-                        images_processed,
-                    ));
+                for inner_node in content {
+                    vec.append(&mut self.extract_images_from_node(inner_node, book_images));
                 }
                 vec
             }
@@ -333,11 +337,7 @@ impl MarkdownTextReader {
                 let mut vec = Vec::new();
                 for item in items {
                     for inner_node in &item.content {
-                        vec.append(&mut self.extract_images_from_node(
-                            inner_node,
-                            book_images,
-                            images_processed,
-                        ));
+                        vec.append(&mut self.extract_images_from_node(inner_node, book_images));
                     }
                 }
                 vec
@@ -345,11 +345,7 @@ impl MarkdownTextReader {
             EpubBlock { content, .. } => {
                 let mut vec = Vec::new();
                 for inner_node in content {
-                    vec.append(&mut self.extract_images_from_node(
-                        inner_node,
-                        book_images,
-                        images_processed,
-                    ));
+                    vec.append(&mut self.extract_images_from_node(inner_node, book_images));
                 }
                 vec
             }
@@ -361,72 +357,55 @@ impl MarkdownTextReader {
         &mut self,
         text: &MarkdownText,
         book_images: &BookImages,
-        images_processed: &mut usize,
     ) -> Vec<(String, u16)> {
-        let mut images_to_load: Vec<(String, u16)> = Vec::new();
-
-        for item in text.iter() {
-            if let TextOrInline::Inline(Inline::Image { url, .. }) = item {
-                *images_processed += 1;
-                info!("Processing image #{}: {}", images_processed, url);
-
-                // Skip if already loaded or currently loading
-                if let Some(embedded_img) = self.embedded_images.borrow().get(url) {
-                    match embedded_img.state {
-                        ImageLoadState::Loaded { .. } | ImageLoadState::Loading => {
-                            debug!("Skipping image {} - already loaded or loading", url);
-                            continue;
-                        }
-                        ImageLoadState::NotLoaded | ImageLoadState::Failed { .. } => {
-                            // Need to (re)load this image
-                        }
+        text.iter()
+            .filter_map(|item| match item {
+                TextOrInline::Inline(Inline::Image { url, .. }) => Some(url),
+                _ => None,
+            })
+            .filter_map(|url| {
+                // Skip already loaded/loading images
+                if let Some(img) = self.embedded_images.borrow().get(url) {
+                    if matches!(
+                        img.state,
+                        ImageLoadState::Loaded { .. } | ImageLoadState::Loading
+                    ) {
+                        return None;
                     }
                 }
 
-                // Try to get image dimensions from book images with chapter context
                 let chapter_path = self.current_chapter_file.as_deref();
-                if let Some((img_width, img_height)) =
-                    book_images.get_image_size_with_context(url, chapter_path)
-                {
-                    info!(
-                        "Got image dimensions for {}: {}x{}",
-                        url, img_width, img_height
-                    );
-                    // Skip very small images
-                    if img_width < 64 || img_height < 64 {
-                        warn!(
-                            "Ignoring small image ({}x{}): {}",
-                            img_width, img_height, url
+                match book_images.get_image_size_with_context(url, chapter_path) {
+                    Some((w, h)) if w >= 64 && h >= 64 => {
+                        let height_cells = EmbeddedImage::height_in_cells(w, h);
+                        self.embedded_images.borrow_mut().insert(
+                            url.clone(),
+                            EmbeddedImage {
+                                src: url.clone(),
+                                lines_before_image: 0,
+                                height_cells,
+                                width: w,
+                                height: h,
+                                state: ImageLoadState::NotLoaded,
+                            },
                         );
-                        continue;
+                        Some((url.clone(), height_cells))
                     }
-
-                    let height_cells = EmbeddedImage::height_in_cells(img_width, img_height);
-
-                    self.embedded_images.borrow_mut().insert(
-                        url.clone(),
-                        EmbeddedImage {
-                            src: url.clone(),
-                            lines_before_image: 0, // Will be set during rendering
-                            height_cells,
-                            width: img_width,
-                            height: img_height,
-                            state: ImageLoadState::NotLoaded,
-                        },
-                    );
-
-                    images_to_load.push((url.clone(), height_cells));
-                    info!("Added image to load queue: {}", url);
-                } else {
-                    warn!("Could not get dimensions for: {}", url);
-                    self.embedded_images.borrow_mut().insert(
-                        url.clone(),
-                        EmbeddedImage::failed_img(url, "Could not read image metadata"),
-                    );
+                    Some((w, h)) => {
+                        warn!("Ignoring small image ({}x{}): {}", w, h, url);
+                        None
+                    }
+                    None => {
+                        warn!("Could not get dimensions for: {}", url);
+                        self.embedded_images.borrow_mut().insert(
+                            url.clone(),
+                            EmbeddedImage::failed_img(url, "Could not read image metadata"),
+                        );
+                        None
+                    }
                 }
-            }
-        }
-        images_to_load
+            })
+            .collect()
     }
 
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
@@ -435,14 +414,12 @@ impl MarkdownTextReader {
     }
 
     /// Rebuild the comment lookup for the current chapter
-    /// Called when chapter changes or comments are updated
     fn rebuild_chapter_comments(&mut self) {
         self.current_chapter_comments.clear();
 
         if let Some(chapter_file) = &self.current_chapter_file {
             if let Some(comments_arc) = &self.book_comments {
                 if let Ok(comments) = comments_arc.lock() {
-                    // Get all comments for this chapter and group by paragraph index
                     for comment in comments.get_chapter_comments(chapter_file) {
                         self.current_chapter_comments
                             .entry(comment.paragraph_index)
@@ -455,15 +432,9 @@ impl MarkdownTextReader {
     }
 
     pub fn new() -> Self {
-        // Initialize image picker exactly like in TextReader
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 picker.set_background_color([0, 0, 0, 0]);
-                let font_size = picker.font_size();
-                debug!(
-                    "Successfully created image picker, detected font size: {:?}",
-                    font_size
-                );
                 Some(picker)
             }
             Err(e) => {
@@ -697,7 +668,6 @@ impl MarkdownTextReader {
         self.comment_edit_mode = None;
 
         self.cache_generation += 1;
-        debug!("Invalidated render cache");
     }
 
     /// Check if we're currently in comment input mode
@@ -800,27 +770,11 @@ impl MarkdownTextReader {
         let mut lines = Vec::new();
         let mut total_height = 0;
 
-        // Debug assertion: raw_text_lines should be empty or we're accumulating garbage
-        #[cfg(debug_assertions)]
-        {
-            let old_count = self.raw_text_lines.len();
-            if old_count > 0 {
-                // This would have caused the bug - accumulating lines on re-render
-                debug_assert!(
-                    false,
-                    "BUG: raw_text_lines not cleared before render! Had {} old lines",
-                    old_count
-                );
-            }
-        }
-
-        // Clear previous state before re-rendering
         self.raw_text_lines.clear();
         self.anchor_positions.clear();
 
         // Iterate through all blocks in the document
         for (node_idx, node) in doc.blocks.iter().enumerate() {
-            // Track anchors before rendering each block
             self.extract_and_track_anchors_from_node(node, total_height);
 
             self.render_node(
@@ -835,55 +789,9 @@ impl MarkdownTextReader {
             );
         }
 
-        // Collect all links from rendered lines
         self.links.clear();
         for rendered_line in &lines {
             self.links.extend(rendered_line.link_nodes.clone());
-        }
-
-        // Debug assertions to verify state consistency
-        #[cfg(debug_assertions)]
-        {
-            // Assert that raw_text_lines count matches non-empty lines in rendered content
-            let non_empty_lines = lines
-                .iter()
-                .filter(|l| !matches!(l.line_type, LineType::Empty))
-                .count();
-
-            // raw_text_lines should have roughly the same count as non-empty rendered lines
-            // (some types like HorizontalRule might not add to raw_text_lines)
-            // When in comment input mode, the textarea content may cause mismatches, so we allow more slack
-            let allowed_diff = if self.comment_input_active { 500 } else { 100 };
-            let diff = (self.raw_text_lines.len() as i32 - non_empty_lines as i32).abs();
-
-            if diff >= allowed_diff {
-                debug!(
-                    "Mismatch detected: raw_text_lines={}, non_empty_lines={}, diff={}, comment_input_active={}, edit_mode={:?}",
-                    self.raw_text_lines.len(),
-                    non_empty_lines,
-                    diff,
-                    self.comment_input_active,
-                    self.comment_edit_mode
-                );
-            }
-
-            debug_assert!(
-                diff < allowed_diff,
-                "raw_text_lines has {} lines but rendered content has {} non-empty lines - mismatch! (comment_input_active={}, edit_mode={:?})",
-                self.raw_text_lines.len(),
-                non_empty_lines,
-                self.comment_input_active,
-                self.comment_edit_mode
-            );
-
-            // Assert lines and raw_text_lines are not empty if document has content
-            if !doc.blocks.is_empty() {
-                debug_assert!(
-                    !lines.is_empty(),
-                    "Rendered lines is empty despite document having {} blocks",
-                    doc.blocks.len()
-                );
-            }
         }
 
         RenderedContent {
@@ -1027,11 +935,9 @@ impl MarkdownTextReader {
                 );
             }
 
-            Quote {
-                content: quote_content,
-            } => {
+            Quote { content } => {
                 self.render_quote(
-                    quote_content,
+                    content,
                     lines,
                     total_height,
                     width,
@@ -1074,7 +980,6 @@ impl MarkdownTextReader {
             }
         }
 
-        // If this node has an anchor ID and we created new lines, attach it to the first line
         if let Some(anchor) = current_node_anchor {
             if initial_line_count < lines.len() {
                 if let Some(line) = lines.get_mut(initial_line_count) {
@@ -1083,15 +988,10 @@ impl MarkdownTextReader {
             }
         }
 
-        // Set the node_index on the first line created for this node (if any)
         if let Some(idx) = node_index {
             if start_lines_count < lines.len() {
                 if let Some(line) = lines.get_mut(start_lines_count) {
                     line.node_index = Some(idx);
-                    debug!(
-                        "Assigned node_index {} to line {} (line type: {:?})",
-                        idx, start_lines_count, line.line_type
-                    );
                 }
             }
         }
@@ -1139,20 +1039,16 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
     ) {
-        // Convert heading content to string for wrapping
         let heading_text = self.text_to_string(content);
 
-        // Apply H1 uppercase transformation if needed
         let display_text = if level == HeadingLevel::H1 {
             heading_text.to_uppercase()
         } else {
             heading_text.clone()
         };
 
-        // Wrap the heading text
         let wrapped = textwrap::wrap(&display_text, width);
 
-        // Style for headings
         let heading_color = if is_focused {
             palette.base_0a // Yellow
         } else {
@@ -1165,7 +1061,6 @@ impl MarkdownTextReader {
             _ => Modifier::BOLD,
         };
 
-        // Add wrapped heading lines
         for wrapped_line in wrapped {
             let styled_spans = vec![Span::styled(
                 wrapped_line.to_string(),
@@ -1193,8 +1088,8 @@ impl MarkdownTextReader {
         // Add decoration line for H1-H3
         if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
             let decoration = match level {
-                HeadingLevel::H1 => "═".repeat(width), // Thick line
-                HeadingLevel::H2 => "─".repeat(width), // Double line
+                HeadingLevel::H1 => "═".repeat(width),
+                HeadingLevel::H2 => "─".repeat(width),
                 _ => unreachable!(),
             };
 
@@ -1245,7 +1140,6 @@ impl MarkdownTextReader {
             return;
         }
 
-        debug!("rendering comments!");
         let comment_header = format!("Note // {}", comment.updated_at.format("%m-%d-%y %H:%M"));
 
         lines.push(RenderedLine {
@@ -1569,15 +1463,8 @@ impl MarkdownTextReader {
             *total_height += 1;
         }
 
-        // Add empty line after code block
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
+
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -1680,15 +1567,7 @@ impl MarkdownTextReader {
             let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
             if let Some(paragraph_comments) = comments_to_render {
                 if !paragraph_comments.is_empty() {
-                    // Add empty line before comments
-                    lines.push(RenderedLine {
-                        spans: vec![Span::raw("")],
-                        raw_text: String::new(),
-                        line_type: LineType::Empty,
-                        link_nodes: vec![],
-                        node_anchor: None,
-                        node_index: None,
-                    });
+                    lines.push(RenderedLine::empty());
                     self.raw_text_lines.push(String::new());
                     *total_height += 1;
 
@@ -1709,14 +1588,7 @@ impl MarkdownTextReader {
         }
 
         // Add empty line after list (only if no comments were rendered)
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2047,14 +1919,7 @@ impl MarkdownTextReader {
         }
 
         // Add empty line after quote
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2089,14 +1954,7 @@ impl MarkdownTextReader {
         *total_height += 1;
 
         // Add empty line after horizontal rule
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2172,28 +2030,14 @@ impl MarkdownTextReader {
 
             // Add a small spacing between definition items (but not after the last one)
             if item != items.last().unwrap() {
-                lines.push(RenderedLine {
-                    spans: vec![Span::raw("")],
-                    raw_text: String::new(),
-                    line_type: LineType::Empty,
-                    link_nodes: vec![],
-                    node_anchor: None,
-                    node_index: None,
-                });
+                lines.push(RenderedLine::empty());
                 self.raw_text_lines.push(String::new());
                 *total_height += 1;
             }
         }
 
         // Add empty line after the entire definition list
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2229,15 +2073,7 @@ impl MarkdownTextReader {
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
         //
-        // Add empty line before the block
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
 
@@ -2291,14 +2127,7 @@ impl MarkdownTextReader {
         *total_height += 1;
 
         // Add empty line after the block
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2404,14 +2233,7 @@ impl MarkdownTextReader {
 
         // Add empty line after if requested
         if add_empty_line_after {
-            lines.push(RenderedLine {
-                spans: vec![Span::raw("")],
-                raw_text: String::new(),
-                line_type: LineType::Empty,
-                link_nodes: vec![],
-                node_anchor: None,
-                node_index: None,
-            });
+            lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
         }
@@ -2567,14 +2389,7 @@ impl MarkdownTextReader {
         const IMAGE_HEIGHT_WIDE: u16 = 20;
 
         // Add empty line before image
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
 
@@ -2650,14 +2465,7 @@ impl MarkdownTextReader {
         }
 
         // Add empty line after image
-        lines.push(RenderedLine {
-            spans: vec![Span::raw("")],
-            raw_text: String::new(),
-            line_type: LineType::Empty,
-            link_nodes: vec![],
-            node_anchor: None,
-            node_index: None,
-        });
+        lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
@@ -2889,13 +2697,11 @@ impl VimNavMotions for MarkdownTextReader {
 }
 
 impl MarkdownTextReader {
-    /// Debug method to copy raw_text_lines with line numbers to clipboard
     pub fn copy_raw_text_lines_to_clipboard(&self) -> Result<(), String> {
         if self.raw_text_lines.is_empty() {
             return Err("No content to copy".to_string());
         }
 
-        // Create a debug output with line numbers
         let mut debug_output = String::new();
         debug_output.push_str(&format!(
             "=== raw_text_lines debug (total {} lines) ===\n",
@@ -2913,14 +2719,9 @@ impl MarkdownTextReader {
             .set_text(debug_output)
             .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
 
-        debug!(
-            "Copied raw_text_lines debug info to clipboard ({} lines)",
-            self.raw_text_lines.len()
-        );
         Ok(())
     }
 
-    /// Actually perform the node restoration (called after rendering)
     fn perform_node_restore(&mut self, node_index: usize) {
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let Some(node_idx) = line.node_index {
@@ -2930,6 +2731,15 @@ impl MarkdownTextReader {
                 }
             }
         }
+    }
+
+    fn calculate_progress(&self, _content: &str, _width: usize, _height: usize) -> u32 {
+        if self.total_wrapped_lines == 0 {
+            return 0;
+        }
+
+        let visible_end = (self.scroll_offset + self.visible_height).min(self.total_wrapped_lines);
+        ((visible_end as f32 / self.total_wrapped_lines as f32) * 100.0) as u32
     }
 }
 
@@ -2974,7 +2784,6 @@ impl TextReaderTrait for MarkdownTextReader {
         if self.scroll_offset > 0 {
             self.scroll_offset = self.scroll_offset.saturating_sub(self.scroll_speed);
             self.last_scroll_time = Instant::now();
-            // Clear current match when manually scrolling so next 'n' finds from new position
             if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
                 self.search_state.current_match_index = None;
             }
@@ -2986,7 +2795,6 @@ impl TextReaderTrait for MarkdownTextReader {
         if self.scroll_offset < max_offset {
             self.scroll_offset = (self.scroll_offset + self.scroll_speed).min(max_offset);
             self.last_scroll_time = Instant::now();
-            // Clear current match when manually scrolling so next 'n' finds from new position
             if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
                 self.search_state.current_match_index = None;
             }
@@ -3038,12 +2846,6 @@ impl TextReaderTrait for MarkdownTextReader {
 
     /// Restore scroll position to show a specific node
     fn restore_to_node_index(&mut self, node_index: usize) {
-        info!(
-            "restore_to_node_index called with node_index={}, deferring until after render",
-            node_index
-        );
-
-        // Defer the restoration until after content is rendered
         self.pending_node_restore = Some(node_index);
     }
 
@@ -3152,7 +2954,6 @@ impl TextReaderTrait for MarkdownTextReader {
             clipboard
                 .set_text(selected_text)
                 .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
-            debug!("Copied selection to clipboard");
             Ok(())
         } else {
             Err("No text selected".to_string())
@@ -3160,32 +2961,20 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
-        if self.show_raw_html {
-            use arboard::Clipboard;
-            let mut clipboard =
-                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
-            clipboard
-                .set_text(
-                    self.raw_html_content
-                        .as_ref()
-                        .unwrap_or(&"<failed to get raw html>".to_string()),
-                )
-                .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
-            debug!("Copied entire chapter to clipboard");
-            Ok(())
-        } else if !self.raw_text_lines.is_empty() {
-            let chapter_text = self.raw_text_lines.join("\n");
-            use arboard::Clipboard;
-            let mut clipboard =
-                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
-            clipboard
-                .set_text(chapter_text)
-                .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
-            debug!("Copied entire chapter to clipboard");
-            Ok(())
+        use arboard::Clipboard;
+        let mut clipboard =
+            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+        let text = if self.show_raw_html {
+            self.raw_html_content
+                .as_ref()
+                .unwrap_or(&"<failed to get raw html>".to_string())
+                .to_string()
         } else {
-            Err("No content to copy".to_string())
-        }
+            self.raw_text_lines.join("\n")
+        };
+        clipboard
+            .set_text(text)
+            .map_err(|e| format!("Failed to copy to clipboard: {}", e))
     }
 
     fn has_text_selection(&self) -> bool {
@@ -3193,28 +2982,17 @@ impl TextReaderTrait for MarkdownTextReader {
     }
 
     fn preload_image_dimensions(&mut self, book_images: &BookImages) {
-        // Extract images from the AST and preload their dimensions
+        //todo this close is a bad idea
         if let Some(doc) = self.markdown_document.clone() {
-            info!(
-                "Starting image dimension preload for document with {} blocks",
-                doc.blocks.len()
-            );
             self.background_loader.cancel_loading();
-            let mut images_processed = 0;
 
             let mut images_to_load = vec![];
 
             for node in &doc.blocks {
-                images_to_load.append(&mut self.extract_images_from_node(
-                    node,
-                    book_images,
-                    &mut images_processed,
-                ));
+                images_to_load.append(&mut self.extract_images_from_node(node, book_images));
             }
 
             info!("Found {} images to load in document", images_to_load.len());
-            //
-            // Start background loading if we have images and a picker
             if !images_to_load.is_empty() {
                 if let Some(ref picker) = self.image_picker {
                     let font_size = picker.font_size();
@@ -3225,7 +3003,6 @@ impl TextReaderTrait for MarkdownTextReader {
                         cell_width,
                         cell_height,
                     );
-                    // Mark all images as loading
                     for (img_src, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img_src)
                         {
@@ -3241,7 +3018,6 @@ impl TextReaderTrait for MarkdownTextReader {
                         }
                     }
                 }
-                debug!("Preloaded dimensions for {} images", images_processed);
             }
         }
     }
@@ -3249,12 +3025,10 @@ impl TextReaderTrait for MarkdownTextReader {
     fn check_for_loaded_images(&mut self) -> bool {
         let mut any_loaded = false;
 
-        // Check for background-loaded images
         if let Some(loaded_images) = self.background_loader.check_for_loaded_images() {
             for (img_src, image) in loaded_images {
                 let mut embedded_images = self.embedded_images.borrow_mut();
                 if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
-                    // Store the loaded image with protocol
                     embedded_image.state = if let Some(ref picker) = self.image_picker {
                         ImageLoadState::Loaded {
                             image: Arc::new(image.clone()),
@@ -3266,7 +3040,6 @@ impl TextReaderTrait for MarkdownTextReader {
                         }
                     };
                     any_loaded = true;
-                    debug!("Image '{}' loaded successfully", img_src);
                 } else {
                     warn!(
                         "Received loaded image '{}' that is no longer in embedded_images (likely due to chapter switch)",
@@ -3366,15 +3139,6 @@ impl TextReaderTrait for MarkdownTextReader {
 
     fn set_raw_html(&mut self, html: String) {
         self.raw_html_content = Some(html);
-    }
-
-    fn calculate_progress(&self, _content: &str, _width: usize, _height: usize) -> u32 {
-        if self.total_wrapped_lines == 0 {
-            return 0;
-        }
-
-        let visible_end = (self.scroll_offset + self.visible_height).min(self.total_wrapped_lines);
-        ((visible_end as f32 / self.total_wrapped_lines as f32) * 100.0) as u32
     }
 
     fn handle_terminal_resize(&mut self) {
@@ -3750,10 +3514,6 @@ impl TextReaderTrait for MarkdownTextReader {
                 }
             }
         }
-    }
-
-    fn get_last_content_area(&self) -> Option<Rect> {
-        self.last_content_area
     }
 
     // Internal link navigation methods (from trait)
