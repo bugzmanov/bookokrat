@@ -110,7 +110,7 @@ pub enum FocusedPanel {
 
 #[derive(PartialEq, Debug, Clone, Copy)]
 pub enum MainPanel {
-    FileList,
+    NavigationList,
     Content,
 }
 
@@ -266,7 +266,7 @@ impl App {
             bookmarks,
             book_images,
             current_book: None,
-            focused_panel: FocusedPanel::Main(MainPanel::FileList),
+            focused_panel: FocusedPanel::Main(MainPanel::NavigationList),
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
             mouse_tracker: MouseTracker::new(),
@@ -385,7 +385,7 @@ impl App {
 
     pub fn switch_to_book_list_mode(&mut self) {
         self.navigation_panel.switch_to_book_mode();
-        self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
+        self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
     }
 
     // =============================================================================
@@ -803,7 +803,7 @@ impl App {
 
                 let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
-                    self.focused_panel = FocusedPanel::Main(MainPanel::FileList);
+                    self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
                     self.text_reader.clear_selection();
 
                     let nav_area = self.get_navigation_panel_area();
@@ -1001,8 +1001,7 @@ impl App {
             }
 
             if let Some(anchor) = anchor_id {
-                self.text_reader
-                    .handle_pending_anchor_scroll(Some(anchor.clone()));
+                self.text_reader.store_pending_anchor_scroll(anchor.clone());
             }
 
             Ok(true)
@@ -1322,7 +1321,7 @@ impl App {
                             // Handle anchor if present
                             if let Some(anchor_id) = anchor {
                                 self.text_reader
-                                    .handle_pending_anchor_scroll(Some(anchor_id.clone()));
+                                    .store_pending_anchor_scroll(anchor_id.clone());
                                 self.text_reader.set_active_anchor(Some(anchor_id));
                             } else {
                                 self.text_reader.set_active_anchor(None);
@@ -1346,7 +1345,7 @@ impl App {
                                 // Handle anchor if present
                                 if let Some(anchor_id) = anchor {
                                     self.text_reader
-                                        .handle_pending_anchor_scroll(Some(anchor_id.clone()));
+                                        .store_pending_anchor_scroll(anchor_id.clone());
                                     // Set this anchor as the active one
                                     self.text_reader.set_active_anchor(Some(anchor_id));
                                 } else {
@@ -1400,7 +1399,7 @@ impl App {
         self.navigation_panel.render(
             f,
             main_chunks[0],
-            self.is_main_panel(MainPanel::FileList),
+            self.is_main_panel(MainPanel::NavigationList),
             &OCEANIC_NEXT,
             &self.book_manager,
         );
@@ -1529,7 +1528,7 @@ impl App {
             "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
         } else {
             let help_text = match self.focused_panel {
-                FocusedPanel::Main(MainPanel::FileList) => {
+                FocusedPanel::Main(MainPanel::NavigationList) => {
                     "j/k: Navigate | Enter: Select | Space+h: History | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
@@ -1808,7 +1807,7 @@ impl App {
         }
 
         // If navigation panel (file list) has focus, handle keys for it
-        if self.is_main_panel(MainPanel::FileList) && !self.is_search_input_mode() {
+        if self.is_main_panel(MainPanel::NavigationList) && !self.is_search_input_mode() {
             let action = self
                 .navigation_panel
                 .handle_key(key, &mut self.key_sequence);
@@ -1829,8 +1828,7 @@ impl App {
                         if let Some(chapter_index) = self.find_spine_index_by_href(&href) {
                             let _ = self.navigate_to_chapter(chapter_index);
                             if let Some(anchor_id) = anchor {
-                                self.text_reader
-                                    .handle_pending_anchor_scroll(Some(anchor_id));
+                                self.text_reader.store_pending_anchor_scroll(anchor_id);
                             }
                             self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                         }
@@ -1940,14 +1938,14 @@ impl App {
             KeyCode::Tab => {
                 if !self.has_active_popup() {
                     self.focused_panel = match self.focused_panel {
-                        FocusedPanel::Main(MainPanel::FileList) => {
+                        FocusedPanel::Main(MainPanel::NavigationList) => {
                             self.navigation_panel
                                 .table_of_contents
                                 .clear_manual_navigation();
                             FocusedPanel::Main(MainPanel::Content)
                         }
                         FocusedPanel::Main(MainPanel::Content) => {
-                            FocusedPanel::Main(MainPanel::FileList)
+                            FocusedPanel::Main(MainPanel::NavigationList)
                         }
                         FocusedPanel::Popup(_) => self.focused_panel, // No tab switching in popups
                     };

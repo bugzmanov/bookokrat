@@ -1,3 +1,15 @@
+// Module declarations
+mod types;
+mod rendering;
+mod navigation;
+mod selection;
+mod search;
+mod comments;
+mod images;
+
+// Re-export types
+pub use types::*;
+
 use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::images::book_images::BookImages;
@@ -47,7 +59,7 @@ struct RenderedLine {
 }
 
 impl RenderedLine {
-    //todo: this is "expensive"
+    //todo: this is expensive & allocates
     fn empty() -> Self {
         Self {
             spans: Vec::new(),

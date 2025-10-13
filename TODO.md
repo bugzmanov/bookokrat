@@ -6,10 +6,10 @@ ideas to implement:
          [ ] Format html into readable
          [ ] Navigate to the position where rendering mode was showing
          [ ] Alow mouse selection & stuff
-     [x] Math Formulas 
+     [x] Math Formulas
         [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
-         [.] links support 
+         [.] links support
              [x] superscript links (footnotes)
              [ ] visited link tracking & styling
              [x] Internal links jumps history (to jump back)
@@ -20,20 +20,20 @@ ideas to implement:
          [x] Headers
          [x] Blockquote
          [x] tables support
-         [x] bold & italic 
+         [x] bold & italic
          [x] lists
          [ ] checkboxes /-- not really needs to for epub
          [x] Image
             [ ] according to logs kitty compression hapens too many times (maybe..)
-         [ ] Code Coloring 
+         [ ] Code Coloring
          [x] epub:type blocks
  - AI integreration
-     - Embeded validation for correct rendering (and markdown parsing) 
+     - Embeded validation for correct rendering (and markdown parsing)
      - Re-explain already explained term or abbreviation (like in chapter nine BFF might be frealy used as abbreviation, since it was introduced in chapter 1)
-     - Smart reading: 
+     - Smart reading:
          - Chapter Summary and main points
          - Quize
-     - Phase 2: RAG Implementation 
+     - Phase 2: RAG Implementation
          - Build a local RAG system for your books:
          - Index entire library into embedded vectors
          - "Find passages about X across all my books"
@@ -52,7 +52,7 @@ ideas to implement:
      - [ ] List of comments
         - [ ] Search in comments
  - [ ] settings window
-     - [ ] make margins configurable + text color 
+     - [ ] make margins configurable + text color
  - [ ] text cursor for reading ala vim normal mode
 
  - images in ghosty terminal
@@ -61,20 +61,23 @@ ideas to implement:
  - [ ] Images in iterm and sixt protocol
  - [ ] integration with GOODREADS
  - ASCII art Logo & animations (eye candy)
- 
- - tmux + tape = to get claude to the position i want it to get to 
 
-bugs: 
+
+ - clickable scrollbar
+
+ - tmux + tape = to get claude to the position i want it to get to
+
+bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reaload
 [ ] Currently reading chpater in TOC highlitning is seriously broken
 [ ] Code block selection with mouse selects wrong lines
 [ ] Adding comments doesn't move image down. it stays covering the text
 [ ] Book search when jumps from the list to the book drops in the wrong location
-[ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks) 
-[ ] Machine Learning Q and A - links not working. 
+[ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
+[ ] Machine Learning Q and A - links not working.
 
-Tools with cool ratatui UI: 
+Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt
 - https://github.com/benjajaja/mdfried  - render headers as images to have different scales.. don't know if i like it
 - https://github.com/bgreenwell/doxx - docx reader
@@ -107,11 +110,11 @@ WebGPU for GPU acceleration (cutting edge)
 
 Done:
  - table of contents of a book
- - Mouse support: 
+ - Mouse support:
    - scroll
    - select text
- - integration with GUI book reader 
+ - integration with GUI book reader
  - Recent books
      - reading history
      - drop dates from book reads. and instead make a separate list of most recent read books
- - SMALL IMAGES most likely needs to be ignored. 
+ - SMALL IMAGES most likely needs to be ignored.
