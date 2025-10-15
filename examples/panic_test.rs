@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => {}
             },
             Event::Mouse(mouse) => {
-                println!("Mouse event: {:?}", mouse);
+                println!("Mouse event: {mouse:?}");
             }
             _ => {}
         }

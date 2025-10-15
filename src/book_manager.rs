@@ -14,6 +14,12 @@ pub struct BookInfo {
     pub display_name: String,
 }
 
+impl Default for BookManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BookManager {
     pub fn new() -> Self {
         Self::new_with_directory(".")
@@ -32,8 +38,8 @@ impl BookManager {
     fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
         std::fs::read_dir(dir)
             .unwrap_or_else(|e| {
-                error!("Failed to read directory {}: {}", dir, e);
-                panic!("Failed to read directory {}: {}", dir, e);
+                error!("Failed to read directory {dir}: {e}");
+                panic!("Failed to read directory {dir}: {e}");
             })
             .filter_map(|entry| {
                 let entry = entry.ok()?;
@@ -79,11 +85,11 @@ impl BookManager {
     }
 
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
-        info!("Loading document from path: {}", path);
+        info!("Loading document from path: {path}");
 
         // Verify the book exists in our managed list
         if !self.books.iter().any(|book| book.path == path) {
-            return Err(format!("Book not found in managed list: {}", path));
+            return Err(format!("Book not found in managed list: {path}"));
         }
 
         if self.is_html_file(path) {
@@ -91,25 +97,24 @@ impl BookManager {
             self.create_fake_epub_from_html(path)
         } else {
             // For real EPUB files
-            info!("Attempting to load EPUB file: {}", path);
+            info!("Attempting to load EPUB file: {path}");
             match EpubDoc::new(path) {
                 Ok(mut doc) => {
-                    info!("Successfully created EpubDoc for: {}", path);
+                    info!("Successfully created EpubDoc for: {path}");
 
                     // Log EPUB metadata
                     let num_pages = doc.get_num_pages();
                     let current_page = doc.get_current_page();
                     info!(
-                        "EPUB spine details: {} pages, current position: {}",
-                        num_pages, current_page
+                        "EPUB spine details: {num_pages} pages, current position: {current_page}"
                     );
 
                     // Try to get metadata
                     if let Some(title) = doc.mdata("title") {
-                        info!("EPUB title: {}", title);
+                        info!("EPUB title: {title}");
                     }
                     if let Some(author) = doc.mdata("creator") {
-                        info!("EPUB author: {}", author);
+                        info!("EPUB author: {author}");
                     }
 
                     // Check if we can get content at position 0
@@ -134,7 +139,7 @@ impl BookManager {
                                 );
                                 // Check if this spine item exists in resources
                                 if let Some((path, mime)) = doc.resources.get(&spine_item.idref) {
-                                    info!("    -> Resource exists: {:?} ({})", path, mime);
+                                    info!("    -> Resource exists: {path:?} ({mime})");
                                 } else {
                                     error!(
                                         "    -> Resource NOT FOUND in resources map for idref: {}",
@@ -148,8 +153,8 @@ impl BookManager {
                     Ok(doc)
                 }
                 Err(e) => {
-                    error!("Failed to create EpubDoc for {}: {}", path, e);
-                    Err(format!("Failed to load EPUB: {}", e))
+                    error!("Failed to create EpubDoc for {path}: {e}");
+                    Err(format!("Failed to load EPUB: {e}"))
                 }
             }
         }
@@ -163,8 +168,8 @@ impl BookManager {
         let html_content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(e) => {
-                error!("Failed to read HTML file {}: {}", path, e);
-                return Err(format!("Failed to read HTML file: {}", e));
+                error!("Failed to read HTML file {path}: {e}");
+                return Err(format!("Failed to read HTML file: {e}"));
             }
         };
 
@@ -193,26 +198,26 @@ impl BookManager {
 
         // Create a temporary file to store the fake EPUB
         let temp_file =
-            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {}", e))?;
+            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
 
         let temp_path = temp_file.path().to_path_buf();
 
         {
             let file = std::fs::File::create(&temp_path)
-                .map_err(|e| format!("Failed to create temp EPUB file: {}", e))?;
+                .map_err(|e| format!("Failed to create temp EPUB file: {e}"))?;
 
             let mut zip = ZipWriter::new(file);
             let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
             // Add mimetype file
             zip.start_file("mimetype", options)
-                .map_err(|e| format!("Failed to add mimetype: {}", e))?;
+                .map_err(|e| format!("Failed to add mimetype: {e}"))?;
             zip.write_all(b"application/epub+zip")
-                .map_err(|e| format!("Failed to write mimetype: {}", e))?;
+                .map_err(|e| format!("Failed to write mimetype: {e}"))?;
 
             // Add META-INF/container.xml
             zip.start_file("META-INF/container.xml", options)
-                .map_err(|e| format!("Failed to add container.xml: {}", e))?;
+                .map_err(|e| format!("Failed to add container.xml: {e}"))?;
             let container_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
     <rootfiles>
@@ -220,11 +225,11 @@ impl BookManager {
     </rootfiles>
 </container>"#;
             zip.write_all(container_xml.as_bytes())
-                .map_err(|e| format!("Failed to write container.xml: {}", e))?;
+                .map_err(|e| format!("Failed to write container.xml: {e}"))?;
 
             // Add OEBPS/content.opf
             zip.start_file("OEBPS/content.opf", options)
-                .map_err(|e| format!("Failed to add content.opf: {}", e))?;
+                .map_err(|e| format!("Failed to add content.opf: {e}"))?;
             let content_opf = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
@@ -245,11 +250,11 @@ impl BookManager {
                 original_path.replace('/', "_")
             );
             zip.write_all(content_opf.as_bytes())
-                .map_err(|e| format!("Failed to write content.opf: {}", e))?;
+                .map_err(|e| format!("Failed to write content.opf: {e}"))?;
 
             // Add OEBPS/toc.ncx (table of contents)
             zip.start_file("OEBPS/toc.ncx", options)
-                .map_err(|e| format!("Failed to add toc.ncx: {}", e))?;
+                .map_err(|e| format!("Failed to add toc.ncx: {e}"))?;
             let toc_ncx = format!(
                 r#"<?xml version="1.0" encoding="UTF-8"?>
 <ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
@@ -276,11 +281,11 @@ impl BookManager {
                 filename
             );
             zip.write_all(toc_ncx.as_bytes())
-                .map_err(|e| format!("Failed to write toc.ncx: {}", e))?;
+                .map_err(|e| format!("Failed to write toc.ncx: {e}"))?;
 
             // Add OEBPS/chapter1.xhtml with the HTML content
             zip.start_file("OEBPS/chapter1.xhtml", options)
-                .map_err(|e| format!("Failed to add chapter1.xhtml: {}", e))?;
+                .map_err(|e| format!("Failed to add chapter1.xhtml: {e}"))?;
 
             // Wrap HTML content in proper XHTML structure if it's not already
             let xhtml_content = if html_content.contains("<!DOCTYPE") {
@@ -291,37 +296,35 @@ impl BookManager {
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-    <title>{}</title>
+    <title>{title}</title>
 </head>
 <body>
-{}
+{html_content}
 </body>
-</html>"#,
-                    title, html_content
+</html>"#
                 )
             };
 
             zip.write_all(xhtml_content.as_bytes())
-                .map_err(|e| format!("Failed to write chapter1.xhtml: {}", e))?;
+                .map_err(|e| format!("Failed to write chapter1.xhtml: {e}"))?;
 
             zip.finish()
-                .map_err(|e| format!("Failed to finish ZIP: {}", e))?;
+                .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
         }
 
         // Now open the temporary EPUB file
         match EpubDoc::new(&temp_path) {
             Ok(mut doc) => {
                 info!(
-                    "Successfully created fake EPUB from HTML: {}",
-                    original_path
+                    "Successfully created fake EPUB from HTML: {original_path}"
                 );
                 // Move to the first (and only) chapter
                 let _ = doc.set_current_page(0);
                 Ok(doc)
             }
             Err(e) => {
-                error!("Failed to open created EPUB: {}", e);
-                Err(format!("Failed to open created EPUB: {}", e))
+                error!("Failed to open created EPUB: {e}");
+                Err(format!("Failed to open created EPUB: {e}"))
             }
         }
     }
@@ -341,7 +344,7 @@ impl BookManager {
                 if let Some(end) = content[content_start..].find("</h1>") {
                     let title = &content[content_start..content_start + end];
                     // Remove any HTML tags from the title
-                    let clean_title = title.replace(|c: char| c == '<' || c == '>', "");
+                    let clean_title = title.replace(['<', '>'], "");
                     return Some(clean_title.trim().to_string());
                 }
             }

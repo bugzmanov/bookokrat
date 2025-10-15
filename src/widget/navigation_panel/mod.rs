@@ -298,16 +298,10 @@ impl NavigationPanel {
                                     })
                                 }
                                 TocItem::Section { href, anchor, .. } => {
-                                    if let Some(href_str) = href {
-                                        Some(NavigationPanelAction::NavigateToChapter {
+                                    href.as_ref().map(|href_str| NavigationPanelAction::NavigateToChapter {
                                             href: href_str.clone(),
                                             anchor: anchor.clone(),
                                         })
-                                    } else {
-                                        None
-                                        // // Section has no content - just toggle expansion
-                                        // Some(NavigationPanelAction::ToggleSection)
-                                    }
                                 }
                             },
                             None => None,

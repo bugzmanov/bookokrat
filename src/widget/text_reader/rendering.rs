@@ -6,7 +6,7 @@ use crate::markdown::{
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::Constraint,
     style::{Color, Modifier, Style as RatatuiStyle},
     text::{Line, Span},
 };
@@ -106,11 +106,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Extract inline anchors from text content
     pub fn extract_inline_anchors_from_text(&mut self, text: &MarkdownText, current_line: usize) {
         for item in text.iter() {
-            match item {
-                TextOrInline::Inline(Inline::Anchor { id }) => {
-                    self.anchor_positions.insert(id.clone(), current_line);
-                }
-                _ => {}
+            if let TextOrInline::Inline(Inline::Anchor { id }) = item {
+                self.anchor_positions.insert(id.clone(), current_line);
             }
         }
     }
@@ -562,7 +559,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                     Inline::Image { alt_text, .. } => {
                         rich_spans
-                            .push(RichSpan::Text(Span::raw(format!("[image: {}]", alt_text))));
+                            .push(RichSpan::Text(Span::raw(format!("[image: {alt_text}]"))));
                     }
 
                     Inline::Anchor { .. } => {
@@ -680,7 +677,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 ListKind::Unordered => "• ".to_string(),
                 ListKind::Ordered { start } => {
                     let num = start + idx as u32;
-                    format!("{}. ", num)
+                    format!("{num}. ")
                 }
             };
 
@@ -935,7 +932,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         let min_col_width = 8; // Minimum column width
         // Account for borders and column spacing
-        let spacing_width = if num_cols > 1 { num_cols - 1 } else { 0 };
+        let spacing_width = num_cols.saturating_sub(1);
         let total_available = available_width.saturating_sub(2 + spacing_width); // 2 for left/right borders
 
         // Calculate content-based widths by examining all rows
@@ -1404,7 +1401,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             // Build the final raw text with indentation
             let final_raw_text = if indent > 0 {
-                format!("{}{}", indent_str, wrapped_line)
+                format!("{indent_str}{wrapped_line}")
             } else {
                 wrapped_line.to_string()
             };

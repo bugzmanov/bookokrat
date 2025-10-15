@@ -23,7 +23,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     for comment in comments.get_chapter_comments(chapter_file) {
                         self.current_chapter_comments
                             .entry(comment.paragraph_index)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(comment.clone());
                     }
                 }
@@ -181,9 +181,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 };
 
                                 if let Err(e) = comments.add_comment(comment) {
-                                    warn!("Failed to add comment: {}", e);
+                                    warn!("Failed to add comment: {e}");
                                 } else {
-                                    debug!("Saved comment for node {}: {}", node_idx, comment_text);
+                                    debug!("Saved comment for node {node_idx}: {comment_text}");
                                 }
                             }
                         }

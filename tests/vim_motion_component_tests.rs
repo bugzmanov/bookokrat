@@ -1,5 +1,4 @@
 use bookrat::book_manager::{BookInfo, BookManager};
-use bookrat::bookmarks::Bookmarks;
 use bookrat::main_app::VimNavMotions;
 use bookrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
@@ -55,7 +54,7 @@ fn create_test_book_manager() -> BookManager {
     let mut books = Vec::new();
     for i in 1..=100 {
         books.push(BookInfo {
-            display_name: format!("Book {}", i),
+            display_name: format!("Book {i}"),
             path: "book1.epub".to_string(),
         })
     }
@@ -99,7 +98,7 @@ fn test_book_list_vim_motion_g() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/book_list_vim_g_component.svg"),
+        std::path::Path::new("tests/snapshots/book_list_vim_g_component.svg"),
         "test_book_list_vim_motion_g",
         create_test_failure_handler("test_book_list_vim_motion_g"),
     );
@@ -139,7 +138,7 @@ fn test_book_list_vim_motion_gg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/book_list_vim_gg_component.svg"),
+        std::path::Path::new("tests/snapshots/book_list_vim_gg_component.svg"),
         "test_book_list_vim_motion_gg",
         create_test_failure_handler("test_book_list_vim_motion_gg"),
     );
@@ -152,8 +151,8 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
     // Create 25 chapters to test scrolling
     for i in 1..=25 {
         toc_items.push(TocItem::Chapter {
-            title: format!("Chapter {}", i),
-            href: format!("chapter{}.xhtml", i),
+            title: format!("Chapter {i}"),
+            href: format!("chapter{i}.xhtml"),
             anchor: None,
         });
     }
@@ -202,7 +201,7 @@ fn test_navigation_panel_vim_motion_g() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/nav_panel_vim_g_component.svg"),
+        std::path::Path::new("tests/snapshots/nav_panel_vim_g_component.svg"),
         "test_navigation_panel_vim_motion_g",
         create_test_failure_handler("test_navigation_panel_vim_motion_g"),
     );
@@ -248,7 +247,7 @@ fn test_navigation_panel_vim_motion_gg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/nav_panel_vim_gg_component.svg"),
+        std::path::Path::new("tests/snapshots/nav_panel_vim_gg_component.svg"),
         "test_navigation_panel_vim_motion_gg",
         create_test_failure_handler("test_navigation_panel_vim_motion_gg"),
     );
@@ -265,8 +264,7 @@ fn test_text_reader_vim_motion_g() {
     let test_content = (0..=100)
         .map(|i| {
             format!(
-                "This is line {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-                i
+                "This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit."
             )
         })
         .collect::<Vec<_>>()
@@ -297,7 +295,7 @@ fn test_text_reader_vim_motion_g() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/text_reader_vim_g_component.svg"),
+        std::path::Path::new("tests/snapshots/text_reader_vim_g_component.svg"),
         "test_text_reader_vim_motion_g",
         create_test_failure_handler("test_text_reader_vim_motion_g"),
     );
@@ -314,8 +312,7 @@ fn test_text_reader_vim_motion_gg() {
     let test_content = (0..=100)
         .map(|i| {
             format!(
-                "This is line {}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
-                i
+                "This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit."
             )
         })
         .collect::<Vec<_>>()
@@ -352,7 +349,7 @@ fn test_text_reader_vim_motion_gg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/text_reader_vim_gg_component.svg"),
+        std::path::Path::new("tests/snapshots/text_reader_vim_gg_component.svg"),
         "test_text_reader_vim_motion_gg",
         create_test_failure_handler("test_text_reader_vim_motion_gg"),
     );

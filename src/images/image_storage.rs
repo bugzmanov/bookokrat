@@ -16,7 +16,7 @@ pub struct ImageStorage {
 impl ImageStorage {
     pub fn new(base_dir: PathBuf) -> Result<Self> {
         fs::create_dir_all(&base_dir)
-            .with_context(|| format!("Failed to create base directory: {:?}", base_dir))?;
+            .with_context(|| format!("Failed to create base directory: {base_dir:?}"))?;
 
         Ok(Self {
             base_dir,
@@ -31,7 +31,7 @@ impl ImageStorage {
 
     pub fn extract_images(&self, epub_path: &Path) -> Result<()> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
-        info!("Starting image extraction for: {}", epub_path_str);
+        info!("Starting image extraction for: {epub_path_str}");
 
         if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
             info!("Images already extracted for this book");
@@ -74,7 +74,7 @@ impl ImageStorage {
             }
 
             if has_images {
-                info!("Found existing images in directory: {:?}", book_dir);
+                info!("Found existing images in directory: {book_dir:?}");
                 self.book_dirs
                     .lock()
                     .unwrap()
@@ -84,12 +84,12 @@ impl ImageStorage {
         }
 
         fs::create_dir_all(&book_dir)
-            .with_context(|| format!("Failed to create book directory: {:?}", book_dir))?;
+            .with_context(|| format!("Failed to create book directory: {book_dir:?}"))?;
 
         let file = fs::File::open(epub_path)
-            .with_context(|| format!("Failed to open EPUB file: {:?}", epub_path))?;
+            .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;
         let mut doc = EpubDoc::from_reader(BufReader::new(file))
-            .with_context(|| format!("Failed to parse EPUB: {:?}", epub_path))?;
+            .with_context(|| format!("Failed to parse EPUB: {epub_path:?}"))?;
 
         let resources = doc.resources.clone();
         info!("Found {} resources in EPUB", resources.len());
@@ -98,24 +98,24 @@ impl ImageStorage {
         for (id, (path, mime_type)) in resources.iter() {
             if is_image_mime_type(mime_type) {
                 image_count += 1;
-                debug!("Extracting image {}: {:?} ({})", id, path, mime_type);
+                debug!("Extracting image {id}: {path:?} ({mime_type})");
                 if let Some((data, _mime)) = doc.get_resource(id) {
-                    let image_path = book_dir.join(&path);
+                    let image_path = book_dir.join(path);
 
                     if let Some(parent) = image_path.parent() {
                         fs::create_dir_all(parent)
-                            .with_context(|| format!("Failed to create directory: {:?}", parent))?;
+                            .with_context(|| format!("Failed to create directory: {parent:?}"))?;
                     }
 
                     fs::write(&image_path, &data)
-                        .with_context(|| format!("Failed to write image: {:?}", image_path))?;
+                        .with_context(|| format!("Failed to write image: {image_path:?}"))?;
                 } else {
-                    warn!("Failed to extract resource: {}", id);
+                    warn!("Failed to extract resource: {id}");
                 }
             }
         }
 
-        info!("Extracted {} images to {:?}", image_count, book_dir);
+        info!("Extracted {image_count} images to {book_dir:?}");
         self.book_dirs
             .lock()
             .unwrap()
@@ -184,14 +184,13 @@ impl ImageStorage {
         // Try each path in order
         for path in &paths_to_try {
             if path.exists() {
-                debug!("Resolved image '{}' to '{:?}'", image_href, path);
+                debug!("Resolved image '{image_href}' to '{path:?}'");
                 return Some(path.clone());
             }
         }
 
         warn!(
-            "Image not found: '{}' with chapter context {:?} (tried: {:?})",
-            image_href, chapter_path, paths_to_try
+            "Image not found: '{image_href}' with chapter context {chapter_path:?} (tried: {paths_to_try:?})"
         );
         None
     }

@@ -25,7 +25,7 @@ impl TocParser {
     fn convert_navpoints_to_toc_items(navpoints: &[NavPoint]) -> Vec<TocItem> {
         navpoints
             .iter()
-            .map(|navpoint| Self::convert_navpoint_to_toc_item(navpoint))
+            .map(Self::convert_navpoint_to_toc_item)
             .collect()
     }
 

@@ -322,7 +322,7 @@ impl VisualDiffViewer {
             Command::new("xdg-open").arg(&output_path).spawn()
         } else if cfg!(target_os = "windows") {
             Command::new("cmd")
-                .args(&["/C", "start", output_path.to_str().unwrap()])
+                .args(["/C", "start", output_path.to_str().unwrap()])
                 .spawn()
         } else {
             return Ok(());

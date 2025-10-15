@@ -228,7 +228,7 @@ impl Table {
                 while start < chars.len() {
                     let end = (start + width).min(chars.len());
                     let chunk: String = chars[start..end].iter().collect();
-                    current_line.push(Span::styled(chunk, span.style.clone()));
+                    current_line.push(Span::styled(chunk, span.style));
 
                     if !current_line.is_empty() {
                         result.push(current_line.clone());
@@ -259,7 +259,7 @@ impl Table {
                         let chunk: String = chars[start..end].iter().collect();
 
                         let chunk_display_width = chunk.chars().count();
-                        current_line.push(Span::styled(chunk, span.style.clone()));
+                        current_line.push(Span::styled(chunk, span.style));
 
                         if start + width < chars.len() {
                             // More content to come, finish this line
@@ -557,7 +557,7 @@ impl Table {
                             let truncated_content: String =
                                 span.content.chars().take(remaining_width).collect();
                             let truncated_width = truncated_content.chars().count();
-                            line_spans.push(Span::styled(truncated_content, span.style.clone()));
+                            line_spans.push(Span::styled(truncated_content, span.style));
                             remaining_width -= truncated_width;
                         }
                     }

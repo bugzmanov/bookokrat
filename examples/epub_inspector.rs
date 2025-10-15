@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "careless.epub"
     };
 
-    println!("Opening EPUB: {}", epub_path);
+    println!("Opening EPUB: {epub_path}");
 
     let mut doc = EpubDoc::new(epub_path)?;
 
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(start) = content.find("<h1") {
                         if let Some(end) = content[start..].find("</h1>") {
                             let h1_section = &content[start..start + end + 5];
-                            println!("Section header: {}", h1_section);
+                            println!("Section header: {h1_section}");
                         }
                     }
                 }
@@ -60,7 +60,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(start) = content.find("<h2") {
                         if let Some(end) = content[start..].find("</h2>") {
                             let h2_section = &content[start..start + end + 5];
-                            println!("Chapter header: {}", h2_section);
+                            println!("Chapter header: {h2_section}");
                         }
                     }
                 }

@@ -23,7 +23,7 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
             PathBuf::from(path)
         } else {
             std::env::current_dir()
-                .map_err(|e| format!("Failed to get current directory: {}", e))?
+                .map_err(|e| format!("Failed to get current directory: {e}"))?
                 .join(path)
         };
 
@@ -76,7 +76,7 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
         Command::new(command)
             .args(&args)
             .spawn()
-            .map_err(|e| format!("Failed to open URL: {}", e))?;
+            .map_err(|e| format!("Failed to open URL: {e}"))?;
 
         Ok(())
     }
@@ -161,7 +161,7 @@ impl RealSystemCommandExecutor {
 
             for pattern in &chapter_patterns {
                 if let Ok(child) = Command::new("ebook-viewer")
-                    .arg(format!("--goto={}", pattern))
+                    .arg(format!("--goto={pattern}"))
                     .arg(path)
                     .spawn()
                 {
@@ -190,6 +190,13 @@ impl RealSystemCommandExecutor {
 pub struct MockSystemCommandExecutor {
     pub executed_commands: std::cell::RefCell<Vec<String>>,
     pub should_fail: bool,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for MockSystemCommandExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -227,7 +234,7 @@ impl SystemCommandExecutor for MockSystemCommandExecutor {
     fn open_file_at_chapter(&self, path: &str, chapter: usize) -> Result<(), String> {
         self.executed_commands
             .borrow_mut()
-            .push(format!("{}@chapter{}", path, chapter));
+            .push(format!("{path}@chapter{chapter}"));
         if self.should_fail {
             Err("Mock failure".to_string())
         } else {
@@ -238,7 +245,7 @@ impl SystemCommandExecutor for MockSystemCommandExecutor {
     fn open_url(&self, url: &str) -> Result<(), String> {
         self.executed_commands
             .borrow_mut()
-            .push(format!("URL:{}", url));
+            .push(format!("URL:{url}"));
         if self.should_fail {
             Err("Mock failure".to_string())
         } else {

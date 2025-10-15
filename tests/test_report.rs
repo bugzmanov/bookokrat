@@ -44,7 +44,7 @@ impl TestReport {
                 report.browser_opened = true;
                 let html = report.generate_html();
                 if let Err(e) = report.save_and_open(html) {
-                    eprintln!("Failed to generate test report: {}", e);
+                    eprintln!("Failed to generate test report: {e}");
                 }
             }
         }
@@ -57,7 +57,7 @@ impl TestReport {
                 report.browser_opened = true;
                 let html = report.generate_html();
                 if let Err(e) = report.save_and_open(html) {
-                    eprintln!("Failed to generate test report: {}", e);
+                    eprintln!("Failed to generate test report: {e}");
                 }
             }
         }
@@ -110,7 +110,7 @@ impl TestReport {
                     failure
                         .line_stats
                         .first_diff_line
-                        .map(|line| format!("<span>📍 First diff: line {}</span>", line))
+                        .map(|line| format!("<span>📍 First diff: line {line}</span>"))
                         .unwrap_or_default(),
                     failure.expected,
                     failure.actual,
@@ -504,7 +504,7 @@ impl TestReport {
                 Command::new("xdg-open").arg(&output_path).spawn()
             } else if cfg!(target_os = "windows") {
                 Command::new("cmd")
-                    .args(&["/C", "start", output_path.to_str().unwrap()])
+                    .args(["/C", "start", output_path.to_str().unwrap()])
                     .spawn()
             } else {
                 return Ok(());

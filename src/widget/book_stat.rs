@@ -34,6 +34,12 @@ pub enum BookStatAction {
     Close,
 }
 
+impl Default for BookStat {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BookStat {
     pub fn new() -> Self {
         Self {
@@ -147,8 +153,7 @@ impl BookStat {
                         }
                         None => {
                             error!(
-                                "BookStat: Failed to get content for chapter '{}' with href '{}'",
-                                title, href
+                                "BookStat: Failed to get content for chapter '{title}' with href '{href}'"
                             );
                         }
                     }
@@ -217,21 +222,18 @@ impl BookStat {
                             }
                             None => {
                                 error!(
-                                    "BookStat: Failed to get content for section '{}' with href '{}'",
-                                    title, href_str
+                                    "BookStat: Failed to get content for section '{title}' with href '{href_str}'"
                                 );
                             }
                         }
-                    } else {
-                        if !children.is_empty() {
-                            self.process_toc_items_recursive(
-                                children,
-                                epub,
-                                text_width,
-                                lines_per_screen,
-                                false,
-                            );
-                        }
+                    } else if !children.is_empty() {
+                        self.process_toc_items_recursive(
+                            children,
+                            epub,
+                            text_width,
+                            lines_per_screen,
+                            false,
+                        );
                     }
                 }
             }
@@ -293,13 +295,13 @@ impl BookStat {
             } else {
                 // Calculate wrapped lines
                 let line_length = line.chars().count();
-                let wrapped_lines = (line_length + width - 1) / width;
+                let wrapped_lines = line_length.div_ceil(width);
                 total_lines += wrapped_lines.max(1);
             }
         }
 
         // Calculate number of screens
-        (total_lines + lines_per_screen - 1) / lines_per_screen
+        total_lines.div_ceil(lines_per_screen)
     }
 
     pub fn show(&mut self) {
@@ -373,13 +375,13 @@ impl BookStat {
 
                     let content = vec![Line::from(vec![
                         Span::styled(
-                            format!("{:3}% ", percentage),
+                            format!("{percentage:3}% "),
                             Style::default().fg(Color::DarkGray),
                         ),
                         Span::raw(stat.title.replace("\n", " ")),
                         Span::raw(" "),
                         Span::styled(
-                            format!("[{}]", screens_text),
+                            format!("[{screens_text}]"),
                             Style::default().fg(Color::Cyan),
                         ),
                     ])];
@@ -430,7 +432,7 @@ impl BookStat {
     ) -> Option<BookStatAction> {
         use crossterm::event::KeyCode;
 
-        return match key.code {
+        match key.code {
             KeyCode::Char('j') => {
                 self.handle_j();
                 None
@@ -460,7 +462,7 @@ impl BookStat {
                 chapter_index: self.get_selected_chapter_index().unwrap_or(0),
             }),
             _ => None,
-        };
+        }
     }
 }
 

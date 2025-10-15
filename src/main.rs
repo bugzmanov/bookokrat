@@ -54,7 +54,7 @@ fn main() -> Result<()> {
     terminal.show_cursor()?;
 
     if let Err(err) = res {
-        error!("Application error: {:?}", err);
+        error!("Application error: {err:?}");
         println!("{err:?}");
     }
 

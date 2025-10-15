@@ -35,16 +35,8 @@ impl MouseTracker {
         };
 
         let is_within_distance = if let Some(last_pos) = self.last_click_position {
-            let distance_x = if column > last_pos.0 {
-                column - last_pos.0
-            } else {
-                last_pos.0 - column
-            };
-            let distance_y = if row > last_pos.1 {
-                row - last_pos.1
-            } else {
-                last_pos.1 - row
-            };
+            let distance_x = column.abs_diff(last_pos.0);
+            let distance_y = row.abs_diff(last_pos.1);
             distance_x <= CLICK_DISTANCE_THRESHOLD && distance_y <= CLICK_DISTANCE_THRESHOLD
         } else {
             false

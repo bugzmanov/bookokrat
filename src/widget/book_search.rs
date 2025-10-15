@@ -502,7 +502,7 @@ impl BookSearch {
             // Add context before (if any)
             if !result.context_before.is_empty() {
                 for line in result.context_before.lines().take(1) {
-                    let prefixed_line = format!("    {}", line);
+                    let prefixed_line = format!("    {line}");
                     if is_selected {
                         all_lines.push(Line::from(Span::styled(
                             prefixed_line,
@@ -548,7 +548,7 @@ impl BookSearch {
             // Add context after (if any)
             if !result.context_after.is_empty() {
                 for line in result.context_after.lines().take(1) {
-                    let prefixed_line = format!("    {}", line);
+                    let prefixed_line = format!("    {line}");
                     if is_selected {
                         all_lines.push(Line::from(Span::styled(
                             prefixed_line,

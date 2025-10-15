@@ -11,6 +11,12 @@ pub mod test_helpers {
         events: Vec<Event>,
     }
 
+    impl Default for TestScenarioBuilder {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl TestScenarioBuilder {
         pub fn new() -> Self {
             Self { events: Vec::new() }

@@ -38,7 +38,7 @@ impl BookComments {
     pub fn new(book_path: &Path) -> Result<Self> {
         let book_hash = Self::compute_book_hash(book_path);
         let comments_dir = Self::get_comments_dir()?;
-        let file_path = comments_dir.join(format!("book_{}.yaml", book_hash));
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
         Self::new_with_path(file_path)
     }
 
@@ -48,7 +48,7 @@ impl BookComments {
         if !comments_dir.exists() {
             fs::create_dir_all(comments_dir)?;
         }
-        let file_path = comments_dir.join(format!("book_{}.yaml", book_hash));
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
         Self::new_with_path(file_path)
     }
 
@@ -163,7 +163,7 @@ impl BookComments {
             });
 
         let digest = md5::compute(filename.as_bytes());
-        format!("{:x}", digest)
+        format!("{digest:x}")
     }
 
     fn get_comments_dir() -> Result<PathBuf> {
@@ -212,9 +212,9 @@ impl BookComments {
         let idx = self.comments.len();
         self.comments_by_location
             .entry(comment.chapter_href.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(comment.paragraph_index)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(idx);
     }
 
@@ -223,9 +223,9 @@ impl BookComments {
         for (idx, comment) in self.comments.iter().enumerate() {
             self.comments_by_location
                 .entry(comment.chapter_href.clone())
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .entry(comment.paragraph_index)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(idx);
         }
     }

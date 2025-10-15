@@ -119,14 +119,14 @@ impl EmbeddedImage {
     pub fn height_in_cells(width: u32, height: u32) -> u16 {
         let aspect_ratio = width as f32 / height as f32;
 
-        let height_cells = if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
+        
+        if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
             IMAGE_HEIGHT_WIDE
         } else if height < 150 {
             IMAGE_HEIGHT_WIDE
         } else {
             IMAGE_HEIGHT_REGULAR
-        };
-        height_cells
+        }
     }
 
     pub fn failed_img(img_src: &str, error_msg: &str) -> EmbeddedImage {
@@ -172,6 +172,7 @@ pub enum CommentEditMode {
     },
 }
 
+#[derive(Default)]
 pub struct CommentInputState {
     pub textarea: Option<TextArea<'static>>,
     pub target_node_index: Option<usize>,
@@ -179,16 +180,6 @@ pub struct CommentInputState {
     pub edit_mode: Option<CommentEditMode>,
 }
 
-impl Default for CommentInputState {
-    fn default() -> Self {
-        Self {
-            textarea: None,
-            target_node_index: None,
-            target_line: None,
-            edit_mode: None,
-        }
-    }
-}
 
 impl CommentInputState {
     pub fn clear(&mut self) {

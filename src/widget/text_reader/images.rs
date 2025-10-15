@@ -16,7 +16,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         use MarkdownBlock::*;
         match &node.block {
             Paragraph { content } => {
-                return self.extract_images_from_text(content, book_images);
+                self.extract_images_from_text(content, book_images)
             }
             Quote { content } => {
                 let mut vec = Vec::new();
@@ -84,11 +84,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         Some((url.clone(), height_cells))
                     }
                     Some((w, h)) => {
-                        warn!("Ignoring small image ({}x{}): {}", w, h, url);
+                        warn!("Ignoring small image ({w}x{h}): {url}");
                         None
                     }
                     None => {
-                        warn!("Could not get dimensions for: {}", url);
+                        warn!("Could not get dimensions for: {url}");
                         self.embedded_images.borrow_mut().insert(
                             url.clone(),
                             EmbeddedImage::failed_img(url, "Could not read image metadata"),
@@ -160,8 +160,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     any_loaded = true;
                 } else {
                     warn!(
-                        "Received loaded image '{}' that is no longer in embedded_images (likely due to chapter switch)",
-                        img_src
+                        "Received loaded image '{img_src}' that is no longer in embedded_images (likely due to chapter switch)"
                     );
                 }
             }
@@ -215,11 +214,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     //todo: there should be a better way
     pub fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo> {
-        for link in &self.links {
-            if link.line == line && column >= link.start_col && column <= link.end_col {
-                return Some(link);
-            }
-        }
-        None
+        self.links.iter().find(|&link| link.line == line && column >= link.start_col && column <= link.end_col)
     }
 }

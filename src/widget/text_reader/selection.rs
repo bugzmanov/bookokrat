@@ -103,10 +103,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         {
             use arboard::Clipboard;
             let mut clipboard =
-                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
             clipboard
                 .set_text(selected_text)
-                .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+                .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
             Ok(())
         } else {
             Err("No text selected".to_string())
@@ -116,7 +116,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
         use arboard::Clipboard;
         let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
         let text = if self.show_raw_html {
             self.raw_html_content
                 .as_ref()
@@ -127,7 +127,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         };
         clipboard
             .set_text(text)
-            .map_err(|e| format!("Failed to copy to clipboard: {}", e))
+            .map_err(|e| format!("Failed to copy to clipboard: {e}"))
     }
 
     //for debuggin purposes
@@ -143,15 +143,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         ));
 
         for (idx, line) in self.raw_text_lines.iter().enumerate() {
-            debug_output.push_str(&format!("{:4}: {}\n", idx, line));
+            debug_output.push_str(&format!("{idx:4}: {line}\n"));
         }
 
         use arboard::Clipboard;
         let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {}", e))?;
+            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
         clipboard
             .set_text(debug_output)
-            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+            .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
 
         Ok(())
     }

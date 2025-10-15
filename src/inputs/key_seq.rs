@@ -5,6 +5,12 @@ pub struct KeySeq {
     last_key_time: Option<Instant>,
 }
 
+impl Default for KeySeq {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KeySeq {
     pub fn new() -> Self {
         Self {

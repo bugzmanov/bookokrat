@@ -159,7 +159,7 @@ impl MarkdownRenderer {
             output.push_str("###### ");
             let term_str = self.render_text(&item.term);
             output.push_str(&term_str);
-            output.push_str("\n");
+            output.push('\n');
 
             // Render each definition (now blocks) with : prefix
             for definition_blocks in &item.definitions {
@@ -174,7 +174,7 @@ impl MarkdownRenderer {
                 }
             }
 
-            output.push_str("\n");
+            output.push('\n');
         }
     }
 
@@ -186,14 +186,14 @@ impl MarkdownRenderer {
         output: &mut String,
     ) {
         // Render as a special block with type annotation
-        output.push_str(&format!("[{} epub:type=\"{}\"]\n", element_name, epub_type));
+        output.push_str(&format!("[{element_name} epub:type=\"{epub_type}\"]\n"));
 
         // Render nested content
         for node in content {
             self.render_node(node, output);
         }
 
-        output.push_str(&format!("[/{}]\n\n", element_name));
+        output.push_str(&format!("[/{element_name}]\n\n"));
     }
 
     fn render_list(
@@ -233,8 +233,7 @@ impl MarkdownRenderer {
 
         // Add table metadata line
         output.push_str(&format!(
-            "[table width=\"{}\" height=\"{}\" header=\"{}\"]\n",
-            num_cols, num_rows, has_header
+            "[table width=\"{num_cols}\" height=\"{num_rows}\" header=\"{has_header}\"]\n"
         ));
 
         // Calculate column widths for proper formatting
@@ -280,12 +279,12 @@ impl MarkdownRenderer {
                     content.len()
                 };
                 // Don't apply bold formatting to header row cells, even if they're marked as headers
-                output.push_str(&format!(" {:<width$} |", content, width = width));
+                output.push_str(&format!(" {content:<width$} |"));
             }
             output.push('\n');
 
             // Render separator row with alignment
-            output.push_str("|");
+            output.push('|');
             for (i, width) in column_widths.iter().enumerate() {
                 let align = if i < alignment.len() {
                     &alignment[i]
@@ -311,7 +310,7 @@ impl MarkdownRenderer {
             output.push('\n');
         } else if !rows.is_empty() {
             // If no header but we have rows, create a separator based on first row
-            output.push_str("|");
+            output.push('|');
             for width in &column_widths {
                 output.push_str(&format!(" {} |", "-".repeat(*width)));
             }
@@ -333,9 +332,9 @@ impl MarkdownRenderer {
                 if cell.is_header {
                     // Account for the ** markers when calculating width
                     let bold_content = format!("**{}**", content.trim());
-                    output.push_str(&format!(" {:<width$} |", bold_content, width = width));
+                    output.push_str(&format!(" {bold_content:<width$} |"));
                 } else {
-                    output.push_str(&format!(" {:<width$} |", content, width = width));
+                    output.push_str(&format!(" {content:<width$} |"));
                 }
             }
             output.push('\n');
@@ -360,7 +359,7 @@ impl MarkdownRenderer {
         match kind {
             crate::markdown::ListKind::Ordered { start } => {
                 let number = start + index as u32;
-                output.push_str(&format!("{}. ", number));
+                output.push_str(&format!("{number}. "));
             }
             crate::markdown::ListKind::Unordered => {
                 // Use different bullets for different nesting levels
@@ -514,7 +513,7 @@ impl MarkdownRenderer {
                 if !output.is_empty() && !output.ends_with(' ') && !output.ends_with('\n') {
                     output.push(' ');
                 }
-                output.push_str(&format!("[image src=\"{}\"]", url));
+                output.push_str(&format!("[image src=\"{url}\"]"));
                 output.push(' ');
             }
             Inline::Link {

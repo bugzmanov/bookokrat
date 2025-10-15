@@ -36,7 +36,7 @@ pub fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
             }
 
             // Add the character
-            styled_char.push_str(&cell.symbol());
+            styled_char.push_str(cell.symbol());
 
             ansi_output.push_str(&styled_char);
         }
@@ -62,7 +62,7 @@ pub fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String
 
     match color {
         Color::Reset => "\u{1b}[0m".to_string(),
-        Color::Black => format!("\u{1b}[{}m", base),
+        Color::Black => format!("\u{1b}[{base}m"),
         Color::Red => format!("\u{1b}[{}m", base + 1),
         Color::Green => format!("\u{1b}[{}m", base + 2),
         Color::Yellow => format!("\u{1b}[{}m", base + 3),
@@ -80,16 +80,16 @@ pub fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String
         Color::White => format!("\u{1b}[{}m", base + 67),
         Color::Rgb(r, g, b) => {
             if is_foreground {
-                format!("\u{1b}[38;2;{};{};{}m", r, g, b)
+                format!("\u{1b}[38;2;{r};{g};{b}m")
             } else {
-                format!("\u{1b}[48;2;{};{};{}m", r, g, b)
+                format!("\u{1b}[48;2;{r};{g};{b}m")
             }
         }
         Color::Indexed(idx) => {
             if is_foreground {
-                format!("\u{1b}[38;5;{}m", idx)
+                format!("\u{1b}[38;5;{idx}m")
             } else {
-                format!("\u{1b}[48;5;{}m", idx)
+                format!("\u{1b}[48;5;{idx}m")
             }
         }
     }

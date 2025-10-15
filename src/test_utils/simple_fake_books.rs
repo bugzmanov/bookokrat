@@ -135,7 +135,7 @@ pub fn create_fake_epub_file<P: AsRef<Path>>(
     for i in 0..config.chapter_count {
         let chapter_content = generate_chapter_content(i + 1, config.words_per_chapter);
         zip.start_file(
-            &format!("OEBPS/chapter{}.xhtml", i + 1),
+            format!("OEBPS/chapter{}.xhtml", i + 1),
             FileOptions::default(),
         )?;
         zip.write_all(chapter_content.as_bytes())?;
@@ -151,12 +151,11 @@ fn generate_chapter_content(chapter_num: usize, word_count: usize) -> String {
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
-    <title>Chapter {}</title>
+    <title>Chapter {chapter_num}</title>
 </head>
 <body>
-    <h1>Chapter {}: Test Chapter Title</h1>
-"#,
-        chapter_num, chapter_num
+    <h1>Chapter {chapter_num}: Test Chapter Title</h1>
+"#
     );
 
     // Generate predictable text content

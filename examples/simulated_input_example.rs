@@ -32,11 +32,11 @@ fn main() -> anyhow::Result<()> {
     let final_state = capture_terminal_state(&terminal);
 
     println!("=== Final Terminal State ===");
-    println!("{}", final_state);
+    println!("{final_state}");
     println!("=== End Terminal State ===");
 
     if let Err(e) = result {
-        eprintln!("Error running app: {}", e);
+        eprintln!("Error running app: {e}");
     }
 
     Ok(())

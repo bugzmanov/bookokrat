@@ -158,7 +158,7 @@ fn test_fake_books_file_list_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/fake_books_file_list.svg"),
+        std::path::Path::new("tests/snapshots/fake_books_file_list.svg"),
         "test_fake_books_file_list_svg",
         create_test_failure_handler("test_fake_books_file_list_svg"),
     );
@@ -186,7 +186,7 @@ fn test_content_view_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/content_view.svg"),
+        std::path::Path::new("tests/snapshots/content_view.svg"),
         "test_content_view_svg",
         create_test_failure_handler("test_content_view_svg"),
     );
@@ -229,7 +229,7 @@ fn test_content_scrolling_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/content_scrolling.svg"),
+        std::path::Path::new("tests/snapshots/content_scrolling.svg"),
         "test_content_scrolling_svg",
         |expected,
          actual,
@@ -288,7 +288,7 @@ fn test_chapter_title_normal_length_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/chapter_title_normal_length.svg"),
+        std::path::Path::new("tests/snapshots/chapter_title_normal_length.svg"),
         "test_chapter_title_normal_length_svg",
         |expected,
          actual,
@@ -348,7 +348,7 @@ fn test_chapter_title_narrow_terminal_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/chapter_title_narrow_terminal.svg"),
+        std::path::Path::new("tests/snapshots/chapter_title_narrow_terminal.svg"),
         "test_chapter_title_narrow_terminal_svg",
         |expected,
          actual,
@@ -410,7 +410,7 @@ fn test_mouse_scroll_file_list_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/mouse_scroll_file_list.svg"),
+        std::path::Path::new("tests/snapshots/mouse_scroll_file_list.svg"),
         "test_mouse_scroll_file_list_svg",
         |expected,
          actual,
@@ -478,7 +478,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/mouse_scroll_bounds_checking.svg"),
+        std::path::Path::new("tests/snapshots/mouse_scroll_bounds_checking.svg"),
         "test_mouse_scroll_bounds_checking_svg",
         |expected,
          actual,
@@ -571,7 +571,7 @@ fn test_mouse_event_batching_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/mouse_event_batching.svg"),
+        std::path::Path::new("tests/snapshots/mouse_event_batching.svg"),
         "test_mouse_event_batching_svg",
         |expected,
          actual,
@@ -701,7 +701,7 @@ fn test_horizontal_scroll_handling_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/horizontal_scroll_handling.svg"),
+        std::path::Path::new("tests/snapshots/horizontal_scroll_handling.svg"),
         "test_horizontal_scroll_handling_svg",
         |expected,
          actual,
@@ -800,7 +800,7 @@ fn test_edge_case_mouse_coordinates_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/edge_case_mouse_coordinates.svg"),
+        std::path::Path::new("tests/snapshots/edge_case_mouse_coordinates.svg"),
         "test_edge_case_mouse_coordinates_svg",
         |expected,
          actual,
@@ -887,7 +887,7 @@ fn test_text_selection_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/text_selection.svg"),
+        std::path::Path::new("tests/snapshots/text_selection.svg"),
         "test_text_selection_svg",
         |expected,
          actual,
@@ -978,7 +978,7 @@ fn test_text_selection_with_auto_scroll_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/text_selection_auto_scroll.svg"),
+        std::path::Path::new("tests/snapshots/text_selection_auto_scroll.svg"),
         "test_text_selection_with_auto_scroll_svg",
         |expected,
          actual,
@@ -1094,7 +1094,7 @@ fn test_continuous_auto_scroll_down_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/continuous_auto_scroll_down.svg"),
+        std::path::Path::new("tests/snapshots/continuous_auto_scroll_down.svg"),
         "test_continuous_auto_scroll_down_svg",
         |expected,
          actual,
@@ -1216,7 +1216,7 @@ fn test_continuous_auto_scroll_up_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/continuous_auto_scroll_up.svg"),
+        std::path::Path::new("tests/snapshots/continuous_auto_scroll_up.svg"),
         "test_continuous_auto_scroll_up_svg",
         |expected,
          actual,
@@ -1302,9 +1302,7 @@ fn test_timer_based_auto_scroll_svg() {
     let final_scroll_offset = app.get_scroll_offset();
     assert!(
         final_scroll_offset > initial_scroll_offset,
-        "Timer-based auto-scroll should have moved from initial offset {} to {}",
-        initial_scroll_offset,
-        final_scroll_offset
+        "Timer-based auto-scroll should have moved from initial offset {initial_scroll_offset} to {final_scroll_offset}"
     );
 
     // Verify progressive scrolling occurred
@@ -1345,7 +1343,7 @@ fn test_timer_based_auto_scroll_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/timer_based_auto_scroll.svg"),
+        std::path::Path::new("tests/snapshots/timer_based_auto_scroll.svg"),
         "test_timer_based_auto_scroll_svg",
         |expected,
          actual,
@@ -1461,7 +1459,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/auto_scroll_stops_when_cursor_returns.svg"),
+        std::path::Path::new("tests/snapshots/auto_scroll_stops_when_cursor_returns.svg"),
         "test_auto_scroll_stops_when_cursor_returns_svg",
         |expected,
          actual,
@@ -1560,7 +1558,7 @@ fn test_double_click_word_selection_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/double_click_word_selection.svg"),
+        std::path::Path::new("tests/snapshots/double_click_word_selection.svg"),
         "test_double_click_word_selection_svg",
         |expected,
          actual,
@@ -1675,7 +1673,7 @@ fn test_triple_click_paragraph_selection_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/triple_click_paragraph_selection.svg"),
+        std::path::Path::new("tests/snapshots/triple_click_paragraph_selection.svg"),
         "test_triple_click_paragraph_selection_svg",
         |expected,
          actual,
@@ -1763,7 +1761,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     // but no actual text is selected, we'll see it in the snapshot
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/text_selection_click_on_book_text_bug.svg"),
+        std::path::Path::new("tests/snapshots/text_selection_click_on_book_text_bug.svg"),
         "test_text_selection_click_on_book_text_bug_svg",
         |expected,
          actual,
@@ -1833,7 +1831,7 @@ fn test_toc_navigation_bug_svg() {
     // Currently, only book selection works, not individual chapter selection.
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/toc_navigation_bug.svg"),
+        std::path::Path::new("tests/snapshots/toc_navigation_bug.svg"),
         "test_toc_navigation_bug_svg",
         |expected,
          actual,
@@ -1889,7 +1887,7 @@ fn test_toc_back_to_books_list_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/toc_back_to_books_list.svg"),
+        std::path::Path::new("tests/snapshots/toc_back_to_books_list.svg"),
         "test_toc_back_to_books_list_svg",
         create_test_failure_handler("test_toc_back_to_books_list_svg"),
     );
@@ -1928,7 +1926,7 @@ fn test_toc_chapter_navigation_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/toc_chapter_navigation.svg"),
+        std::path::Path::new("tests/snapshots/toc_chapter_navigation.svg"),
         "test_toc_chapter_navigation_svg",
         create_test_failure_handler("test_toc_chapter_navigation_svg"),
     );
@@ -2042,7 +2040,7 @@ fn test_mathml_content_rendering_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/mathml_content_rendering.svg"),
+        std::path::Path::new("tests/snapshots/mathml_content_rendering.svg"),
         "test_mathml_content_rendering_svg",
         create_test_failure_handler("test_mathml_content_rendering_svg"),
     );
@@ -2095,7 +2093,7 @@ fn test_book_reading_history_with_many_entries_svg() {
 
     // Create bookmarks using the production format by manually crafting valid JSON
     // This is the only way to create deterministic test data with specific timestamps
-    use chrono::{DateTime, Duration, TimeZone, Utc};
+    use chrono::{Duration, TimeZone, Utc};
     use std::collections::HashMap;
 
     // Use a fixed date for deterministic test output
@@ -2178,7 +2176,7 @@ fn test_book_reading_history_with_many_entries_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/book_reading_history_many_entries.svg"),
+        std::path::Path::new("tests/snapshots/book_reading_history_many_entries.svg"),
         "test_book_reading_history_with_many_entries_svg",
         |expected,
          actual,
@@ -2267,7 +2265,7 @@ fn test_headings_h1_to_h6_rendering_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/headings_h1_to_h6_rendering.svg"),
+        std::path::Path::new("tests/snapshots/headings_h1_to_h6_rendering.svg"),
         "test_headings_h1_to_h6_rendering_svg",
         create_test_failure_handler("test_headings_h1_to_h6_rendering_svg"),
     );
@@ -2370,7 +2368,7 @@ fn test_table_with_links_and_linebreaks_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/table_with_links_and_linebreaks.svg"),
+        std::path::Path::new("tests/snapshots/table_with_links_and_linebreaks.svg"),
         "test_table_with_links_and_linebreaks_svg",
         create_test_failure_handler("test_table_with_links_and_linebreaks_svg"),
     );
@@ -2532,7 +2530,7 @@ fetchData('https://api.example.com/data')
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/basic_markdown_elements.svg"),
+        std::path::Path::new("tests/snapshots/basic_markdown_elements.svg"),
         "test_basic_markdown_elements_svg",
         create_test_failure_handler("test_basic_markdown_elements_svg"),
     );
@@ -2601,7 +2599,7 @@ fn test_epub_type_attributes_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/epub_type_attributes.svg"),
+        std::path::Path::new("tests/snapshots/epub_type_attributes.svg"),
         "test_epub_type_attributes_svg",
         create_test_failure_handler("test_epub_type_attributes_svg"),
     );
@@ -2685,7 +2683,7 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/complex_table_with_code_and_linebreaks.svg"),
+        std::path::Path::new("tests/snapshots/complex_table_with_code_and_linebreaks.svg"),
         "test_complex_table_with_code_and_linebreaks_svg",
         create_test_failure_handler("test_complex_table_with_code_and_linebreaks_svg"),
     );
@@ -2749,7 +2747,7 @@ Q = xW<sub>Q</sub></pre>
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/html_subscript_rendering.svg"),
+        std::path::Path::new("tests/snapshots/html_subscript_rendering.svg"),
         "test_html_subscript_rendering_svg",
         create_test_failure_handler("test_html_subscript_rendering_svg"),
     );
@@ -2858,7 +2856,7 @@ fn test_definition_list_with_complex_content_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/definition_list_complex_content.svg"),
+        std::path::Path::new("tests/snapshots/definition_list_complex_content.svg"),
         "test_definition_list_with_complex_content_svg",
         create_test_failure_handler("test_definition_list_with_complex_content_svg"),
     );
@@ -3090,7 +3088,7 @@ fn test_lists_with_tables_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/lists_with_tables.svg"),
+        std::path::Path::new("tests/snapshots/lists_with_tables.svg"),
         "test_lists_with_tables_svg",
         create_test_failure_handler("test_lists_with_tables_svg"),
     );
@@ -3209,7 +3207,7 @@ hello_world()</code></pre>
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/content_search.svg"),
+        std::path::Path::new("tests/snapshots/content_search.svg"),
         "test_content_search_svg",
         create_test_failure_handler("test_content_search_svg"),
     );
@@ -3270,7 +3268,7 @@ fn test_toc_search_svg() {
 
     assert_svg_snapshot(
         svg_output.clone(),
-        &std::path::Path::new("tests/snapshots/toc_search.svg"),
+        std::path::Path::new("tests/snapshots/toc_search.svg"),
         "test_toc_search_svg",
         create_test_failure_handler("test_toc_search_svg"),
     );

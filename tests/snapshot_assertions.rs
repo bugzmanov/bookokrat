@@ -53,18 +53,16 @@ pub fn assert_svg_snapshot(
     );
 
     // Print a concise error message
-    eprintln!("\n❌ SVG snapshot test failed: {}", test_name);
+    eprintln!("\n❌ SVG snapshot test failed: {test_name}");
     eprintln!(
-        "   📊 Total lines: {} (expected) vs {} (actual)",
-        expected_line_count, actual_line_count
+        "   📊 Total lines: {expected_line_count} (expected) vs {actual_line_count} (actual)"
     );
-    eprintln!("   ⚠️  Lines with differences: {}", diff_count);
+    eprintln!("   ⚠️  Lines with differences: {diff_count}");
     if let Some(line) = first_diff_line {
-        eprintln!("   📍 First difference at line: {}", line);
+        eprintln!("   📍 First difference at line: {line}");
     }
     eprintln!(
-        "   💡 To update snapshot: SNAPSHOTS=overwrite cargo test {}\n",
-        test_name
+        "   💡 To update snapshot: SNAPSHOTS=overwrite cargo test {test_name}\n"
     );
 
     // Panic with a clean message

@@ -281,7 +281,7 @@ impl MathMLParser {
             "math" => {
                 // Process the content of math element
                 let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
-                if children.len() > 0 {
+                if !children.is_empty() {
                     self.process_element(&children[0])
                 } else {
                     Ok(MathBox::new(node.text().unwrap_or("")))
@@ -311,7 +311,7 @@ impl MathMLParser {
                     Ok(MathBox::new(text))
                 } else if matches!(text, "=" | "+" | "-" | "*" | "/" | "≠") {
                     // Add spacing around binary operators
-                    Ok(MathBox::new(&format!(" {} ", text)))
+                    Ok(MathBox::new(&format!(" {text} ")))
                 } else if matches!(text, "(" | ")" | "[" | "]" | "{" | "}") {
                     // No extra spacing for brackets, parentheses
                     Ok(MathBox::new(text))
@@ -401,7 +401,7 @@ impl MathMLParser {
             _ => {
                 // Default: concatenate children horizontally (like Python)
                 let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
-                if children.len() > 0 {
+                if !children.is_empty() {
                     let boxes: Result<Vec<_>, _> = children
                         .iter()
                         .map(|child| self.process_element(child))
@@ -613,7 +613,7 @@ impl MathMLParser {
                         .collect::<String>()
                         .trim()
                         .to_string();
-                    let latex_text = format!("{}_{}", base_text, subscript_text);
+                    let latex_text = format!("{base_text}_{subscript_text}");
                     return Ok(MathBox::new(&latex_text));
                 }
             }
@@ -690,7 +690,7 @@ impl MathMLParser {
                     .collect::<String>()
                     .trim()
                     .to_string();
-                let latex_text = format!("{}^{}", base_text, superscript_text);
+                let latex_text = format!("{base_text}^{superscript_text}");
                 return Ok(MathBox::new(&latex_text));
             }
         }
@@ -897,7 +897,7 @@ impl MathMLParser {
             .children()
             .find(|n| n.is_element())
             .and_then(|n| n.text())
-            .map_or(false, |text| text.contains('∑'));
+            .is_some_and(|text| text.contains('∑'));
 
         // Calculate dimensions
         let mut width = base.width.max(under.width);
@@ -947,7 +947,7 @@ impl MathMLParser {
             .children()
             .find(|n| n.is_element())
             .and_then(|n| n.text())
-            .map_or(false, |text| text.contains('∑'));
+            .is_some_and(|text| text.contains('∑'));
 
         // Calculate dimensions
         let mut width = base.width.max(under.width).max(over.width);
@@ -1046,7 +1046,7 @@ impl MathMLParser {
                 .collect::<String>()
                 .trim()
                 .to_string();
-            return Ok(MathBox::new(&format!("√({})", inner_text)));
+            return Ok(MathBox::new(&format!("√({inner_text})")));
         }
 
         // Step 2: Measure the formula dimensions
@@ -1058,7 +1058,7 @@ impl MathMLParser {
         let radical_lines = self.generate_sqrt_radical(formula_height + 1, formula_width + 4);
 
         // Step 4: Calculate total dimensions
-        let radical_width = radical_lines.get(0).map_or(0, |line| line.chars().count());
+        let radical_width = radical_lines.first().map_or(0, |line| line.chars().count());
         let total_width = radical_width.max(formula_width + 10); // Extra padding
         let total_height = radical_lines.len();
         let baseline = inner.baseline + 1;
@@ -1129,14 +1129,12 @@ impl MathMLParser {
             {
                 // Use Unicode format: ³√x for cube root
                 return Ok(MathBox::new(&format!(
-                    "{}√({})",
-                    unicode_index, radicand_text
+                    "{unicode_index}√({radicand_text})"
                 )));
             } else {
                 // Fallback to notation like: [3]√(x)
                 return Ok(MathBox::new(&format!(
-                    "[{}]√({})",
-                    index_text, radicand_text
+                    "[{index_text}]√({radicand_text})"
                 )));
             }
         }
@@ -1203,7 +1201,7 @@ impl MathMLParser {
             if line.trim_start().starts_with("_") {
                 // This is the line with underscore - add index here WITH A SPACE
                 // The underscore line has no leading spaces, so add one space before index
-                modified_lines.push(format!(" {}{}", index_text, line));
+                modified_lines.push(format!(" {index_text}{line}"));
             } else {
                 // Other lines need to be padded by index width + 1 for alignment
                 modified_lines.push(format!("{}{}", " ".repeat(index_width + 1), line));
@@ -1842,8 +1840,7 @@ impl MathMLParser {
                     } else {
                         // For multi-line boxes that contain simple content, just take first line
                         vec![
-                            b.content
-                                .get(0)
+                            b.content.first()
                                 .map(|row| row.iter().collect::<String>())
                                 .unwrap_or_default(),
                         ]
@@ -2412,17 +2409,17 @@ P(x₁,x₂,...,xₙ)     = ⎜──────────────⎟  = 
 
                 if actual_line != expected_line {
                     println!("Line {} differs:", i + 1);
-                    println!("  Expected: {:?}", expected_line);
-                    println!("  Actual:   {:?}", actual_line);
+                    println!("  Expected: {expected_line:?}");
+                    println!("  Actual:   {actual_line:?}");
                 } else {
                     println!("Line {} matches: {:?}", i + 1, actual_line);
                 }
             }
 
             println!("\n=== FULL EXPECTED OUTPUT ===");
-            println!("{}", expected);
+            println!("{expected}");
             println!("\n=== FULL ACTUAL OUTPUT ===");
-            println!("{}", actual);
+            println!("{actual}");
             println!("=== END ===\n");
 
             panic!("Multi-line strings don't match");
@@ -2540,7 +2537,7 @@ P(x₁,x₂,...,xₙ)     = ⎜──────────────⎟  = 
 where   ⎨m_left/right is the number of instances in the left/right subset
         ⎩                      m = m_left + m_right"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
-        assert_multiline_eq(&result.trim(), &expected.trim());
+        assert_multiline_eq(result.trim(), expected.trim());
     }
 
     #[test]
@@ -2570,7 +2567,7 @@ Hᵢ =  -     ∑     pᵢ,ₖlog₂(pᵢ,ₖ)
           k = 1
          pᵢ,ₖ ≠ 0"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
-        assert_multiline_eq(&result.trim(), &expected.trim());
+        assert_multiline_eq(result.trim(), expected.trim());
     }
 
     #[test]
@@ -2603,7 +2600,7 @@ Hᵢ =  -     ∑     pᵢ,ₖlog₂(pᵢ,ₖ)
 RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
                 \╱   m   i = 1"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
-        assert_multiline_eq(&result.trim(), &expected.trim());
+        assert_multiline_eq(result.trim(), expected.trim());
     }
 
     #[test]
@@ -2687,6 +2684,6 @@ RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
  5_  ╱  ─────
    \╱   z - 1"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
-        assert_multiline_eq(&result.trim_start(), &expected.trim_start());
+        assert_multiline_eq(result.trim_start(), expected.trim_start());
     }
 }

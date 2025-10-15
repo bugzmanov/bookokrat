@@ -127,7 +127,7 @@ mod tests {
 
         for i in 0..5 {
             list.push(JumpLocation {
-                epub_path: format!("book{}.epub", i),
+                epub_path: format!("book{i}.epub"),
                 chapter_index: i,
                 node_index: 0,
             });

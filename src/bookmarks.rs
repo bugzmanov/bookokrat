@@ -46,7 +46,7 @@ impl Bookmarks {
     pub fn load_or_ephemeral(file_path: Option<&str>) -> Self {
         match file_path {
             Some(path) => Self::load_from_file(path).unwrap_or_else(|e| {
-                log::error!("Failed to load bookmarks from {}: {}", path, e);
+                log::error!("Failed to load bookmarks from {path}: {e}");
                 Self::with_file(path)
             }),
             None => Self::ephemeral(),
@@ -64,7 +64,7 @@ impl Bookmarks {
                     Ok(bookmarks)
                 }
                 Err(e) => {
-                    log::error!("Failed to parse bookmarks file: {}", e);
+                    log::error!("Failed to parse bookmarks file: {e}");
                     Err(anyhow::anyhow!("Failed to parse bookmarks: {}", e))
                 }
             }
@@ -117,7 +117,7 @@ impl Bookmarks {
         // Save immediately if we have a file path
         if !self.books.is_empty() && self.file_path.is_some() {
             if let Err(e) = self.save() {
-                log::error!("Failed to save bookmark: {}", e);
+                log::error!("Failed to save bookmark: {e}");
             }
         }
     }

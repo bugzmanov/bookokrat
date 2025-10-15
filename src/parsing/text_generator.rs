@@ -10,7 +10,7 @@ impl TextGenerator {
         let h3_pattern = Regex::new(r"(?s)<h3[^>]*>(.*?)</h3>").ok()?;
         let title_pattern = Regex::new(r"(?s)<title[^>]*>(.*?)</title>").ok()?;
 
-        for re in vec![h1_pattern, h2_pattern, h3_pattern, title_pattern] {
+        for re in [h1_pattern, h2_pattern, h3_pattern, title_pattern] {
             if let Some(captures) = re.captures(html_content) {
                 if let Some(title_match) = captures.get(1) {
                     let title = Self::extract_text_from_html(title_match.as_str());

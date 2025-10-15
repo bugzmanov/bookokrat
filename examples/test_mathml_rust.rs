@@ -40,8 +40,8 @@ fn main() {
     println!("Complex Equation Rendering:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(html, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -67,8 +67,8 @@ fn main() {
     println!("\nSimple Fraction Alignment Test:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(simple, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -90,8 +90,8 @@ fn main() {
     println!("\nSuper complex test:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(super_complex, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -118,8 +118,8 @@ fn main() {
     println!("\nDuper complex test:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(duper, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -135,8 +135,8 @@ fn main() {
     println!("\nSimple Square Root Test:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(sqrt_simple, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -155,8 +155,8 @@ fn main() {
     println!("\nComplex Square Root with Fraction:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(sqrt_complex, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
@@ -177,21 +177,21 @@ fn main() {
     println!("\nComplex Multiline:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(complex_multiline, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 
     // ----
     let complex_integral = r#"
-        <math alttext="\displaystyle-\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{p(\bm{\xi})}{q(\bm{\xi})}\mathrm{d}\bm{\xi}=\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{q(\bm{\xi})}{p(\bm{\xi})}\mathrm{d}\bm{\xi}" class="ltx_Math" display="inline" id="S1.Ex1.m3"><semantics><mrow><mrow><mo>−</mo><mrow><mstyle displaystyle="true"><msub><mo>∫</mo><msup><mi>ℝ</mi><mi>D</mi></msup></msub></mstyle><mrow><mi>p</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow><mo lspace="0.167em" rspace="0em">​</mo><mrow><mi>log</mi><mo lspace="0.167em">⁡</mo><mrow><mstyle displaystyle="true"><mfrac><mrow><mi>p</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow><mrow><mi>q</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow></mfrac></mstyle><mo lspace="0em" rspace="0em">​</mo><mi mathvariant="normal">d</mi><mo lspace="0em" rspace="0em">​</mo><mi>𝝃</mi></mrow></mrow></mrow></mrow></mrow><mo>=</mo><mrow><mstyle displaystyle="true"><msub><mo>∫</mo><msup><mi>ℝ</mi><mi>D</mi></msup></msub></mstyle><mrow><mi>p</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow><mo lspace="0.167em" rspace="0em">​</mo><mrow><mi>log</mi><mo lspace="0.167em">⁡</mo><mrow><mstyle displaystyle="true"><mfrac><mrow><mi>q</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow><mrow><mi>p</mi><mo lspace="0em" rspace="0em">​</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow></mfrac></mstyle><mo lspace="0em" rspace="0em">​</mo><mi mathvariant="normal">d</mi><mo lspace="0em" rspace="0em">​</mo><mi>𝝃</mi></mrow></mrow></mrow></mrow></mrow><annotation encoding="application/x-tex">\displaystyle-\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{p(\bm{\xi})}{q(\bm{\xi})}\mathrm{d}\bm{\xi}=\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{q(\bm{\xi})}{p(\bm{\xi})}\mathrm{d}\bm{\xi}</annotation><annotation encoding="application/x-llamapun">- ∫ start_POSTSUBSCRIPT blackboard_R start_POSTSUPERSCRIPT italic_D end_POSTSUPERSCRIPT end_POSTSUBSCRIPT italic_p ( bold_italic_ξ ) roman_log divide start_ARG italic_p ( bold_italic_ξ ) end_ARG start_ARG italic_q ( bold_italic_ξ ) end_ARG roman_d bold_italic_ξ = ∫ start_POSTSUBSCRIPT blackboard_R start_POSTSUPERSCRIPT italic_D end_POSTSUPERSCRIPT end_POSTSUBSCRIPT italic_p ( bold_italic_ξ ) roman_log divide start_ARG italic_q ( bold_italic_ξ ) end_ARG start_ARG italic_p ( bold_italic_ξ ) end_ARG roman_d bold_italic_ξ</annotation></semantics></math>
+        <math alttext="\displaystyle-\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{p(\bm{\xi})}{q(\bm{\xi})}\mathrm{d}\bm{\xi}=\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{q(\bm{\xi})}{p(\bm{\xi})}\mathrm{d}\bm{\xi}" class="ltx_Math" display="inline" id="S1.Ex1.m3"><semantics><mrow><mrow><mo>−</mo><mrow><mstyle displaystyle="true"><msub><mo>∫</mo><msup><mi>ℝ</mi><mi>D</mi></msup></msub></mstyle><mrow><mi>p</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow><mo lspace="0.167em" rspace="0em">\u{200B}</mo><mrow><mi>log</mi><mo lspace="0.167em">⁡</mo><mrow><mstyle displaystyle="true"><mfrac><mrow><mi>p</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow><mrow><mi>q</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow></mfrac></mstyle><mo lspace="0em" rspace="0em">\u{200B}</mo><mi mathvariant="normal">d</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mi>𝝃</mi></mrow></mrow></mrow></mrow></mrow><mo>=</mo><mrow><mstyle displaystyle="true"><msub><mo>∫</mo><msup><mi>ℝ</mi><mi>D</mi></msup></msub></mstyle><mrow><mi>p</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow><mo lspace="0.167em" rspace="0em">\u{200B}</mo><mrow><mi>log</mi><mo lspace="0.167em">⁡</mo><mrow><mstyle displaystyle="true"><mfrac><mrow><mi>q</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow><mrow><mi>p</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mrow><mo stretchy="false">(</mo><mi>𝝃</mi><mo stretchy="false">)</mo></mrow></mrow></mfrac></mstyle><mo lspace="0em" rspace="0em">\u{200B}</mo><mi mathvariant="normal">d</mi><mo lspace="0em" rspace="0em">\u{200B}</mo><mi>𝝃</mi></mrow></mrow></mrow></mrow></mrow><annotation encoding="application/x-tex">\displaystyle-\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{p(\bm{\xi})}{q(\bm{\xi})}\mathrm{d}\bm{\xi}=\int_{\mathbb{R}^{D}}p(\bm{\xi})\log\frac{q(\bm{\xi})}{p(\bm{\xi})}\mathrm{d}\bm{\xi}</annotation><annotation encoding="application/x-llamapun">- ∫ start_POSTSUBSCRIPT blackboard_R start_POSTSUPERSCRIPT italic_D end_POSTSUPERSCRIPT end_POSTSUBSCRIPT italic_p ( bold_italic_ξ ) roman_log divide start_ARG italic_p ( bold_italic_ξ ) end_ARG start_ARG italic_q ( bold_italic_ξ ) end_ARG roman_d bold_italic_ξ = ∫ start_POSTSUBSCRIPT blackboard_R start_POSTSUPERSCRIPT italic_D end_POSTSUPERSCRIPT end_POSTSUBSCRIPT italic_p ( bold_italic_ξ ) roman_log divide start_ARG italic_q ( bold_italic_ξ ) end_ARG start_ARG italic_p ( bold_italic_ξ ) end_ARG roman_d bold_italic_ξ</annotation></semantics></math>
         "#;
 
     println!("\nComplex integral:");
     println!("{}", "=".repeat(60));
     match mathml_to_ascii(complex_integral, true) {
-        Ok(result) => println!("{}", result),
-        Err(e) => println!("Error: {}", e),
+        Ok(result) => println!("{result}"),
+        Err(e) => println!("Error: {e}"),
     }
     println!("{}", "=".repeat(60));
 }

@@ -24,6 +24,12 @@ pub struct SearchEngine {
     chapters: Vec<ProcessedChapter>,
 }
 
+impl Default for SearchEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SearchEngine {
     pub fn new() -> Self {
         Self {
@@ -144,7 +150,7 @@ impl SearchEngine {
                     let max_snippet_chars = 300;
                     let snippet = if line.chars().count() > max_snippet_chars {
                         let truncated: String = line.chars().take(max_snippet_chars).collect();
-                        format!("{}...", truncated)
+                        format!("{truncated}...")
                     } else {
                         line.clone()
                     };
@@ -224,7 +230,7 @@ impl SearchEngine {
                     let max_snippet_chars = 300;
                     let snippet = if line.chars().count() > max_snippet_chars {
                         let truncated: String = line.chars().take(max_snippet_chars).collect();
-                        format!("{}...", truncated)
+                        format!("{truncated}...")
                     } else {
                         line.clone()
                     };
@@ -270,7 +276,7 @@ impl SearchEngine {
                     // Truncate long lines (safely handling Unicode)
                     if line.chars().count() > max_line_length {
                         let truncated: String = line.chars().take(max_line_length).collect();
-                        format!("{}...", truncated)
+                        format!("{truncated}...")
                     } else {
                         line.clone()
                     }
@@ -292,7 +298,7 @@ impl SearchEngine {
                     // Truncate long lines (safely handling Unicode)
                     if line.chars().count() > max_line_length {
                         let truncated: String = line.chars().take(max_line_length).collect();
-                        format!("{}...", truncated)
+                        format!("{truncated}...")
                     } else {
                         line.clone()
                     }

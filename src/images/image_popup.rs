@@ -36,7 +36,7 @@ impl ImagePopup {
 
     pub fn render(&mut self, f: &mut Frame, terminal_size: Rect) {
         let render_start = Instant::now();
-        self.load_start = Some(render_start.clone());
+        self.load_start = Some(render_start);
         let popup_area = self.calculate_optimal_popup_area(terminal_size);
         let calc_duration = render_start.elapsed();
 
@@ -64,7 +64,7 @@ impl ImagePopup {
             block_duration.as_millis()
         );
 
-        let size_text = format!("{}x{} pixels", width, height);
+        let size_text = format!("{width}x{height} pixels");
 
         let loading_text = vec![
             Line::from(""),

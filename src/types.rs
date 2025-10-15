@@ -16,11 +16,11 @@ impl LinkInfo {
 
         Self {
             text: url.clone(),
-            url: url,
+            url,
             line: 0, // Not needed for navigation
             start_col: 0,
             end_col: 0,
-            link_type: link_type,
+            link_type,
             target_chapter,
             target_anchor,
         }

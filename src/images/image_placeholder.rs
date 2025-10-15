@@ -241,8 +241,7 @@ mod tests {
         {
             assert_eq!(
                 actual, expected,
-                "Line {} doesn't match.\nExpected: '{}'\nActual:   '{}'",
-                i, expected, actual
+                "Line {i} doesn't match.\nExpected: '{expected}'\nActual:   '{actual}'"
             );
         }
 
@@ -280,8 +279,7 @@ mod tests {
         {
             assert_eq!(
                 actual, expected,
-                "Narrow display line {} doesn't match.\nExpected: '{}'\nActual:   '{}'",
-                i, expected, actual
+                "Narrow display line {i} doesn't match.\nExpected: '{expected}'\nActual:   '{actual}'"
             );
         }
     }

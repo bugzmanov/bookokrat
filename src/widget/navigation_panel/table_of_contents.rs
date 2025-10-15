@@ -87,6 +87,12 @@ pub struct TableOfContents {
     search_state: SearchState,
 }
 
+impl Default for TableOfContents {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TableOfContents {
     pub fn new() -> Self {
         let mut list_state = ListState::default();
@@ -174,11 +180,7 @@ impl TableOfContents {
 
         if self.manual_navigation_cooldown > 0 {
             self.manual_navigation_cooldown = self.manual_navigation_cooldown.saturating_sub(1);
-            if self.manual_navigation_cooldown > 0 {
-                self.manual_navigation = true;
-            } else {
-                self.manual_navigation = false;
-            }
+            self.manual_navigation = self.manual_navigation_cooldown > 0;
         }
 
         if let Some(ref book_info) = self.current_book_info {
@@ -476,11 +478,10 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    if *is_expanded {
-                        if Self::toggle_expansion_at_index(children, target_index, current_index) {
+                    if *is_expanded
+                        && Self::toggle_expansion_at_index(children, target_index, current_index) {
                             return true;
                         }
-                    }
                 }
                 TocItem::Chapter { .. } => {}
             }
@@ -512,8 +513,8 @@ impl TableOfContents {
                     is_expanded,
                     ..
                 } => {
-                    if *is_expanded {
-                        if Self::set_expansion_at_index(
+                    if *is_expanded
+                        && Self::set_expansion_at_index(
                             children,
                             target_index,
                             current_index,
@@ -521,7 +522,6 @@ impl TableOfContents {
                         ) {
                             return true;
                         }
-                    }
                 }
                 TocItem::Chapter { .. } => {}
             }
@@ -754,7 +754,7 @@ impl TableOfContents {
             &mut toc_item_index,
             is_focused,
         );
-        let title = format!("{} - Book", book_display_name);
+        let title = format!("{book_display_name} - Book");
         let mut toc_list = List::new(items)
             .block(
                 Block::default()
@@ -797,7 +797,7 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{}{}", indent, title);
+                    let full_text = format!("{indent}{title}");
 
                     // Check if this item matches search
                     let chapter_content = if self.search_state.active
@@ -836,7 +836,7 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{}{} {}", indent, section_icon, title);
+                    let full_text = format!("{indent}{section_icon} {title}");
 
                     // Check if this item matches search
                     let section_content = if self.search_state.active
@@ -1060,7 +1060,7 @@ impl TableOfContents {
             match item {
                 TocItem::Chapter { title, .. } => {
                     let indent = "  ".repeat(indent_level + 1);
-                    items.push(format!("{}{}", indent, title));
+                    items.push(format!("{indent}{title}"));
                 }
                 TocItem::Section {
                     title,
@@ -1070,7 +1070,7 @@ impl TableOfContents {
                 } => {
                     let section_icon = if *is_expanded { "⌄" } else { "›" };
                     let indent = "  ".repeat(indent_level + 1);
-                    items.push(format!("{}{} {}", indent, section_icon, title));
+                    items.push(format!("{indent}{section_icon} {title}"));
 
                     // Only collect children if expanded
                     if *is_expanded {

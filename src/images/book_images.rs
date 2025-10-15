@@ -28,7 +28,7 @@ impl BookImages {
 
     /// Load images for a specific EPUB book
     pub fn load_book(&mut self, epub_path: &Path) -> Result<()> {
-        debug!("Loading images for book: {:?}", epub_path);
+        debug!("Loading images for book: {epub_path:?}");
 
         // Extract images if not already extracted
         self.storage.extract_images(epub_path)?;
@@ -56,7 +56,7 @@ impl BookImages {
         if image_path.extension().and_then(|ext| ext.to_str()) == Some("svg") {
             // For SVG files, use a default size since they're scalable
             // We could parse the SVG to get viewBox dimensions, but for now use defaults
-            debug!("SVG image '{}' using default size 800x600", image_src);
+            debug!("SVG image '{image_src}' using default size 800x600");
             return Some((800, 600));
         }
 
@@ -64,13 +64,12 @@ impl BookImages {
         match imagesize::size(&image_path) {
             Ok(size) => {
                 let (width, height) = (size.width as u32, size.height as u32);
-                debug!("Image '{}' size: {}x{}", image_src, width, height);
+                debug!("Image '{image_src}' size: {width}x{height}");
                 Some((width, height))
             }
             Err(e) => {
                 warn!(
-                    "Failed to get image size for '{}' from {:?}: {}",
-                    image_src, image_path, e
+                    "Failed to get image size for '{image_src}' from {image_path:?}: {e}"
                 );
                 None
             }
@@ -99,20 +98,19 @@ impl BookImages {
         if image_path.extension().and_then(|ext| ext.to_str()) == Some("svg") {
             // For SVG files, we can't load them as DynamicImage
             // Return None or consider rasterizing the SVG
-            debug!("SVG images not supported for DynamicImage: {}", image_src);
+            debug!("SVG images not supported for DynamicImage: {image_src}");
             return None;
         }
 
         // Load and return the image
         match image::open(&image_path) {
             Ok(img) => {
-                debug!("Successfully loaded image: {}", image_src);
+                debug!("Successfully loaded image: {image_src}");
                 Some(img)
             }
             Err(e) => {
                 warn!(
-                    "Failed to load image '{}' from {:?}: {}",
-                    image_src, image_path, e
+                    "Failed to load image '{image_src}' from {image_path:?}: {e}"
                 );
                 None
             }
@@ -158,8 +156,7 @@ impl BookImages {
         let new_height = target_height_in_pixels;
 
         debug!(
-            "Resizing {} from {}x{} to {}x{}",
-            image_src, img_width, img_height, new_width, new_height
+            "Resizing {image_src} from {img_width}x{img_height} to {new_width}x{new_height}"
         );
 
         // Use fast_image_resize for better performance
@@ -167,8 +164,7 @@ impl BookImages {
             Ok(resized) => resized,
             Err(e) => {
                 warn!(
-                    "Fast resize failed for {}: {}, falling back to slow resize",
-                    image_src, e
+                    "Fast resize failed for {image_src}: {e}, falling back to slow resize"
                 );
                 img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
             }

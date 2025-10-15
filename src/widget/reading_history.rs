@@ -42,7 +42,7 @@ impl ReadingHistory {
         for (path, bookmark_entry) in bookmarks.iter() {
             let title = path
                 .split('/')
-                .last()
+                .next_back()
                 .unwrap_or("Unknown")
                 .trim_end_matches(".epub")
                 .to_string();
@@ -177,7 +177,7 @@ impl ReadingHistory {
     /// Handle mouse click at the given position
     /// Returns true if an item was clicked (for double-click detection)
     pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
-        debug!("ReadingHistory: Mouse click at ({}, {})", x, y);
+        debug!("ReadingHistory: Mouse click at ({x}, {y})");
 
         if let Some(popup_area) = self.last_popup_area {
             debug!(
@@ -211,7 +211,7 @@ impl ReadingHistory {
 
                 if new_index < self.items.len() {
                     self.state.select(Some(new_index));
-                    debug!("ReadingHistory: Selected item at index {}", new_index);
+                    debug!("ReadingHistory: Selected item at index {new_index}");
                     return true;
                 }
             } else {
@@ -350,13 +350,9 @@ impl ReadingHistory {
             }
             KeyCode::Esc => Some(ReadingHistoryAction::Close),
             KeyCode::Enter => {
-                if let Some(path) = self.selected_path() {
-                    Some(ReadingHistoryAction::OpenBook {
+                self.selected_path().map(|path| ReadingHistoryAction::OpenBook {
                         path: path.to_string(),
                     })
-                } else {
-                    None
-                }
             }
             _ => None,
         }

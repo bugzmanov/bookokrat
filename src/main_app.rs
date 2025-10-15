@@ -51,7 +51,7 @@ struct EpubBook {
 impl EpubBook {
     fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
         Self {
-            file: file,
+            file,
             epub: doc,
         }
     }
@@ -120,6 +120,12 @@ pub enum PopupWindow {
     BookStats,
     ImagePopup,
     BookSearch,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl App {
@@ -245,7 +251,7 @@ impl App {
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
         let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
-            error!("Failed to initialize image storage: {}. Using fallback.", e);
+            error!("Failed to initialize image storage: {e}. Using fallback.");
             ImageStorage::new(std::env::temp_dir().join("bookrat_images"))
                 .expect("Failed to create fallback image storage")
         }));
@@ -253,7 +259,7 @@ impl App {
         let book_images = BookImages::new(image_storage.clone());
 
         let terminal_size = if let Ok((width, height)) = crossterm::terminal::size() {
-            debug!("Initial terminal size: {}x{}", width, height);
+            debug!("Initial terminal size: {width}x{height}");
             Rect::new(0, 0, width, height)
         } else {
             Rect::new(0, 0, 80, 24)
@@ -273,20 +279,19 @@ impl App {
             key_sequence: KeySeq::new(),
             reading_history: None,
             image_popup: None,
-            terminal_size: terminal_size,
+            terminal_size,
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
             jump_list: JumpList::new(20),
             book_search: None,
         };
 
-        if auto_load_recent && let Some((recent_path, _)) = app.bookmarks.get_most_recent() {
-            if app.book_manager.contains_book(&recent_path) {
+        if auto_load_recent && let Some((recent_path, _)) = app.bookmarks.get_most_recent()
+            && app.book_manager.contains_book(&recent_path) {
                 if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
-                    error!("Failed to auto-load most recent book: {}", e);
+                    error!("Failed to auto-load most recent book: {e}");
                 }
             }
-        }
 
         app
     }
@@ -395,7 +400,7 @@ impl App {
 
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
-            error!("Failed to load EPUB document: {}", e);
+            error!("Failed to load EPUB document: {e}");
             anyhow::anyhow!("Failed to load EPUB: {}", e)
         })?;
 
@@ -408,7 +413,7 @@ impl App {
 
         let path_buf = std::path::PathBuf::from(path);
         if let Err(e) = self.book_images.load_book(&path_buf) {
-            error!("Failed to load book in BookImages: {}", e);
+            error!("Failed to load book in BookImages: {e}");
         }
 
         self.initialize_search_engine(&mut doc);
@@ -419,7 +424,7 @@ impl App {
                 self.text_reader.set_book_comments(comments_arc);
             }
             Err(e) => {
-                warn!("Failed to initialize book comments: {}", e);
+                warn!("Failed to initialize book comments: {e}");
             }
         }
 
@@ -444,41 +449,39 @@ impl App {
             } else {
                 warn!("Could not find chapter for href: {}", bookmark.chapter_href);
             }
-        } else {
-            if doc.get_num_pages() > 1 {
-                if doc.go_next() {
-                    match doc.get_current_str() {
-                        Some((content, mime)) => {
-                            info!(
-                                "Content at new position available, mime: {}, length: {} bytes",
-                                mime,
-                                content.len()
-                            );
-                        }
-                        None => {
-                            error!(
-                                "WARNING: No content at new position {} after go_next()",
-                                doc.get_current_page()
-                            );
-                        }
+        } else if doc.get_num_pages() > 1 {
+            if doc.go_next() {
+                match doc.get_current_str() {
+                    Some((content, mime)) => {
+                        info!(
+                            "Content at new position available, mime: {}, length: {} bytes",
+                            mime,
+                            content.len()
+                        );
                     }
-                } else {
-                    error!("Failed to move to next chapter with go_next()");
-                    error!(
-                        "Current position: {}, Total chapters: {}",
-                        doc.get_current_page(),
-                        doc.get_num_pages()
-                    );
+                    None => {
+                        error!(
+                            "WARNING: No content at new position {} after go_next()",
+                            doc.get_current_page()
+                        );
+                    }
+                }
+            } else {
+                error!("Failed to move to next chapter with go_next()");
+                error!(
+                    "Current position: {}, Total chapters: {}",
+                    doc.get_current_page(),
+                    doc.get_num_pages()
+                );
 
-                    // Try alternative: set_current_page
-                    info!("Attempting fallback: set_current_page(1)");
-                    if doc.set_current_page(1) {
-                        info!("Fallback successful: moved to chapter 1 using set_current_page");
-                    } else {
-                        error!("Fallback also failed - unable to navigate in this EPUB");
-                        // Don't fail completely - stay at chapter 0
-                        info!("Staying at chapter 0 as fallback");
-                    }
+                // Try alternative: set_current_page
+                info!("Attempting fallback: set_current_page(1)");
+                if doc.set_current_page(1) {
+                    info!("Fallback successful: moved to chapter 1 using set_current_page");
+                } else {
+                    error!("Fallback also failed - unable to navigate in this EPUB");
+                    // Don't fail completely - stay at chapter 0
+                    info!("Staying at chapter 0 as fallback");
                 }
             }
         }
@@ -591,7 +594,7 @@ impl App {
                     > std::time::Duration::from_millis(500)
             {
                 if let Err(e) = self.bookmarks.save() {
-                    error!("Failed to save bookmark: {}", e);
+                    error!("Failed to save bookmark: {e}");
                 }
                 self.last_bookmark_save = now;
             }
@@ -718,8 +721,7 @@ impl App {
             if drain_count > 20 {
                 // Safety check
                 warn!(
-                    "Warning: draining many events ({}), may indicate event accumulation issue",
-                    drain_count
+                    "Warning: draining many events ({drain_count}), may indicate event accumulation issue"
                 );
             }
 
@@ -742,13 +744,13 @@ impl App {
                     break;
                 }
                 Err(e) => {
-                    warn!("Error reading event during batching: {:?}", e);
+                    warn!("Error reading event during batching: {e:?}");
                     break;
                 }
             }
         }
 
-        let net_scroll = scroll_down_count as i32 - scroll_up_count as i32;
+        let net_scroll = scroll_down_count - scroll_up_count;
 
         self.apply_scroll(net_scroll, initial_column);
     }
@@ -882,7 +884,7 @@ impl App {
                         .handle_mouse_up(mouse_event.column, mouse_event.row)
                     {
                         if let Err(e) = self.handle_link_click(&LinkInfo::from_url(url)) {
-                            error!("Failed to handle link click: {}", e);
+                            error!("Failed to handle link click: {e}");
                         }
                     }
                 }
@@ -927,7 +929,7 @@ impl App {
         match &link_info.link_type {
             crate::markdown::LinkType::External => {
                 if let Err(e) = open::that(&link_info.url) {
-                    error!("Failed to open external link: {}", e);
+                    error!("Failed to open external link: {e}");
                     Ok(false)
                 } else {
                     Ok(true)
@@ -985,7 +987,7 @@ impl App {
                 .highlight_line_temporarily(target_line, Duration::from_secs(2));
             Ok(true)
         } else {
-            warn!("Anchor '{}' not found in current chapter", anchor_id);
+            warn!("Anchor '{anchor_id}' not found in current chapter");
             Ok(false)
         }
     }
@@ -1006,7 +1008,7 @@ impl App {
 
             Ok(true)
         } else {
-            warn!("Chapter file '{}' not found in TOC", chapter_file);
+            warn!("Chapter file '{chapter_file}' not found in TOC");
             Ok(false)
         }
     }
@@ -1034,7 +1036,7 @@ impl App {
                     let href_without_anchor = href.split('#').next().unwrap_or(href);
 
                     if href_without_anchor == filename
-                        || href_without_anchor.ends_with(&format!("/{}", filename))
+                        || href_without_anchor.ends_with(&format!("/{filename}"))
                         || (filename.contains('/') && href_without_anchor.ends_with(filename))
                     {
                         return self.find_spine_index_by_href(href);
@@ -1046,7 +1048,7 @@ impl App {
                             section_href.split('#').next().unwrap_or(section_href);
 
                         if href_without_anchor == filename
-                            || href_without_anchor.ends_with(&format!("/{}", filename))
+                            || href_without_anchor.ends_with(&format!("/{filename}"))
                             || (filename.contains('/') && href_without_anchor.ends_with(filename))
                         {
                             return self.find_spine_index_by_href(section_href);
@@ -1112,7 +1114,7 @@ impl App {
         } else if let Some(image) = self.book_images.get_image(image_src) {
             Arc::new(image)
         } else {
-            debug!("Image not loaded and could not be loaded: {}", image_src);
+            debug!("Image not loaded and could not be loaded: {image_src}");
             return;
         };
 
@@ -1153,8 +1155,7 @@ impl App {
                 Ok(resized) => Arc::new(resized),
                 Err(e) => {
                     warn!(
-                        "Failed to pre-scale image with fast_image_resize: {}, using original",
-                        e
+                        "Failed to pre-scale image with fast_image_resize: {e}, using original"
                     );
                     original_image
                 }
@@ -1211,15 +1212,13 @@ impl App {
                     self.navigation_panel.scroll_up(nav_panel_height);
                 }
             }
+        } else if scroll_amount > 0 {
+            for _ in 0..scroll_amount.min(10) {
+                self.scroll_down();
+            }
         } else {
-            if scroll_amount > 0 {
-                for _ in 0..scroll_amount.min(10) {
-                    self.scroll_down();
-                }
-            } else {
-                for _ in 0..(-scroll_amount).min(10) {
-                    self.scroll_up();
-                }
+            for _ in 0..(-scroll_amount).min(10) {
+                self.scroll_up();
             }
         }
     }
@@ -1234,7 +1233,7 @@ impl App {
                     "Successfully opened EPUB with system viewer at chapter {}",
                     book.current_chapter()
                 ),
-                Err(e) => error!("Failed to open EPUB with system viewer: {}", e),
+                Err(e) => error!("Failed to open EPUB with system viewer: {e}"),
             }
         } else {
             error!("No EPUB file currently loaded");
@@ -1265,7 +1264,7 @@ impl App {
     fn jump_back(&mut self) {
         if let Some(location) = self.jump_list.jump_back() {
             if let Err(e) = self.jump_to_location(location) {
-                error!("Failed to jump back: {}", e);
+                error!("Failed to jump back: {e}");
             }
         }
     }
@@ -1274,7 +1273,7 @@ impl App {
     fn jump_forward(&mut self) {
         if let Some(location) = self.jump_list.jump_forward() {
             if let Err(e) = self.jump_to_location(location) {
-                error!("Failed to jump forward: {}", e);
+                error!("Failed to jump forward: {e}");
             }
         }
     }
@@ -1292,7 +1291,7 @@ impl App {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(self.terminal_size.clone());
+            .split(self.terminal_size);
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
@@ -1306,7 +1305,7 @@ impl App {
         match self.navigation_panel.get_selected_action() {
             SelectedActionOwned::BookIndex(index) => {
                 if let Err(e) = self.open_book_for_reading(index) {
-                    error!("Failed to open book at index {}: {}", index, e);
+                    error!("Failed to open book at index {index}: {e}");
                 }
             }
             SelectedActionOwned::BackToBooks => {
@@ -1333,7 +1332,7 @@ impl App {
                                 .clear_manual_navigation();
                             self.update_toc_state();
                         } else {
-                            error!("Could not find spine index for href: {}", href);
+                            error!("Could not find spine index for href: {href}");
                         }
                     }
                     TocItem::Section { href, anchor, .. } => {
@@ -1356,8 +1355,7 @@ impl App {
                                 self.update_toc_state();
                             } else {
                                 error!(
-                                    "Could not find spine index for section href: {}",
-                                    section_href
+                                    "Could not find spine index for section href: {section_href}"
                                 );
                             }
                         } else {
@@ -1515,12 +1513,12 @@ impl App {
                     } else {
                         ""
                     };
-                    format!("/ {}█  {}  ESC: Cancel | Enter: Search", query, match_info)
+                    format!("/ {query}█  {match_info}  ESC: Cancel | Enter: Search")
                 }
                 SearchMode::NavigationMode => {
                     let query = &search_state.query;
                     let match_info = search_state.get_match_info();
-                    format!("/{}  {}  n/N: Navigate | ESC: Exit", query, match_info)
+                    format!("/{query}  {match_info}  n/N: Navigate | ESC: Exit")
                 }
                 _ => "Search mode active".to_string(),
             }
@@ -1615,7 +1613,7 @@ impl App {
                             .book_stat
                             .calculate_stats(&mut book.epub, terminal_size)
                         {
-                            error!("Failed to calculate book statistics: {}", e);
+                            error!("Failed to calculate book statistics: {e}");
                         } else {
                             self.book_stat.show();
                             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
@@ -1629,7 +1627,7 @@ impl App {
                 // Handle Space->z to copy raw_text_lines for debugging
                 if self.is_main_panel(MainPanel::Content) {
                     if let Err(e) = self.text_reader.copy_raw_text_lines_to_clipboard() {
-                        debug!("Copy raw_text_lines failed: {}", e);
+                        debug!("Copy raw_text_lines failed: {e}");
                     } else {
                         debug!("Successfully copied raw_text_lines to clipboard for debugging");
                     }
@@ -1641,7 +1639,7 @@ impl App {
                 // Handle Space->c to copy entire chapter content
                 if self.is_main_panel(MainPanel::Content) {
                     if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
-                        debug!("Copy chapter failed: {}", e);
+                        debug!("Copy chapter failed: {e}");
                     } else {
                         debug!("Successfully copied chapter content to clipboard");
                     }
@@ -1728,7 +1726,7 @@ impl App {
                     } => {
                         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
-                            error!("Failed to navigate to chapter {}: {}", chapter_index, e);
+                            error!("Failed to navigate to chapter {chapter_index}: {e}");
                         } else {
                             self.text_reader.scroll_to_line(line_number);
                         }
@@ -1752,7 +1750,7 @@ impl App {
                     self.book_stat.hide();
                     self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                     if let Err(e) = self.navigate_to_chapter(chapter_index) {
-                        error!("Failed to navigate to chapter {}: {}", chapter_index, e);
+                        error!("Failed to navigate to chapter {chapter_index}: {e}");
                     }
                 }
                 None => {}
@@ -1904,7 +1902,7 @@ impl App {
                             // Cursor not on a comment, ignore
                         }
                         Err(e) => {
-                            error!("Failed to delete comment: {}", e);
+                            error!("Failed to delete comment: {e}");
                         }
                     }
                 }
@@ -1968,16 +1966,15 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                if self.text_reader.has_text_selection() {
-                    if self.text_reader.start_comment_input() {
+                if self.text_reader.has_text_selection()
+                    && self.text_reader.start_comment_input() {
                         debug!("Started comment input mode");
                     }
-                }
             }
             KeyCode::Char('c') => {
                 if !self.handle_key_sequence('c') {
                     if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
-                        error!("Copy failed: {}", e);
+                        error!("Copy failed: {e}");
                     }
                 }
             }
@@ -1994,7 +1991,7 @@ impl App {
             }
             _ => {}
         }
-        return None;
+        None
     }
 
     pub fn handle_resize(&mut self) {
@@ -2147,6 +2144,12 @@ pub struct FPSCounter {
     last_measure: Instant,
     ticks: u16,
     current_fps: u16,
+}
+
+impl Default for FPSCounter {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FPSCounter {

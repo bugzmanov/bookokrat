@@ -105,6 +105,12 @@ pub struct MarkdownTextReader {
     chapter_title: Option<String>,
 }
 
+impl Default for MarkdownTextReader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MarkdownTextReader {
     pub fn new() -> Self {
         let image_picker = match Picker::from_query_stdio() {
@@ -114,8 +120,7 @@ impl MarkdownTextReader {
             }
             Err(e) => {
                 warn!(
-                    "Failed to create image picker: {}. The terminal would not support image rendering!",
-                    e
+                    "Failed to create image picker: {e}. The terminal would not support image rendering!"
                 );
                 None
             }
@@ -218,15 +223,15 @@ impl MarkdownTextReader {
                         self.scroll_to_line(target_line);
                         self.highlight_line_temporarily(target_line, Duration::from_secs(2));
                     } else {
-                        warn!("Pending anchor '{}' not found after re-render", anchor_id);
+                        warn!("Pending anchor '{anchor_id}' not found after re-render");
                     }
                 }
             }
         }
         let title_text = if let Some(ref title) = self.chapter_title {
-            format!("[{}/{}] {}", current_chapter, total_chapters, title)
+            format!("[{current_chapter}/{total_chapters}] {title}")
         } else {
-            format!("Chapter {}/{}", current_chapter, total_chapters)
+            format!("Chapter {current_chapter}/{total_chapters}")
         };
 
         let progress = self.calculate_progress("", width, self.visible_height);
@@ -234,7 +239,7 @@ impl MarkdownTextReader {
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
-            .title_bottom(Line::from(format!(" {}% ", progress)).right_aligned());
+            .title_bottom(Line::from(format!(" {progress}% ")).right_aligned());
 
         // Remove borders so the text sits inside the frame cleanly
         let mut inner_area = block.inner(area);
@@ -370,18 +375,10 @@ impl MarkdownTextReader {
                             let scaled_image = image;
 
                             if let Some(ref picker) = self.image_picker {
-                                let image_screen_start = if scroll_offset > image_start_line {
-                                    0
-                                } else {
-                                    image_start_line - scroll_offset
-                                };
+                                let image_screen_start = image_start_line.saturating_sub(scroll_offset);
 
                                 // Clip the top portion if the image starts above the viewport
-                                let image_top_clipped = if scroll_offset > image_start_line {
-                                    scroll_offset - image_start_line
-                                } else {
-                                    0
-                                };
+                                let image_top_clipped = scroll_offset.saturating_sub(image_start_line);
 
                                 let visible_image_height = (image_height_cells - image_top_clipped)
                                     .min(area_height - image_screen_start);
@@ -536,11 +533,10 @@ impl MarkdownTextReader {
     ) {
         let title_text = if let Some(ref title) = self.chapter_title {
             format!(
-                "[{}/{}] {} [RAW HTML]",
-                current_chapter, total_chapters, title
+                "[{current_chapter}/{total_chapters}] {title} [RAW HTML]"
             )
         } else {
-            format!("Chapter {}/{} [RAW HTML]", current_chapter, total_chapters)
+            format!("Chapter {current_chapter}/{total_chapters} [RAW HTML]")
         };
 
         let block = ratatui::widgets::Block::default()

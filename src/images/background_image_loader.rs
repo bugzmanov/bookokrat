@@ -123,7 +123,7 @@ impl BackgroundImageLoader {
             {
                 loaded_images.insert(img_src.clone(), scaled_image);
             } else {
-                warn!("Failed to load and resize image: {}", img_src);
+                warn!("Failed to load and resize image: {img_src}");
             }
         }
 
@@ -141,7 +141,7 @@ impl BackgroundImageLoader {
             Ok(()) => {}
             Err(e) => {
                 if !cancel_flag.load(Ordering::Relaxed) {
-                    error!("Failed to send loaded images: {}", e);
+                    error!("Failed to send loaded images: {e}");
                 }
             }
         }

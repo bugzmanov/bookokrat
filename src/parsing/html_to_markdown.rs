@@ -177,7 +177,7 @@ impl HtmlToMarkdownConverter {
                 }
                 _ => MathContent::Inline(ascii_math),
             },
-            Err(e) => MathContent::Error(format!("Failed to parse math: {:?}", e)),
+            Err(e) => MathContent::Error(format!("Failed to parse math: {e:?}")),
         }
     }
 
@@ -203,7 +203,7 @@ impl HtmlToMarkdownConverter {
                 text: link_text,
                 url: href,
                 title,
-                link_type: link_type,
+                link_type,
                 target_chapter,
                 target_anchor,
             })
@@ -231,12 +231,12 @@ impl HtmlToMarkdownConverter {
         let mut normalized = content.split_whitespace().collect::<Vec<_>>().join(" ");
 
         // Preserve leading space if original had it and we already have content
-        if !current_text.is_empty() && content.chars().next().map_or(false, |c| c.is_whitespace()) {
-            normalized = format!(" {}", normalized);
+        if !current_text.is_empty() && content.chars().next().is_some_and(|c| c.is_whitespace()) {
+            normalized = format!(" {normalized}");
         }
 
         // Preserve trailing space if original had it
-        if content.chars().last().map_or(false, |c| c.is_whitespace()) {
+        if content.chars().last().is_some_and(|c| c.is_whitespace()) {
             normalized.push(' ');
         }
 
@@ -520,7 +520,7 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         if let Some(src) = self.get_attr_value(attrs, "src") {
-            info!("Found image during HTML->Markdown conversion: src={}", src);
+            info!("Found image during HTML->Markdown conversion: src={src}");
             let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
             let title = self.get_attr_value(attrs, "title");
 
@@ -604,7 +604,7 @@ impl HtmlToMarkdownConverter {
             }
             Err(e) => {
                 let paragraph_block = Block::CodeBlock {
-                    language: Some(format!("failed to extract mathml: {:?}", e)),
+                    language: Some(format!("failed to extract mathml: {e:?}")),
                     content: mathml_html,
                 };
                 Node::new_with_id(paragraph_block, 0..0, id)
@@ -627,58 +627,55 @@ impl HtmlToMarkdownConverter {
 
         // Process table children to find thead and tbody
         for child in node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "thead" => {
-                            // Process header rows
-                            for thead_child in child.children.borrow().iter() {
-                                if let NodeData::Element { name, .. } = &thead_child.data {
-                                    if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row_with_rowspan(
-                                            thead_child,
-                                            &mut rowspan_tracker,
-                                        );
-                                        max_columns = max_columns.max(row.cells.len());
-                                        header = Some(row);
-                                        break; // Only take the first header row
-                                    }
+            if let NodeData::Element { name, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "thead" => {
+                        // Process header rows
+                        for thead_child in child.children.borrow().iter() {
+                            if let NodeData::Element { name, .. } = &thead_child.data {
+                                if name.local.as_ref() == "tr" {
+                                    let row = self.extract_table_row_with_rowspan(
+                                        thead_child,
+                                        &mut rowspan_tracker,
+                                    );
+                                    max_columns = max_columns.max(row.cells.len());
+                                    header = Some(row);
+                                    break; // Only take the first header row
                                 }
                             }
                         }
-                        "tbody" => {
-                            // Process body rows
-                            for tbody_child in child.children.borrow().iter() {
-                                if let NodeData::Element { name, .. } = &tbody_child.data {
-                                    if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row_with_rowspan(
-                                            tbody_child,
-                                            &mut rowspan_tracker,
-                                        );
-                                        max_columns = max_columns.max(row.cells.len());
-                                        rows.push(row);
-                                    }
-                                }
-                            }
-                        }
-                        "tr" => {
-                            // Direct tr children (no tbody/thead)
-                            let row =
-                                self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
-                            max_columns = max_columns.max(row.cells.len());
-
-                            // First row becomes header if we don't have one yet
-                            if header.is_none() && rows.is_empty() {
-                                header = Some(row);
-                            } else {
-                                rows.push(row);
-                            }
-                        }
-                        _ => {}
                     }
+                    "tbody" => {
+                        // Process body rows
+                        for tbody_child in child.children.borrow().iter() {
+                            if let NodeData::Element { name, .. } = &tbody_child.data {
+                                if name.local.as_ref() == "tr" {
+                                    let row = self.extract_table_row_with_rowspan(
+                                        tbody_child,
+                                        &mut rowspan_tracker,
+                                    );
+                                    max_columns = max_columns.max(row.cells.len());
+                                    rows.push(row);
+                                }
+                            }
+                        }
+                    }
+                    "tr" => {
+                        // Direct tr children (no tbody/thead)
+                        let row =
+                            self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
+                        max_columns = max_columns.max(row.cells.len());
+
+                        // First row becomes header if we don't have one yet
+                        if header.is_none() && rows.is_empty() {
+                            header = Some(row);
+                        } else {
+                            rows.push(row);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -724,58 +721,55 @@ impl HtmlToMarkdownConverter {
 
         // Process table children to find thead and tbody
         for child in node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "thead" => {
-                            // Process header rows
-                            for thead_child in child.children.borrow().iter() {
-                                if let NodeData::Element { name, .. } = &thead_child.data {
-                                    if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row_with_rowspan(
-                                            thead_child,
-                                            &mut rowspan_tracker,
-                                        );
-                                        max_columns = max_columns.max(row.cells.len());
-                                        header = Some(row);
-                                        break; // Only take the first header row
-                                    }
+            if let NodeData::Element { name, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "thead" => {
+                        // Process header rows
+                        for thead_child in child.children.borrow().iter() {
+                            if let NodeData::Element { name, .. } = &thead_child.data {
+                                if name.local.as_ref() == "tr" {
+                                    let row = self.extract_table_row_with_rowspan(
+                                        thead_child,
+                                        &mut rowspan_tracker,
+                                    );
+                                    max_columns = max_columns.max(row.cells.len());
+                                    header = Some(row);
+                                    break; // Only take the first header row
                                 }
                             }
                         }
-                        "tbody" => {
-                            // Process body rows
-                            for tbody_child in child.children.borrow().iter() {
-                                if let NodeData::Element { name, .. } = &tbody_child.data {
-                                    if name.local.as_ref() == "tr" {
-                                        let row = self.extract_table_row_with_rowspan(
-                                            tbody_child,
-                                            &mut rowspan_tracker,
-                                        );
-                                        max_columns = max_columns.max(row.cells.len());
-                                        rows.push(row);
-                                    }
-                                }
-                            }
-                        }
-                        "tr" => {
-                            // Direct tr children (no tbody/thead)
-                            let row =
-                                self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
-                            max_columns = max_columns.max(row.cells.len());
-
-                            // First row becomes header if we don't have one yet
-                            if header.is_none() && rows.is_empty() {
-                                header = Some(row);
-                            } else {
-                                rows.push(row);
-                            }
-                        }
-                        _ => {}
                     }
+                    "tbody" => {
+                        // Process body rows
+                        for tbody_child in child.children.borrow().iter() {
+                            if let NodeData::Element { name, .. } = &tbody_child.data {
+                                if name.local.as_ref() == "tr" {
+                                    let row = self.extract_table_row_with_rowspan(
+                                        tbody_child,
+                                        &mut rowspan_tracker,
+                                    );
+                                    max_columns = max_columns.max(row.cells.len());
+                                    rows.push(row);
+                                }
+                            }
+                        }
+                    }
+                    "tr" => {
+                        // Direct tr children (no tbody/thead)
+                        let row =
+                            self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
+                        max_columns = max_columns.max(row.cells.len());
+
+                        // First row becomes header if we don't have one yet
+                        if header.is_none() && rows.is_empty() {
+                            header = Some(row);
+                        } else {
+                            rows.push(row);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -821,35 +815,30 @@ impl HtmlToMarkdownConverter {
         // Collect all actual td/th elements first
         let mut actual_cells = Vec::new();
         for child in tr_node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, attrs, .. } => {
-                    let tag_name = name.local.as_ref();
-                    if tag_name == "th" || tag_name == "td" {
-                        let content = self.extract_formatted_content_with_context(child, true);
-                        let rowspan = self
-                            .get_attr_value(attrs, "rowspan")
-                            .and_then(|s| s.parse::<u32>().ok())
-                            .unwrap_or(1);
+            if let NodeData::Element { name, attrs, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                if tag_name == "th" || tag_name == "td" {
+                    let content = self.extract_formatted_content_with_context(child, true);
+                    let rowspan = self
+                        .get_attr_value(attrs, "rowspan")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(1);
 
-                        let cell = if tag_name == "th" {
-                            if rowspan > 1 {
-                                crate::markdown::TableCell::new_header_with_rowspan(
-                                    content, rowspan,
-                                )
-                            } else {
-                                crate::markdown::TableCell::new_header(content)
-                            }
+                    let cell = if tag_name == "th" {
+                        if rowspan > 1 {
+                            crate::markdown::TableCell::new_header_with_rowspan(
+                                content, rowspan,
+                            )
                         } else {
-                            if rowspan > 1 {
-                                crate::markdown::TableCell::new_with_rowspan(content, rowspan)
-                            } else {
-                                crate::markdown::TableCell::new(content)
-                            }
-                        };
-                        actual_cells.push((cell, rowspan));
-                    }
+                            crate::markdown::TableCell::new_header(content)
+                        }
+                    } else if rowspan > 1 {
+                        crate::markdown::TableCell::new_with_rowspan(content, rowspan)
+                    } else {
+                        crate::markdown::TableCell::new(content)
+                    };
+                    actual_cells.push((cell, rowspan));
                 }
-                _ => {}
             }
         }
 
@@ -983,7 +972,7 @@ impl HtmlToMarkdownConverter {
                         "img" => {
                             // Handle images inline within the container
                             if let Some(src) = self.get_attr_value(attrs, "src") {
-                                info!("Found inline image in container: src={}", src);
+                                info!("Found inline image in container: src={src}");
                                 let alt_text =
                                     self.get_attr_value(attrs, "alt").unwrap_or_default();
                                 let title = self.get_attr_value(attrs, "title");
@@ -1044,7 +1033,7 @@ impl HtmlToMarkdownConverter {
                                 }
                                 Err(e) => {
                                     // Error case: add as text
-                                    let error_text = format!("Failed to parse math: {:?}", e);
+                                    let error_text = format!("Failed to parse math: {e:?}");
                                     current_text.push_text(TextNode::new(error_text, None));
                                 }
                             }
@@ -1153,37 +1142,34 @@ impl HtmlToMarkdownConverter {
         let mut current_definitions: Vec<Vec<Node>> = Vec::new();
 
         for child in node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "dt" => {
-                            // If we have a previous term with definitions, save it
-                            if let Some(term) = current_term.take() {
-                                if !current_definitions.is_empty() {
-                                    definition_items
-                                        .push(DefinitionListItem::new(term, current_definitions));
-                                    current_definitions = Vec::new();
-                                }
+            if let NodeData::Element { name, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "dt" => {
+                        // If we have a previous term with definitions, save it
+                        if let Some(term) = current_term.take() {
+                            if !current_definitions.is_empty() {
+                                definition_items
+                                    .push(DefinitionListItem::new(term, current_definitions));
+                                current_definitions = Vec::new();
                             }
+                        }
 
-                            // Extract new term
-                            let term_content = self.extract_formatted_content(child);
-                            if !term_content.is_empty() {
-                                current_term = Some(term_content);
-                            }
+                        // Extract new term
+                        let term_content = self.extract_formatted_content(child);
+                        if !term_content.is_empty() {
+                            current_term = Some(term_content);
                         }
-                        "dd" => {
-                            // Extract definition content as blocks (like list items)
-                            let definition_blocks = self.extract_definition_content(child);
-                            if !definition_blocks.is_empty() {
-                                current_definitions.push(definition_blocks);
-                            }
-                        }
-                        _ => {}
                     }
+                    "dd" => {
+                        // Extract definition content as blocks (like list items)
+                        let definition_blocks = self.extract_definition_content(child);
+                        if !definition_blocks.is_empty() {
+                            current_definitions.push(definition_blocks);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -1371,9 +1357,9 @@ impl HtmlToMarkdownConverter {
                                 MathMLParser::try_unicode_subscript(&normalized, true)
                                     .unwrap_or_else(|| {
                                         if normalized.len() == 1 {
-                                            format!("_{}", normalized)
+                                            format!("_{normalized}")
                                         } else {
-                                            format!("_{{{}}}", normalized)
+                                            format!("_{{{normalized}}}")
                                         }
                                     })
                             }
@@ -1381,9 +1367,9 @@ impl HtmlToMarkdownConverter {
                                 MathMLParser::try_unicode_superscript(&normalized, true)
                                     .unwrap_or_else(|| {
                                         if normalized.len() == 1 {
-                                            format!("^{}", normalized)
+                                            format!("^{normalized}")
                                         } else {
-                                            format!("^{{{}}}", normalized)
+                                            format!("^{{{normalized}}}")
                                         }
                                     })
                             }
@@ -1429,9 +1415,9 @@ impl HtmlToMarkdownConverter {
                                 MathMLParser::try_unicode_subscript(&normalized, true)
                                     .unwrap_or_else(|| {
                                         if normalized.len() == 1 {
-                                            format!("_{}", normalized)
+                                            format!("_{normalized}")
                                         } else {
-                                            format!("_{{{}}}", normalized)
+                                            format!("_{{{normalized}}}")
                                         }
                                     })
                             }
@@ -1439,9 +1425,9 @@ impl HtmlToMarkdownConverter {
                                 MathMLParser::try_unicode_superscript(&normalized, true)
                                     .unwrap_or_else(|| {
                                         if normalized.len() == 1 {
-                                            format!("^{}", normalized)
+                                            format!("^{normalized}")
                                         } else {
-                                            format!("^{{{}}}", normalized)
+                                            format!("^{{{normalized}}}")
                                         }
                                     })
                             }
@@ -1545,7 +1531,7 @@ impl HtmlToMarkdownConverter {
             "img" => {
                 // Handle image elements
                 if let Some(src) = self.get_attr_value(attrs, "src") {
-                    info!("Found inline image in text context: src={}", src);
+                    info!("Found inline image in text context: src={src}");
                     let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
                     let title = self.get_attr_value(attrs, "title");
 
@@ -1665,7 +1651,7 @@ impl HtmlToMarkdownConverter {
             "img" => {
                 // Handle image elements inside paragraphs and other blocks
                 if let Some(src) = self.get_attr_value(attrs, "src") {
-                    info!("Found inline image in block context: src={}", src);
+                    info!("Found inline image in block context: src={src}");
                     let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
                     let title = self.get_attr_value(attrs, "title");
 
@@ -1793,7 +1779,7 @@ impl HtmlToMarkdownConverter {
     }
 
     fn add_code_spacing(&self, content: &str) -> String {
-        format!("{}", content)
+        content.to_string()
     }
 
     fn trim_text_trailing_whitespace(&self, text: &mut Text) {
@@ -2131,7 +2117,7 @@ mod tests {
 
         let doc = converter.convert(html);
         let rendered = renderer.render(&doc);
-        eprintln!("{:#?}", doc);
+        eprintln!("{doc:#?}");
         let expected = r#"
 - Level 1 Item 1
 - Level 1 Item 2
@@ -2493,9 +2479,9 @@ The protocol operates on multiple layers:
                                 _ => String::new(),
                             })
                             .collect();
-                        format!("Link: url='{}', text='{}'", url, link_text)
+                        format!("Link: url='{url}', text='{link_text}'")
                     }
-                    _ => format!("Other inline"),
+                    _ => "Other inline".to_string(),
                 })
                 .collect();
 
@@ -2517,8 +2503,7 @@ The protocol operates on multiple layers:
 
             assert!(
                 has_link_with_subscript,
-                "Should handle subscript within link text. Got items: {:?}",
-                text_items
+                "Should handle subscript within link text. Got items: {text_items:?}"
             );
         } else {
             panic!("Expected paragraph block");
@@ -3243,10 +3228,10 @@ The protocol operates on multiple layers:
                 match item {
                     TextOrInline::Inline(Inline::Link { url, text, .. }) => {
                         let text_str = renderer.render_text(text);
-                        println!("  Item {}: Link: text='{}', url='{}'", i, text_str, url);
+                        println!("  Item {i}: Link: text='{text_str}', url='{url}'");
                     }
                     TextOrInline::Inline(Inline::Anchor { id }) => {
-                        println!("  Item {}: Anchor: id='{}'", i, id);
+                        println!("  Item {i}: Anchor: id='{id}'");
                     }
                     TextOrInline::Text(text_node) => {
                         if text_node.content.len() > 20 {
@@ -3256,7 +3241,7 @@ The protocol operates on multiple layers:
                         }
                     }
                     _ => {
-                        println!("  Item {}: Other inline element", i);
+                        println!("  Item {i}: Other inline element");
                     }
                 }
             }
@@ -3296,9 +3281,9 @@ The protocol operates on multiple layers:
             } = problematic_link
             {
                 println!("\nProblematic link analysis:");
-                println!("  URL: '{}'", url);
-                println!("  Target chapter: {:?}", target_chapter);
-                println!("  Target anchor: {:?}", target_anchor);
+                println!("  URL: '{url}'");
+                println!("  Target chapter: {target_chapter:?}");
+                println!("  Target anchor: {target_anchor:?}");
 
                 // This should be ch02.html#id699, NOT ch02.html#id699-marker
                 assert_eq!(url, "ch02.html#id699", "URL should be ch02.html#id699");
@@ -3350,7 +3335,7 @@ The protocol operates on multiple layers:
             for (i, item) in items.iter().enumerate() {
                 match item {
                     TextOrInline::Inline(Inline::Link { url, .. }) => {
-                        println!("  Item {}: Link URL: '{}'", i, url);
+                        println!("  Item {i}: Link URL: '{url}'");
                         // This should be ch02.html#id699, NOT ch02.html#id699-marker
                         assert_eq!(
                             url, "ch02.html#id699",
@@ -3358,11 +3343,11 @@ The protocol operates on multiple layers:
                         );
                     }
                     TextOrInline::Inline(Inline::Anchor { id }) => {
-                        println!("  Item {}: Anchor ID: '{}'", i, id);
+                        println!("  Item {i}: Anchor ID: '{id}'");
                         assert_eq!(id, "id699-marker", "Anchor should be id699-marker");
                     }
                     _ => {
-                        println!("  Item {}: Other", i);
+                        println!("  Item {i}: Other");
                     }
                 }
             }
@@ -3398,7 +3383,7 @@ The protocol operates on multiple layers:
             for item in &items {
                 if let TextOrInline::Inline(Inline::Link { text, url, .. }) = item {
                     let text_str = renderer.render_text(text);
-                    println!("Found link: text='{}', url='{}'", text_str, url);
+                    println!("Found link: text='{text_str}', url='{url}'");
 
                     // Validate the link text and URL (should be superscript since it's in <sup>)
                     assert_eq!(text_str, "²", "Link text should be '²' (superscript)");
@@ -3458,10 +3443,10 @@ The protocol operates on multiple layers:
                     TextOrInline::Inline(inline) => match inline {
                         Inline::Link { text, url, .. } => {
                             let text_str = renderer.render_text(text);
-                            println!("Item {}: Link(text='{}', url='{}')", i, text_str, url);
+                            println!("Item {i}: Link(text='{text_str}', url='{url}')");
                         }
-                        Inline::Anchor { id } => println!("Item {}: Anchor(id='{}')", i, id),
-                        _ => println!("Item {}: Other inline type", i),
+                        Inline::Anchor { id } => println!("Item {i}: Anchor(id='{id}')"),
+                        _ => println!("Item {i}: Other inline type"),
                     },
                 }
             }

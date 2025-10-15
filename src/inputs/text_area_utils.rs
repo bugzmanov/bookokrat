@@ -90,5 +90,5 @@ pub fn map_keys_to_input(key: crossterm::event::KeyEvent) -> Option<Input> {
         },
         _ => return None, // Ignore other keys
     };
-    return Some(textarea_input);
+    Some(textarea_input)
 }
