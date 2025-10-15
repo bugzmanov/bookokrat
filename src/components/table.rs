@@ -1,4 +1,3 @@
-use crate::text_reader_trait::LinkInfo;
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Style, Stylize},
@@ -6,6 +5,8 @@ use ratatui::{
     widgets::{Block, StatefulWidget, Widget},
 };
 use std::cmp::max;
+
+use crate::types::LinkInfo;
 
 /// Configuration for table appearance
 #[derive(Debug, Clone)]

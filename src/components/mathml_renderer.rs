@@ -1159,7 +1159,6 @@ impl MathMLParser {
         // Use the EXACT SAME structure as square root!
         // For fraction height 3, we need 4 lines total with proper padding
         if formula_height == 3 {
-            let height = 4; // height + 1 for the overline, same as sqrt
             // Line 1: overline (padding = height + 1 = 5 spaces)
             lines.push(format!(
                 "{}{}",

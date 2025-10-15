@@ -4,6 +4,7 @@ mod navigation;
 mod rendering;
 mod search;
 mod selection;
+mod text_selection;
 mod types;
 
 pub use types::*;
@@ -11,10 +12,10 @@ pub use types::*;
 use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::markdown::Document;
+use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::search::SearchState;
-use crate::text_reader_trait::LinkInfo;
-use crate::text_selection::TextSelection;
 use crate::theme::Base16Palette;
+use crate::types::LinkInfo;
 use image::{DynamicImage, GenericImageView};
 use log::warn;
 use ratatui::{
@@ -32,8 +33,6 @@ use std::time::{Duration, Instant};
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
-
-    // Rendering cache - built from AST
     rendered_content: RenderedContent,
 
     // Scrolling state
@@ -98,9 +97,6 @@ pub struct MarkdownTextReader {
 
     /// Book comments to display alongside paragraphs
     book_comments: Option<Arc<Mutex<BookComments>>>,
-
-    /// Pre-built comment lookup for current chapter (paragraph_index -> Vec<Comment>)
-    /// Built once when chapter is loaded to avoid repeated lookups during rendering
     current_chapter_comments: HashMap<usize, Vec<Comment>>,
 
     /// Comment input state

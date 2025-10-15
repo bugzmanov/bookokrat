@@ -126,8 +126,3 @@ impl Bookmarks {
         self.books.iter()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

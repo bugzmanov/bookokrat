@@ -3,8 +3,8 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::text_reader_trait::LinkInfo;
 use crate::theme::Base16Palette;
+use crate::types::LinkInfo;
 use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style as RatatuiStyle},

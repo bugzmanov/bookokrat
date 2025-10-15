@@ -18,8 +18,8 @@ use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::text_reader_trait::{LinkInfo, TextReaderTrait};
 use crate::theme::OCEANIC_NEXT;
+use crate::types::LinkInfo;
 use image::GenericImageView;
 use log::warn;
 

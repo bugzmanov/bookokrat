@@ -1,5 +1,5 @@
+use super::CurrentBookInfo;
 use crate::markdown_text_reader::ActiveSection;
-use crate::navigation_panel::CurrentBookInfo;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::Base16Palette;
 use ratatui::{

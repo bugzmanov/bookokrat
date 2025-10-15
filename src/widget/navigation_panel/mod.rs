@@ -1,10 +1,14 @@
-use crate::book_list::BookList;
+pub mod book_list;
+pub mod table_of_contents;
+
+pub use book_list::BookList;
+pub use table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
+
 use crate::book_manager::BookManager;
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel};
-use crate::table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect};
 

@@ -5,7 +5,6 @@ use bookrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
 use bookrat::table_of_contents::TocItem;
 use bookrat::test_utils::test_helpers::create_test_terminal;
-use bookrat::text_reader_trait::TextReaderTrait;
 use bookrat::theme::Base16Palette;
 
 mod snapshot_assertions;

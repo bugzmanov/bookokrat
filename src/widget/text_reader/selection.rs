@@ -130,6 +130,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .map_err(|e| format!("Failed to copy to clipboard: {}", e))
     }
 
+    //for debuggin purposes
     pub fn copy_raw_text_lines_to_clipboard(&self) -> Result<(), String> {
         if self.raw_text_lines.is_empty() {
             return Err("No content to copy".to_string());

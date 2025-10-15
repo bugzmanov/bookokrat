@@ -1,6 +1,8 @@
+pub mod simple_fake_books;
+
 pub mod test_helpers {
+    use super::simple_fake_books::create_test_books_in_dir;
     use crate::event_source::{Event, KeyCode, KeyEvent, KeyModifiers, SimulatedEventSource};
-    use crate::simple_fake_books::create_test_books_in_dir;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 

@@ -5,7 +5,7 @@ use crate::markdown::{
 use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
-use log::{debug, info};
+use log::info;
 use markup5ever_rcdom::{NodeData, RcDom};
 use std::rc::Rc;
 

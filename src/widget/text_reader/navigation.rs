@@ -1,7 +1,6 @@
 use super::types::*;
 use crate::main_app::VimNavMotions;
 use crate::search::SearchMode;
-use log::debug;
 use std::time::Instant;
 
 impl crate::markdown_text_reader::MarkdownTextReader {

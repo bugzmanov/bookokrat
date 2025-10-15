@@ -1,4 +1,3 @@
-use log::debug;
 use ratatui::{
     style::Color,
     text::{Line, Span},

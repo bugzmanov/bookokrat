@@ -1,9 +1,10 @@
-use crate::text_reader_trait::LinkInfo;
 use image::DynamicImage;
 use ratatui::text::Span;
 use ratatui_image::protocol::StatefulProtocol;
 use std::sync::Arc;
 use tui_textarea::TextArea;
+
+use crate::types::LinkInfo;
 
 /// Height for regular images in terminal cells
 pub const IMAGE_HEIGHT_REGULAR: u16 = 15;
