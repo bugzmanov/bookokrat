@@ -77,7 +77,6 @@ impl ReadingHistory {
             )
             .collect();
 
-        // Sort by date descending (most recent first)
         items.sort_by(|a, b| b.date.cmp(&a.date));
 
         let mut state = ListState::default();

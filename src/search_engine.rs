@@ -58,21 +58,18 @@ impl SearchEngine {
             return Vec::new();
         }
 
-        // Check if the query is wrapped in quotes for phrase search
         let trimmed = query.trim();
         if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() > 2 {
             let phrase = &trimmed[1..trimmed.len() - 1];
             return self.search_exact_phrase(phrase);
         }
 
-        // Use word-based search instead of fuzzy matching
         self.search_word_based(query)
     }
 
     fn search_word_based(&self, query: &str) -> Vec<BookSearchResult> {
         let mut results = Vec::new();
 
-        // Split query into words and convert to lowercase
         let query_words: Vec<String> = query
             .split_whitespace()
             .map(|w| w.to_lowercase())
@@ -87,17 +84,14 @@ impl SearchEngine {
             for (line_idx, line) in chapter.lines.iter().enumerate() {
                 let line_lower = line.to_lowercase();
 
-                // Split line into words for word-based matching
                 let line_words: Vec<&str> = line_lower.split_whitespace().collect();
 
-                // Count how many query words match in this line
                 let mut matched_words = 0;
                 let mut all_match_positions = Vec::new();
 
                 for query_word in &query_words {
                     let mut word_found = false;
 
-                    // Check each word in the line
                     for line_word in &line_words {
                         // Match if:
                         // 1. Exact word match
@@ -109,7 +103,6 @@ impl SearchEngine {
                         {
                             word_found = true;
 
-                            // Find character positions for highlighting
                             if let Some(pos) = line_lower.find(query_word.as_str()) {
                                 for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
                                     if byte_idx >= pos && byte_idx < pos + query_word.len() {
@@ -126,7 +119,6 @@ impl SearchEngine {
                     }
                 }
 
-                // Calculate match score based on how many words matched
                 let match_ratio = matched_words as f64 / query_words.len() as f64;
 
                 // Include results where:
@@ -165,7 +157,6 @@ impl SearchEngine {
             }
         }
 
-        // Sort by match score (higher is better)
         results.sort_by(|a, b| {
             b.match_score
                 .partial_cmp(&a.match_score)
@@ -194,14 +185,12 @@ impl SearchEngine {
             for (line_idx, line) in chapter.lines.iter().enumerate() {
                 let line_lower = line.to_lowercase();
 
-                // Find all occurrences of the phrase in the line
                 let mut search_start = 0;
                 let mut match_positions_in_line = Vec::new();
 
                 while let Some(match_start) = line_lower[search_start..].find(&phrase_lower) {
                     let absolute_start = search_start + match_start;
 
-                    // Collect character positions for highlighting
                     let mut positions = Vec::new();
                     for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
                         if byte_idx >= absolute_start && byte_idx < absolute_start + phrase.len() {
@@ -216,7 +205,6 @@ impl SearchEngine {
                 if !match_positions_in_line.is_empty() {
                     let (context_before, context_after) = self.extract_context(chapter, line_idx);
 
-                    // Truncate very long snippet lines to keep results readable
                     let max_snippet_chars = 300;
                     let snippet = if line.chars().count() > max_snippet_chars {
                         let truncated: String = line.chars().take(max_snippet_chars).collect();
@@ -251,7 +239,6 @@ impl SearchEngine {
 
     fn extract_context(&self, chapter: &ProcessedChapter, line_idx: usize) -> (String, String) {
         // Limit context to 1 line before and 1 line after to keep results concise
-        // Also truncate long lines to prevent excessive context display
         let context_lines = 1;
         let max_line_length = 200; // Truncate context lines longer than this
 
@@ -261,9 +248,8 @@ impl SearchEngine {
             chapter.lines[before_start..before_end]
                 .iter()
                 .filter(|line| !line.trim().is_empty())
-                .take(1) // Only take 1 line of context
+                .take(1)
                 .map(|line| {
-                    // Truncate long lines (safely handling Unicode)
                     if line.chars().count() > max_line_length {
                         let truncated: String = line.chars().take(max_line_length).collect();
                         format!("{truncated}...")
@@ -283,9 +269,8 @@ impl SearchEngine {
             chapter.lines[after_start..after_end]
                 .iter()
                 .filter(|line| !line.trim().is_empty())
-                .take(1) // Only take 1 line of context
+                .take(1)
                 .map(|line| {
-                    // Truncate long lines (safely handling Unicode)
                     if line.chars().count() > max_line_length {
                         let truncated: String = line.chars().take(max_line_length).collect();
                         format!("{truncated}...")

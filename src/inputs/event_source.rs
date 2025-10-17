@@ -140,28 +140,23 @@ mod tests {
 
         let mut source = SimulatedEventSource::new(events);
 
-        // Should have events available
         assert!(source.poll(Duration::from_millis(0)).unwrap());
 
-        // Read first event
         if let Event::Key(key) = source.read().unwrap() {
             assert_eq!(key.code, KeyCode::Char('j'));
             assert!(key.modifiers.is_empty());
         }
 
-        // Read second event
         if let Event::Key(key) = source.read().unwrap() {
             assert_eq!(key.code, KeyCode::Char('k'));
             assert!(key.modifiers.is_empty());
         }
 
-        // Read third event
         if let Event::Key(key) = source.read().unwrap() {
             assert_eq!(key.code, KeyCode::Char('d'));
             assert!(key.modifiers.contains(KeyModifiers::CONTROL));
         }
 
-        // No more events
         assert!(!source.poll(Duration::from_millis(0)).unwrap());
     }
 
@@ -174,10 +169,8 @@ mod tests {
 
         let mut source = SimulatedEventSource::new(events);
 
-        // Should have events available
         assert!(source.poll(Duration::from_millis(0)).unwrap());
 
-        // Read first mouse event (scroll down)
         if let Event::Mouse(mouse) = source.read().unwrap() {
             assert_eq!(mouse.kind, MouseEventKind::ScrollDown);
             assert_eq!(mouse.column, 50);
@@ -187,7 +180,6 @@ mod tests {
             panic!("Expected mouse event");
         }
 
-        // Read second mouse event (scroll up)
         if let Event::Mouse(mouse) = source.read().unwrap() {
             assert_eq!(mouse.kind, MouseEventKind::ScrollUp);
             assert_eq!(mouse.column, 25);
@@ -197,7 +189,6 @@ mod tests {
             panic!("Expected mouse event");
         }
 
-        // No more events
         assert!(!source.poll(Duration::from_millis(0)).unwrap());
     }
 }

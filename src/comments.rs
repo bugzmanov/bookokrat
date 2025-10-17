@@ -30,7 +30,7 @@ impl Comment {
 pub struct BookComments {
     pub file_path: PathBuf,
     comments: Vec<Comment>,
-    // Efficient two-level lookup: chapter_href -> paragraph_index -> comment indices
+    //chapter_href -> paragraph_index -> comment indices
     comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
 }
 
@@ -153,7 +153,6 @@ impl BookComments {
     }
 
     fn compute_book_hash(book_path: &Path) -> String {
-        // Use only the filename, not the full path
         let filename = book_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -167,7 +166,6 @@ impl BookComments {
     }
 
     fn get_comments_dir() -> Result<PathBuf> {
-        // Use current directory instead of config directory
         let comments_dir = std::env::current_dir()
             .context("Could not determine current directory")?
             .join(".bookrat_comments");

@@ -248,16 +248,12 @@ mod tests {
             },
         ]);
 
-        // Should start at first match at or after position 1 (which is index 2)
         assert_eq!(state.get_current_match(), Some(2));
 
-        // Next should go to index 4
         assert_eq!(state.next_match(), Some(4));
 
-        // Next should wrap to index 0
         assert_eq!(state.next_match(), Some(0));
 
-        // Previous should go back to index 4
         assert_eq!(state.previous_match(), Some(4));
     }
 }

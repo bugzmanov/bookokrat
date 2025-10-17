@@ -245,7 +245,6 @@ impl Table {
                     current_line.clear();
                 }
 
-                // Add the span to the new line
                 if span_width <= width {
                     current_line.push(span.clone());
                     current_width = span_width;
@@ -262,12 +261,10 @@ impl Table {
                         current_line.push(Span::styled(chunk, span.style));
 
                         if start + width < chars.len() {
-                            // More content to come, finish this line
                             result.push(current_line.clone());
                             current_line.clear();
                             current_width = 0;
                         } else {
-                            // This is the last chunk
                             current_width = chunk_display_width;
                         }
 
@@ -277,12 +274,10 @@ impl Table {
             }
         }
 
-        // Add any remaining content
         if !current_line.is_empty() {
             result.push(current_line);
         }
 
-        // Ensure we have at least one line
         if result.is_empty() {
             result.push(vec![Span::styled(
                 String::new(),
@@ -324,7 +319,6 @@ impl Table {
 
                     if j < chars.len() && chars[j] == ')' {
                         // Valid link found - add just the text with link styling
-                        // Add any pending text
                         if !current_text.is_empty() {
                             spans.push(Span::styled(
                                 current_text.clone(),
@@ -333,7 +327,6 @@ impl Table {
                             current_text.clear();
                         }
 
-                        // Add link text with link styling
                         let link_color = Color::Cyan;
                         spans.push(Span::styled(
                             link_text,
@@ -520,7 +513,6 @@ impl Table {
                 // Calculate the actual width of the spans
                 let spans_width: usize = cell_spans.iter().map(|s| s.content.chars().count()).sum();
 
-                // Ensure we don't exceed the column width
                 if spans_width <= width {
                     // Add the cell spans
                     for span in cell_spans {

@@ -450,20 +450,11 @@ impl App {
             }
         } else if doc.get_num_pages() > 1 {
             if doc.go_next() {
-                match doc.get_current_str() {
-                    Some((content, mime)) => {
-                        info!(
-                            "Content at new position available, mime: {}, length: {} bytes",
-                            mime,
-                            content.len()
-                        );
-                    }
-                    None => {
-                        error!(
-                            "WARNING: No content at new position {} after go_next()",
-                            doc.get_current_page()
-                        );
-                    }
+                if doc.get_current_str().is_none() {
+                    error!(
+                        "WARNING: No content at new position {} after go_next()",
+                        doc.get_current_page()
+                    );
                 }
             } else {
                 error!("Failed to move to next chapter with go_next()");

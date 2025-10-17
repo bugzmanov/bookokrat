@@ -118,7 +118,6 @@ fn test_book_list_vim_motion_gg() {
     }
 
     nav_panel.handle_gg();
-    // Render only the navigation panel in book list mode
     terminal
         .draw(|f| {
             let area = f.area();
@@ -181,7 +180,6 @@ fn test_navigation_panel_vim_motion_g() {
     // Test G (go to bottom)
     nav_panel.handle_upper_g();
 
-    // Render only the navigation panel
     terminal
         .draw(|f| {
             let area = f.area();
@@ -227,7 +225,6 @@ fn test_navigation_panel_vim_motion_gg() {
     // Test gg (go to top)
     nav_panel.handle_gg();
 
-    // Render only the navigation panel
     terminal
         .draw(|f| {
             let area = f.area();
@@ -323,7 +320,6 @@ fn test_text_reader_vim_motion_gg() {
     text_reader.handle_j();
     text_reader.handle_j();
     text_reader.handle_gg();
-    // Render only the text reader
     terminal
         .draw(|f| {
             let area = f.area();

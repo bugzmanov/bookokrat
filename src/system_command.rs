@@ -8,7 +8,6 @@ pub trait SystemCommandExecutor {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// Real system command executor
 pub struct RealSystemCommandExecutor;
 
 impl SystemCommandExecutor for RealSystemCommandExecutor {
@@ -63,7 +62,6 @@ impl SystemCommandExecutor for RealSystemCommandExecutor {
     }
 
     fn open_url(&self, url: &str) -> Result<(), String> {
-        // Determine the command based on the operating system
         let (command, args) = if cfg!(target_os = "macos") {
             ("open", vec![url])
         } else if cfg!(target_os = "windows") {
@@ -185,7 +183,6 @@ impl RealSystemCommandExecutor {
     }
 }
 
-/// Mock system command executor for testing
 #[cfg(any(test, feature = "test-utils"))]
 pub struct MockSystemCommandExecutor {
     pub executed_commands: std::cell::RefCell<Vec<String>>,

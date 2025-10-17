@@ -73,21 +73,18 @@ impl ContentResult {
     }
 }
 
-/// Math content handling result
 enum MathContent {
     Inline(String),
     Block(String),
     Error(String),
 }
 
-/// Text transformation to apply during processing
 #[derive(Debug, Clone, PartialEq)]
 enum TextTransform {
     Subscript,
     Superscript,
 }
 
-/// Processing context for content collection
 #[derive(Debug, Clone)]
 struct ProcessingContext {
     in_table: bool,
@@ -117,16 +114,13 @@ struct ProcessingContext {
 /// let markdown_doc = converter.convert(html_content);
 /// # }
 /// ```
-pub struct HtmlToMarkdownConverter {
-    // Conversion state and placeholders
-}
+pub struct HtmlToMarkdownConverter {}
 
 impl HtmlToMarkdownConverter {
     pub fn new() -> Self {
         HtmlToMarkdownConverter {}
     }
 
-    /// Unified content collection method that handles both text and block modes
     fn collect_content(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -154,22 +148,11 @@ impl HtmlToMarkdownConverter {
                     ));
                 }
 
-                // // Ensure we always have at least one block
-                // if blocks.is_empty() {
-                //     blocks.push(Node::new(
-                //         Block::Paragraph {
-                //             content: Text::from("<fallback ERROR>"), //Text::default(),
-                //         },
-                //         0..0,
-                //     ));
-                // }
-
                 ContentResult::Blocks(blocks)
             }
         }
     }
 
-    /// Handle math elements with appropriate mode-specific logic
     fn handle_math_element(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -187,7 +170,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Handle link elements consistently
     fn handle_link_element(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -201,7 +183,6 @@ impl HtmlToMarkdownConverter {
             }
             let title = self.get_attr_value(attrs, "title");
 
-            // Classify the link and extract target information
             let (link_type, target_chapter, target_anchor) =
                 crate::markdown::classify_link_href(&href);
 
@@ -218,7 +199,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Normalize text content with proper whitespace handling
     fn normalize_text_content(
         &self,
         content: &str,
@@ -269,7 +249,6 @@ impl HtmlToMarkdownConverter {
         let mut document = Document::new();
         self.visit_node(&dom.document, &mut document);
 
-        // Post-process:
         self.group_dialog_paragraphs(&mut document);
 
         document
@@ -291,7 +270,7 @@ impl HtmlToMarkdownConverter {
             }
             NodeData::Text { contents: _ } => {
                 // For now, we'll handle text within element contexts
-                // This is a placeholder for the actual implementation
+                // TODO: Implement text handling
             }
             _ => {
                 // Handle comments, doctypes, etc. by visiting children
@@ -311,7 +290,6 @@ impl HtmlToMarkdownConverter {
     ) {
         let tag_name = name.local.as_ref();
 
-        // Check for epub:type attribute first
         if let Some(epub_type) = self.get_epub_type_attr(attrs) {
             self.handle_epub_block(tag_name, epub_type, attrs, node, document);
             return;
@@ -327,10 +305,8 @@ impl HtmlToMarkdownConverter {
                 self.handle_heading(tag_name, attrs, node, document);
             }
             "div" | "section" | "article" => {
-                // Check if this div/section has an ID and contains a heading
                 let div_id = self.get_attr_value(attrs, "id");
 
-                // Check if the first significant child is a heading
                 let mut has_immediate_heading = false;
                 for child in node.children.borrow().iter() {
                     if let NodeData::Element { ref name, .. } = child.data {
@@ -339,7 +315,6 @@ impl HtmlToMarkdownConverter {
                             has_immediate_heading = true;
                             break;
                         }
-                        // Don't break on whitespace-only text nodes
                         if child_tag != "style" && child_tag != "script" {
                             // If we hit a non-heading element, stop looking
                             break;
@@ -353,7 +328,6 @@ impl HtmlToMarkdownConverter {
                 }
 
                 if has_immediate_heading && div_id.is_some() {
-                    // Process children but pass the div's ID to any heading
                     for child in node.children.borrow().iter() {
                         if let NodeData::Element {
                             ref name,
@@ -363,10 +337,8 @@ impl HtmlToMarkdownConverter {
                         {
                             let child_tag = name.local.as_ref();
                             if matches!(child_tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
-                                // Handle the heading with the div's ID if the heading doesn't have its own
                                 let heading_id = self.get_attr_value(attrs, "id");
                                 if heading_id.is_none() {
-                                    // Use the div's ID for this heading
                                     self.handle_heading_with_id(
                                         child_tag,
                                         child,
@@ -374,7 +346,6 @@ impl HtmlToMarkdownConverter {
                                         div_id.clone(),
                                     );
                                 } else {
-                                    // Heading has its own ID, use that
                                     self.handle_heading(child_tag, attrs, child, document);
                                 }
                             } else {
@@ -385,7 +356,6 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                 } else {
-                    // Normal div without special heading handling
                     for child in node.children.borrow().iter() {
                         self.visit_node(child, document);
                     }
@@ -409,7 +379,6 @@ impl HtmlToMarkdownConverter {
             "style" | "script" | "head" => {
                 // Do nothing
             }
-            // Handle inline formatting elements within other content
             "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" | "sub"
             | "sup" => {
                 // These are handled within extract_formatted_content, skip at block level
@@ -427,7 +396,6 @@ impl HtmlToMarkdownConverter {
                 self.handle_blockquote(attrs, node, document);
             }
             "hr" => {
-                // Add a thematic break (horizontal rule)
                 document.blocks.push(Node::new(Block::ThematicBreak, 0..0));
             }
             // Skip li, dt, dd at this level - they're handled within their containers
@@ -459,7 +427,6 @@ impl HtmlToMarkdownConverter {
 
         let content = self.extract_formatted_content(node);
 
-        // Extract the id attribute from the HTML element
         let id = self.get_attr_value(attrs, "id");
 
         let heading_block = Block::Heading { level, content };
@@ -499,10 +466,8 @@ impl HtmlToMarkdownConverter {
     ) {
         let blocks = self.extract_formatted_content_as_blocks(node, false);
 
-        // Extract the id attribute from the HTML paragraph element
         let paragraph_id = self.get_attr_value(attrs, "id");
 
-        // Filter out empty paragraph blocks and apply ID to paragraph blocks
         for mut block_node in blocks {
             let should_add = match &block_node.block {
                 Block::Paragraph { content } => !content.is_empty(),
@@ -511,7 +476,6 @@ impl HtmlToMarkdownConverter {
             };
 
             if should_add {
-                // Apply the paragraph ID only to paragraph blocks
                 if matches!(block_node.block, Block::Paragraph { .. }) {
                     block_node.id = paragraph_id.clone();
                 }
@@ -526,14 +490,11 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         if let Some(src) = self.get_attr_value(attrs, "src") {
-            info!("Found image during HTML->Markdown conversion: src={src}");
             let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
             let title = self.get_attr_value(attrs, "title");
 
-            // Extract the id attribute from the HTML img element
             let id = self.get_attr_value(attrs, "id");
 
-            // Create an Inline::Image
             let image_inline = Inline::Image {
                 alt_text,
                 url: src,
@@ -588,21 +549,17 @@ impl HtmlToMarkdownConverter {
     ) {
         let mathml_html = self.serialize_node_to_html(node);
 
-        // Extract the id attribute from the HTML mathml element
         let id = self.get_attr_value(attrs, "id");
 
         let content = match mathml_to_ascii(&mathml_html, true) {
             Ok(ascii_math) => {
-                // Check if the math expression is single-line or multi-line
                 if ascii_math.contains('\n') {
-                    // Multi-line math: use CodeBlock with language "math"
                     let code_block = Block::CodeBlock {
                         language: Some("math".to_string()),
                         content: ascii_math,
                     };
                     Node::new_with_id(code_block, 0..0, id)
                 } else {
-                    // Single-line math: use as regular paragraph text
                     let content = Text::from(ascii_math);
                     let paragraph_block = Block::Paragraph { content };
                     Node::new_with_id(paragraph_block, 0..0, id)
@@ -629,15 +586,13 @@ impl HtmlToMarkdownConverter {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut max_columns = 0;
-        let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
+        let mut rowspan_tracker: Vec<u32> = Vec::new();
 
-        // Process table children to find thead and tbody
         for child in node.children.borrow().iter() {
             if let NodeData::Element { name, .. } = &child.data {
                 let tag_name = name.local.as_ref();
                 match tag_name {
                     "thead" => {
-                        // Process header rows
                         for thead_child in child.children.borrow().iter() {
                             if let NodeData::Element { name, .. } = &thead_child.data {
                                 if name.local.as_ref() == "tr" {
@@ -653,7 +608,6 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                     "tbody" => {
-                        // Process body rows
                         for tbody_child in child.children.borrow().iter() {
                             if let NodeData::Element { name, .. } = &tbody_child.data {
                                 if name.local.as_ref() == "tr" {
@@ -668,7 +622,6 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                     "tr" => {
-                        // Direct tr children (no tbody/thead)
                         let row = self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
                         max_columns = max_columns.max(row.cells.len());
 
@@ -684,10 +637,8 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Set default alignment for all columns
         let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
 
-        // Pad all rows to have max_columns cells
         if let Some(ref mut header_row) = header {
             while header_row.cells.len() < max_columns {
                 header_row.cells.push(crate::markdown::TableCell::new(
@@ -703,9 +654,7 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Only create table if we have content
         if header.is_some() || !rows.is_empty() {
-            // Extract the id attribute from the HTML table element
             let id = self.get_attr_value(attrs, "id");
 
             let table_block = Block::Table {
@@ -718,19 +667,18 @@ impl HtmlToMarkdownConverter {
         }
     }
 
+    //todo: this is ugly copy-paste from handle_table
     fn extract_table_as_block(&mut self, node: &Rc<markup5ever_rcdom::Node>) -> Option<Block> {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut max_columns = 0;
-        let mut rowspan_tracker: Vec<u32> = Vec::new(); // Track remaining rowspan for each column
+        let mut rowspan_tracker: Vec<u32> = Vec::new();
 
-        // Process table children to find thead and tbody
         for child in node.children.borrow().iter() {
             if let NodeData::Element { name, .. } = &child.data {
                 let tag_name = name.local.as_ref();
                 match tag_name {
                     "thead" => {
-                        // Process header rows
                         for thead_child in child.children.borrow().iter() {
                             if let NodeData::Element { name, .. } = &thead_child.data {
                                 if name.local.as_ref() == "tr" {
@@ -746,7 +694,6 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                     "tbody" => {
-                        // Process body rows
                         for tbody_child in child.children.borrow().iter() {
                             if let NodeData::Element { name, .. } = &tbody_child.data {
                                 if name.local.as_ref() == "tr" {
@@ -761,11 +708,9 @@ impl HtmlToMarkdownConverter {
                         }
                     }
                     "tr" => {
-                        // Direct tr children (no tbody/thead)
                         let row = self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
                         max_columns = max_columns.max(row.cells.len());
 
-                        // First row becomes header if we don't have one yet
                         if header.is_none() && rows.is_empty() {
                             header = Some(row);
                         } else {
@@ -777,10 +722,8 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Set default alignment for all columns
         let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
 
-        // Pad all rows to have max_columns cells
         if let Some(ref mut header_row) = header {
             while header_row.cells.len() < max_columns {
                 header_row.cells.push(crate::markdown::TableCell::new(
@@ -796,7 +739,6 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Only create table if we have content
         if header.is_some() || !rows.is_empty() {
             Some(Block::Table {
                 header,
@@ -816,7 +758,6 @@ impl HtmlToMarkdownConverter {
         let mut cells = Vec::new();
         let mut column_index = 0;
 
-        // Collect all actual td/th elements first
         let mut actual_cells = Vec::new();
         for child in tr_node.children.borrow().iter() {
             if let NodeData::Element { name, attrs, .. } = &child.data {
@@ -844,26 +785,21 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Now build the row, skipping occupied columns
         let mut actual_cell_index = 0;
         while actual_cell_index < actual_cells.len() || column_index < rowspan_tracker.len() {
-            // Extend rowspan_tracker if needed
             while rowspan_tracker.len() <= column_index {
                 rowspan_tracker.push(0);
             }
 
             if rowspan_tracker[column_index] > 0 {
-                // This column is occupied by a cell from previous row
                 cells.push(crate::markdown::TableCell::new(
                     crate::markdown::Text::default(),
                 ));
                 rowspan_tracker[column_index] -= 1;
             } else if actual_cell_index < actual_cells.len() {
-                // Place the next actual cell here
                 let (cell, rowspan) = actual_cells[actual_cell_index].clone();
                 cells.push(cell);
 
-                // Set up rowspan tracking for this cell (subtract 1 for current row)
                 if rowspan > 1 {
                     rowspan_tracker[column_index] = rowspan - 1;
                 } else {
@@ -894,11 +830,10 @@ impl HtmlToMarkdownConverter {
         let items = self.extract_list_items(node);
 
         if !items.is_empty() {
-            // Extract the id attribute from the HTML list element (ul/ol)
             let id = self.get_attr_value(attrs, "id");
 
             let list_block = Block::List { kind, items };
-            let list_node = Node::new_with_id(list_block, 0..0, id); // Store HTML id for anchor resolution
+            let list_node = Node::new_with_id(list_block, 0..0, id);
             document.blocks.push(list_node);
         }
     }
@@ -921,7 +856,7 @@ impl HtmlToMarkdownConverter {
                     // Skip whitespace-only text nodes between list items
                     if !contents.borrow().trim().is_empty() {
                         // If there's actual text content between list items (which shouldn't happen in valid HTML),
-                        // we could handle it here, but for now we'll just skip it
+                        // it is possible to handle it here, but for now we'll just skip it
                     }
                 }
                 _ => {}
@@ -932,7 +867,6 @@ impl HtmlToMarkdownConverter {
     }
 
     /// Extracts block content from a container element (li, dd, etc.)
-    /// This handles nested lists, paragraphs, images, code blocks, etc.
     fn extract_container_blocks(
         &mut self,
         container_node: &Rc<markup5ever_rcdom::Node>,
@@ -947,7 +881,6 @@ impl HtmlToMarkdownConverter {
 
                     match tag_name {
                         "ul" | "ol" => {
-                            // Flush current text before block element
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
 
                             let kind = self.get_list_kind(tag_name, attrs);
@@ -972,9 +905,7 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         "img" => {
-                            // Handle images inline within the container
                             if let Some(src) = self.get_attr_value(attrs, "src") {
-                                info!("Found inline image in container: src={src}");
                                 let alt_text =
                                     self.get_attr_value(attrs, "alt").unwrap_or_default();
                                 let title = self.get_attr_value(attrs, "title");
@@ -990,7 +921,6 @@ impl HtmlToMarkdownConverter {
                         "pre" => {
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
 
-                            // Extract code block content
                             let mut code_content = String::new();
                             Self::collect_text_from_node(child, &mut code_content);
                             let language = self.get_attr_value(attrs, "data-type");
@@ -1002,22 +932,18 @@ impl HtmlToMarkdownConverter {
                             content.push(Node::new(code_block, 0..0));
                         }
                         "table" => {
-                            // Flush current text before table
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
 
-                            // Extract table content using the existing table extraction logic
                             let table_block = self.extract_table_as_block(child);
                             if let Some(table) = table_block {
                                 content.push(Node::new(table, 0..0));
                             }
                         }
                         "math" => {
-                            // Handle MathML elements - check if multiline to determine block vs inline
                             let mathml_html = self.serialize_node_to_html(child);
                             match mathml_to_ascii(&mathml_html, true) {
                                 Ok(ascii_math) => {
                                     if ascii_math.contains('\n') {
-                                        // Multi-line math: flush text and create CodeBlock
                                         self.flush_text_as_paragraph(
                                             &mut current_text,
                                             &mut content,
@@ -1029,12 +955,10 @@ impl HtmlToMarkdownConverter {
                                         };
                                         content.push(Node::new(code_block, 0..0));
                                     } else {
-                                        // Single-line math: add as inline text
                                         current_text.push_text(TextNode::new(ascii_math, None));
                                     }
                                 }
                                 Err(e) => {
-                                    // Error case: add as text
                                     let error_text = format!("Failed to parse math: {e:?}");
                                     current_text.push_text(TextNode::new(error_text, None));
                                 }
@@ -1051,7 +975,6 @@ impl HtmlToMarkdownConverter {
                     }
                 }
                 NodeData::Text { .. } => {
-                    // Process text nodes through the normal formatted content collector
                     let context = ProcessingContext {
                         in_table: false,
                         current_style: None,
@@ -1060,7 +983,6 @@ impl HtmlToMarkdownConverter {
                     self.collect_as_text(child, &mut current_text, context);
                 }
                 _ => {
-                    // Process other node types
                     for grandchild in child.children.borrow().iter() {
                         let context = ProcessingContext {
                             in_table: false,
@@ -1073,7 +995,6 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Flush any remaining text
         self.flush_text_as_paragraph(&mut current_text, &mut content);
 
         content
@@ -1082,10 +1003,8 @@ impl HtmlToMarkdownConverter {
     /// Helper method to flush current text as a paragraph if it has content
     fn flush_text_as_paragraph(&mut self, current_text: &mut Text, content: &mut Vec<Node>) {
         if !current_text.is_empty() {
-            // Trim trailing whitespace before creating paragraph
             self.trim_text_trailing_whitespace(current_text);
 
-            // Check if the text has any non-whitespace content
             let has_content = current_text.clone().into_iter().any(|item| match item {
                 TextOrInline::Text(node) => !node.content.trim().is_empty(),
                 TextOrInline::Inline(_) => true,
@@ -1101,7 +1020,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Extract list kind from tag name and attributes
     fn get_list_kind(
         &self,
         tag_name: &str,
@@ -1128,8 +1046,6 @@ impl HtmlToMarkdownConverter {
     }
 
     fn extract_definition_content(&mut self, dd_node: &Rc<markup5ever_rcdom::Node>) -> Vec<Node> {
-        // Extract blocks from definition element
-        // Note: Can return empty Vec - definition list items can have empty definitions
         self.extract_container_blocks(dd_node)
     }
 
@@ -1148,7 +1064,6 @@ impl HtmlToMarkdownConverter {
                 let tag_name = name.local.as_ref();
                 match tag_name {
                     "dt" => {
-                        // If we have a previous term with definitions, save it
                         if let Some(term) = current_term.take() {
                             if !current_definitions.is_empty() {
                                 definition_items
@@ -1157,14 +1072,12 @@ impl HtmlToMarkdownConverter {
                             }
                         }
 
-                        // Extract new term
                         let term_content = self.extract_formatted_content(child);
                         if !term_content.is_empty() {
                             current_term = Some(term_content);
                         }
                     }
                     "dd" => {
-                        // Extract definition content as blocks (like list items)
                         let definition_blocks = self.extract_definition_content(child);
                         if !definition_blocks.is_empty() {
                             current_definitions.push(definition_blocks);
@@ -1175,16 +1088,13 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        // Don't forget the last term
         if let Some(term) = current_term {
             if !current_definitions.is_empty() {
                 definition_items.push(DefinitionListItem::new(term, current_definitions));
             }
         }
 
-        // Create the definition list block if we have items
         if !definition_items.is_empty() {
-            // Extract the id attribute from the HTML dl element
             let id = self.get_attr_value(attrs, "id");
 
             let definition_list_block = Block::DefinitionList {
@@ -1201,10 +1111,8 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
-        // Extract the content of the blockquote as blocks
         let content = self.extract_container_blocks(node);
 
-        // Create a Quote block containing the extracted content
         if !content.is_empty() {
             let quote_block = Block::Quote { content };
             document.blocks.push(Node::new(quote_block, 0..0));
@@ -1221,7 +1129,6 @@ impl HtmlToMarkdownConverter {
     ) {
         let mut content = Vec::new();
 
-        // Process children directly to properly handle block elements
         for child in node.children.borrow().iter() {
             match &child.data {
                 NodeData::Element { name, attrs, .. } => {
@@ -1272,23 +1179,18 @@ impl HtmlToMarkdownConverter {
                             content.extend(temp_doc.blocks);
                         }
                         _ => {
-                            // For other elements, process as blocks
                             let blocks = self.extract_formatted_content_as_blocks(child, false);
                             content.extend(blocks);
                         }
                     }
                 }
                 _ => {
-                    // For text nodes and other non-element nodes, process as blocks
                     let blocks = self.extract_formatted_content_as_blocks(child, false);
                     content.extend(blocks);
                 }
             }
         }
 
-        // Note: EpubBlock can have empty content vector - no need to add default paragraph
-
-        // Extract the id attribute from the HTML element with epub:type
         let id = self.get_attr_value(attrs, "id");
 
         let epub_block = Block::EpubBlock {
@@ -1339,7 +1241,7 @@ impl HtmlToMarkdownConverter {
         self.collect_content(node, mode, context).into_blocks()
     }
 
-    /// Collect content as text (unified implementation)
+    /// Collect content as text
     fn collect_as_text(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -1352,7 +1254,6 @@ impl HtmlToMarkdownConverter {
                 if let Some(normalized) =
                     self.normalize_text_content(&content, text, context.current_style.clone())
                 {
-                    // Apply text transformation if needed
                     let transformed_text =
                         match context.text_transform {
                             Some(TextTransform::Subscript) => {
@@ -1386,7 +1287,6 @@ impl HtmlToMarkdownConverter {
                 self.handle_element_for_text(node, tag_name, attrs, text, context);
             }
             _ => {
-                // For other node types, process children with inherited context
                 for child in node.children.borrow().iter() {
                     self.collect_as_text(child, text, context.clone());
                 }
@@ -1394,7 +1294,7 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Collect content as blocks (unified implementation)
+    /// Collect content as blocks
     fn collect_as_blocks(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -1410,7 +1310,6 @@ impl HtmlToMarkdownConverter {
                     current_text,
                     context.current_style.clone(),
                 ) {
-                    // Apply text transformation if needed
                     let transformed_text =
                         match context.text_transform {
                             Some(TextTransform::Subscript) => {
@@ -1451,7 +1350,6 @@ impl HtmlToMarkdownConverter {
                 );
             }
             _ => {
-                // For other node types, process children with inherited context
                 for child in node.children.borrow().iter() {
                     self.collect_as_blocks(child, blocks, current_text, context.clone());
                 }
@@ -1459,7 +1357,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Handle element processing for text collection
     fn handle_element_for_text(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -1472,17 +1369,13 @@ impl HtmlToMarkdownConverter {
 
         match tag_name {
             "a" => {
-                // Check if this <a> element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     text.push_inline(Inline::Anchor { id });
                 }
 
-                // Handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     text.push_inline(link);
                 } else {
-                    // If it's not a link (no href), still process children
-                    // This handles cases like <a id="anchor">text content</a>
                     for child in node.children.borrow().iter() {
                         self.collect_as_text(child, text, new_context.clone());
                     }
@@ -1509,7 +1402,6 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "sub" => {
-                // Process children with subscript transformation context
                 let sub_context = ProcessingContext {
                     in_table: context.in_table,
                     current_style: context.current_style,
@@ -1520,7 +1412,6 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "sup" => {
-                // Process children with superscript transformation context
                 let sup_context = ProcessingContext {
                     in_table: context.in_table,
                     current_style: context.current_style,
@@ -1531,9 +1422,7 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "img" => {
-                // Handle image elements
                 if let Some(src) = self.get_attr_value(attrs, "src") {
-                    info!("Found inline image in text context: src={src}");
                     let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
                     let title = self.get_attr_value(attrs, "title");
 
@@ -1546,12 +1435,10 @@ impl HtmlToMarkdownConverter {
                 }
             }
             _ => {
-                // Check if this element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     text.push_inline(Inline::Anchor { id });
                 }
 
-                // Process children with the new context
                 for child in node.children.borrow().iter() {
                     self.collect_as_text(child, text, new_context.clone());
                 }
@@ -1573,17 +1460,13 @@ impl HtmlToMarkdownConverter {
 
         match tag_name {
             "a" => {
-                // Check if this <a> element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     current_text.push_inline(Inline::Anchor { id });
                 }
 
-                // Handle as a link if it has an href
                 if let Some(link) = self.handle_link_element(node, attrs, context) {
                     current_text.push_inline(link);
                 } else {
-                    // If it's not a link (no href), still process children
-                    // This handles cases like <a id="anchor">text content</a>
                     for child in node.children.borrow().iter() {
                         self.collect_as_blocks(child, blocks, current_text, new_context.clone());
                     }
@@ -1595,7 +1478,6 @@ impl HtmlToMarkdownConverter {
                 };
                 match self.handle_math_element(node, &mode) {
                     MathContent::Block(math_text) => {
-                        // Flush current text and create CodeBlock
                         if !current_text.is_empty() {
                             blocks.push(Node::new(
                                 Block::Paragraph {
@@ -1629,7 +1511,6 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "sub" => {
-                // Process children with subscript transformation
                 let sub_context = ProcessingContext {
                     in_table: context.in_table,
                     current_style: context.current_style,
@@ -1640,7 +1521,6 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "sup" => {
-                // Process children with superscript transformation
                 let sup_context = ProcessingContext {
                     in_table: context.in_table,
                     current_style: context.current_style,
@@ -1651,9 +1531,7 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "img" => {
-                // Handle image elements inside paragraphs and other blocks
                 if let Some(src) = self.get_attr_value(attrs, "src") {
-                    info!("Found inline image in block context: src={src}");
                     let alt_text = self.get_attr_value(attrs, "alt").unwrap_or_default();
                     let title = self.get_attr_value(attrs, "title");
 
@@ -1666,12 +1544,10 @@ impl HtmlToMarkdownConverter {
                 }
             }
             _ => {
-                // Check if this element has an ID attribute - if so, create an anchor marker
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     current_text.push_inline(Inline::Anchor { id });
                 }
 
-                // Process children with the new context
                 for child in node.children.borrow().iter() {
                     self.collect_as_blocks(child, blocks, current_text, new_context.clone());
                 }
@@ -1679,7 +1555,6 @@ impl HtmlToMarkdownConverter {
         }
     }
 
-    /// Get appropriate context for element based on tag name
     fn get_element_context(
         &self,
         tag_name: &str,
@@ -1695,8 +1570,6 @@ impl HtmlToMarkdownConverter {
         context
     }
 
-    /// Check if an element has an epub:type attribute and return its value
-    /// Only returns Some for epub:type values that should be rendered as special blocks
     fn get_epub_type_attr(
         &self,
         attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
@@ -1707,20 +1580,15 @@ impl HtmlToMarkdownConverter {
             .find(|attr| attr.name.local.as_ref() == "epub:type")
             .map(|attr| attr.value.to_string())?;
 
-        // Only process specific epub:type values that represent content blocks
-        // Exclude structural/navigational types that shouldn't be rendered specially
         match epub_type.as_str() {
-            // Content blocks we want to highlight
             "footnote" | "endnote" | "note" | "sidebar" | "pullquote" | "tip" | "warning"
             | "caution" | "important" | "example" | "definition" | "glossary" | "bibliography"
             | "appendix" | "preface" | "foreword" | "introduction" | "conclusion" | "epigraph"
             | "dedication" => Some(epub_type),
 
-            // Structural types we ignore (let them be processed normally)
             "chapter" | "part" | "section" | "subsection" | "titlepage" | "toc" | "bodymatter"
             | "frontmatter" | "backmatter" | "cover" | "acknowledgments" | "copyright-page" => None,
 
-            // For unknown types, be conservative and render them specially
             _ => Some(epub_type),
         }
     }
@@ -1785,7 +1653,6 @@ impl HtmlToMarkdownConverter {
     }
 
     fn trim_text_trailing_whitespace(&self, text: &mut Text) {
-        // Find the last text node and trim its trailing whitespace
         let items: Vec<TextOrInline> = text.clone().into_iter().collect();
         if items.is_empty() {
             return;
@@ -1793,11 +1660,9 @@ impl HtmlToMarkdownConverter {
 
         let mut new_items = items.clone();
         if let Some(TextOrInline::Text(node)) = new_items.last_mut() {
-            // Trim trailing whitespace from the last text node
             node.content = node.content.trim_end().to_string();
         }
 
-        // Rebuild the Text from the modified items
         *text = Text::default();
         for item in new_items {
             text.push(item);
@@ -1805,10 +1670,6 @@ impl HtmlToMarkdownConverter {
     }
 
     /// Groups consecutive dialog paragraphs into single paragraphs with line breaks.
-    ///
-    /// This method identifies dialog lines (starting with various dash characters)
-    /// and merges consecutive dialog paragraphs into a single paragraph block,
-    /// preserving the dialog structure while reducing fragmentation.
     fn group_dialog_paragraphs(&self, document: &mut Document) {
         let mut i = 0;
 
@@ -1864,7 +1725,6 @@ impl HtmlToMarkdownConverter {
                     }
                 }
                 TextOrInline::Inline(Inline::Link { text, .. }) => {
-                    // Recursively check link text
                     if Self::is_dialog_content(&text) {
                         return true;
                     }
@@ -1877,7 +1737,6 @@ impl HtmlToMarkdownConverter {
         false
     }
 
-    /// Merge a group of dialog Text contents into a single Text with line breaks
     fn merge_dialog_group(&self, dialog_group: &[Text]) -> Text {
         let mut merged = Text::default();
 

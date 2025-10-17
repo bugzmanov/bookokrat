@@ -261,7 +261,6 @@ impl DefinitionListItem {
         }
     }
 
-    // Helper method to create from simple text (backward compatibility)
     pub fn new_from_text(term: Text, definitions: Vec<Text>) -> Self {
         let definitions = definitions
             .into_iter()
@@ -305,7 +304,6 @@ impl TableCell {
     }
 }
 
-// From implementations for Text
 impl From<&str> for Text {
     fn from(value: &str) -> Self {
         TextNode::from(value).into()
@@ -342,7 +340,6 @@ impl From<Vec<TextOrInline>> for Text {
     }
 }
 
-// From implementations for TextNode
 impl From<&str> for TextNode {
     fn from(value: &str) -> Self {
         value.to_string().into()
@@ -358,7 +355,6 @@ impl From<String> for TextNode {
     }
 }
 
-// Text methods
 impl Text {
     pub fn push(&mut self, item: TextOrInline) {
         self.0.push(item);
@@ -389,7 +385,6 @@ impl Text {
     }
 }
 
-// IntoIterator for Text
 impl IntoIterator for Text {
     type Item = TextOrInline;
     type IntoIter = std::vec::IntoIter<Self::Item>;

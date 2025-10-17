@@ -87,7 +87,6 @@ impl BookManager {
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
         info!("Loading document from path: {path}");
 
-        // Verify the book exists in our managed list
         if !self.books.iter().any(|book| book.path == path) {
             return Err(format!("Book not found in managed list: {path}"));
         }
@@ -96,20 +95,17 @@ impl BookManager {
             // For HTML files, create a fake EPUB
             self.create_fake_epub_from_html(path)
         } else {
-            // For real EPUB files
             info!("Attempting to load EPUB file: {path}");
             match EpubDoc::new(path) {
                 Ok(mut doc) => {
                     info!("Successfully created EpubDoc for: {path}");
 
-                    // Log EPUB metadata
                     let num_pages = doc.get_num_pages();
                     let current_page = doc.get_current_page();
                     info!(
                         "EPUB spine details: {num_pages} pages, current position: {current_page}"
                     );
 
-                    // Try to get metadata
                     if let Some(title) = doc.mdata("title") {
                         info!("EPUB title: {title}");
                     }
@@ -117,7 +113,6 @@ impl BookManager {
                         info!("EPUB author: {author}");
                     }
 
-                    // Check if we can get content at position 0
                     match doc.get_current_str() {
                         Some((content, mime)) => {
                             info!(
@@ -128,7 +123,6 @@ impl BookManager {
                         }
                         None => {
                             error!("WARNING: No content available at initial position 0");
-                            // Try to see what's in the spine
                             info!("Attempting to get spine information...");
                             let spine = &doc.spine;
                             info!("Spine has {} items", spine.len());
@@ -164,7 +158,6 @@ impl BookManager {
         &self,
         path: &str,
     ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
-        // Read the HTML content
         let html_content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(e) => {
@@ -173,7 +166,6 @@ impl BookManager {
             }
         };
 
-        // Create a minimal EPUB structure in memory
         self.create_minimal_epub_from_html(&html_content, path)
     }
 
@@ -186,7 +178,6 @@ impl BookManager {
         use tempfile::NamedTempFile;
         use zip::{ZipWriter, write::FileOptions};
 
-        // Extract title from HTML, or use full filename (with .html) as fallback
         let filename = Path::new(original_path)
             .file_name()
             .and_then(|name| name.to_str())
@@ -196,7 +187,6 @@ impl BookManager {
             .extract_html_title(html_content)
             .unwrap_or_else(|| filename.to_string());
 
-        // Create a temporary file to store the fake EPUB
         let temp_file =
             NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
 
@@ -209,13 +199,11 @@ impl BookManager {
             let mut zip = ZipWriter::new(file);
             let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
-            // Add mimetype file
             zip.start_file("mimetype", options)
                 .map_err(|e| format!("Failed to add mimetype: {e}"))?;
             zip.write_all(b"application/epub+zip")
                 .map_err(|e| format!("Failed to write mimetype: {e}"))?;
 
-            // Add META-INF/container.xml
             zip.start_file("META-INF/container.xml", options)
                 .map_err(|e| format!("Failed to add container.xml: {e}"))?;
             let container_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -227,7 +215,6 @@ impl BookManager {
             zip.write_all(container_xml.as_bytes())
                 .map_err(|e| format!("Failed to write container.xml: {e}"))?;
 
-            // Add OEBPS/content.opf
             zip.start_file("OEBPS/content.opf", options)
                 .map_err(|e| format!("Failed to add content.opf: {e}"))?;
             let content_opf = format!(
@@ -252,7 +239,6 @@ impl BookManager {
             zip.write_all(content_opf.as_bytes())
                 .map_err(|e| format!("Failed to write content.opf: {e}"))?;
 
-            // Add OEBPS/toc.ncx (table of contents)
             zip.start_file("OEBPS/toc.ncx", options)
                 .map_err(|e| format!("Failed to add toc.ncx: {e}"))?;
             let toc_ncx = format!(
@@ -283,11 +269,9 @@ impl BookManager {
             zip.write_all(toc_ncx.as_bytes())
                 .map_err(|e| format!("Failed to write toc.ncx: {e}"))?;
 
-            // Add OEBPS/chapter1.xhtml with the HTML content
             zip.start_file("OEBPS/chapter1.xhtml", options)
                 .map_err(|e| format!("Failed to add chapter1.xhtml: {e}"))?;
 
-            // Wrap HTML content in proper XHTML structure if it's not already
             let xhtml_content = if html_content.contains("<!DOCTYPE") {
                 html_content.to_string()
             } else {
@@ -312,11 +296,9 @@ impl BookManager {
                 .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
         }
 
-        // Now open the temporary EPUB file
         match EpubDoc::new(&temp_path) {
             Ok(mut doc) => {
                 info!("Successfully created fake EPUB from HTML: {original_path}");
-                // Move to the first (and only) chapter
                 let _ = doc.set_current_page(0);
                 Ok(doc)
             }
@@ -352,7 +334,6 @@ impl BookManager {
     }
 
     pub fn refresh_books(&mut self) {
-        info!("Refreshing book list");
         self.books = Self::discover_books_in_dir(&self.scan_directory);
     }
 

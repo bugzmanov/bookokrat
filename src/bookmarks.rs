@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-/// Bookmark format that uses chapter href instead of index
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Bookmark {
     pub chapter_href: String,
@@ -114,7 +113,6 @@ impl Bookmarks {
             },
         );
 
-        // Save immediately if we have a file path
         if !self.books.is_empty() && self.file_path.is_some() {
             if let Err(e) = self.save() {
                 log::error!("Failed to save bookmark: {e}");

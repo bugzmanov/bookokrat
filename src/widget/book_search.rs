@@ -258,7 +258,6 @@ impl BookSearch {
             let new_selected = (self.scroll_offset + cursor_viewport_pos).min(total_items - 1);
             self.selected_result = new_selected;
         } else if self.selected_result < total_items - 1 {
-            // Can't scroll viewport, but can move cursor down
             self.selected_result += 1;
         }
     }
@@ -271,23 +270,17 @@ impl BookSearch {
 
         let visible_height = area_height.saturating_sub(5) as usize;
 
-        // Calculate cursor position relative to viewport
         let cursor_viewport_pos = self.selected_result.saturating_sub(self.scroll_offset);
 
-        // Check if we can scroll up
         if self.scroll_offset > 0 {
-            // Scroll viewport up by 1
             self.scroll_offset -= 1;
 
-            // Try to maintain cursor at same viewport position
             let new_selected = self.scroll_offset + cursor_viewport_pos;
             self.selected_result = new_selected;
         } else if self.selected_result > 0 {
-            // Can't scroll viewport, but can move cursor up
             self.selected_result -= 1;
         }
 
-        // Ensure the selection stays inside the visible viewport when we cannot scroll further
         if visible_height > 0 {
             let max_visible_index = self
                 .scroll_offset
@@ -511,7 +504,6 @@ impl BookSearch {
                 all_lines.push(Line::from(header_spans));
             }
 
-            // Add context before (if any)
             if !result.context_before.is_empty() {
                 for line in result.context_before.lines().take(1) {
                     let prefixed_line = format!("    {line}");
@@ -529,7 +521,6 @@ impl BookSearch {
                 }
             }
 
-            // Add the main snippet with highlighting
             if !result.snippet.is_empty() {
                 if is_selected {
                     // For selected items, rebuild with background
@@ -557,7 +548,6 @@ impl BookSearch {
                 }
             }
 
-            // Add context after (if any)
             if !result.context_after.is_empty() {
                 for line in result.context_after.lines().take(1) {
                     let prefixed_line = format!("    {line}");
@@ -575,11 +565,9 @@ impl BookSearch {
                 }
             }
 
-            // Add separator
             all_lines.push(Line::from(""));
         }
 
-        // Render as a paragraph with text wrapping enabled
         let paragraph = Paragraph::new(all_lines)
             .style(Style::default().bg(palette.base_00))
             .block(Block::default())
