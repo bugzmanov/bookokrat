@@ -62,6 +62,3 @@ test-utils = []
 
 [profile.release]
 debug = true
-
-[build]
-target = "aarch64-apple-darwin"

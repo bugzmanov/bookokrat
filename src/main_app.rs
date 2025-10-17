@@ -50,10 +50,7 @@ struct EpubBook {
 }
 impl EpubBook {
     fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
-        Self {
-            file,
-            epub: doc,
-        }
+        Self { file, epub: doc }
     }
 
     fn total_chapters(&self) -> usize {
@@ -286,12 +283,14 @@ impl App {
             book_search: None,
         };
 
-        if auto_load_recent && let Some((recent_path, _)) = app.bookmarks.get_most_recent()
-            && app.book_manager.contains_book(&recent_path) {
-                if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
-                    error!("Failed to auto-load most recent book: {e}");
-                }
+        if auto_load_recent
+            && let Some((recent_path, _)) = app.bookmarks.get_most_recent()
+            && app.book_manager.contains_book(&recent_path)
+        {
+            if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
+                error!("Failed to auto-load most recent book: {e}");
             }
+        }
 
         app
     }
@@ -998,7 +997,7 @@ impl App {
         anchor_id: Option<&String>,
     ) -> std::io::Result<bool> {
         if let Some(chapter_index) = self.find_chapter_by_filename(chapter_file) {
-            if let Err(_) = self.navigate_to_chapter(chapter_index) {
+            if self.navigate_to_chapter(chapter_index).is_err() {
                 return Ok(false);
             }
 
@@ -1154,9 +1153,7 @@ impl App {
             {
                 Ok(resized) => Arc::new(resized),
                 Err(e) => {
-                    warn!(
-                        "Failed to pre-scale image with fast_image_resize: {e}, using original"
-                    );
+                    warn!("Failed to pre-scale image with fast_image_resize: {e}, using original");
                     original_image
                 }
             }
@@ -1966,10 +1963,9 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                if self.text_reader.has_text_selection()
-                    && self.text_reader.start_comment_input() {
-                        debug!("Started comment input mode");
-                    }
+                if self.text_reader.has_text_selection() && self.text_reader.start_comment_input() {
+                    debug!("Started comment input mode");
+                }
             }
             KeyCode::Char('c') => {
                 if !self.handle_key_sequence('c') {

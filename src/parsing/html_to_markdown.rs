@@ -13,9 +13,15 @@ use std::rc::Rc;
 #[derive(Debug, Clone)]
 enum ContentCollectionMode {
     /// Collect as flat text (for headings, simple content)
-    FlatText { in_table: bool },
+    FlatText {
+        #[allow(dead_code)]
+        in_table: bool,
+    },
     /// Collect as structured blocks (for complex content with math)
-    StructuredBlocks { in_table: bool },
+    StructuredBlocks {
+        #[allow(dead_code)]
+        in_table: bool,
+    },
 }
 
 /// Result of content collection
@@ -550,7 +556,7 @@ impl HtmlToMarkdownConverter {
     ) {
         // TODO: In the future, we should handle inline formatting like <sub> within <pre>
         let mut content = String::new();
-        self.collect_text_from_node(node, &mut content);
+        Self::collect_text_from_node(node, &mut content);
 
         let id = self.get_attr_value(attrs, "id");
 
@@ -561,14 +567,14 @@ impl HtmlToMarkdownConverter {
         document.blocks.push(code_node);
     }
 
-    fn collect_text_from_node(&self, node: &Rc<markup5ever_rcdom::Node>, output: &mut String) {
+    fn collect_text_from_node(node: &Rc<markup5ever_rcdom::Node>, output: &mut String) {
         match &node.data {
             NodeData::Text { contents } => {
                 output.push_str(&contents.borrow());
             }
             _ => {
                 for child in node.children.borrow().iter() {
-                    self.collect_text_from_node(child, output);
+                    Self::collect_text_from_node(child, output);
                 }
             }
         }
@@ -663,8 +669,7 @@ impl HtmlToMarkdownConverter {
                     }
                     "tr" => {
                         // Direct tr children (no tbody/thead)
-                        let row =
-                            self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
+                        let row = self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
                         max_columns = max_columns.max(row.cells.len());
 
                         // First row becomes header if we don't have one yet
@@ -757,8 +762,7 @@ impl HtmlToMarkdownConverter {
                     }
                     "tr" => {
                         // Direct tr children (no tbody/thead)
-                        let row =
-                            self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
+                        let row = self.extract_table_row_with_rowspan(child, &mut rowspan_tracker);
                         max_columns = max_columns.max(row.cells.len());
 
                         // First row becomes header if we don't have one yet
@@ -826,9 +830,7 @@ impl HtmlToMarkdownConverter {
 
                     let cell = if tag_name == "th" {
                         if rowspan > 1 {
-                            crate::markdown::TableCell::new_header_with_rowspan(
-                                content, rowspan,
-                            )
+                            crate::markdown::TableCell::new_header_with_rowspan(content, rowspan)
                         } else {
                             crate::markdown::TableCell::new_header(content)
                         }
@@ -990,7 +992,7 @@ impl HtmlToMarkdownConverter {
 
                             // Extract code block content
                             let mut code_content = String::new();
-                            self.collect_text_from_node(child, &mut code_content);
+                            Self::collect_text_from_node(child, &mut code_content);
                             let language = self.get_attr_value(attrs, "data-type");
 
                             let code_block = Block::CodeBlock {
@@ -1789,21 +1791,10 @@ impl HtmlToMarkdownConverter {
             return;
         }
 
-        // Process items in reverse to find the last text node
         let mut new_items = items.clone();
-        for i in (0..new_items.len()).rev() {
-            match &mut new_items[i] {
-                TextOrInline::Text(node) => {
-                    // Trim trailing whitespace from the last text node
-                    node.content = node.content.trim_end().to_string();
-                    break;
-                }
-                TextOrInline::Inline(_) => {
-                    // Inline elements like links/images shouldn't have whitespace trimmed
-                    // But if we hit an inline, we're done (no text nodes after it to trim)
-                    break;
-                }
-            }
+        if let Some(TextOrInline::Text(node)) = new_items.last_mut() {
+            // Trim trailing whitespace from the last text node
+            node.content = node.content.trim_end().to_string();
         }
 
         // Rebuild the Text from the modified items
@@ -1823,13 +1814,13 @@ impl HtmlToMarkdownConverter {
 
         while i < document.blocks.len() {
             if let Block::Paragraph { content } = &document.blocks[i].block {
-                if self.is_dialog_content(content) {
+                if Self::is_dialog_content(content) {
                     let mut dialog_contents = vec![content.clone()];
                     let mut j = i + 1;
 
                     while j < document.blocks.len() {
                         if let Block::Paragraph { content } = &document.blocks[j].block {
-                            if self.is_dialog_content(content) {
+                            if Self::is_dialog_content(content) {
                                 dialog_contents.push(content.clone());
                                 j += 1;
                             } else {
@@ -1856,7 +1847,7 @@ impl HtmlToMarkdownConverter {
     }
 
     /// Check if a Text content represents dialog (contains dialog lines)
-    fn is_dialog_content(&self, content: &Text) -> bool {
+    fn is_dialog_content(content: &Text) -> bool {
         for item in content.clone().into_iter() {
             match item {
                 TextOrInline::Text(text_node) => {
@@ -1874,7 +1865,7 @@ impl HtmlToMarkdownConverter {
                 }
                 TextOrInline::Inline(Inline::Link { text, .. }) => {
                     // Recursively check link text
-                    if self.is_dialog_content(&text) {
+                    if Self::is_dialog_content(&text) {
                         return true;
                     }
                 }

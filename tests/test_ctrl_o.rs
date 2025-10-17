@@ -18,8 +18,7 @@ fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
     );
 
     // Load an EPUB file first
-    app
-        .load_epub("tests/testdata/digital_frontier.epub", false)
+    app.load_epub("tests/testdata/digital_frontier.epub", false)
         .unwrap();
 
     // Create event source with Ctrl+O followed by quit

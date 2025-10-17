@@ -8,7 +8,7 @@ pub fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
 
     for y in 0..buffer.area.height {
         for x in 0..buffer.area.width {
-            let cell = buffer.get(x, y);
+            let cell = buffer.cell((x, y)).unwrap();
 
             // Add ANSI escape codes for styling
             let mut styled_char = String::new();

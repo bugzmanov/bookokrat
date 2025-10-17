@@ -68,9 +68,7 @@ impl BookImages {
                 Some((width, height))
             }
             Err(e) => {
-                warn!(
-                    "Failed to get image size for '{image_src}' from {image_path:?}: {e}"
-                );
+                warn!("Failed to get image size for '{image_src}' from {image_path:?}: {e}");
                 None
             }
         }
@@ -109,9 +107,7 @@ impl BookImages {
                 Some(img)
             }
             Err(e) => {
-                warn!(
-                    "Failed to load image '{image_src}' from {image_path:?}: {e}"
-                );
+                warn!("Failed to load image '{image_src}' from {image_path:?}: {e}");
                 None
             }
         }
@@ -155,17 +151,13 @@ impl BookImages {
         let new_width = (img_width as f32 * scale) as u32;
         let new_height = target_height_in_pixels;
 
-        debug!(
-            "Resizing {image_src} from {img_width}x{img_height} to {new_width}x{new_height}"
-        );
+        debug!("Resizing {image_src} from {img_width}x{img_height} to {new_width}x{new_height}");
 
         // Use fast_image_resize for better performance
         let scaled_image = match self.fast_resize_image(&img, new_width, new_height) {
             Ok(resized) => resized,
             Err(e) => {
-                warn!(
-                    "Fast resize failed for {image_src}: {e}, falling back to slow resize"
-                );
+                warn!("Fast resize failed for {image_src}: {e}, falling back to slow resize");
                 img.resize_exact(new_width, new_height, image::imageops::FilterType::Lanczos3)
             }
         };

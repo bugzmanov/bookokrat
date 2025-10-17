@@ -375,10 +375,12 @@ impl MarkdownTextReader {
                             let scaled_image = image;
 
                             if let Some(ref picker) = self.image_picker {
-                                let image_screen_start = image_start_line.saturating_sub(scroll_offset);
+                                let image_screen_start =
+                                    image_start_line.saturating_sub(scroll_offset);
 
                                 // Clip the top portion if the image starts above the viewport
-                                let image_top_clipped = scroll_offset.saturating_sub(image_start_line);
+                                let image_top_clipped =
+                                    scroll_offset.saturating_sub(image_start_line);
 
                                 let visible_image_height = (image_height_cells - image_top_clipped)
                                     .min(area_height - image_screen_start);
@@ -532,9 +534,7 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
     ) {
         let title_text = if let Some(ref title) = self.chapter_title {
-            format!(
-                "[{current_chapter}/{total_chapters}] {title} [RAW HTML]"
-            )
+            format!("[{current_chapter}/{total_chapters}] {title} [RAW HTML]")
         } else {
             format!("Chapter {current_chapter}/{total_chapters} [RAW HTML]")
         };

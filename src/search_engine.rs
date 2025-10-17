@@ -17,6 +17,7 @@ struct ProcessedChapter {
     index: usize,
     title: String,
     lines: Vec<String>,
+    #[allow(dead_code)]
     raw_text: String,
 }
 
@@ -110,15 +111,10 @@ impl SearchEngine {
 
                             // Find character positions for highlighting
                             if let Some(pos) = line_lower.find(query_word.as_str()) {
-                                let mut char_pos = 0;
-                                let mut byte_pos = 0;
-
-                                for ch in line.chars() {
-                                    if byte_pos >= pos && byte_pos < pos + query_word.len() {
+                                for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
+                                    if byte_idx >= pos && byte_idx < pos + query_word.len() {
                                         all_match_positions.push(char_pos);
                                     }
-                                    byte_pos += ch.len_utf8();
-                                    char_pos += 1;
                                 }
                             }
                             break;
@@ -207,16 +203,10 @@ impl SearchEngine {
 
                     // Collect character positions for highlighting
                     let mut positions = Vec::new();
-                    let chars: Vec<char> = line.chars().collect();
-                    let mut char_pos = 0;
-                    let mut byte_pos = 0;
-
-                    for ch in line.chars() {
-                        if byte_pos >= absolute_start && byte_pos < absolute_start + phrase.len() {
+                    for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
+                        if byte_idx >= absolute_start && byte_idx < absolute_start + phrase.len() {
                             positions.push(char_pos);
                         }
-                        byte_pos += ch.len_utf8();
-                        char_pos += 1;
                     }
 
                     match_positions_in_line.extend(positions);

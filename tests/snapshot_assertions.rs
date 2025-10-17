@@ -61,9 +61,7 @@ pub fn assert_svg_snapshot(
     if let Some(line) = first_diff_line {
         eprintln!("   📍 First difference at line: {line}");
     }
-    eprintln!(
-        "   💡 To update snapshot: SNAPSHOTS=overwrite cargo test {test_name}\n"
-    );
+    eprintln!("   💡 To update snapshot: SNAPSHOTS=overwrite cargo test {test_name}\n");
 
     // Panic with a clean message
     panic!("SVG snapshot mismatch");

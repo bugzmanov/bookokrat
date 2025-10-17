@@ -1128,14 +1128,10 @@ impl MathMLParser {
                 Self::try_unicode_superscript(&index_text, self.use_unicode)
             {
                 // Use Unicode format: ³√x for cube root
-                return Ok(MathBox::new(&format!(
-                    "{unicode_index}√({radicand_text})"
-                )));
+                return Ok(MathBox::new(&format!("{unicode_index}√({radicand_text})")));
             } else {
                 // Fallback to notation like: [3]√(x)
-                return Ok(MathBox::new(&format!(
-                    "[{index_text}]√({radicand_text})"
-                )));
+                return Ok(MathBox::new(&format!("[{index_text}]√({radicand_text})")));
             }
         }
 
@@ -1158,11 +1154,9 @@ impl MathMLParser {
         // For fraction height 3, we need 4 lines total with proper padding
         if formula_height == 3 {
             // Line 1: overline (padding = height + 1 = 5 spaces)
-            lines.push(format!(
-                "{}{}",
-                " ".repeat(5),
-                format!("⟋{}", "─".repeat(formula_width + 4))
-            ));
+            let padding = " ".repeat(5);
+            let dash_line = "─".repeat(formula_width + 4);
+            lines.push(format!("{padding}⟋{dash_line}"));
             // Line 2: diagonal for numerator (padding = height + 1 - 1 = 4)
             lines.push(format!("{}╱  ", " ".repeat(4)));
             // Line 3: underscore + diagonal (this is where index goes)
@@ -1748,8 +1742,8 @@ impl MathMLParser {
                     let mut paren_count = 1;
                     let mut closing_pos = None;
 
-                    for j in (i + 1)..boxes.len() {
-                        if let Some(ch) = self.is_single_paren(&boxes[j]) {
+                    for (j, candidate) in boxes.iter().enumerate().skip(i + 1) {
+                        if let Some(ch) = self.is_single_paren(candidate) {
                             match (open_char, ch) {
                                 ('(', ')') | ('[', ']') | ('{', '}') => {
                                     paren_count -= 1;
@@ -1840,7 +1834,8 @@ impl MathMLParser {
                     } else {
                         // For multi-line boxes that contain simple content, just take first line
                         vec![
-                            b.content.first()
+                            b.content
+                                .first()
                                 .map(|row| row.iter().collect::<String>())
                                 .unwrap_or_default(),
                         ]

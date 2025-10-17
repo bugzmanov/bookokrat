@@ -145,25 +145,22 @@ impl TableOfContents {
                 .iter()
                 .find(|old| old.title() == new_item.title() && old.href() == new_item.href())
             {
-                // Copy expansion state if both are sections
-                match (old_item, new_item) {
-                    (
-                        TocItem::Section {
-                            is_expanded: old_expanded,
-                            children: old_children,
-                            ..
-                        },
-                        TocItem::Section {
-                            is_expanded: new_expanded,
-                            children: new_children,
-                            ..
-                        },
-                    ) => {
-                        *new_expanded = *old_expanded;
-                        // Recursively copy expansion states for children
-                        Self::copy_expansion_states(old_children, new_children);
-                    }
-                    _ => {} // Chapters don't have expansion state
+                if let (
+                    TocItem::Section {
+                        is_expanded: old_expanded,
+                        children: old_children,
+                        ..
+                    },
+                    TocItem::Section {
+                        is_expanded: new_expanded,
+                        children: new_children,
+                        ..
+                    },
+                ) = (old_item, new_item)
+                {
+                    *new_expanded = *old_expanded;
+                    // Recursively copy expansion states for children
+                    Self::copy_expansion_states(old_children, new_children);
                 }
             }
         }
@@ -246,7 +243,7 @@ impl TableOfContents {
                     {
                         return Some(current_index + child_index);
                     }
-                    current_index += self.count_visible_toc_items(children);
+                    current_index += Self::count_visible_toc_items(children);
                 }
             }
         }
@@ -258,7 +255,7 @@ impl TableOfContents {
         self.manual_navigation = true; // User is manually navigating
         self.manual_navigation_cooldown = 5; // Set grace period
         if let Some(ref current_book_info) = self.current_book_info {
-            let total_items = self.count_visible_toc_items(&current_book_info.toc_items);
+            let total_items = Self::count_visible_toc_items(&current_book_info.toc_items);
             // Add 1 for the "<< books list" item
             if self.selected_index < total_items {
                 self.selected_index += 1;
@@ -291,7 +288,7 @@ impl TableOfContents {
         self.manual_navigation_cooldown = 5; // Set grace period
         if let Some(ref current_book_info) = self.current_book_info {
             let visible_height = area_height.saturating_sub(2) as usize; // Account for borders
-            let total_items = self.count_visible_toc_items(&current_book_info.toc_items) + 1; // +1 for "<< books list"
+            let total_items = Self::count_visible_toc_items(&current_book_info.toc_items) + 1; // +1 for "<< books list"
             let current_offset = self.list_state.offset();
 
             let cursor_viewport_pos = self.selected_index.saturating_sub(current_offset);
@@ -352,9 +349,10 @@ impl TableOfContents {
                 Some(SelectedTocItem::BackToBooks)
             } else {
                 // Subtract 1 to account for the back button
-                if let Some(toc_item) = self
-                    .get_toc_item_by_index(&current_book_info.toc_items, self.selected_index - 1)
-                {
+                if let Some(toc_item) = Self::get_toc_item_by_index(
+                    &current_book_info.toc_items,
+                    self.selected_index - 1,
+                ) {
                     Some(SelectedTocItem::TocItem(toc_item))
                 } else {
                     Some(SelectedTocItem::BackToBooks)
@@ -479,9 +477,10 @@ impl TableOfContents {
                     ..
                 } => {
                     if *is_expanded
-                        && Self::toggle_expansion_at_index(children, target_index, current_index) {
-                            return true;
-                        }
+                        && Self::toggle_expansion_at_index(children, target_index, current_index)
+                    {
+                        return true;
+                    }
                 }
                 TocItem::Chapter { .. } => {}
             }
@@ -519,9 +518,10 @@ impl TableOfContents {
                             target_index,
                             current_index,
                             expand,
-                        ) {
-                            return true;
-                        }
+                        )
+                    {
+                        return true;
+                    }
                 }
                 TocItem::Chapter { .. } => {}
             }
@@ -533,7 +533,7 @@ impl TableOfContents {
     pub fn get_total_items(&self) -> usize {
         if let Some(ref current_book_info) = self.current_book_info {
             // Add 1 for the "<< books list" item
-            self.count_visible_toc_items(&current_book_info.toc_items) + 1
+            Self::count_visible_toc_items(&current_book_info.toc_items) + 1
         } else {
             1 // Just the back button
         }
@@ -561,7 +561,7 @@ impl TableOfContents {
                     let toc_index = new_index - 1;
                     if let Some(ref current_book_info) = self.current_book_info {
                         if let Some((item, indent_level)) =
-                            self.get_toc_item_with_indent(&current_book_info.toc_items, toc_index)
+                            Self::get_toc_item_with_indent(&current_book_info.toc_items, toc_index)
                         {
                             // Check if this is a section with an arrow
                             if matches!(item, TocItem::Section { .. }) {
@@ -599,7 +599,7 @@ impl TableOfContents {
     }
 
     /// Count visible TOC items (considering expansion state)
-    fn count_visible_toc_items(&self, toc_items: &[TocItem]) -> usize {
+    fn count_visible_toc_items(toc_items: &[TocItem]) -> usize {
         let mut count = 0;
         for item in toc_items {
             count += 1; // Count the item itself
@@ -610,7 +610,7 @@ impl TableOfContents {
                     ..
                 } => {
                     if *is_expanded {
-                        count += self.count_visible_toc_items(children);
+                        count += Self::count_visible_toc_items(children);
                     }
                 }
                 TocItem::Chapter { .. } => {}
@@ -620,16 +620,14 @@ impl TableOfContents {
     }
 
     /// Get TOC item by flat index with its indent level
-    fn get_toc_item_with_indent<'a>(
-        &self,
-        toc_items: &'a [TocItem],
+    fn get_toc_item_with_indent(
+        toc_items: &[TocItem],
         target_index: usize,
-    ) -> Option<(&'a TocItem, usize)> {
-        self.get_toc_item_with_indent_helper(toc_items, target_index, &mut 0, 0)
+    ) -> Option<(&TocItem, usize)> {
+        Self::get_toc_item_with_indent_helper(toc_items, target_index, &mut 0, 0)
     }
 
     fn get_toc_item_with_indent_helper<'a>(
-        &self,
         toc_items: &'a [TocItem],
         target_index: usize,
         current_index: &mut usize,
@@ -648,7 +646,7 @@ impl TableOfContents {
                     ..
                 } => {
                     if *is_expanded {
-                        if let Some(result) = self.get_toc_item_with_indent_helper(
+                        if let Some(result) = Self::get_toc_item_with_indent_helper(
                             children,
                             target_index,
                             current_index,
@@ -666,16 +664,11 @@ impl TableOfContents {
     }
 
     /// Get TOC item by flat index
-    fn get_toc_item_by_index<'a>(
-        &self,
-        toc_items: &'a [TocItem],
-        target_index: usize,
-    ) -> Option<&'a TocItem> {
-        self.get_toc_item_by_index_helper(toc_items, target_index, &mut 0)
+    fn get_toc_item_by_index(toc_items: &[TocItem], target_index: usize) -> Option<&TocItem> {
+        Self::get_toc_item_by_index_helper(toc_items, target_index, &mut 0)
     }
 
     fn get_toc_item_by_index_helper<'a>(
-        &self,
         toc_items: &'a [TocItem],
         target_index: usize,
         current_index: &mut usize,
@@ -693,9 +686,11 @@ impl TableOfContents {
                     ..
                 } => {
                     if *is_expanded {
-                        if let Some(child_item) =
-                            self.get_toc_item_by_index_helper(children, target_index, current_index)
-                        {
+                        if let Some(child_item) = Self::get_toc_item_by_index_helper(
+                            children,
+                            target_index,
+                            current_index,
+                        ) {
                             return Some(child_item);
                         }
                     }
@@ -773,6 +768,7 @@ impl TableOfContents {
     }
 
     /// Render TOC items using the new ADT structure
+    #[allow(clippy::too_many_arguments)]
     fn render_toc_items(
         &self,
         current_book: &CurrentBookInfo,
@@ -1043,19 +1039,14 @@ impl TableOfContents {
 
         // Add TOC items
         if let Some(ref book_info) = self.current_book_info {
-            self.collect_toc_items_text(&book_info.toc_items, &mut items, 0);
+            Self::collect_toc_items_text(&book_info.toc_items, &mut items, 0);
         }
 
         items
     }
 
     /// Recursively collect text from TOC items
-    fn collect_toc_items_text(
-        &self,
-        toc_items: &[TocItem],
-        items: &mut Vec<String>,
-        indent_level: usize,
-    ) {
+    fn collect_toc_items_text(toc_items: &[TocItem], items: &mut Vec<String>, indent_level: usize) {
         for item in toc_items {
             match item {
                 TocItem::Chapter { title, .. } => {
@@ -1074,7 +1065,7 @@ impl TableOfContents {
 
                     // Only collect children if expanded
                     if *is_expanded {
-                        self.collect_toc_items_text(children, items, indent_level + 1);
+                        Self::collect_toc_items_text(children, items, indent_level + 1);
                     }
                 }
             }

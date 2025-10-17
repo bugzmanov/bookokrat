@@ -12,12 +12,14 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 pub struct RenderingContext {
     pub raw_text_lines: Vec<String>,
     pub anchor_positions: HashMap<String, usize>,
     pub links: Vec<LinkInfo>,
 }
 
+#[allow(dead_code)]
 impl RenderingContext {
     pub fn new() -> Self {
         Self {
@@ -78,7 +80,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         match &node.block {
             MarkdownBlock::Heading { content, .. } => {
                 if node.id.is_none() {
-                    let heading_text = self.text_to_string(content);
+                    let heading_text = Self::text_to_string(content);
                     let anchor_id = self.generate_heading_anchor(&heading_text);
                     self.anchor_positions.insert(anchor_id, current_line);
                 }
@@ -112,6 +114,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_node(
         &mut self,
         node: &Node,
@@ -264,7 +267,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     // Helper method to convert Text AST to plain string
-    pub fn text_to_string(&self, text: &MarkdownText) -> String {
+    pub fn text_to_string(text: &MarkdownText) -> String {
         let mut result = String::new();
         for item in text.iter() {
             match item {
@@ -275,7 +278,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     Inline::Link {
                         text: link_text, ..
                     } => {
-                        result.push_str(&self.text_to_string(link_text));
+                        result.push_str(&Self::text_to_string(link_text));
                     }
                     Inline::Image { alt_text, .. } => {
                         result.push_str(alt_text);
@@ -295,6 +298,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         result
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_heading(
         &mut self,
         level: HeadingLevel,
@@ -305,7 +309,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
     ) {
-        let heading_text = self.text_to_string(content);
+        let heading_text = Self::text_to_string(content);
 
         let display_text = if level == HeadingLevel::H1 {
             heading_text.to_uppercase()
@@ -391,6 +395,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_paragraph(
         &mut self,
         content: &MarkdownText,
@@ -502,7 +507,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         target_anchor,
                         ..
                     } => {
-                        let link_text_str = self.text_to_string(link_text);
+                        let link_text_str = Self::text_to_string(link_text);
 
                         // Create link info (line and columns will be set during line creation)
                         let link_info = LinkInfo {
@@ -558,8 +563,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
 
                     Inline::Image { alt_text, .. } => {
-                        rich_spans
-                            .push(RichSpan::Text(Span::raw(format!("[image: {alt_text}]"))));
+                        rich_spans.push(RichSpan::Text(Span::raw(format!("[image: {alt_text}]"))));
                     }
 
                     Inline::Anchor { .. } => {
@@ -611,6 +615,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         Span::styled(node.content.clone(), styled)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_code_block(
         &mut self,
         language: Option<&str>,
@@ -657,6 +662,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_list(
         &mut self,
         kind: &crate::markdown::ListKind,
@@ -781,6 +787,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_table(
         &mut self,
         header: &Option<crate::markdown::TableRow>,
@@ -801,7 +808,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             table_headers = header_row
                 .cells
                 .iter()
-                .map(|cell| self.text_to_string(&cell.content))
+                .map(|cell| Self::text_to_string(&cell.content))
                 .collect();
         }
 
@@ -810,7 +817,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let row_data: Vec<String> = row
                 .cells
                 .iter()
-                .map(|cell| self.text_to_string(&cell.content))
+                .map(|cell| Self::text_to_string(&cell.content))
                 .collect();
             table_rows.push(row_data);
         }
@@ -1033,6 +1040,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_quote(
         &mut self,
         content: &[Node],
@@ -1147,6 +1155,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_definition_list(
         &mut self,
         items: &[crate::markdown::DefinitionListItem],
@@ -1230,6 +1239,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_epub_block(
         &mut self,
         _epub_type: &str,
@@ -1320,6 +1330,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_text_spans(
         &mut self,
         rich_spans: &[RichSpan],
@@ -1437,7 +1448,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         #[derive(Clone)]
         struct CharWithRichSpan {
             ch: char,
-            rich_span_idx: usize,    // Index into original_rich_spans
+            rich_span_idx: usize, // Index into original_rich_spans
+            #[allow(dead_code)]
             char_idx_in_span: usize, // Position within the span's text
         }
 

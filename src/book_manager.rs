@@ -315,9 +315,7 @@ impl BookManager {
         // Now open the temporary EPUB file
         match EpubDoc::new(&temp_path) {
             Ok(mut doc) => {
-                info!(
-                    "Successfully created fake EPUB from HTML: {original_path}"
-                );
+                info!("Successfully created fake EPUB from HTML: {original_path}");
                 // Move to the first (and only) chapter
                 let _ = doc.set_current_page(0);
                 Ok(doc)

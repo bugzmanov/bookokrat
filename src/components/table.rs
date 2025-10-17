@@ -310,8 +310,6 @@ impl Table {
                 // Look for the matching ]( pattern
                 let mut link_text = String::new();
                 let mut j = i + 1;
-                let mut found_link = false;
-
                 while j < chars.len() && chars[j] != ']' {
                     link_text.push(chars[j]);
                     j += 1;
@@ -326,8 +324,6 @@ impl Table {
 
                     if j < chars.len() && chars[j] == ')' {
                         // Valid link found - add just the text with link styling
-                        found_link = true;
-
                         // Add any pending text
                         if !current_text.is_empty() {
                             spans.push(Span::styled(
@@ -351,11 +347,10 @@ impl Table {
                     }
                 }
 
-                if !found_link {
-                    // Not a valid link, treat [ as normal character
-                    current_text.push('[');
-                    i += 1;
-                }
+                // Not a valid link, treat [ as normal character
+                current_text.push('[');
+                i += 1;
+                continue;
             }
             // Check for bold (**text** or __text__)
             else if i + 1 < chars.len()

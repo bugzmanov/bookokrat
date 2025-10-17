@@ -221,6 +221,13 @@ impl TextSelection {
             return;
         }
 
+        if let Some(current_line) = lines.get(line) {
+            let current_len = current_line.chars().count();
+            if column > current_len && current_len > 0 {
+                return;
+            }
+        }
+
         let (para_start, para_end) = self.find_paragraph_boundaries(lines, line);
 
         self.start = Some(SelectionPoint {

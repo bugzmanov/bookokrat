@@ -81,7 +81,7 @@ fn test_book_list_vim_motion_g() {
     nav_panel.handle_upper_g();
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             nav_panel.render(f, area, false, &palette, &book_manager);
         })
@@ -121,7 +121,7 @@ fn test_book_list_vim_motion_gg() {
     // Render only the navigation panel in book list mode
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             nav_panel.render(f, area, false, &palette, &book_manager);
         })
@@ -184,7 +184,7 @@ fn test_navigation_panel_vim_motion_g() {
     // Render only the navigation panel
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             nav_panel.render(f, area, false, &palette, &book_manager);
         })
@@ -230,7 +230,7 @@ fn test_navigation_panel_vim_motion_gg() {
     // Render only the navigation panel
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             nav_panel.render(f, area, false, &palette, &book_manager);
         })
@@ -263,14 +263,11 @@ fn test_text_reader_vim_motion_g() {
     // Create test content with many lines
     let test_content = (0..=100)
         .map(|i| {
-            format!(
-                "This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit."
-            )
+            format!("This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
         })
         .collect::<Vec<_>>()
         .join("\n");
 
-    let area = terminal.get_frame().size();
     text_reader.set_content_from_string(&test_content, None);
 
     // Test G (go to bottom)
@@ -278,7 +275,7 @@ fn test_text_reader_vim_motion_g() {
 
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             text_reader.render(f, area, 1, 5, &palette, true);
         })
@@ -311,15 +308,12 @@ fn test_text_reader_vim_motion_gg() {
     // Create test content
     let test_content = (0..=100)
         .map(|i| {
-            format!(
-                "This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit."
-            )
+            format!("This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     // Update wrapped lines
-    let area = terminal.get_frame().size();
     text_reader.set_content_from_string(&test_content, None);
 
     // Scroll down first
@@ -332,7 +326,7 @@ fn test_text_reader_vim_motion_gg() {
     // Render only the text reader
     terminal
         .draw(|f| {
-            let area = f.size();
+            let area = f.area();
             let palette = get_test_palette();
             text_reader.render(f, area, 1, 5, &palette, true);
         })

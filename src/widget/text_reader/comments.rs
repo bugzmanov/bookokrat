@@ -7,6 +7,8 @@ use ratatui::text::Span;
 use std::sync::{Arc, Mutex};
 use tui_textarea::{Input, Key, TextArea};
 
+type CommentSelection = (String, usize, Option<(usize, usize)>);
+
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
         self.book_comments = Some(comments);
@@ -207,7 +209,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Get comment ID from current text selection
     /// Returns the comment ID if any line in the selection is a comment line
-    pub fn get_comment_at_cursor(&self) -> Option<(String, usize, Option<(usize, usize)>)> {
+    pub fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
         if let Some((start, end)) = self.text_selection.get_selection_range() {
             // Check all lines in the selection range
             for line_idx in start.line..=end.line {
@@ -290,6 +292,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn render_comment_as_quote(
         &mut self,
         comment: &Comment,

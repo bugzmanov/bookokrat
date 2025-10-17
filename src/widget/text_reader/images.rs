@@ -15,9 +15,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(String, u16)> {
         use MarkdownBlock::*;
         match &node.block {
-            Paragraph { content } => {
-                self.extract_images_from_text(content, book_images)
-            }
+            Paragraph { content } => self.extract_images_from_text(content, book_images),
             Quote { content } => {
                 let mut vec = Vec::new();
                 for inner_node in content {
@@ -214,6 +212,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     //todo: there should be a better way
     pub fn get_link_at_position(&self, line: usize, column: usize) -> Option<&LinkInfo> {
-        self.links.iter().find(|&link| link.line == line && column >= link.start_col && column <= link.end_col)
+        self.links
+            .iter()
+            .find(|&link| link.line == line && column >= link.start_col && column <= link.end_col)
     }
 }

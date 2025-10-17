@@ -404,8 +404,8 @@ impl IntoIterator for Text {
 pub fn classify_link_href(href: &str) -> (LinkType, Option<String>, Option<String>) {
     if href.starts_with("http://") || href.starts_with("https://") {
         (LinkType::External, None, None)
-    } else if href.starts_with("#") {
-        (LinkType::InternalAnchor, None, Some(href[1..].to_string()))
+    } else if let Some(stripped) = href.strip_prefix('#') {
+        (LinkType::InternalAnchor, None, Some(stripped.to_string()))
     } else if href.contains(".html") {
         // Extract chapter and anchor for chapter links
         if let Some(hash_pos) = href.find('#') {

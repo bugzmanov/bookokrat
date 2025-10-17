@@ -30,20 +30,7 @@ fn create_test_fps_counter() -> FPSCounter {
 /// Helper trait for simpler key event handling in tests
 trait TestKeyEventHandler {
     fn press_key(&mut self, key: crossterm::event::KeyCode);
-    fn press_keys(&mut self, keys: &[crossterm::event::KeyCode]);
     fn press_char_times(&mut self, ch: char, times: usize);
-    fn press_sequence(&mut self, sequence: &[KeyAction]);
-}
-
-/// Represents different types of key press actions for test sequences
-#[derive(Clone)]
-enum KeyAction {
-    /// Single key press
-    Key(crossterm::event::KeyCode),
-    /// Character repeated multiple times
-    CharTimes(char, usize),
-    /// Multiple key presses
-    Keys(Vec<crossterm::event::KeyCode>),
 }
 
 impl TestKeyEventHandler for App {
@@ -59,26 +46,9 @@ impl TestKeyEventHandler for App {
         );
     }
 
-    fn press_keys(&mut self, keys: &[crossterm::event::KeyCode]) {
-        for key in keys {
-            self.press_key(*key);
-        }
-    }
-
     fn press_char_times(&mut self, ch: char, times: usize) {
         for _ in 0..times {
             self.press_key(crossterm::event::KeyCode::Char(ch));
-        }
-    }
-
-    /// Execute a sequence of different key actions
-    fn press_sequence(&mut self, sequence: &[KeyAction]) {
-        for action in sequence {
-            match action {
-                KeyAction::Key(key) => self.press_key(*key),
-                KeyAction::CharTimes(ch, times) => self.press_char_times(*ch, *times),
-                KeyAction::Keys(keys) => self.press_keys(keys),
-            }
         }
     }
 }
@@ -2085,12 +2055,6 @@ fn test_book_reading_history_with_many_entries_svg() {
         bookrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
             .expect("Failed to create temp books");
 
-    let mut app = bookrat::App::new_with_config(
-        Some(&temp_manager.get_directory()),
-        Some(&bookmark_path.to_string_lossy()),
-        false,
-    );
-
     // Create bookmarks using the production format by manually crafting valid JSON
     // This is the only way to create deterministic test data with specific timestamps
     use chrono::{Duration, TimeZone, Utc};
@@ -2149,7 +2113,7 @@ fn test_book_reading_history_with_many_entries_svg() {
     println!("Created {} bookmarks using production code", 100);
 
     // Now reload the app to pick up the bookmarks
-    app = bookrat::App::new_with_config(
+    let mut app = bookrat::App::new_with_config(
         Some(&temp_manager.get_directory()),
         Some(&bookmark_path.to_string_lossy()),
         false,

@@ -298,10 +298,12 @@ impl NavigationPanel {
                                     })
                                 }
                                 TocItem::Section { href, anchor, .. } => {
-                                    href.as_ref().map(|href_str| NavigationPanelAction::NavigateToChapter {
+                                    href.as_ref().map(|href_str| {
+                                        NavigationPanelAction::NavigateToChapter {
                                             href: href_str.clone(),
                                             anchor: anchor.clone(),
-                                        })
+                                        }
+                                    })
                                 }
                             },
                             None => None,

@@ -9,6 +9,7 @@ pub struct TestFailure {
     pub expected: String,
     pub actual: String,
     pub line_stats: LineStats,
+    #[allow(dead_code)]
     pub snapshot_path: String,
 }
 
@@ -38,6 +39,7 @@ impl TestReport {
         }
     }
 
+    #[allow(dead_code)]
     pub fn generate_and_open_if_failures() {
         if let Ok(mut report) = TEST_REPORT.lock() {
             if !report.failures.is_empty() && !report.browser_opened {

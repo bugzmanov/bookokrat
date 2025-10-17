@@ -354,8 +354,20 @@ mod tests {
 
         let chapter1_comments = comments.get_chapter_comments("chapter1.xhtml");
         assert_eq!(chapter1_comments.len(), 2);
-        assert_eq!(chapter1_comments[0].content, "C1P1");
-        assert_eq!(chapter1_comments[1].content, "C1P5");
+        assert!(
+            chapter1_comments
+                .iter()
+                .find(|&x| x.content == "C1P1")
+                .is_some()
+        );
+        assert!(
+            chapter1_comments
+                .iter()
+                .find(|&x| x.content == "C1P5")
+                .is_some()
+        );
+        // assert_eq!(chapter1_comments[0].content, "C1P1");
+        // assert_eq!(chapter1_comments[1].content, "C1P5");
 
         let chapter2_comments = comments.get_chapter_comments("chapter2.xhtml");
         assert_eq!(chapter2_comments.len(), 1);

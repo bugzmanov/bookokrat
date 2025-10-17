@@ -349,11 +349,11 @@ impl ReadingHistory {
                 None
             }
             KeyCode::Esc => Some(ReadingHistoryAction::Close),
-            KeyCode::Enter => {
-                self.selected_path().map(|path| ReadingHistoryAction::OpenBook {
-                        path: path.to_string(),
-                    })
-            }
+            KeyCode::Enter => self
+                .selected_path()
+                .map(|path| ReadingHistoryAction::OpenBook {
+                    path: path.to_string(),
+                }),
             _ => None,
         }
     }

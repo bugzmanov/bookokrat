@@ -269,6 +269,8 @@ impl BookSearch {
             return;
         }
 
+        let visible_height = area_height.saturating_sub(5) as usize;
+
         // Calculate cursor position relative to viewport
         let cursor_viewport_pos = self.selected_result.saturating_sub(self.scroll_offset);
 
@@ -283,6 +285,16 @@ impl BookSearch {
         } else if self.selected_result > 0 {
             // Can't scroll viewport, but can move cursor up
             self.selected_result -= 1;
+        }
+
+        // Ensure the selection stays inside the visible viewport when we cannot scroll further
+        if visible_height > 0 {
+            let max_visible_index = self
+                .scroll_offset
+                .saturating_add(visible_height.saturating_sub(1));
+            if self.selected_result > max_visible_index {
+                self.selected_result = max_visible_index.min(self.results.len().saturating_sub(1));
+            }
         }
     }
 
@@ -613,46 +625,6 @@ impl BookSearch {
         }
 
         spans
-    }
-
-    fn wrap_text(&self, text: &str, max_width: usize) -> Vec<String> {
-        if text.len() <= max_width {
-            return vec![text.to_string()];
-        }
-
-        let mut lines = Vec::new();
-        let mut current_line = String::new();
-        let mut current_width = 0;
-
-        for word in text.split_whitespace() {
-            let word_len = word.len();
-
-            if current_width == 0 {
-                // First word on the line
-                current_line = word.to_string();
-                current_width = word_len;
-            } else if current_width + 1 + word_len <= max_width {
-                // Word fits on current line
-                current_line.push(' ');
-                current_line.push_str(word);
-                current_width += 1 + word_len;
-            } else {
-                // Start a new line
-                lines.push(current_line);
-                current_line = word.to_string();
-                current_width = word_len;
-            }
-        }
-
-        if !current_line.is_empty() {
-            lines.push(current_line);
-        }
-
-        if lines.is_empty() {
-            vec![text.to_string()]
-        } else {
-            lines
-        }
     }
 
     fn render_status_bar(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {

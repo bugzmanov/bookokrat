@@ -31,7 +31,7 @@ pub const OCEANIC_NEXT: Base16Palette = Base16Palette {
     base_05: Color::from_u32(0xC0C5CE),
     base_06: Color::from_u32(0xCDD3DE),
     base_07: Color::from_u32(0xF0F4F8),
-    base_08: Color::from_u32(0xEC5f67),
+    base_08: Color::from_u32(0xEC5F67),
     base_09: Color::from_u32(0xF99157),
     base_0a: Color::from_u32(0xFAC863),
     base_0b: Color::from_u32(0x99C794),

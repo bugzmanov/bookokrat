@@ -94,6 +94,7 @@ impl RichSpan {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ImageLoadState {
     NotLoaded,
     Loading,
@@ -119,10 +120,7 @@ impl EmbeddedImage {
     pub fn height_in_cells(width: u32, height: u32) -> u16 {
         let aspect_ratio = width as f32 / height as f32;
 
-        
-        if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO {
-            IMAGE_HEIGHT_WIDE
-        } else if height < 150 {
+        if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO || height < 150 {
             IMAGE_HEIGHT_WIDE
         } else {
             IMAGE_HEIGHT_REGULAR
@@ -179,7 +177,6 @@ pub struct CommentInputState {
     pub target_line: Option<usize>,
     pub edit_mode: Option<CommentEditMode>,
 }
-
 
 impl CommentInputState {
     pub fn clear(&mut self) {

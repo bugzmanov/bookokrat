@@ -93,6 +93,7 @@ impl BookList {
             return;
         }
 
+        let visible_height = area_height.saturating_sub(2) as usize; // Account for borders
         let current_offset = self.list_state.offset();
 
         let cursor_viewport_pos = self.selected.saturating_sub(current_offset);
@@ -109,6 +110,18 @@ impl BookList {
         } else if self.selected > 0 {
             self.selected -= 1;
             self.list_state.select(Some(self.selected));
+        }
+
+        // Keep selection inside the visible viewport when we cannot scroll up further
+        if visible_height > 0 {
+            let current_offset = self.list_state.offset();
+            let max_visible_index = current_offset.saturating_add(visible_height.saturating_sub(1));
+            if self.selected > max_visible_index {
+                self.selected = max_visible_index.min(self.book_infos.len().saturating_sub(1));
+                self.list_state = ListState::default()
+                    .with_selected(Some(self.selected))
+                    .with_offset(current_offset);
+            }
         }
     }
 
