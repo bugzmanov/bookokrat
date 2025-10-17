@@ -150,28 +150,45 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.last_active_anchor = anchor;
     }
 
-    /// todo: this is very bugggy!
     pub fn get_active_section(&mut self, current_chapter: usize) -> ActiveSection {
-        let viewport_middle = self.scroll_offset + (self.visible_height / 2);
+        let visible_start = self.scroll_offset;
+        let total_lines = self.rendered_content.lines.len();
+        if total_lines == 0 {
+            let chapter_href = self
+                .current_chapter_file
+                .clone()
+                .unwrap_or_else(|| format!("chapter_{current_chapter}"));
+            return ActiveSection::new(current_chapter, chapter_href, None);
+        }
 
-        // Scan backwards from middle to find the most recent anchor
-        let lines_to_check = viewport_middle.min(self.rendered_content.lines.len());
+        let chapter_href = self
+            .current_chapter_file
+            .clone()
+            .unwrap_or_else(|| format!("chapter_{current_chapter}"));
 
-        for line_idx in (0..=lines_to_check).rev() {
+        let viewport_mid = (visible_start + self.visible_height / 2).min(total_lines);
+        let mut latest_heading_anchor: Option<String> = None;
+
+        for line_idx in visible_start..viewport_mid {
             if let Some(line) = self.rendered_content.lines.get(line_idx) {
-                if let Some(ref anchor) = line.node_anchor {
-                    // Found an anchor - update and return it
-                    self.last_active_anchor = Some(anchor.clone());
-                    return ActiveSection::Anchor(anchor.clone());
+                if matches!(line.line_type, LineType::Heading { .. }) {
+                    if let Some(anchor) = line.node_anchor.clone() {
+                        latest_heading_anchor = Some(anchor);
+                    }
                 }
             }
         }
 
-        if let Some(ref anchor) = self.last_active_anchor {
-            return ActiveSection::Anchor(anchor.clone());
+        if let Some(anchor) = latest_heading_anchor {
+            self.last_active_anchor = Some(anchor.clone());
+            return ActiveSection::new(current_chapter, chapter_href, Some(anchor));
         }
 
-        ActiveSection::Chapter(current_chapter)
+        if let Some(ref anchor) = self.last_active_anchor {
+            return ActiveSection::new(current_chapter, chapter_href, Some(anchor.clone()));
+        }
+
+        ActiveSection::new(current_chapter, chapter_href, None)
     }
 
     /// Get the index of the first visible node in the viewport

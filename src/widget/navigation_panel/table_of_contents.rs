@@ -196,23 +196,17 @@ impl TableOfContents {
 
     /// Ensure a specific item is visible in the viewport
     fn ensure_item_visible(&mut self, target_index: usize, viewport_height: usize) {
-        // Get the current offset from the list state
         let current_offset = self.list_state.offset();
 
-        // Calculate visible range
         let visible_start = current_offset;
         let visible_end = current_offset + viewport_height.saturating_sub(3); // Account for borders
 
-        // Check if target is outside visible range
         if target_index < visible_start {
-            // Scroll up to show the item at the top
             *self.list_state.offset_mut() = target_index;
         } else if target_index >= visible_end {
-            // Scroll down to show the item at the bottom
             let new_offset = target_index.saturating_sub(viewport_height.saturating_sub(4));
             *self.list_state.offset_mut() = new_offset;
         }
-        // If item is already visible, don't change the offset
     }
 
     /// Find the index of the active item in the flattened TOC list
@@ -224,14 +218,12 @@ impl TableOfContents {
         let mut current_index = 0;
 
         for item in items {
-            // Check if this item matches the active section
             if self.is_item_active(item, active_section) {
                 return Some(current_index);
             }
 
             current_index += 1;
 
-            // If it's an expanded section, count its children
             if let TocItem::Section {
                 children,
                 is_expanded,
@@ -920,40 +912,20 @@ impl TableOfContents {
 
     /// Check if a TOC item is active based on the current active section
     fn is_item_active(&self, item: &TocItem, active_section: &ActiveSection) -> bool {
-        match active_section {
-            ActiveSection::Anchor(active_anchor) => {
-                // Check if this item's anchor matches the active anchor
-                if let Some(item_anchor) = item.anchor() {
-                    item_anchor == active_anchor
-                } else {
-                    false
-                }
-            }
-            ActiveSection::Chapter(_chapter_idx) => {
-                // Compare by href - check if this item's href matches the current chapter's href
-                if let Some(current_book) = &self.current_book_info {
-                    if let Some(current_href) = &current_book.current_chapter_href {
-                        if let Some(item_href) = item.href() {
-                            // Normalize both hrefs for comparison
-                            let current_normalized =
-                                current_href.split('#').next().unwrap_or(current_href);
-                            let item_normalized = item_href.split('#').next().unwrap_or(item_href);
+        if let Some(item_href) = item.href() {
+            let item_base_href = item_href.split('#').next().unwrap_or(item_href);
 
-                            // Check if they match
-                            current_normalized == item_normalized
-                                || current_normalized.ends_with(item_normalized)
-                                || item_normalized.ends_with(current_normalized)
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
+            if item_base_href == active_section.chapter_base_href {
+                return match (&active_section.anchor, item.anchor()) {
+                    (Some(active_anchor), Some(item_anchor)) => item_anchor == active_anchor,
+                    (Some(_), None) => true,
+                    (None, Some(_)) => false,
+                    (None, None) => true,
+                };
             }
         }
+
+        false
     }
 
     /// Create a line with search highlighting

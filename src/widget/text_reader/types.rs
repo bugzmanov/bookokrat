@@ -155,9 +155,27 @@ pub struct EmbeddedTable {
 
 /// Represents the active section being read
 #[derive(Clone, Debug)]
-pub enum ActiveSection {
-    Anchor(String), // Specific section via anchor
-    Chapter(usize), // Fallback to chapter index
+pub struct ActiveSection {
+    pub chapter: usize,
+    pub chapter_href: String,
+    pub chapter_base_href: String,
+    pub anchor: Option<String>,
+}
+
+impl ActiveSection {
+    pub fn new(chapter: usize, chapter_href: String, anchor: Option<String>) -> Self {
+        let chapter_base_href = Self::normalize_href(&chapter_href);
+        Self {
+            chapter,
+            chapter_href,
+            chapter_base_href,
+            anchor,
+        }
+    }
+
+    fn normalize_href(href: &str) -> String {
+        href.split('#').next().unwrap_or(href).to_string()
+    }
 }
 
 #[derive(Clone, Debug)]

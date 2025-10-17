@@ -129,7 +129,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         use MarkdownBlock::*;
 
         // Store the current node's anchor to add to the first line rendered for this node
-        let current_node_anchor = node.id.clone();
+        let mut current_node_anchor = node.id.clone();
+        let mut generated_heading_anchor: Option<String> = None;
         let initial_line_count = lines.len();
 
         // Remember the starting line count to assign node_index to first line only
@@ -137,6 +138,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         match &node.block {
             Heading { level, content } => {
+                if current_node_anchor.is_none() {
+                    let heading_text = Self::text_to_string(content);
+                    generated_heading_anchor = Some(self.generate_heading_anchor(&heading_text));
+                }
+
                 self.render_heading(
                     *level,
                     content,
@@ -247,6 +253,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_focused,
                 );
             }
+        }
+
+        if current_node_anchor.is_none() {
+            current_node_anchor = generated_heading_anchor;
         }
 
         if let Some(anchor) = current_node_anchor {

@@ -546,6 +546,7 @@ impl App {
             let current_chapter = book.current_chapter();
             let active_selection = self.text_reader.get_active_section(book.current_chapter());
 
+            debug!("active_selection: {:?}", active_selection);
             self.navigation_panel
                 .table_of_contents
                 .update_navigation_info(

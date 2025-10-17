@@ -161,7 +161,7 @@ fn create_test_book_info_with_toc() -> CurrentBookInfo {
         toc_items,
         current_chapter: 0,
         current_chapter_href: Some("chapter1.xhtml".to_string()),
-        active_section: ActiveSection::Chapter(0),
+        active_section: ActiveSection::new(0, "chapter1.xhtml".to_string(), None),
     }
 }
 
