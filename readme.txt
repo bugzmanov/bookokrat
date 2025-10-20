@@ -1,98 +1,4 @@
-
-  ██████╗  ██████╗  ██████╗ ██╗  ██╗ ██████╗ ██╗  ██╗██████╗  █████╗ ████████╗
-  ██╔══██╗██╔═══██╗██╔═══██╗██║ ██╔╝██╔═══██╗██║ ██╔╝██╔══██╗██╔══██╗╚══██╔══╝
-  ██████╔╝██║   ██║██║   ██║█████╔╝ ██║   ██║█████╔╝ ██████╔╝███████║   ██║
-  ██╔══██╗██║   ██║██║   ██║██╔═██╗ ██║   ██║██╔═██╗ ██╔══██╗██╔══██║   ██║
-  ██████╔╝╚██████╔╝╚██████╔╝██║  ██╗╚██████╔╝██║  ██╗██║  ██║██║  ██║   ██║
-  ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
-
-───────────────────────────────────────────────────────────────────────────────
-                        A Terminal EPUB Book Reader                     2025
-───────────────────────────────────────────────────────────────────────────────
-                                    
- █   █ █▀ █   ▐▀▄ ▐▀▄ ▐█▄ ▄█  █▀    █         
- ▐▄▌▄▌ ██▄▐▄  █   ▐ ▐ █  █  █ ██▄   █                 |\_/|
- ▐  ▌  ▀▀▀▐▀▀ ▀▀▀ ▀▀  ▀     ▀ ▀▀▀   ▄                |=^.^=`--.
-                                                     |-.--,---';
-    Bookokrat is a terminal-based EPUB reader     |=========|=========|=========|
-built in Rust. It creates distraction-free        |  ||   //| |==|   H|| ||I ..H|
-environment to read tech and fiction books.       |  ||  // | |--| I H||I||I#||H|
-Keyboard or mouse: vim-style motions and          |  || //  | |==| I H||I||I#||H|
-navigation or full mouse support with smooth      |=========|=========|=========|
-scrolling and multiclick text selection.          |  |-|    |  |=|   N|      |=||
-The rendering engine handles everything from      |  |-|    |  |H|  /N|      |+||
-code formatting and MathML formulas to embedded   |  |-|    |  |=|/' N|      |=||
-images, formatted tables, lists and clickable     |=========|=========|=========|
-hyperlinks. Engine preserves rich text formatting | |<|  I  | H  #||  | |=|\\   |
-across comlex nested HTML structures.             | |>|  I  | HI #||  | |*| \\  |
-It's a comfortable habitat for terminal lovers.   | |<|  I  | HI #||  | |=|  \\ |
-Automatic bookmarks preserve your position in     |=========|=========|=========|
-every book, fuzzy search works at chapter and     
-book-wide scope and persistent annotations let you build your commentary as you read. 
-This work is heavily inspired by https://github.com/dmitrysobolev/bookrat.
-
 ===============================================================================
-
-
-  ██████╗  ██████╗  ██████╗ ██╗  ██╗ ██████╗ ██╗  ██╗██████╗  █████╗ ████████╗
-  ██╔══██╗██╔═══██╗██╔═══██╗██║ ██╔╝██╔═══██╗██║ ██╔╝██╔══██╗██╔══██╗╚══██╔══╝
-  ██████╔╝██║   ██║██║   ██║█████╔╝ ██║   ██║█████╔╝ ██████╔╝███████║   ██║
-  ██╔══██╗██║   ██║██║   ██║██╔═██╗ ██║   ██║██╔═██╗ ██╔══██╗██╔══██║   ██║
-  ██████╔╝╚██████╔╝╚██████╔╝██║  ██╗╚██████╔╝██║  ██╗██║  ██║██║  ██║   ██║
-  ╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
-
-───────────────────────────────────────────────────────────────────────────────
-                        A Terminal EPUB Book Reader                     2025
-───────────────────────────────────────────────────────────────────────────────
-▖  ▖  ▜          
-▌▞▖▌█▌▐ ▛▘▛▌▛▛▌█▌
-▛ ▝▌▙▖▐▖▙▖▙▌▌▌▌▙▖
-▗▖ ▗▖▗▄▄▄▖▗▖    ▗▄▄▖ ▗▄▖ ▗▖  ▗▖▗▄▄▄▖    
-▐▌ ▐▌▐▌   ▐▌   ▐▌   ▐▌ ▐▌▐▛▚▞▜▌▐▌       
-▐▌ ▐▌▐▛▀▀▘▐▌   ▐▌   ▐▌ ▐▌▐▌  ▐▌▐▛▀▀▘    
-▐▙█▟▌▐▙▄▄▖▐▙▄▄▖▝▚▄▄▖▝▚▄▞▘▐▌  ▐▌▐▙▄▄▖
-                                    
- █   █ █▀ █   ▐▀▄ ▐▀▄ ▐█▄ ▄█  █▀    █         
- ▐▄▌▄▌ ██▄▐▄  █   ▐ ▐ █  █  █ ██▄   █                 |\_/|
- ▐  ▌  ▀▀▀▐▀▀ ▀▀▀ ▀▀  ▀     ▀ ▀▀▀   ▄                |=^.^=`--.
-                                                     |-.--,---';
-    Bookokrat is a terminal-based EPUB reader     |=========|=========|=========|
-built in Rust. It creates distraction-free        |  ||   //| |==|   H|| ||I ..H|
-environment to read tech and fiction books.       |  ||  // | |--| I H||I||I#||H|
-Keyboard or mouse: vim-style motions and          |  || //  | |==| I H||I||I#||H|
-navigation or full mouse support with smooth      |=========|=========|=========|
-scrolling and multiclick text selection.          |  |-|    |  |=|   N|      |=||
-The rendering engine handles everything from      |  |-|    |  |H|  /N|      |+||
-code formatting and MathML formulas to embedded   |  |-|    |  |=|/' N|      |=||
-images, formatted tables, lists and clickable     |=========|=========|=========|
-hyperlinks. Engine preserves rich text formatting | |<|  I  | H  #||  | |=|\\   |
-across comlex nested HTML structures.             | |>|  I  | HI #||  | |*| \\  |
-It's a comfortable habitat for terminal lovers.   | |<|  I  | HI #||  | |=|  \\ |
-Automatic bookmarks preserve your position in     |=========|=========|=========|
-every book, fuzzy search works at chapter and     
-book-wide scope and persistent annotations let you build your commentary as you read. 
-This work is heavily inspired by https://github.com/dmitrysobolev/bookrat.
-
-===============================================================================
-
-
-      |\_/|
-     |=^.^=`--.
-     |-.--,---';
-  |=========|=========|=========|
-  |  ||   //| |==|   H|| ||I ..H|
-  |  ||  // | |--| I H||I||I#||H|
-  |  || //  | |==| I H||I||I#||H|
-  |=========|=========|=========|
-  |  |-|    |  |=|   N|      |=||
-  |  |-|    |  |H|  /N|      |+||
-  |  |-|    |  |=|/' N|      |=||
-  |=========|=========|=========|
-  | |<|  I  | H  #||  | |=|\\   |
-  | |>|  I  | HI #||  | |*| \\  |
-  | |<|  I  | HI #||  | |=|  \\ |
-  |=========|=========|=========|
-
 
                               FEATURES AT A GLANCE
 
@@ -130,22 +36,6 @@ This work is heavily inspired by https://github.com/dmitrysobolev/bookrat.
     ▸ External EPUB reader integration
     ▸ Performance profiling overlay
     ▸ Book statistics popup
-
-===============================================================================
-
-                                 QUICK START
-
-  [1] Install Rust from https://rustup.rs (if needed)
-
-  [2] Build and run:
-
-      $ cargo run --release
-
-  [3] Place EPUB files in your current directory
-
-  [4] Launch Bookokrat and start reading!
-
-      Navigate with j/k, open books with Enter, quit with q
 
 ===============================================================================
 
@@ -282,17 +172,6 @@ Comments are saved per-book and persist across sessions.
 
                               ADVANCED FEATURES
 
-  [MATHML RENDERING]
-    Bookokrat automatically detects and renders MathML expressions as ASCII
-    art with Unicode subscripts and superscripts. Complex mathematical
-    expressions are displayed in readable terminal format.
-
-  [IMAGE DISPLAY]
-    • Inline images displayed directly in text with dynamic sizing
-    • Image placeholders show loading indicators
-    • Press Enter on an image or click it to view full-size
-    • Images are extracted and cached for performance
-
   [LINK NAVIGATION]
     Following links creates a navigation breadcrumb trail. Use Ctrl+o and
     Ctrl+i to jump backward and forward through your reading path, just
@@ -322,37 +201,6 @@ Comments are saved per-book and persist across sessions.
   ▸ Debug view: Press Space+s to toggle raw HTML for rendering issues
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
-
-===============================================================================
-
-                               CONFIGURATION
-
-Bookokrat stores data in the current directory:
-
-  bookmarks.json      Saved reading positions and timestamps
-  temp_images/        Extracted image cache
-  bookokrat.log         Debug logging output
-
-Reading speed for time estimates is set to 250 words per minute.
-
-===============================================================================
-
-                           BUILDING FROM SOURCE
-
-  Build optimized release binary:
-    $ cargo build --release
-
-  Run with debug logging:
-    $ RUST_LOG=bookokrat=debug cargo run
-
-  Run tests:
-    $ cargo test
-
-  Format code:
-    $ cargo fmt
-
-  Check for issues:
-    $ cargo clippy
 
 ===============================================================================
 

@@ -76,6 +76,7 @@ bugs:
 [ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
+[ ] Careless people: current chanpter highlightning not workin
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

@@ -7,7 +7,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+    },
 };
 use regex::Regex;
 
@@ -128,6 +130,24 @@ impl HelpPopup {
             .wrap(Wrap { trim: false });
 
         f.render_widget(paragraph, popup_area);
+
+        // Render scrollbar
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(OCEANIC_NEXT.base_04))
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"));
+
+        let mut scrollbar_state =
+            ScrollbarState::new(self.total_lines).position(self.scroll_offset);
+
+        f.render_stateful_widget(
+            scrollbar,
+            popup_area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
     }
 
     pub fn scroll_down(&mut self) {
