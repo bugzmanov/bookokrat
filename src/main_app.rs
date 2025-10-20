@@ -10,7 +10,8 @@ use crate::images::image_storage::ImageStorage;
 use crate::inputs::{ClickType, KeySeq, MouseTracker, map_keys_to_input};
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
-use crate::navigation_panel::{CurrentBookInfo, NavigationPanel};
+use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
+use crate::notification::NotificationManager;
 use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
@@ -20,6 +21,7 @@ use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
 use crate::theme::OCEANIC_NEXT;
 use crate::types::LinkInfo;
+use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use image::GenericImageView;
 use log::warn;
 
@@ -86,6 +88,8 @@ pub struct App {
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
+    help_popup: Option<HelpPopup>,
+    notifications: NotificationManager,
 }
 
 pub trait VimNavMotions {
@@ -117,6 +121,7 @@ pub enum PopupWindow {
     BookStats,
     ImagePopup,
     BookSearch,
+    Help,
 }
 
 impl Default for App {
@@ -204,6 +209,21 @@ impl App {
         matches!(self.focused_panel, FocusedPanel::Popup(_))
     }
 
+    /// Show an informational notification to the user
+    pub fn show_info(&mut self, message: impl Into<String>) {
+        self.notifications.show_info(message);
+    }
+
+    /// Show a warning notification to the user
+    pub fn show_warning(&mut self, message: impl Into<String>) {
+        self.notifications.show_warning(message);
+    }
+
+    /// Show an error notification to the user
+    pub fn show_error(&mut self, message: impl Into<String>) {
+        self.notifications.show_error(message);
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     pub fn new_with_mock_system_executor(
         book_directory: Option<&str>,
@@ -249,7 +269,7 @@ impl App {
 
         let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
             error!("Failed to initialize image storage: {e}. Using fallback.");
-            ImageStorage::new(std::env::temp_dir().join("bookrat_images"))
+            ImageStorage::new(std::env::temp_dir().join("bookokrat_images"))
                 .expect("Failed to create fallback image storage")
         }));
 
@@ -281,6 +301,8 @@ impl App {
             book_stat: BookStat::new(),
             jump_list: JumpList::new(20),
             book_search: None,
+            help_popup: None,
+            notifications: NotificationManager::new(),
         };
 
         if auto_load_recent
@@ -289,6 +311,7 @@ impl App {
         {
             if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
                 error!("Failed to auto-load most recent book: {e}");
+                app.show_error(format!("Failed to auto-load recent book: {}", e));
             }
         }
 
@@ -400,6 +423,7 @@ impl App {
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {e}");
+            self.show_error(format!("Failed to load EPUB: {}", e));
             anyhow::anyhow!("Failed to load EPUB: {}", e)
         })?;
 
@@ -523,8 +547,14 @@ impl App {
 
     fn switch_to_toc_mode(&mut self, book: &EpubBook) {
         let toc_items = TocParser::parse_toc_structure(&book.epub);
-        let active_section = self.text_reader.get_active_section(book.current_chapter());
         let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
+        let available_anchors =
+            TableOfContents::anchors_for_items(&toc_items, current_chapter_href.as_deref());
+        let active_section = self.text_reader.get_active_section(
+            book.current_chapter(),
+            current_chapter_href.as_deref(),
+            &available_anchors,
+        );
 
         let book_info = CurrentBookInfo {
             path: book.file.clone(),
@@ -544,14 +574,21 @@ impl App {
         if let Some(book) = &self.current_book {
             let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
             let current_chapter = book.current_chapter();
-            let active_selection = self.text_reader.get_active_section(book.current_chapter());
+            let available_anchors = self
+                .navigation_panel
+                .table_of_contents
+                .anchors_for_chapter(current_chapter_href.as_deref());
+            let active_selection = self.text_reader.get_active_section(
+                book.current_chapter(),
+                current_chapter_href.as_deref(),
+                &available_anchors,
+            );
 
-            debug!("active_selection: {:?}", active_selection);
             self.navigation_panel
                 .table_of_contents
                 .update_navigation_info(
                     current_chapter,
-                    current_chapter_href,
+                    current_chapter_href.clone(),
                     active_selection.clone(),
                 );
 
@@ -764,6 +801,11 @@ impl App {
                         }
                     }
                     return; // Block all other interactions
+                }
+
+                // Ignore mouse clicks when help popup is shown
+                if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
+                    return; // Block all interactions, help popup only responds to keyboard
                 }
 
                 if matches!(
@@ -1183,6 +1225,21 @@ impl App {
             return;
         }
 
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
+            if let Some(ref mut help_popup) = self.help_popup {
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        help_popup.scroll_down();
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        help_popup.scroll_up();
+                    }
+                }
+            }
+            return;
+        }
+
         // Block scrolling for other popups
         if self.has_active_popup() {
             return;
@@ -1212,20 +1269,27 @@ impl App {
         }
     }
 
-    pub fn open_with_system_viewer(&self) {
+    pub fn open_with_system_viewer(&mut self) {
         if let Some(book) = &self.current_book {
             match self
                 .system_command_executor
                 .open_file_at_chapter(&book.file, book.current_chapter())
             {
-                Ok(_) => info!(
-                    "Successfully opened EPUB with system viewer at chapter {}",
-                    book.current_chapter()
-                ),
-                Err(e) => error!("Failed to open EPUB with system viewer: {e}"),
+                Ok(_) => {
+                    info!(
+                        "Successfully opened EPUB with system viewer at chapter {}",
+                        book.current_chapter()
+                    );
+                    self.show_info("Opened in external viewer");
+                }
+                Err(e) => {
+                    error!("Failed to open EPUB with system viewer: {e}");
+                    self.show_error(format!("Failed to open in external viewer: {}", e));
+                }
             }
         } else {
             error!("No EPUB file currently loaded");
+            self.show_error("No EPUB file currently loaded");
         }
     }
 
@@ -1254,6 +1318,7 @@ impl App {
         if let Some(location) = self.jump_list.jump_back() {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump back: {e}");
+                self.show_error(format!("Failed to jump back: {}", e));
             }
         }
     }
@@ -1263,6 +1328,7 @@ impl App {
         if let Some(location) = self.jump_list.jump_forward() {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump forward: {e}");
+                self.show_error(format!("Failed to jump forward: {}", e));
             }
         }
     }
@@ -1295,6 +1361,7 @@ impl App {
             SelectedActionOwned::BookIndex(index) => {
                 if let Err(e) = self.open_book_for_reading(index) {
                     error!("Failed to open book at index {index}: {e}");
+                    self.show_error(format!("Failed to open book: {}", e));
                 }
             }
             SelectedActionOwned::BackToBooks => {
@@ -1322,6 +1389,7 @@ impl App {
                             self.update_toc_state();
                         } else {
                             error!("Could not find spine index for href: {href}");
+                            self.show_error("Chapter not found in book");
                         }
                     }
                     TocItem::Section { href, anchor, .. } => {
@@ -1346,6 +1414,7 @@ impl App {
                                 error!(
                                     "Could not find spine index for section href: {section_href}"
                                 );
+                                self.show_error("Section not found in book");
                             }
                         } else {
                             // No href - just toggle expansion
@@ -1463,6 +1532,19 @@ impl App {
 
             self.book_stat.render(f, f.area());
         }
+
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut help_popup) = self.help_popup {
+                help_popup.render(f, f.area());
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -1484,9 +1566,17 @@ impl App {
     }
 
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
+        use crate::notification::NotificationLevel;
         let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
 
-        let help_content = if self.is_in_search_mode() {
+        let help_content = if let Some(notification) = self.notifications.get_current() {
+            let level_str = match notification.level {
+                NotificationLevel::Info => "INFO",
+                NotificationLevel::Warning => "WARNING",
+                NotificationLevel::Error => "ERROR",
+            };
+            format!("[{}] {} | ESC: Dismiss", level_str, notification.message)
+        } else if self.is_in_search_mode() {
             let search_state = if self.navigation_panel.is_searching() {
                 self.navigation_panel.get_search_state()
             } else {
@@ -1528,6 +1618,9 @@ impl App {
                 FocusedPanel::Popup(PopupWindow::ImagePopup) => "ESC/Any key: Close",
                 FocusedPanel::Popup(PopupWindow::BookSearch) => {
                     "Space+f: Reopen | Space+F: New Search"
+                }
+                FocusedPanel::Popup(PopupWindow::Help) => {
+                    "j/k/Ctrl+d/u: Scroll | gg/G: Top/Bottom | ESC/?: Close"
                 }
             };
             help_text.to_string()
@@ -1603,6 +1696,7 @@ impl App {
                             .calculate_stats(&mut book.epub, terminal_size)
                         {
                             error!("Failed to calculate book statistics: {e}");
+                            self.show_error(format!("Failed to calculate statistics: {}", e));
                         } else {
                             self.book_stat.show();
                             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
@@ -1716,6 +1810,7 @@ impl App {
                         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {chapter_index}: {e}");
+                            self.show_error(format!("Failed to navigate to chapter: {}", e));
                         } else {
                             self.text_reader.scroll_to_line(line_number);
                         }
@@ -1740,6 +1835,7 @@ impl App {
                     self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                     if let Err(e) = self.navigate_to_chapter(chapter_index) {
                         error!("Failed to navigate to chapter {chapter_index}: {e}");
+                        self.show_error(format!("Failed to navigate to chapter: {}", e));
                     }
                 }
                 None => {}
@@ -1770,6 +1866,21 @@ impl App {
                         }
                     }
                 }
+            }
+            return None;
+        }
+
+        // If help popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::Help) {
+            let action = if let Some(ref mut help) = self.help_popup {
+                help.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(HelpPopupAction::Close) = action {
+                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                self.help_popup = None;
             }
             return None;
         }
@@ -1806,7 +1917,9 @@ impl App {
                         bypass = true;
                     }
                     NavigationPanelAction::SelectBook { book_index } => {
-                        let _ = self.open_book_for_reading(book_index);
+                        if let Err(e) = self.open_book_for_reading(book_index) {
+                            self.show_error(format!("Failed to open book: {}", e));
+                        }
                     }
                     NavigationPanelAction::SwitchToBookList => {
                         self.switch_to_book_list_mode();
@@ -1814,6 +1927,13 @@ impl App {
                     NavigationPanelAction::NavigateToChapter { href, anchor } => {
                         if let Some(chapter_index) = self.find_spine_index_by_href(&href) {
                             let _ = self.navigate_to_chapter(chapter_index);
+                            let nav_area = self.get_navigation_panel_area();
+                            let toc_height = nav_area.height as usize;
+                            let anchor_ref = anchor.as_deref();
+                            self.navigation_panel
+                                .table_of_contents
+                                .set_active_from_hint(&href, anchor_ref, Some(toc_height));
+
                             if let Some(anchor_id) = anchor {
                                 self.text_reader.store_pending_anchor_scroll(anchor_id);
                             }
@@ -1886,12 +2006,14 @@ impl App {
                     match self.text_reader.delete_comment_at_cursor() {
                         Ok(true) => {
                             info!("Comment deleted successfully");
+                            self.show_info("Comment deleted");
                         }
                         Ok(false) => {
                             // Cursor not on a comment, ignore
                         }
                         Err(e) => {
                             error!("Failed to delete comment: {e}");
+                            self.show_error(format!("Failed to delete comment: {}", e));
                         }
                     }
                 }
@@ -1966,12 +2088,18 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('?') => {
+                self.help_popup = Some(HelpPopup::new());
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+            }
             KeyCode::Char('q') => {
                 self.save_bookmark_with_throttle(true);
                 return Some(AppAction::Quit);
             }
             KeyCode::Esc => {
-                if self.text_reader.has_text_selection() {
+                if self.notifications.has_notification() {
+                    self.notifications.dismiss();
+                } else if self.text_reader.has_text_selection() {
                     self.text_reader.clear_selection();
                 } else if self.is_in_search_mode() {
                     self.cancel_current_search();
@@ -2217,6 +2345,7 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
         if last_tick.elapsed() >= tick_rate {
             let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
             let images_loaded = app.text_reader.check_for_loaded_images();
+            let notification_expired = app.notifications.update();
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
@@ -2224,6 +2353,9 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             if highlight_changed {
                 needs_redraw = true;
                 debug!("Highlight expired, forcing redraw");
+            }
+            if notification_expired {
+                needs_redraw = true;
             }
             last_tick = std::time::Instant::now();
         }

@@ -581,7 +581,7 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - The application scans the current directory for EPUB files on startup
 - Bookmarks are automatically saved when navigating between chapters or files
 - The most recently read book is auto-loaded on startup
-- Logging is written to `bookrat.log` for debugging
+- Logging is written to `bookokrat.log` for debugging
 - The TUI uses vim-like keybindings throughout all components
 - Reading speed is set to 250 words per minute for time calculations
 - Scroll acceleration increases speed when holding down scroll keys

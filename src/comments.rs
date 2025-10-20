@@ -168,7 +168,7 @@ impl BookComments {
     fn get_comments_dir() -> Result<PathBuf> {
         let comments_dir = std::env::current_dir()
             .context("Could not determine current directory")?
-            .join(".bookrat_comments");
+            .join(".bookokrat_comments");
 
         if !comments_dir.exists() {
             fs::create_dir_all(&comments_dir).context("Failed to create comments directory")?;

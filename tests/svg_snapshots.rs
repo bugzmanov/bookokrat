@@ -1,9 +1,9 @@
-use bookrat::simple_fake_books::FakeBookConfig;
-use bookrat::test_utils::test_helpers::{
+use bookokrat::simple_fake_books::FakeBookConfig;
+use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
 };
 // SVG snapshot tests using snapbox
-use bookrat::{App, main_app::FPSCounter};
+use bookokrat::{App, main_app::FPSCounter};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 mod snapshot_assertions;
@@ -236,7 +236,7 @@ fn test_chapter_title_normal_length_svg() {
         let path = book_info.path.clone();
         let _ = app.open_book_for_reading_by_path(&path);
         // Switch to content focus like runtime behavior after loading
-        app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::Content);
+        app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::Content);
         // Force animation to complete for testing
     }
 
@@ -475,7 +475,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
 
 #[test]
 fn test_mouse_event_batching_svg() {
-    use bookrat::event_source::{EventSource, SimulatedEventSource};
+    use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -568,7 +568,7 @@ fn test_mouse_event_batching_svg() {
 
 #[test]
 fn test_horizontal_scroll_handling_svg() {
-    use bookrat::event_source::{EventSource, SimulatedEventSource};
+    use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -698,7 +698,7 @@ fn test_horizontal_scroll_handling_svg() {
 
 #[test]
 fn test_edge_case_mouse_coordinates_svg() {
-    use bookrat::event_source::{EventSource, SimulatedEventSource};
+    use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1681,7 +1681,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     }
 
     // Ensure content panel has focus
-    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::Content);
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::Content);
 
     // Draw initial state
     terminal
@@ -1769,7 +1769,7 @@ fn test_toc_navigation_bug_svg() {
     }
 
     // Start with file list panel focused to show the TOC
-    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::NavigationList);
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::NavigationList);
 
     // Draw initial state - should show book with expanded TOC
     terminal
@@ -2052,7 +2052,7 @@ fn test_book_reading_history_with_many_entries_svg() {
 
     // Create app with real bookmark file
     let temp_manager =
-        bookrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
+        bookokrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
             .expect("Failed to create temp books");
 
     // Create bookmarks using the production format by manually crafting valid JSON
@@ -2068,7 +2068,7 @@ fn test_book_reading_history_with_many_entries_svg() {
     // Add books read today (most recent - should appear at top)
     for i in 0..10 {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        let bookmark = bookrat::bookmarks::Bookmark {
+        let bookmark = bookokrat::bookmarks::Bookmark {
             chapter_href: format!("chapter_{}.html", i * 2),
             node_index: None,
             last_read: now - Duration::hours(i as i64),
@@ -2081,7 +2081,7 @@ fn test_book_reading_history_with_many_entries_svg() {
     // Add books read yesterday
     for i in 10..20 {
         let book_path = format!("{}/Test Book {}.epub", temp_manager.get_directory(), i);
-        let bookmark = bookrat::bookmarks::Bookmark {
+        let bookmark = bookokrat::bookmarks::Bookmark {
             chapter_href: format!("chapter_{}.html", (i - 10) * 3),
             node_index: None,
             last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
@@ -2093,7 +2093,7 @@ fn test_book_reading_history_with_many_entries_svg() {
 
     // Save using the production Bookmarks struct
     let mut prod_bookmarks =
-        bookrat::bookmarks::Bookmarks::with_file(&bookmark_path.to_string_lossy());
+        bookokrat::bookmarks::Bookmarks::with_file(&bookmark_path.to_string_lossy());
 
     // Add all the bookmarks using the production method
     for (path, bookmark) in books_map {
@@ -2113,7 +2113,7 @@ fn test_book_reading_history_with_many_entries_svg() {
     println!("Created {} bookmarks using production code", 100);
 
     // Now reload the app to pick up the bookmarks
-    let mut app = bookrat::App::new_with_config(
+    let mut app = bookokrat::App::new_with_config(
         Some(&temp_manager.get_directory()),
         Some(&bookmark_path.to_string_lossy()),
         false,
@@ -3196,7 +3196,7 @@ fn test_toc_search_svg() {
 
     // Make sure we're focused on the TOC panel, not the content
     // After opening a book, focus typically goes to content, so we need to switch back
-    app.focused_panel = bookrat::FocusedPanel::Main(bookrat::MainPanel::NavigationList);
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::NavigationList);
 
     // Initial draw to show the TOC
     terminal

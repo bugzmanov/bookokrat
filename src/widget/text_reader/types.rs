@@ -164,17 +164,27 @@ pub struct ActiveSection {
 
 impl ActiveSection {
     pub fn new(chapter: usize, chapter_href: String, anchor: Option<String>) -> Self {
-        let chapter_base_href = Self::normalize_href(&chapter_href);
+        let chapter_base_href = Self::base_href(&chapter_href);
+        let normalized_anchor = anchor.map(|a| Self::normalize_anchor(&a));
         Self {
             chapter,
             chapter_href,
             chapter_base_href,
-            anchor,
+            anchor: normalized_anchor,
         }
     }
 
-    fn normalize_href(href: &str) -> String {
+    pub fn base_href(href: &str) -> String {
         href.split('#').next().unwrap_or(href).to_string()
+    }
+
+    pub fn normalize_anchor(anchor: &str) -> String {
+        anchor
+            .split('#')
+            .last()
+            .unwrap_or(anchor)
+            .trim_start_matches('#')
+            .to_string()
     }
 }
 

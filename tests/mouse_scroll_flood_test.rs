@@ -1,5 +1,5 @@
 use anyhow::Result;
-use bookrat::main_app::{App, run_app_with_event_source};
+use bookokrat::main_app::{App, run_app_with_event_source};
 use crossterm::event::{Event, MouseEvent, MouseEventKind};
 use ratatui::{Terminal, backend::TestBackend};
 use std::time::{Duration, Instant};
@@ -42,7 +42,7 @@ impl FloodEventSource {
     }
 }
 
-impl bookrat::event_source::EventSource for FloodEventSource {
+impl bookokrat::event_source::EventSource for FloodEventSource {
     fn poll(&mut self, _timeout: Duration) -> Result<bool> {
         Ok(self.current_index < self.events.len())
     }

@@ -1,10 +1,10 @@
-use bookrat::book_manager::{BookInfo, BookManager};
-use bookrat::main_app::VimNavMotions;
-use bookrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
-use bookrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
-use bookrat::table_of_contents::TocItem;
-use bookrat::test_utils::test_helpers::create_test_terminal;
-use bookrat::theme::Base16Palette;
+use bookokrat::book_manager::{BookInfo, BookManager};
+use bookokrat::main_app::VimNavMotions;
+use bookokrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
+use bookokrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
+use bookokrat::table_of_contents::TocItem;
+use bookokrat::test_utils::test_helpers::create_test_terminal;
+use bookokrat::theme::Base16Palette;
 
 mod snapshot_assertions;
 mod svg_generation;
@@ -64,7 +64,7 @@ fn create_test_book_manager() -> BookManager {
 
 // Get default theme palette
 fn get_test_palette() -> Base16Palette {
-    bookrat::theme::OCEANIC_NEXT
+    bookokrat::theme::OCEANIC_NEXT
 }
 
 #[test]

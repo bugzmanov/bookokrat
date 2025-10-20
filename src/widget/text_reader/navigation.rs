@@ -150,21 +150,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.last_active_anchor = anchor;
     }
 
-    pub fn get_active_section(&mut self, current_chapter: usize) -> ActiveSection {
+    pub fn get_active_section(
+        &mut self,
+        current_chapter: usize,
+        chapter_href: Option<&str>,
+        available_anchors: &[String],
+    ) -> ActiveSection {
+        let chapter_href = if let Some(href) = chapter_href {
+            href.to_string()
+        } else if let Some(ref file) = self.current_chapter_file {
+            file.clone()
+        } else {
+            format!("chapter_{current_chapter}")
+        };
+
         let visible_start = self.scroll_offset;
         let total_lines = self.rendered_content.lines.len();
         if total_lines == 0 {
-            let chapter_href = self
-                .current_chapter_file
-                .clone()
-                .unwrap_or_else(|| format!("chapter_{current_chapter}"));
             return ActiveSection::new(current_chapter, chapter_href, None);
         }
-
-        let chapter_href = self
-            .current_chapter_file
-            .clone()
-            .unwrap_or_else(|| format!("chapter_{current_chapter}"));
 
         let viewport_mid = (visible_start + self.visible_height / 2).min(total_lines);
         let mut latest_heading_anchor: Option<String> = None;
@@ -180,15 +184,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         if let Some(anchor) = latest_heading_anchor {
-            self.last_active_anchor = Some(anchor.clone());
-            return ActiveSection::new(current_chapter, chapter_href, Some(anchor));
+            if let Some(matched) = Self::match_available_anchor(&anchor, available_anchors) {
+                self.last_active_anchor = Some(matched.clone());
+                return ActiveSection::new(current_chapter, chapter_href, Some(matched));
+            }
         }
 
         if let Some(ref anchor) = self.last_active_anchor {
-            return ActiveSection::new(current_chapter, chapter_href, Some(anchor.clone()));
+            if let Some(matched) = Self::match_available_anchor(anchor, available_anchors) {
+                self.last_active_anchor = Some(matched.clone());
+                return ActiveSection::new(current_chapter, chapter_href, Some(matched));
+            }
         }
 
+        self.last_active_anchor = None;
         ActiveSection::new(current_chapter, chapter_href, None)
+    }
+
+    fn match_available_anchor(anchor: &str, available: &[String]) -> Option<String> {
+        if available.iter().any(|a| a == anchor) {
+            return Some(anchor.to_string());
+        }
+
+        available
+            .iter()
+            .find(|a| a.eq_ignore_ascii_case(anchor))
+            .cloned()
     }
 
     /// Get the index of the first visible node in the viewport

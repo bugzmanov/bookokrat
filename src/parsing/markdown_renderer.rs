@@ -33,8 +33,8 @@ use crate::markdown::{
 /// # Usage
 ///
 /// ```rust,no_run
-/// use bookrat::parsing::markdown_renderer::MarkdownRenderer;
-/// # use bookrat::markdown::Document;
+/// use bookokrat::parsing::markdown_renderer::MarkdownRenderer;
+/// # use bookokrat::markdown::Document;
 /// # fn main() {
 /// let renderer = MarkdownRenderer::new();
 /// # let markdown_document = Document::new();

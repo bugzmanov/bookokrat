@@ -137,6 +137,95 @@ impl TableOfContents {
         }
     }
 
+    pub fn set_active_from_hint(
+        &mut self,
+        chapter_href: &str,
+        anchor: Option<&str>,
+        viewport_height: Option<usize>,
+    ) {
+        let current_chapter = if let Some(ref info) = self.current_book_info {
+            info.current_chapter
+        } else {
+            return;
+        };
+
+        let mut active = ActiveSection::new(
+            current_chapter,
+            chapter_href.to_string(),
+            anchor.map(|a| a.to_string()),
+        );
+
+        if let Some(ref mut info) = self.current_book_info {
+            info.current_chapter_href = Some(active.chapter_href.clone());
+            info.active_section = active.clone();
+        }
+
+        let mut active_index = if let Some(ref info) = self.current_book_info {
+            self.find_active_item_index(&info.toc_items, &active)
+        } else {
+            None
+        };
+
+        if active_index.is_none() && active.anchor.is_some() {
+            active.anchor = None;
+            if let Some(ref mut info) = self.current_book_info {
+                info.active_section = active.clone();
+            }
+            active_index = if let Some(ref info) = self.current_book_info {
+                self.find_active_item_index(&info.toc_items, &active)
+            } else {
+                None
+            };
+        }
+
+        if let Some(idx) = active_index {
+            let index_with_header = idx + 1;
+            self.active_item_index = Some(index_with_header);
+            if let Some(height) = viewport_height.or(Some(self.last_viewport_height)) {
+                if height > 0 {
+                    self.ensure_item_visible(index_with_header, height);
+                }
+            }
+        }
+    }
+
+    pub fn anchors_for_chapter(&self, chapter_href: Option<&str>) -> Vec<String> {
+        if let Some(ref info) = self.current_book_info {
+            Self::anchors_for_items(&info.toc_items, chapter_href)
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn anchors_for_items(items: &[TocItem], chapter_href: Option<&str>) -> Vec<String> {
+        let mut anchors = Vec::new();
+        if let Some(href) = chapter_href {
+            let target_base = ActiveSection::base_href(href);
+            Self::collect_anchors_for_href(items, &target_base, &mut anchors);
+        }
+        anchors
+    }
+
+    fn collect_anchors_for_href(items: &[TocItem], target_base: &str, output: &mut Vec<String>) {
+        for item in items {
+            if let Some(item_href) = item.href() {
+                let item_base = ActiveSection::base_href(item_href);
+                if item_base == target_base {
+                    if let Some(anchor) = item.anchor() {
+                        let normalized = ActiveSection::normalize_anchor(anchor);
+                        if !output.contains(&normalized) {
+                            output.push(normalized);
+                        }
+                    }
+                }
+            }
+
+            if let TocItem::Section { children, .. } = item {
+                Self::collect_anchors_for_href(children, target_base, output);
+            }
+        }
+    }
+
     /// Recursively copy expansion states from old items to new items based on matching titles/hrefs
     fn copy_expansion_states(old_items: &[TocItem], new_items: &mut [TocItem]) {
         for new_item in new_items.iter_mut() {
@@ -917,7 +1006,9 @@ impl TableOfContents {
 
             if item_base_href == active_section.chapter_base_href {
                 return match (&active_section.anchor, item.anchor()) {
-                    (Some(active_anchor), Some(item_anchor)) => item_anchor == active_anchor,
+                    (Some(active_anchor), Some(item_anchor)) => {
+                        ActiveSection::normalize_anchor(item_anchor) == *active_anchor
+                    }
                     (Some(_), None) => true,
                     (None, Some(_)) => false,
                     (None, None) => true,

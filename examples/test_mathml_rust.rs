@@ -1,6 +1,6 @@
 //! Test the Rust MathML renderer with the same examples as Python
 
-use bookrat::mathml_renderer::mathml_to_ascii;
+use bookokrat::mathml_renderer::mathml_to_ascii;
 
 fn main() {
     println!("Testing Rust MathML Renderer");

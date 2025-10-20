@@ -1,17 +1,17 @@
 [package]
-name = "bookrat"
+name = "bookokrat"
 version = "0.1.0"
 edition = "2024"
 authors = ["Your Name <your.email@example.com>"]
 description = "A TUI EPUB reader application"
-default-run = "bookrat"
+default-run = "bookokrat"
 
 [lib]
-name = "bookrat"
+name = "bookokrat"
 path = "src/lib.rs"
 
 [[bin]]
-name = "bookrat"
+name = "bookokrat"
 path = "src/main.rs"
 
 [dependencies]
@@ -50,7 +50,7 @@ dirs = "5.0"
 tui-textarea = "0.7"
 
 [dev-dependencies]
-bookrat = { path = ".", features = ["test-utils"] }
+bookokrat = { path = ".", features = ["test-utils"] }
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"

@@ -11,9 +11,9 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
 // Use modules from the library crate
-use bookrat::event_source::KeyboardEventSource;
-use bookrat::main_app::{App, run_app_with_event_source};
-use bookrat::panic_handler;
+use bookokrat::event_source::KeyboardEventSource;
+use bookokrat::main_app::{App, run_app_with_event_source};
+use bookokrat::panic_handler;
 
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
@@ -26,10 +26,10 @@ fn main() -> Result<()> {
             .set_max_level(LevelFilter::Debug)
             .add_filter_ignore_str("html5ever")
             .build(),
-        File::create("bookrat.log")?,
+        File::create("bookokrat.log")?,
     )?;
 
-    info!("Starting BookRat EPUB reader");
+    info!("Starting Bookokrat EPUB reader");
 
     // Terminal initialization
     enable_raw_mode()?;
@@ -58,6 +58,6 @@ fn main() -> Result<()> {
         println!("{err:?}");
     }
 
-    info!("Shutting down BookRat");
+    info!("Shutting down Bookokrat");
     Ok(())
 }

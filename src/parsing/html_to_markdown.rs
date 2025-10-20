@@ -107,7 +107,7 @@ struct ProcessingContext {
 /// # Usage
 ///
 /// ```rust,no_run
-/// use bookrat::parsing::html_to_markdown::HtmlToMarkdownConverter;
+/// use bookokrat::parsing::html_to_markdown::HtmlToMarkdownConverter;
 /// # fn main() {
 /// let mut converter = HtmlToMarkdownConverter::new();
 /// # let html_content = "<p>Hello world</p>";
