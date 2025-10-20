@@ -48,6 +48,9 @@ serde_yaml = "0.9"
 md5 = "0.7"
 dirs = "5.0"
 tui-textarea = "0.7"
+ansi-to-tui = "7.0.0"
+vt100 = "0.15"
+codepage-437 = "0.1.0"
 
 [dev-dependencies]
 bookokrat = { path = ".", features = ["test-utils"] }
