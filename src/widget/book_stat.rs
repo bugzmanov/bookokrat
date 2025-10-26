@@ -3,13 +3,14 @@ use crate::main_app::VimNavMotions;
 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::parsing::toc_parser::TocParser;
+use crate::theme::OCEANIC_NEXT;
 use anyhow::Result;
 use crossterm::event::KeyModifiers;
 use epub::doc::EpubDoc;
 use log::{debug, error};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::io::{Read, Seek};
@@ -351,7 +352,7 @@ impl BookStat {
             // Show a message if no chapters found
             vec![ListItem::new(vec![Line::from(vec![Span::styled(
                 "No chapters found. Processing...",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(OCEANIC_NEXT.base_0a),
             )])])]
         } else {
             self.chapter_stats
@@ -376,13 +377,13 @@ impl BookStat {
                     let content = vec![Line::from(vec![
                         Span::styled(
                             format!("{percentage:3}% "),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(OCEANIC_NEXT.base_03),
                         ),
                         Span::raw(stat.title.replace("\n", " ")),
                         Span::raw(" "),
                         Span::styled(
                             format!("[{screens_text}]"),
-                            Style::default().fg(Color::Cyan),
+                            Style::default().fg(OCEANIC_NEXT.base_0c),
                         ),
                     ])];
 
@@ -397,14 +398,15 @@ impl BookStat {
                 Block::default()
                     .title(" Chapter Statistics ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue)),
+                    .border_style(Style::default().fg(OCEANIC_NEXT.base_0c))
+                    .style(Style::default().bg(OCEANIC_NEXT.base_00)),
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(OCEANIC_NEXT.base_02)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("> ");
+            .highlight_symbol("» ");
 
         // Render the list
         frame.render_stateful_widget(list, popup_area, &mut self.list_state);
@@ -412,7 +414,7 @@ impl BookStat {
         // Add help text at the bottom
         let help_text = "j/k: Navigate | Enter: Jump | G/gg: Bottom/Top | Esc: Close";
         let help = Paragraph::new(help_text)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(OCEANIC_NEXT.base_03))
             .alignment(Alignment::Center);
 
         let help_area = Rect {

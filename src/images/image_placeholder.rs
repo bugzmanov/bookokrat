@@ -109,7 +109,10 @@ impl ImagePlaceholder {
                         status_text.to_string()
                     } else {
                         let max_len = available_width.saturating_sub(3); // Leave room for "..."
-                        format!("{}...", &status_text.chars().take(max_len).collect::<String>())
+                        format!(
+                            "{}...",
+                            &status_text.chars().take(max_len).collect::<String>()
+                        )
                     };
 
                     let text_padding = (available_width - display_text.len()) / 2;

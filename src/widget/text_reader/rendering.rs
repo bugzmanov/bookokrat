@@ -1579,7 +1579,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
     ) {
-
         // Add empty line before image
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
