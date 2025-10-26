@@ -105,6 +105,7 @@ pub enum ImageLoadState {
     Failed {
         reason: String,
     },
+    Unsupported,
 }
 
 pub struct EmbeddedImage {

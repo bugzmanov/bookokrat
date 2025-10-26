@@ -46,7 +46,7 @@ ideas to implement:
      [x] Global in the book
      [ ] Global in the library
  - [ ] Code formatting & coloring. Goal: Manning books should be nice to read
- - [ ] User errors & info message
+ - [x] User errors & info message
  - [x] NOTES & comments
      - [ ] Notes should support markdown (maybe)
      - [ ] List of comments
@@ -60,8 +60,7 @@ ideas to implement:
      - copy images to clipboard
  - [ ] Images in iterm and sixt protocol
  - [ ] integration with GOODREADS
- - ASCII art Logo & animations (eye candy)
-
+ - [x] ASCII Logo 
 
  - clickable scrollbar
 
@@ -77,6 +76,11 @@ bugs:
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
 [ ] Careless people: current chanpter highlightning not workin
+[ ] Effective rust - chapter 4 
+  [ ] Lists have visual artefacts
+  [ ] footnote links are not propertly working
+
+[ ] <i>code</i> will have bg highlightning instead of just being cursive
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

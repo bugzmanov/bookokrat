@@ -1,3 +1,5 @@
+use crate::color_mode::smart_color;
+use once_cell::sync::Lazy;
 use ratatui::style::Color;
 
 // Color palette structure
@@ -21,25 +23,26 @@ pub struct Base16Palette {
     pub base_0f: Color, // Brown
 }
 
+// Lazy initialization of the palette to support runtime color detection
 #[allow(dead_code)]
-pub const OCEANIC_NEXT: Base16Palette = Base16Palette {
-    base_00: Color::from_u32(0x1B2B34),
-    base_01: Color::from_u32(0x343D46),
-    base_02: Color::from_u32(0x4F5B66),
-    base_03: Color::from_u32(0x65737E),
-    base_04: Color::from_u32(0xA7ADBA),
-    base_05: Color::from_u32(0xC0C5CE),
-    base_06: Color::from_u32(0xCDD3DE),
-    base_07: Color::from_u32(0xF0F4F8),
-    base_08: Color::from_u32(0xEC5F67),
-    base_09: Color::from_u32(0xF99157),
-    base_0a: Color::from_u32(0xFAC863),
-    base_0b: Color::from_u32(0x99C794),
-    base_0c: Color::from_u32(0x5FB3B3),
-    base_0d: Color::from_u32(0x6699CC),
-    base_0e: Color::from_u32(0xC594C5),
-    base_0f: Color::from_u32(0xAB7967),
-};
+pub static OCEANIC_NEXT: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+    base_00: smart_color(0x1B2B34),
+    base_01: smart_color(0x343D46),
+    base_02: smart_color(0x4F5B66),
+    base_03: smart_color(0x65737E),
+    base_04: smart_color(0xA7ADBA),
+    base_05: smart_color(0xC0C5CE),
+    base_06: smart_color(0xCDD3DE),
+    base_07: smart_color(0xF0F4F8),
+    base_08: smart_color(0xEC5F67),
+    base_09: smart_color(0xF99157),
+    base_0a: smart_color(0xFAC863),
+    base_0b: smart_color(0x99C794),
+    base_0c: smart_color(0x5FB3B3),
+    base_0d: smart_color(0x6699CC),
+    base_0e: smart_color(0xC594C5),
+    base_0f: smart_color(0xAB7967),
+});
 
 // Color utilities for focus states
 impl Base16Palette {

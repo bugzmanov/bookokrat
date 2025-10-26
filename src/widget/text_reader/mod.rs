@@ -17,7 +17,7 @@ use crate::search::SearchState;
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use image::{DynamicImage, GenericImageView};
-use log::warn;
+use log::{info, warn};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -115,8 +115,23 @@ impl MarkdownTextReader {
     pub fn new() -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                picker.set_background_color([0, 0, 0, 0]);
-                Some(picker)
+                info!("Image picker protocol type: {:?}", picker.protocol_type());
+
+                // Check if protocol requires true color but terminal doesn't support it
+                use ratatui_image::picker::ProtocolType;
+                let requires_true_color =
+                    matches!(picker.protocol_type(), ProtocolType::Halfblocks);
+
+                if requires_true_color && !crate::color_mode::supports_true_color() {
+                    warn!(
+                        "Image protocol {:?} requires true color, but terminal doesn't support it. Disabling image rendering.",
+                        picker.protocol_type()
+                    );
+                    None
+                } else {
+                    picker.set_background_color([0, 0, 0, 0]);
+                    Some(picker)
+                }
             }
             Err(e) => {
                 warn!(

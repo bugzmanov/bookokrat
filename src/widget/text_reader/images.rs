@@ -128,9 +128,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 } else {
                     for (img, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
-                            img_state.state = ImageLoadState::Failed {
-                                reason: "terminal doesn't support images".to_string(),
-                            };
+                            img_state.state = ImageLoadState::Unsupported;
                         }
                     }
                 }
@@ -151,9 +149,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             protocol: picker.new_resize_protocol(image),
                         }
                     } else {
-                        ImageLoadState::Failed {
-                            reason: "Image picker not initialized".to_string(),
-                        }
+                        ImageLoadState::Unsupported
                     };
                     any_loaded = true;
                 } else {

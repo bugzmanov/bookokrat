@@ -1,6 +1,7 @@
 // Export modules for use in tests
 pub mod book_manager;
 pub mod bookmarks;
+pub mod color_mode;
 pub mod comments;
 pub use inputs::event_source;
 pub mod components;

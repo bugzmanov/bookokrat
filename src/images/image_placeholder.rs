@@ -29,6 +29,7 @@ pub enum LoadingStatus {
     Loading,
     Failed,
     Loaded,
+    Unsupported,
 }
 
 impl LoadingStatus {
@@ -37,6 +38,7 @@ impl LoadingStatus {
             LoadingStatus::Loading => "loading...",
             LoadingStatus::Failed => "loading failed",
             LoadingStatus::Loaded => "loaded",
+            LoadingStatus::Unsupported => "images not supported in this terminal",
         }
     }
 }
@@ -63,10 +65,12 @@ impl ImagePlaceholder {
         let mut raw_lines = Vec::new();
         let mut styled_lines = Vec::new();
 
-        // Calculate frame width based on content + internal padding
-        let content_width = image_src.len();
+        // Calculate frame width based on status message length (not image src)
+        // This ensures the status message always fits
+        let status_text = status.as_str();
+        let min_content_width = status_text.len().max(image_src.len());
         // Frame width = content + 2 borders + 2 * internal padding
-        let frame_width = (content_width + 2 + (2 * config.internal_padding))
+        let frame_width = (min_content_width + 2 + (2 * config.internal_padding))
             .min(terminal_width)
             .max(20);
         let padding = (terminal_width.saturating_sub(frame_width)) / 2;
@@ -90,65 +94,34 @@ impl ImagePlaceholder {
 
         // Middle lines (total_height - 2 for top/bottom borders)
         let middle_lines = config.total_height - 2;
-        let center_line = middle_lines / 2;
+        let _center_line = middle_lines / 2;
         let status_info_line = middle_lines - 1; // Show status info on the last line before bottom border
 
         for i in 0..middle_lines {
             let middle_line = if visible {
-                if i == center_line {
-                    // Center line with [image src=...] text
-                    let text_len = image_src.len();
-                    let available_width = frame_width - 2 - (2 * config.internal_padding);
-
-                    if text_len <= available_width {
-                        // Center the text within the available space
-                        let text_padding = (available_width - text_len) / 2;
-                        let left_spaces = config.internal_padding + text_padding;
-                        let right_spaces = frame_width - 2 - left_spaces - text_len;
-                        format!(
-                            "{}│{}{}{}│",
-                            padding_str,
-                            " ".repeat(left_spaces),
-                            image_src,
-                            " ".repeat(right_spaces)
-                        )
-                    } else {
-                        // Truncate if too long
-                        let max_len = available_width.saturating_sub(3); // Leave room for "..."
-                        let truncated = format!(
-                            "{}...",
-                            &image_src.chars().take(max_len).collect::<String>()
-                        );
-                        let text_padding = (available_width - truncated.len()) / 2;
-                        let left_spaces = config.internal_padding + text_padding;
-                        let right_spaces = frame_width - 2 - left_spaces - truncated.len();
-                        format!(
-                            "{}│{}{}{}│",
-                            padding_str,
-                            " ".repeat(left_spaces),
-                            truncated,
-                            " ".repeat(right_spaces)
-                        )
-                    }
-                } else if i == status_info_line {
+                if i == status_info_line {
                     // Show loading status on the last line
                     let status_text = status.as_str();
                     let available_width = frame_width - 2 - (2 * config.internal_padding);
 
-                    if status_text.len() <= available_width {
-                        let text_padding = (available_width - status_text.len()) / 2;
-                        let left_spaces = config.internal_padding + text_padding;
-                        let right_spaces = frame_width - 2 - left_spaces - status_text.len();
-                        format!(
-                            "{}│{}{}{}│",
-                            padding_str,
-                            " ".repeat(left_spaces),
-                            status_text,
-                            " ".repeat(right_spaces)
-                        )
+                    // Truncate status text if too long
+                    let display_text = if status_text.len() <= available_width {
+                        status_text.to_string()
                     } else {
-                        format!("{}│{}│", padding_str, " ".repeat(frame_width - 2))
-                    }
+                        let max_len = available_width.saturating_sub(3); // Leave room for "..."
+                        format!("{}...", &status_text.chars().take(max_len).collect::<String>())
+                    };
+
+                    let text_padding = (available_width - display_text.len()) / 2;
+                    let left_spaces = config.internal_padding + text_padding;
+                    let right_spaces = frame_width - 2 - left_spaces - display_text.len();
+                    format!(
+                        "{}│{}{}{}│",
+                        padding_str,
+                        " ".repeat(left_spaces),
+                        display_text,
+                        " ".repeat(right_spaces)
+                    )
                 } else {
                     format!("{}│{}│", padding_str, " ".repeat(frame_width - 2))
                 }

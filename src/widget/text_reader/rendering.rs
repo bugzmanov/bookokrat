@@ -1579,8 +1579,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
     ) {
-        // Constants for image display
-        const IMAGE_HEIGHT_WIDE: u16 = 20;
 
         // Add empty line before image
         lines.push(RenderedLine::empty());
@@ -1601,17 +1599,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     ImageLoadState::Failed { .. } => {
                         crate::images::image_placeholder::LoadingStatus::Failed
                     }
+                    ImageLoadState::Unsupported => {
+                        crate::images::image_placeholder::LoadingStatus::Unsupported
+                    }
                     ImageLoadState::NotLoaded | ImageLoadState::Loading => {
                         crate::images::image_placeholder::LoadingStatus::Loading
                     }
                 };
                 (height, status)
             } else {
-                // Image not preloaded yet - use default height
-                (
-                    IMAGE_HEIGHT_WIDE,
-                    crate::images::image_placeholder::LoadingStatus::Loading,
-                )
+                // Image not in map yet - check if picker exists to determine status
+                let status = if self.image_picker.is_none() {
+                    crate::images::image_placeholder::LoadingStatus::Unsupported
+                } else {
+                    crate::images::image_placeholder::LoadingStatus::Loading
+                };
+                (IMAGE_HEIGHT_WIDE, status)
             };
 
         // Update or insert the embedded image info
