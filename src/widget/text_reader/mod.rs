@@ -115,10 +115,38 @@ impl MarkdownTextReader {
     pub fn new() -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                info!("Image picker protocol type: {:?}", picker.protocol_type());
+                info!(
+                    "Image picker initial protocol type: {:?}",
+                    picker.protocol_type()
+                );
+
+                // Check capabilities to see what's actually supported
+                use ratatui_image::picker::{Capability, ProtocolType};
+                let has_kitty = picker
+                    .capabilities()
+                    .iter()
+                    .any(|c| matches!(c, Capability::Kitty));
+                let has_sixel = picker
+                    .capabilities()
+                    .iter()
+                    .any(|c| matches!(c, Capability::Sixel));
+
+                // Prefer: Kitty > Sixel > iTerm > Halfblocks
+                let chosen_protocol = if has_kitty {
+                    info!("Kitty protocol detected, using Kitty");
+                    ProtocolType::Kitty
+                } else if has_sixel {
+                    info!("Sixel protocol detected, using Sixel");
+                    ProtocolType::Sixel
+                } else {
+                    // Keep whatever was detected (iTerm or Halfblocks)
+                    picker.protocol_type()
+                };
+
+                picker.set_protocol_type(chosen_protocol);
+                info!("Final protocol type: {:?}", picker.protocol_type());
 
                 // Check if protocol requires true color but terminal doesn't support it
-                use ratatui_image::picker::ProtocolType;
                 let requires_true_color =
                     matches!(picker.protocol_type(), ProtocolType::Halfblocks);
 
