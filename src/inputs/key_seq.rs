@@ -48,4 +48,8 @@ impl KeySeq {
         self.key_sequence.clear();
         self.last_key_time = None;
     }
+
+    pub fn current_sequence(&self) -> String {
+        self.key_sequence.iter().collect()
+    }
 }

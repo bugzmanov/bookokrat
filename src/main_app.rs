@@ -1645,6 +1645,29 @@ impl App {
         f.render_widget(help, area);
     }
 
+    /// Check if a key is a global hotkey that should work regardless of focus
+    /// Returns true if the key was handled as a global hotkey
+    fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        match key.code {
+            KeyCode::Char('?') => {
+                self.help_popup = Some(HelpPopup::new());
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+                true
+            }
+            KeyCode::Char(' ') => {
+                self.key_sequence.handle_key(' ');
+                true
+            }
+            KeyCode::Char(c) if self.key_sequence.current_sequence() == " " => {
+                // Handle space + key combinations (global across all panels)
+                self.handle_key_sequence(c)
+            }
+            _ => false,
+        }
+    }
+
     /// Handle a key sequence and return true if it was handled
     fn handle_key_sequence(&mut self, key_char: char) -> bool {
         let sequence: String = self.key_sequence.handle_key(key_char);
@@ -1731,13 +1754,13 @@ impl App {
                 true
             }
             " o" => {
-                // Handle Space->o to open current EPUB with system viewer
+                // Handle Space->o to open current EPUB with system viewer (global)
                 self.open_with_system_viewer();
                 self.key_sequence.clear();
                 true
             }
             " h" => {
-                // Handle Space->h to toggle reading history
+                // Handle Space->h to toggle reading history (global)
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)
@@ -1906,6 +1929,11 @@ impl App {
 
         // If navigation panel (file list) has focus, handle keys for it
         if self.is_main_panel(MainPanel::NavigationList) && !self.is_search_input_mode() {
+            // Check for global hotkeys first
+            if self.handle_global_hotkeys(key) {
+                return None;
+            }
+
             let action = self
                 .navigation_panel
                 .handle_key(key, &mut self.key_sequence);

@@ -9,14 +9,58 @@ Bookokrat is a Rust terminal EPUB reader with a split-view library and reader, f
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
 
 ## Keyboard Reference
-- **Global:** `q` quit; `Tab` switch library/content focus; `Esc` clear selection/search or dismiss popups; `Space+h` toggle reading history; `Space+d` book stats popup; `Space+o` open current book in the OS viewer.
-- **Library & TOC panel:** `j/k` move; `Ctrl+d` / `Ctrl+u` half-page; `gg` top; `G` bottom; `/` start filter; `n` / `N` cycle matches; `h` collapse entry; `l` expand; `H` collapse all; `L` expand all; `Enter` open the highlighted book or heading.
-- **Reader panel:** `j/k` scroll; `Ctrl+d` / `Ctrl+u` half-screen; `gg` top; `G` bottom; `h` / `l` previous or next chapter; `Ctrl+o` jump back; `Ctrl+i` jump forward; `/` search within chapter; `n` / `N` step through matches; `Space+f` reopen last book search; `Space+F` start a fresh book search; `Space+s` toggle raw HTML; `Space+c` copy entire chapter; `Space+z` copy a debug transcript; `c` or `Ctrl+C` copy selection; `a` create or edit a comment on the current selection; `d` delete the comment under the cursor; `p` toggle the profiler overlay.
-- **Book search popup (Space+f / Space+F):** Type to search the whole book; `Enter` run the search or open the highlighted result; `j/k` or arrows move; `g` / `G` jump to top/bottom; `Space` return to the input field; `Esc` close.
-- **Reading history popup (Space+h):** `j/k` move; `Ctrl+d` / `Ctrl+u` page; `gg` / `G` jump; `Enter` reopen the selection; `Esc` close.
-- **Book stats popup (Space+d):** `j/k` move; `Ctrl+d` / `Ctrl+u` page; `gg` / `G` jump; `Enter` jump to the chapter; `Esc` close.
-- **Comments:** Select text (keyboard or mouse), press `a` to add or edit, type your note, `Esc` saves; press `d` on a commented passage to remove it.
-- **Images & links:** Click an image or highlight it and press `Enter` to open the zoomed popup (any key dismisses); following a link records your place so `Ctrl+o` / `Ctrl+i` step backward and forward.
+
+Bookokrat follows Vim-style keybindings throughout the interface for consistent, efficient navigation.
+
+### Global Commands
+- `q` - Quit application
+- `Tab` - Switch focus between library/TOC and content panels
+- `Esc` - Clear selection/search or dismiss popups
+
+### Navigation (Vim-style)
+- `j/k` - Move down/up (works in all lists and reader)
+- `h/l` - Collapse/expand in TOC; previous/next chapter in reader
+- `Ctrl+d` / `Ctrl+u` - Scroll half-page down/up
+- `gg` - Jump to top
+- `G` - Jump to bottom
+- `Ctrl+o` / `Ctrl+i` - Jump backward/forward in history
+
+### Search
+- `/` - Start search (filter in library/TOC; search in reader)
+- `n` / `N` - Jump to next/previous match
+- `Space+f` - Reopen last book-wide search
+- `Space+F` - Start fresh book-wide search
+
+### Library & TOC Panel
+- `Enter` - Open highlighted book or heading
+- `h` / `l` - Collapse/expand entry
+- `H` / `L` - Collapse/expand all
+
+### Reader Panel
+- `h` / `l` - Previous/next chapter
+- `Space+s` - Toggle raw HTML view
+- `Space+c` - Copy entire chapter
+- `Space+z` - Copy debug transcript
+- `c` or `Ctrl+C` - Copy selection
+- `p` - Toggle profiler overlay
+
+### Comments & Annotations
+- `a` - Create or edit comment on selection
+- `d` - Delete comment under cursor
+
+### Popups & External Actions
+- `Space+h` - Toggle reading history popup
+- `Space+d` - Show book statistics popup
+- `Space+o` - Open current book in OS viewer
+- `Enter` - Open image popup (when on image) or activate popup selection
+
+### Popup Navigation
+All popups (search results, reading history, book stats) support:
+- `j/k` - Move up/down
+- `Ctrl+d` / `Ctrl+u` - Half-page scroll
+- `gg` / `G` - Jump to top/bottom
+- `Enter` - Activate selection
+- `Esc` - Close popup
 
 ## Mouse Support
 - Scroll with the wheel over either pane; Bookokrat batches rapid wheel events for smooth scrolling.
@@ -33,3 +77,7 @@ cargo run
 ```
 
 - Place EPUB files alongside the binary (or run within your library directory) and navigate with the shortcuts above.
+
+## Attribution
+
+This project is based on [bookrat](https://github.com/dmitrysobolev/bookrat) by Dmitry Sobolev, licensed under the MIT License.
