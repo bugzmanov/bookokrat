@@ -12,3 +12,5 @@ experiments/
 tests/snapshots/debug_*
 temp_images/
 .bookokrat_comments/
+tmp/
+logo.inspirations/
