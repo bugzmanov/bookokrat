@@ -77,6 +77,7 @@ pub struct App {
     book_images: BookImages,
     current_book: Option<EpubBook>,
     pub focused_panel: FocusedPanel,
+    previous_main_panel: MainPanel,
     pub system_command_executor: Box<dyn SystemCommandExecutor>,
     last_bookmark_save: std::time::Instant,
     mouse_tracker: MouseTracker,
@@ -141,6 +142,17 @@ impl App {
             FocusedPanel::Main(p) => p == panel,
             FocusedPanel::Popup(_) => false,
         }
+    }
+
+    /// Set focus to a main panel and track it for popup dismissal
+    fn set_main_panel_focus(&mut self, panel: MainPanel) {
+        self.previous_main_panel = panel;
+        self.focused_panel = FocusedPanel::Main(panel);
+    }
+
+    /// Close current popup and return focus to previous main panel
+    fn close_popup_to_previous(&mut self) {
+        self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
     }
 
     /// Check if we're in search mode
@@ -290,6 +302,7 @@ impl App {
             book_images,
             current_book: None,
             focused_panel: FocusedPanel::Main(MainPanel::NavigationList),
+            previous_main_panel: MainPanel::NavigationList,
             system_command_executor: system_executor,
             last_bookmark_save: std::time::Instant::now(),
             mouse_tracker: MouseTracker::new(),
@@ -313,6 +326,12 @@ impl App {
                 error!("Failed to auto-load most recent book: {e}");
                 app.show_error(format!("Failed to auto-load recent book: {}", e));
             }
+        } else if auto_load_recent && app.bookmarks.get_most_recent().is_none() {
+            // No bookmarks exist - show help popup for first-time users
+            // Set previous panel to NavigationList so ESC returns there
+            app.previous_main_panel = MainPanel::NavigationList;
+            app.help_popup = Some(HelpPopup::new());
+            app.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
         }
 
         app
@@ -797,7 +816,7 @@ impl App {
                     if let Some(ref popup) = self.image_popup {
                         if popup.is_outside_popup_area(click_x, click_y) {
                             self.image_popup = None;
-                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                            self.close_popup_to_previous();
                         }
                     }
                     return; // Block all other interactions
@@ -1652,6 +1671,10 @@ impl App {
 
         match key.code {
             KeyCode::Char('?') => {
+                // Save current main panel before opening help
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
                 self.help_popup = Some(HelpPopup::new());
                 self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
                 true
@@ -1697,6 +1720,9 @@ impl App {
             " f" => {
                 // Handle Space->f to open book search (reuse existing search)
                 if self.current_book.is_some() {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
                     self.open_book_search(false); // Don't clear input
                 }
                 self.key_sequence.clear();
@@ -1705,6 +1731,9 @@ impl App {
             " F" => {
                 // Handle Space->F to open book search (clear input)
                 if self.current_book.is_some() {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
                     self.open_book_search(true); // Clear input for new search
                 }
                 self.key_sequence.clear();
@@ -1721,6 +1750,9 @@ impl App {
                             error!("Failed to calculate book statistics: {e}");
                             self.show_error(format!("Failed to calculate statistics: {}", e));
                         } else {
+                            if let FocusedPanel::Main(panel) = self.focused_panel {
+                                self.previous_main_panel = panel;
+                            }
                             self.book_stat.show();
                             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
                         }
@@ -1765,11 +1797,14 @@ impl App {
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)
                 ) {
-                    // Close history
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    // Close history - return to previous panel
+                    self.close_popup_to_previous();
                     self.reading_history = None;
                 } else {
-                    // Open history
+                    // Open history - save current main panel
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
                     self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
                 }
@@ -1811,7 +1846,7 @@ impl App {
             FocusedPanel::Popup(PopupWindow::ImagePopup)
         ) {
             self.image_popup = None;
-            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+            self.close_popup_to_previous();
             return None;
         }
 
@@ -1830,7 +1865,7 @@ impl App {
                         chapter_index,
                         line_number,
                     } => {
-                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        self.set_main_panel_focus(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {chapter_index}: {e}");
                             self.show_error(format!("Failed to navigate to chapter: {}", e));
@@ -1839,7 +1874,7 @@ impl App {
                         }
                     }
                     BookSearchAction::Close => {
-                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        self.close_popup_to_previous();
                     }
                 }
             }
@@ -1851,11 +1886,11 @@ impl App {
             match self.book_stat.handle_key(key, &mut self.key_sequence) {
                 Some(BookStatAction::Close) => {
                     self.book_stat.hide();
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    self.close_popup_to_previous();
                 }
                 Some(BookStatAction::JumpToChapter { chapter_index }) => {
                     self.book_stat.hide();
-                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                    self.set_main_panel_focus(MainPanel::Content);
                     if let Err(e) = self.navigate_to_chapter(chapter_index) {
                         error!("Failed to navigate to chapter {chapter_index}: {e}");
                         self.show_error(format!("Failed to navigate to chapter: {}", e));
@@ -1878,12 +1913,12 @@ impl App {
                 use crate::reading_history::ReadingHistoryAction;
                 match action {
                     ReadingHistoryAction::Close => {
-                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                        self.close_popup_to_previous();
                         self.reading_history = None;
                     }
                     ReadingHistoryAction::OpenBook { path } => {
                         if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
-                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                            self.set_main_panel_focus(MainPanel::Content);
                             self.reading_history = None;
                             let _ = self.open_book_for_reading(book_index);
                         }
@@ -1902,7 +1937,7 @@ impl App {
             };
 
             if let Some(HelpPopupAction::Close) = action {
-                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                self.close_popup_to_previous();
                 self.help_popup = None;
             }
             return None;
@@ -2074,17 +2109,17 @@ impl App {
             }
             KeyCode::Tab => {
                 if !self.has_active_popup() {
-                    self.focused_panel = match self.focused_panel {
+                    match self.focused_panel {
                         FocusedPanel::Main(MainPanel::NavigationList) => {
                             self.navigation_panel
                                 .table_of_contents
                                 .clear_manual_navigation();
-                            FocusedPanel::Main(MainPanel::Content)
+                            self.set_main_panel_focus(MainPanel::Content);
                         }
                         FocusedPanel::Main(MainPanel::Content) => {
-                            FocusedPanel::Main(MainPanel::NavigationList)
+                            self.set_main_panel_focus(MainPanel::NavigationList);
                         }
-                        FocusedPanel::Popup(_) => self.focused_panel, // No tab switching in popups
+                        FocusedPanel::Popup(_) => {} // No tab switching in popups
                     };
                 }
             }
