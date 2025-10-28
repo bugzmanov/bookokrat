@@ -896,13 +896,9 @@ impl HtmlToMarkdownConverter {
                         "p" => {
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
 
-                            let para_content = self.extract_formatted_content(child);
-                            if !para_content.is_empty() {
-                                let paragraph = Block::Paragraph {
-                                    content: para_content,
-                                };
-                                content.push(Node::new(paragraph, 0..0));
-                            }
+                            let para_blocks =
+                                self.extract_formatted_content_as_blocks(child, false);
+                            content.extend(para_blocks);
                         }
                         "img" => {
                             if let Some(src) = self.get_attr_value(attrs, "src") {
