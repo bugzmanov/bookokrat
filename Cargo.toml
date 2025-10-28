@@ -78,6 +78,7 @@ walkdir = "2.4"
 
 [features]
 test-utils = []
+serde = []
 
 [profile.release]
 debug = true

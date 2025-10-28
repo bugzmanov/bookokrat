@@ -44,7 +44,7 @@ impl TiledImage {
         let tile_height = char_height as u32;
 
         let mut tiles = HashMap::new();
-        let num_tiles = (image.height() + tile_height - 1) / tile_height;
+        let num_tiles = image.height().div_ceil(tile_height);
 
         // Pre-compute tiles for the entire image
         for tile_idx in 0..num_tiles {
@@ -81,9 +81,8 @@ impl TiledImage {
 
         // Calculate which tiles are visible
         let start_tile = y_offset / tile_height;
-        let end_tile =
-            ((y_offset + (viewport_height_cells as u32 * char_height as u32)) + tile_height - 1)
-                / tile_height;
+        let viewport_height_pixels = viewport_height_cells as u32 * char_height as u32;
+        let end_tile = (y_offset + viewport_height_pixels).div_ceil(tile_height);
 
         let mut visible_tiles = Vec::new();
         for tile_idx in start_tile..=end_tile {

@@ -29,7 +29,7 @@ fn rgb_to_256color(r: u8, g: u8, b: u8) -> u8 {
         let gray_index = if avg <= 8 {
             0
         } else {
-            ((avg as u16 - 8) * 23 / (238 - 8)).min(23) as u8
+            ((avg - 8) * 23 / (238 - 8)).min(23) as u8
         };
         return 232 + gray_index;
     }
@@ -52,7 +52,7 @@ fn rgb_to_256color(r: u8, g: u8, b: u8) -> u8 {
         let gray_index = if avg <= 8 {
             0
         } else {
-            ((avg as u16 - 8) * 23 / (238 - 8)).min(23) as u8
+            ((avg - 8) * 23 / (238 - 8)).min(23) as u8
         };
         let gray_color = 232 + gray_index;
 

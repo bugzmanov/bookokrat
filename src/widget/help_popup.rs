@@ -24,6 +24,12 @@ pub struct HelpPopup {
     last_popup_area: Option<Rect>,
 }
 
+impl Default for HelpPopup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HelpPopup {
     pub fn new() -> Self {
         let ansi_art_bytes = include_bytes!("../../readme.ans");
@@ -90,7 +96,7 @@ impl HelpPopup {
         let readme = include_str!("../../readme.txt");
         for line in readme.lines() {
             lines.push(Line::from(Span::styled(
-                format!("  {}", line),
+                format!("  {line}"),
                 Style::default().fg(OCEANIC_NEXT.base_05),
             )));
         }
@@ -268,9 +274,9 @@ fn preprocess_custom_ansi(input: &str) -> String {
 
         // If bold flag is set (1), include bold modifier
         if bold_flag == "1" {
-            format!("\x1b[1m\x1b[38;2;{};{};{}m", r, g, b)
+            format!("\x1b[1m\x1b[38;2;{r};{g};{b}m")
         } else {
-            format!("\x1b[38;2;{};{};{}m", r, g, b)
+            format!("\x1b[38;2;{r};{g};{b}m")
         }
     })
     .into_owned()
@@ -321,7 +327,7 @@ fn to_color(c: vt100::Color) -> Color {
             13 => Color::Rgb(255, 100, 255),
             14 => Color::Rgb(100, 255, 255),
             15 => Color::White,
-            _ => Color::Indexed(i as u8),
+            _ => Color::Indexed(i),
         },
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }

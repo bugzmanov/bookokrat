@@ -324,7 +324,7 @@ impl App {
         {
             if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
                 error!("Failed to auto-load most recent book: {e}");
-                app.show_error(format!("Failed to auto-load recent book: {}", e));
+                app.show_error(format!("Failed to auto-load recent book: {e}"));
             }
         } else if auto_load_recent && app.bookmarks.get_most_recent().is_none() {
             // No bookmarks exist - show help popup for first-time users
@@ -442,7 +442,7 @@ impl App {
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {e}");
-            self.show_error(format!("Failed to load EPUB: {}", e));
+            self.show_error(format!("Failed to load EPUB: {e}"));
             anyhow::anyhow!("Failed to load EPUB: {}", e)
         })?;
 
@@ -1308,7 +1308,7 @@ impl App {
                 }
                 Err(e) => {
                     error!("Failed to open EPUB with system viewer: {e}");
-                    self.show_error(format!("Failed to open in external viewer: {}", e));
+                    self.show_error(format!("Failed to open in external viewer: {e}"));
                 }
             }
         } else {
@@ -1342,7 +1342,7 @@ impl App {
         if let Some(location) = self.jump_list.jump_back() {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump back: {e}");
-                self.show_error(format!("Failed to jump back: {}", e));
+                self.show_error(format!("Failed to jump back: {e}"));
             }
         }
     }
@@ -1352,7 +1352,7 @@ impl App {
         if let Some(location) = self.jump_list.jump_forward() {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump forward: {e}");
-                self.show_error(format!("Failed to jump forward: {}", e));
+                self.show_error(format!("Failed to jump forward: {e}"));
             }
         }
     }
@@ -1385,7 +1385,7 @@ impl App {
             SelectedActionOwned::BookIndex(index) => {
                 if let Err(e) = self.open_book_for_reading(index) {
                     error!("Failed to open book at index {index}: {e}");
-                    self.show_error(format!("Failed to open book: {}", e));
+                    self.show_error(format!("Failed to open book: {e}"));
                 }
             }
             SelectedActionOwned::BackToBooks => {
@@ -1753,7 +1753,7 @@ impl App {
                             .calculate_stats(&mut book.epub, terminal_size)
                         {
                             error!("Failed to calculate book statistics: {e}");
-                            self.show_error(format!("Failed to calculate statistics: {}", e));
+                            self.show_error(format!("Failed to calculate statistics: {e}"));
                         } else {
                             if let FocusedPanel::Main(panel) = self.focused_panel {
                                 self.previous_main_panel = panel;
@@ -1873,7 +1873,7 @@ impl App {
                         self.set_main_panel_focus(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {chapter_index}: {e}");
-                            self.show_error(format!("Failed to navigate to chapter: {}", e));
+                            self.show_error(format!("Failed to navigate to chapter: {e}"));
                         } else {
                             self.text_reader.scroll_to_line(line_number);
                         }
@@ -1898,7 +1898,7 @@ impl App {
                     self.set_main_panel_focus(MainPanel::Content);
                     if let Err(e) = self.navigate_to_chapter(chapter_index) {
                         error!("Failed to navigate to chapter {chapter_index}: {e}");
-                        self.show_error(format!("Failed to navigate to chapter: {}", e));
+                        self.show_error(format!("Failed to navigate to chapter: {e}"));
                     }
                 }
                 None => {}
@@ -1986,7 +1986,7 @@ impl App {
                     }
                     NavigationPanelAction::SelectBook { book_index } => {
                         if let Err(e) = self.open_book_for_reading(book_index) {
-                            self.show_error(format!("Failed to open book: {}", e));
+                            self.show_error(format!("Failed to open book: {e}"));
                         }
                     }
                     NavigationPanelAction::SwitchToBookList => {
@@ -2081,7 +2081,7 @@ impl App {
                         }
                         Err(e) => {
                             error!("Failed to delete comment: {e}");
-                            self.show_error(format!("Failed to delete comment: {}", e));
+                            self.show_error(format!("Failed to delete comment: {e}"));
                         }
                     }
                 }

@@ -181,10 +181,7 @@ impl ResizeEncodeRender for StatefulProtocol {
 
                 // For tiled mode, we encode the full image once
                 if self.hash != self.source.hash
-                    || kitty
-                        .tiled_data
-                        .as_ref()
-                        .map_or(true, |t| t.tiles.is_empty())
+                    || kitty.tiled_data.as_ref().is_none_or(|t| t.tiles.is_empty())
                 {
                     // For tiling, we need to encode the full image, not just the visible area
                     // Calculate the area that would contain the entire image

@@ -173,7 +173,7 @@ impl StatefulKitty {
         tiled_data.image_height = img.height();
         tiled_data.tiles.clear();
 
-        let num_rows = (img.height() + tile_height - 1) / tile_height;
+        let num_rows = img.height().div_ceil(tile_height);
 
         for row in 0..num_rows {
             let y_offset = row * tile_height;
@@ -201,13 +201,10 @@ impl StatefulKitty {
 
             // Calculate which rows are visible
             let start_row = viewport_y_pixels / tile_height;
-            let end_row =
-                ((viewport_y_pixels + (area.height as u32 * char_height as u32)) + tile_height - 1)
-                    / tile_height;
+            let viewport_height_pixels = area.height as u32 * char_height as u32;
+            let end_row = (viewport_y_pixels + viewport_height_pixels).div_ceil(tile_height);
 
-            for row in
-                start_row..end_row.min((tiled_data.image_height + tile_height - 1) / tile_height)
-            {
+            for row in start_row..end_row.min(tiled_data.image_height.div_ceil(tile_height)) {
                 let row_y_pixels = row * tile_height;
                 let row_y_cells =
                     (row_y_pixels.saturating_sub(viewport_y_pixels)) / (char_height as u32);

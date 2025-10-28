@@ -182,7 +182,7 @@ impl ActiveSection {
     pub fn normalize_anchor(anchor: &str) -> String {
         anchor
             .split('#')
-            .last()
+            .next_back()
             .unwrap_or(anchor)
             .trim_start_matches('#')
             .to_string()
