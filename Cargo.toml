@@ -1,10 +1,14 @@
 [package]
 name = "bookokrat"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-authors = ["Your Name <your.email@example.com>"]
-description = "A TUI EPUB reader application"
+authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
+license = "MIT"
+description = "A terminal-based EPUB Books reader"
 default-run = "bookokrat"
+repository="https://github.com/bugzmanov/bookokrat"
+readme = "README.md"
+keywords = ["tui", "ratatui", "epub", "reader"]
 
 [lib]
 name = "bookokrat"

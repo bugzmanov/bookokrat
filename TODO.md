@@ -79,8 +79,10 @@ bugs:
 [ ] Effective rust - chapter 4 
   [ ] Lists have visual artefacts
   [ ] footnote links are not propertly working
-
+[ ] Full Stack web developer. Chapter 2.2.5 - images are misplaced
 [ ] <i>code</i> will have bg highlightning instead of just being cursive
+[ ] Modal windows should support scrolling and clicking
+   [ ] History and  Book stat should be mouse accessible
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

@@ -1,6 +1,6 @@
 # Bookokrat
 
-Bookokrat is a Rust terminal EPUB reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, and inline annotations.
+Bookokrat is a terminal-based EPUB reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, and inline annotations.
 
 ## Demo
 
@@ -75,10 +75,10 @@ All popups (search results, reading history, book stats) support:
 
 ## Quick Start
 - Install Rust via https://rustup.rs if needed.
-- From the repository, run:
+- Install using Cargo:
 
 ```bash
-cargo run
+cargo install bookokrat
 ```
 
 - Place EPUB files alongside the binary (or run within your library directory) and navigate with the shortcuts above.
