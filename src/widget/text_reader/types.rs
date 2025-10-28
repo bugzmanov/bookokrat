@@ -1,6 +1,6 @@
+use crate::ratatui_image::protocol::StatefulProtocol;
 use image::DynamicImage;
 use ratatui::text::Span;
-use ratatui_image::protocol::StatefulProtocol;
 use std::sync::Arc;
 use tui_textarea::TextArea;
 

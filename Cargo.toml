@@ -34,7 +34,6 @@ pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 arboard = "3.4"
 zip = "0.6"
 tempfile = "3.8"
-ratatui-image = { path = "../ratatui-image", features = ["crossterm"] }
 image = "0.25"
 fast_image_resize = "3.0"
 imagesize = "0.13"
@@ -51,6 +50,23 @@ tui-textarea = "0.7"
 ansi-to-tui = "7.0.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"
+# Vendored ratatui-image dependencies
+icy_sixel = "0.1.1"
+base64 = "0.21.2"
+rand = "0.8.5"
+thiserror = "1.0.59"
+flate2 = "1.0"
+
+[target.'cfg(not(windows))'.dependencies]
+rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58.0", default-features = false, features = [
+    "std",
+    "Win32_System_Console",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }
 
 [dev-dependencies]
 bookokrat = { path = ".", features = ["test-utils"] }

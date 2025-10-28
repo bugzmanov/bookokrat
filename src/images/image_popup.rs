@@ -1,3 +1,4 @@
+use crate::ratatui_image::{Image, Resize, ViewportOptions, picker::Picker, protocol::Protocol};
 use image::{DynamicImage, GenericImageView};
 use log::debug;
 use ratatui::{
@@ -7,7 +8,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
-use ratatui_image::{Resize, picker::Picker, protocol::Protocol};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -103,7 +103,7 @@ impl ImagePopup {
             .new_protocol(
                 self.image.as_ref().clone(),
                 self.calculate_optimal_popup_area(terminal_size),
-                Resize::Viewport(ratatui_image::ViewportOptions {
+                Resize::Viewport(ViewportOptions {
                     y_offset: 0,
                     x_offset: 0,
                 }),
@@ -124,7 +124,7 @@ impl ImagePopup {
         );
 
         let image_area = inner_area;
-        let image_widget = ratatui_image::Image::new(self.protocol.as_ref().unwrap());
+        let image_widget = Image::new(self.protocol.as_ref().unwrap());
 
         let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
         let duration = start.elapsed();

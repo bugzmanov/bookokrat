@@ -6,6 +6,9 @@ pub mod comments;
 pub use inputs::event_source;
 pub mod components;
 pub mod images;
+// Vendored ratatui-image
+pub mod vendored;
+pub use vendored::ratatui_image;
 pub mod inputs;
 pub mod jump_list;
 pub mod main_app;

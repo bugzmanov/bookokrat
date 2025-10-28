@@ -1,10 +1,10 @@
 use super::types::*;
 use crate::images::book_images::BookImages;
 use crate::markdown::{Block as MarkdownBlock, Inline, Node, TextOrInline};
+use crate::ratatui_image::picker::Picker;
 use crate::types::LinkInfo;
 use image::DynamicImage;
 use log::{debug, warn};
-use ratatui_image::picker::Picker;
 use std::sync::Arc;
 
 impl crate::markdown_text_reader::MarkdownTextReader {

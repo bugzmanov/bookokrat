@@ -1214,6 +1214,11 @@ impl App {
             original_image
         };
 
+        // Save current main panel before opening image popup
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+
         let popup = ImagePopup::new(prescaled_image, picker, image_src.to_string());
         self.image_popup = Some(popup);
         self.focused_panel = FocusedPanel::Popup(PopupWindow::ImagePopup);

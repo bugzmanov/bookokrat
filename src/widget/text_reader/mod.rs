@@ -13,6 +13,7 @@ use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
+use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
 use crate::search::SearchState;
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
@@ -25,7 +26,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
-use ratatui_image::{Resize, StatefulImage, picker::Picker};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -121,7 +121,7 @@ impl MarkdownTextReader {
                 );
 
                 // Check capabilities to see what's actually supported
-                use ratatui_image::picker::{Capability, ProtocolType};
+                use crate::ratatui_image::picker::{Capability, ProtocolType};
                 let has_kitty = picker
                     .capabilities()
                     .iter()
@@ -477,7 +477,7 @@ impl MarkdownTextReader {
                                         * current_font_size.1 as f32)
                                         as u32;
 
-                                    let viewport_options = ratatui_image::ViewportOptions {
+                                    let viewport_options = ViewportOptions {
                                         y_offset: y_offset_pixels,
                                         x_offset: 0, // No horizontal scrolling for now
                                     };
