@@ -20,6 +20,7 @@ pub struct BookStat {
     list_state: ListState,
     visible: bool,
     terminal_size: (u16, u16),
+    last_popup_area: Option<Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +49,7 @@ impl BookStat {
             list_state: ListState::default(),
             visible: false,
             terminal_size: (80, 24),
+            last_popup_area: None,
         }
     }
 
@@ -340,6 +342,8 @@ impl BookStat {
             height: popup_height,
         };
 
+        self.last_popup_area = Some(popup_area);
+
         // Clear background
         frame.render_widget(Clear, popup_area);
 
@@ -412,7 +416,8 @@ impl BookStat {
         frame.render_stateful_widget(list, popup_area, &mut self.list_state);
 
         // Add help text at the bottom
-        let help_text = "j/k: Navigate | Enter: Jump | G/gg: Bottom/Top | Esc: Close";
+        let help_text =
+            "j/k/Scroll: Navigate | Enter/DblClick: Jump | G/gg: Bottom/Top | Esc: Close";
         let help = Paragraph::new(help_text)
             .style(Style::default().fg(OCEANIC_NEXT.base_03))
             .alignment(Alignment::Center);
@@ -464,6 +469,67 @@ impl BookStat {
                 chapter_index: self.get_selected_chapter_index().unwrap_or(0),
             }),
             _ => None,
+        }
+    }
+
+    /// Handle mouse click at the given position
+    /// Returns true if an item was clicked (for double-click detection)
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
+        debug!("BookStat: Mouse click at ({x}, {y})");
+
+        if let Some(popup_area) = self.last_popup_area {
+            debug!(
+                "BookStat: Popup area: x={}, y={}, w={}, h={}",
+                popup_area.x, popup_area.y, popup_area.width, popup_area.height
+            );
+
+            // Check if click is within the popup area
+            if x >= popup_area.x
+                && x < popup_area.x + popup_area.width
+                && y > popup_area.y
+                && y < popup_area.y + popup_area.height.saturating_sub(2)
+            {
+                // Calculate which item was clicked
+                // Account for the border (1 line at top)
+                let relative_y = y.saturating_sub(popup_area.y).saturating_sub(1);
+
+                // Get the current scroll offset from the list state
+                let offset = self.list_state.offset();
+
+                // Calculate the actual index in the list
+                let new_index = offset + relative_y as usize;
+
+                debug!(
+                    "BookStat: relative_y={}, offset={}, new_index={}, items_len={}",
+                    relative_y,
+                    offset,
+                    new_index,
+                    self.chapter_stats.len()
+                );
+
+                if new_index < self.chapter_stats.len() {
+                    self.list_state.select(Some(new_index));
+                    debug!("BookStat: Selected item at index {new_index}");
+                    return true;
+                }
+            } else {
+                debug!("BookStat: Click outside popup area");
+            }
+        } else {
+            debug!("BookStat: No popup area set");
+        }
+        false
+    }
+
+    /// Check if the given coordinates are outside the popup area
+    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
+        if let Some(popup_area) = self.last_popup_area {
+            x < popup_area.x
+                || x >= popup_area.x + popup_area.width
+                || y < popup_area.y
+                || y >= popup_area.y + popup_area.height
+        } else {
+            true
         }
     }
 }

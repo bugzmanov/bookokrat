@@ -1,11 +1,12 @@
 ideas to implement:
  - [ ] Dimming should probably just use math instead of sticking to fixed palette
- - [ ] status bar to show errors and warnings
+ - [x] status bar to show errors and warnings
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
+         [ ] Search
          [ ] Navigate to the position where rendering mode was showing
-         [ ] Alow mouse selection & stuff
+         [ ] Alow mouse selection & copy-paste
      [x] Math Formulas
         [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
@@ -22,17 +23,16 @@ ideas to implement:
          [x] tables support
          [x] bold & italic
          [x] lists
-         [ ] checkboxes /-- not really needs to for epub
+         [ ] checkboxes /-- not really needed to for epub
          [x] Image
-            [ ] according to logs kitty compression hapens too many times (maybe..)
          [ ] Code Coloring
          [x] epub:type blocks
  - AI integreration
-     - Embeded validation for correct rendering (and markdown parsing)
-     - Re-explain already explained term or abbreviation (like in chapter nine BFF might be frealy used as abbreviation, since it was introduced in chapter 1)
      - Smart reading:
          - Chapter Summary and main points
          - Quize
+     - Embeded validation for correct rendering (and markdown parsing)
+     - Re-explain already explained term or abbreviation (like in chapter nine BFF might be frealy used as abbreviation, since it was introduced in chapter 1)
      - Phase 2: RAG Implementation
          - Build a local RAG system for your books:
          - Index entire library into embedded vectors
@@ -49,40 +49,38 @@ ideas to implement:
  - [x] User errors & info message
  - [x] NOTES & comments
      - [ ] Notes should support markdown (maybe)
-     - [ ] List of comments
+     - [ ] List/summary of comments
         - [ ] Search in comments
  - [ ] settings window
      - [ ] make margins configurable + text color
+     - [ ] multiple themes
  - [ ] text cursor for reading ala vim normal mode
-
- - images in ghosty terminal
-     - images of various sized - needs larger size for large images
-     - copy images to clipboard
- - [ ] Images in iterm and sixt protocol
- - [ ] integration with GOODREADS
+ - [x] images in ghosty terminal
+     - [ ] images of various sized - right now bookokrat support just 2 presets
+     - [ ] copy images to clipboard
+ - [x] Images in iterm and sixt protocol
  - [x] ASCII Logo 
+ - [ ] integration with GOODREADS
 
- - clickable scrollbar
+ - clickable scrollbar // not really needed
 
  - tmux + tape = to get claude to the position i want it to get to
 
 bugs:
 ---------------------
-[ ] Bug clicking in subchapter triggers image reaload
+[ ] Bug clicking in subchapter triggers image reload
 [ ] Currently reading chpater in TOC highlitning is seriously broken
 [ ] Code block selection with mouse selects wrong lines
 [ ] Adding comments doesn't move image down. it stays covering the text
 [ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
-[ ] Careless people: current chanpter highlightning not workin
+[ ] Careless people: current chanpter highlightning not working
 [ ] Effective rust - chapter 4 
   [ ] Lists have visual artefacts
   [ ] footnote links are not propertly working
 [ ] Full Stack web developer. Chapter 2.2.5 - images are misplaced
-[ ] <i>code</i> will have bg highlightning instead of just being cursive
-[ ] Modal windows should support scrolling and clicking
-   [ ] History and  Book stat should be mouse accessible
+[ ] <i>code</i> will have bg color instead of being cursive
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

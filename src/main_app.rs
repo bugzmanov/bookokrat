@@ -833,20 +833,40 @@ impl App {
                     return; // Block all other interactions
                 }
 
-                // Ignore mouse clicks when help popup is shown
+                // Handle help popup mouse clicks
                 if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
-                    return; // Block all interactions, help popup only responds to keyboard
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
+
+                    if let Some(ref help_popup) = self.help_popup {
+                        // Check if click is outside popup area - close it
+                        if help_popup.is_outside_popup_area(click_x, click_y) {
+                            self.help_popup = None;
+                            self.close_popup_to_previous();
+                        }
+                    }
+                    return; // Block all other interactions
                 }
 
                 if matches!(
                     self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ReadingHistory)
                 ) {
-                    let click_type = self
-                        .mouse_tracker
-                        .detect_click_type(mouse_event.column, mouse_event.row);
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
 
                     if let Some(ref mut history) = self.reading_history {
+                        // Check if click is outside popup area - close it
+                        if history.is_outside_popup_area(click_x, click_y) {
+                            self.reading_history = None;
+                            self.close_popup_to_previous();
+                            return;
+                        }
+
+                        let click_type = self
+                            .mouse_tracker
+                            .detect_click_type(mouse_event.column, mouse_event.row);
+
                         match click_type {
                             ClickType::Single | ClickType::Triple => {
                                 history.handle_mouse_click(mouse_event.column, mouse_event.row);
@@ -858,6 +878,51 @@ impl App {
                                         let _ = self.open_book_for_reading_by_path(&ptmp);
                                         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
                                         self.reading_history = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::BookStats)
+                ) {
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
+
+                    // Check if click is outside popup area - close it
+                    if self.book_stat.is_outside_popup_area(click_x, click_y) {
+                        self.book_stat.hide();
+                        self.close_popup_to_previous();
+                        return;
+                    }
+
+                    let click_type = self
+                        .mouse_tracker
+                        .detect_click_type(mouse_event.column, mouse_event.row);
+
+                    match click_type {
+                        ClickType::Single | ClickType::Triple => {
+                            self.book_stat
+                                .handle_mouse_click(mouse_event.column, mouse_event.row);
+                        }
+                        ClickType::Double => {
+                            if self
+                                .book_stat
+                                .handle_mouse_click(mouse_event.column, mouse_event.row)
+                            {
+                                if let Some(chapter_index) =
+                                    self.book_stat.get_selected_chapter_index()
+                                {
+                                    self.book_stat.hide();
+                                    self.set_main_panel_focus(MainPanel::Content);
+                                    if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                                        error!(
+                                            "Failed to navigate to chapter {chapter_index}: {e}"
+                                        );
                                     }
                                 }
                             }
@@ -933,10 +998,8 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ImagePopup)
-                ) {
+                // Block mouse up events for all popups
+                if self.has_active_popup() {
                     return;
                 }
 
@@ -953,11 +1016,8 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
-                // Block if image popup is shown
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ImagePopup)
-                ) {
+                // Block drag events for all popups
+                if self.has_active_popup() {
                     return;
                 }
 
@@ -1269,6 +1329,40 @@ impl App {
                 } else {
                     for _ in 0..(-scroll_amount).min(10) {
                         help_popup.scroll_up();
+                    }
+                }
+            }
+            return;
+        }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::BookStats)
+        ) {
+            if scroll_amount > 0 {
+                for _ in 0..scroll_amount.min(10) {
+                    self.book_stat.handle_j();
+                }
+            } else {
+                for _ in 0..(-scroll_amount).min(10) {
+                    self.book_stat.handle_k();
+                }
+            }
+            return;
+        }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ReadingHistory)
+        ) {
+            if let Some(ref mut history) = self.reading_history {
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        history.handle_j();
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        history.handle_k();
                     }
                 }
             }
@@ -1721,9 +1815,11 @@ impl App {
                     "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
-                    "j/k: Navigate | Enter: Open | ESC: Close"
+                    "j/k/Scroll: Navigate | Enter/DblClick: Open | ESC: Close"
                 }
-                FocusedPanel::Popup(PopupWindow::BookStats) => "j/k/Ctrl+d/u: Scroll | ESC: Close",
+                FocusedPanel::Popup(PopupWindow::BookStats) => {
+                    "j/k/Ctrl+d/u/Scroll: Scroll | Enter/DblClick: Jump | ESC: Close"
+                }
                 FocusedPanel::Popup(PopupWindow::ImagePopup) => "ESC/Any key: Close",
                 FocusedPanel::Popup(PopupWindow::BookSearch) => {
                     "Space+f: Reopen | Space+F: New Search"

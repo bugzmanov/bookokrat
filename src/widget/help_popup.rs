@@ -232,6 +232,18 @@ impl HelpPopup {
             _ => None,
         }
     }
+
+    /// Check if the given coordinates are outside the popup area
+    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
+        if let Some(popup_area) = self.last_popup_area {
+            x < popup_area.x
+                || x >= popup_area.x + popup_area.width
+                || y < popup_area.y
+                || y >= popup_area.y + popup_area.height
+        } else {
+            true
+        }
+    }
 }
 
 /// Strips SAUCE metadata from ANSI art files
