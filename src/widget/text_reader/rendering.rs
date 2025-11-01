@@ -12,6 +12,12 @@ use ratatui::{
 };
 use std::collections::HashMap;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RenderContext {
+    TopLevel,
+    InsideContainer,
+}
+
 #[allow(dead_code)]
 pub struct RenderingContext {
     pub raw_text_lines: Vec<String>,
@@ -31,6 +37,13 @@ impl RenderingContext {
 }
 
 impl crate::markdown_text_reader::MarkdownTextReader {
+    fn last_line_has_content(lines: &[RenderedLine]) -> bool {
+        lines
+            .last()
+            .map(|line| !line.raw_text.trim().is_empty())
+            .unwrap_or(false)
+    }
+
     pub fn render_document_to_lines(
         &mut self,
         doc: &Document,
@@ -55,8 +68,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 width,
                 palette,
                 is_focused,
-                0,              // indent level
-                Some(node_idx), // Pass the node index
+                0,
+                Some(node_idx),
+                RenderContext::TopLevel,
             );
         }
 
@@ -125,6 +139,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
         node_index: Option<usize>,
+        context: RenderContext,
     ) {
         use MarkdownBlock::*;
 
@@ -164,6 +179,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_focused,
                     indent,
                     node_index,
+                    context,
                 );
             }
 
@@ -176,6 +192,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    indent,
+                    Self::last_line_has_content(lines),
                 );
             }
 
@@ -416,8 +434,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
         node_index: Option<usize>,
+        context: RenderContext,
     ) {
-        // First, check if this paragraph contains any images and separate them
+        if context == RenderContext::InsideContainer {
+            let text_content: String = content
+                .iter()
+                .filter_map(|item| match item {
+                    TextOrInline::Text(t) => Some(t.content.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if text_content.trim().is_empty() {
+                return;
+            }
+        }
+
         let mut current_rich_spans = Vec::new();
         let mut has_content = false;
 
@@ -452,14 +483,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render any remaining text spans
         if !current_rich_spans.is_empty() {
+            let add_empty_line = context == RenderContext::TopLevel;
             self.render_text_spans(
                 &current_rich_spans,
-                None, // no prefix
+                None,
                 lines,
                 total_height,
                 width,
                 indent,
-                true, // add empty line after
+                add_empty_line,
             );
         } else if !has_content {
             // Empty paragraph - just add an empty line
@@ -635,11 +667,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         _width: usize, //todo: not supported yet
         palette: &Base16Palette,
         is_focused: bool,
+        indent: usize,
+        add_spacing_before: bool,
     ) {
         // TODO: Implement syntax highlighting if language is provided
+        if add_spacing_before {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+        }
+
+        let indent_str = "  ".repeat(indent);
         let code_lines: Vec<&str> = content.lines().collect();
 
         for code_line in code_lines {
+            let mut spans = Vec::new();
+            let mut display_text = String::new();
+
+            if !indent_str.is_empty() {
+                spans.push(Span::raw(indent_str.clone()));
+                display_text.push_str(&indent_str);
+            }
+
             let styled_span = Span::styled(
                 code_line.to_string(),
                 RatatuiStyle::default()
@@ -651,9 +700,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     .bg(palette.base_00),
             );
 
+            display_text.push_str(code_line);
+            spans.push(styled_span);
+
             lines.push(RenderedLine {
-                spans: vec![styled_span],
-                raw_text: code_line.to_string(),
+                spans,
+                raw_text: display_text.clone(),
                 line_type: LineType::CodeBlock {
                     language: language.map(String::from),
                 },
@@ -662,7 +714,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
             });
 
-            self.raw_text_lines.push(code_line.to_string());
+            self.raw_text_lines.push(display_text);
             *total_height += 1;
         }
 
@@ -704,40 +756,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     // First block gets the bullet/number prefix
                     match &block_node.block {
                         MarkdownBlock::Paragraph { content } => {
-                            // Render the rich text content with prefix and indentation
                             let mut content_rich_spans = Vec::new();
                             for item in content.iter() {
                                 content_rich_spans
                                     .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
 
-                            // Store original line count to update line types after
                             let lines_before = lines.len();
 
                             self.render_text_spans(
                                 &content_rich_spans,
-                                Some(&prefix), // add bullet/number prefix
+                                Some(&prefix),
                                 lines,
                                 total_height,
                                 width,
-                                indent, // proper indentation
-                                false,  // don't add empty line after
+                                indent,
+                                false,
                             );
 
-                            // Update line types and node_index for all newly added lines
                             for (i, line) in lines[lines_before..].iter_mut().enumerate() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
                                     indent,
                                 };
-                                // Set node_index only on the first line of the first item
                                 if i == 0 && idx == 0 {
                                     line.node_index = node_index;
                                 }
                             }
                         }
                         _ => {
-                            // For other block types in list items, render them with increased indent
                             self.render_node(
                                 block_node,
                                 lines,
@@ -746,12 +793,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 palette,
                                 is_focused,
                                 indent + 1,
-                                None, // No separate node index for nested blocks
+                                None,
+                                RenderContext::InsideContainer,
                             );
                         }
                     }
                 } else {
-                    // Subsequent blocks are rendered with increased indent
                     self.render_node(
                         block_node,
                         lines,
@@ -760,9 +807,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         indent + 1,
-                        None, // No separate node index for nested blocks
+                        None,
+                        RenderContext::InsideContainer,
                     );
                 }
+            }
+
+            if idx + 1 < items.len() {
+                lines.push(RenderedLine::empty());
+                self.raw_text_lines.push(String::new());
+                *total_height += 1;
             }
         }
 
@@ -1109,7 +1163,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     );
                 }
                 _ => {
-                    // Render other block types within quotes
                     self.render_node(
                         node,
                         lines,
@@ -1118,7 +1171,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         indent + 1,
-                        None, // No separate node index for nested blocks
+                        None,
+                        RenderContext::InsideContainer,
                     );
                 }
             }
@@ -1219,18 +1273,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             // Render each definition (dd) - as blocks with indentation
             for definition_blocks in &item.definitions {
-                // Each definition is now a Vec<Node> (blocks), not just Text
                 for block_node in definition_blocks {
-                    // Render each block with 2 levels of indentation
                     self.render_node(
                         block_node,
                         lines,
                         total_height,
-                        width.saturating_sub(4), // Reduce width for indentation
+                        width.saturating_sub(4),
                         palette,
                         is_focused,
-                        2,    // 2 levels of indentation (4 spaces)
-                        None, // No separate node index for nested blocks
+                        2,
+                        None,
+                        RenderContext::InsideContainer,
                     );
                 }
             }
@@ -1308,8 +1361,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         width,
                         palette,
                         is_focused,
-                        0,    // no indentation
-                        None, // No separate node index for footnote content
+                        0,
+                        None,
+                        RenderContext::InsideContainer,
                     );
                 }
             }
@@ -1351,15 +1405,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         indent: usize,
         add_empty_line_after: bool,
     ) {
-        // Build complete rich spans with prefix
-        let mut complete_rich_spans = Vec::new();
-        if let Some(prefix_str) = prefix {
-            complete_rich_spans.push(RichSpan::Text(Span::raw(prefix_str.to_string())));
-        }
-        complete_rich_spans.extend_from_slice(rich_spans);
+        let prefix_text = prefix.unwrap_or("");
+        let prefix_width = prefix_text.chars().count();
+        let prefix_padding = if prefix_width > 0 {
+            " ".repeat(prefix_width)
+        } else {
+            String::new()
+        };
+        let wrappable_rich_spans: Vec<RichSpan> = rich_spans.to_vec();
 
         // Convert rich spans to plain text for wrapping
-        let plain_text = complete_rich_spans
+        let plain_text = wrappable_rich_spans
             .iter()
             .map(|rs| match rs {
                 RichSpan::Text(span) => span.content.as_ref(),
@@ -1369,7 +1425,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Calculate available width after accounting for indentation
         let indent_str = "  ".repeat(indent);
-        let available_width = width.saturating_sub(indent_str.len());
+        let indent_width_chars = indent_str.chars().count();
+        let mut available_width = width.saturating_sub(indent_width_chars);
+        if prefix_width > 0 {
+            available_width = available_width.saturating_sub(prefix_width);
+        }
+        let available_width = available_width.max(1);
 
         // Wrap the text
         let wrapped = textwrap::wrap(&plain_text, available_width);
@@ -1382,10 +1443,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             // Map wrapped line back to rich spans
             let rich_spans_for_line = if line_idx == 0 && wrapped.len() == 1 {
                 // Single line - use all rich spans
-                complete_rich_spans.clone()
+                wrappable_rich_spans.clone()
             } else {
                 // Multi-line content: map wrapped line back to rich spans
-                self.map_wrapped_line_to_rich_spans(wrapped_line, &complete_rich_spans)
+                self.map_wrapped_line_to_rich_spans(wrapped_line, &wrappable_rich_spans)
             };
 
             // Extract spans and links, calculating positions
@@ -1393,12 +1454,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             for rich_span in rich_spans_for_line {
                 match rich_span {
                     RichSpan::Text(span) => {
-                        let len = span.content.len();
+                        let len = span.content.chars().count();
                         line_spans.push(span);
                         current_col += len;
                     }
                     RichSpan::Link { span, mut info } => {
-                        let len = span.content.len();
+                        let len = span.content.chars().count();
                         info.line = lines.len(); // Set to current line being created
                         info.start_col = current_col;
                         info.end_col = current_col + len;
@@ -1415,17 +1476,37 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_spans.insert(0, Span::raw(indent_str.clone()));
                 // Adjust link positions for indentation
                 for link in &mut line_links {
-                    link.start_col += indent_str.len();
-                    link.end_col += indent_str.len();
+                    link.start_col += indent_width_chars;
+                    link.end_col += indent_width_chars;
                 }
             }
 
-            // Build the final raw text with indentation
-            let final_raw_text = if indent > 0 {
-                format!("{indent_str}{wrapped_line}")
-            } else {
-                wrapped_line.to_string()
-            };
+            if prefix_width > 0 {
+                let insert_at = if indent > 0 { 1 } else { 0 };
+                if line_idx == 0 {
+                    line_spans.insert(insert_at, Span::raw(prefix_text.to_string()));
+                } else {
+                    line_spans.insert(insert_at, Span::raw(prefix_padding.clone()));
+                }
+                for link in &mut line_links {
+                    link.start_col += prefix_width;
+                    link.end_col += prefix_width;
+                }
+            }
+
+            // Build the final raw text with indentation and prefix padding
+            let mut final_raw_text = String::new();
+            if indent > 0 {
+                final_raw_text.push_str(&indent_str);
+            }
+            if prefix_width > 0 {
+                if line_idx == 0 {
+                    final_raw_text.push_str(prefix_text);
+                } else {
+                    final_raw_text.push_str(&prefix_padding);
+                }
+            }
+            final_raw_text.push_str(wrapped_line.as_ref());
 
             lines.push(RenderedLine {
                 spans: line_spans,

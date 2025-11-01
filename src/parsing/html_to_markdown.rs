@@ -532,6 +532,15 @@ impl HtmlToMarkdownConverter {
             NodeData::Text { contents } => {
                 output.push_str(&contents.borrow());
             }
+            NodeData::Element { name, .. } => {
+                if name.local.as_ref().eq_ignore_ascii_case("br") {
+                    output.push('\n');
+                } else {
+                    for child in node.children.borrow().iter() {
+                        Self::collect_text_from_node(child, output);
+                    }
+                }
+            }
             _ => {
                 for child in node.children.borrow().iter() {
                     Self::collect_text_from_node(child, output);
@@ -991,6 +1000,7 @@ impl HtmlToMarkdownConverter {
         }
 
         self.flush_text_as_paragraph(&mut current_text, &mut content);
+        self.merge_anchor_only_paragraphs(&mut content);
 
         content
     }
@@ -1012,6 +1022,102 @@ impl HtmlToMarkdownConverter {
                 content.push(Node::new(paragraph, 0..0));
             }
             *current_text = Text::default();
+        }
+    }
+
+    fn merge_anchor_only_paragraphs(&self, content: &mut Vec<Node>) {
+        let mut index = 0;
+        while index < content.len() {
+            let anchors = {
+                if let Block::Paragraph {
+                    content: paragraph_text,
+                } = &content[index].block
+                {
+                    Self::extract_anchor_inlines(paragraph_text)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(anchors) = anchors {
+                if anchors.is_empty() {
+                    content.remove(index);
+                    continue;
+                }
+
+                let mut target_idx = None;
+                if index + 1 < content.len() {
+                    if matches!(content[index + 1].block, Block::Paragraph { .. }) {
+                        target_idx = Some(index + 1);
+                    }
+                }
+
+                if target_idx.is_none() && index > 0 {
+                    if matches!(content[index - 1].block, Block::Paragraph { .. }) {
+                        target_idx = Some(index - 1);
+                    }
+                }
+
+                if let Some(target) = target_idx {
+                    if target > index {
+                        if let Block::Paragraph {
+                            content: ref mut target_text,
+                        } = content[target].block
+                        {
+                            for anchor in anchors.iter().rev() {
+                                target_text.insert_front(TextOrInline::Inline(anchor.clone()));
+                            }
+                        }
+                        content.remove(index);
+                        continue;
+                    } else if let Block::Paragraph {
+                        content: ref mut target_text,
+                    } = content[target].block
+                    {
+                        for anchor in anchors {
+                            target_text.push_inline(anchor);
+                        }
+                        content.remove(index);
+                        if index > 0 {
+                            index -= 1;
+                        }
+                        continue;
+                    }
+                }
+
+                index += 1;
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn extract_anchor_inlines(text: &Text) -> Option<Vec<Inline>> {
+        let mut anchors = Vec::new();
+        let mut has_non_anchor = false;
+
+        for item in text.iter() {
+            match item {
+                TextOrInline::Inline(Inline::Anchor { id }) => {
+                    anchors.push(Inline::Anchor { id: id.clone() });
+                }
+                TextOrInline::Inline(_) => {
+                    has_non_anchor = true;
+                    break;
+                }
+                TextOrInline::Text(node) => {
+                    if !node.content.trim().is_empty() {
+                        has_non_anchor = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !has_non_anchor && !anchors.is_empty() {
+            Some(anchors)
+        } else {
+            None
         }
     }
 

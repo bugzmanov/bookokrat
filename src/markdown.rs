@@ -383,6 +383,10 @@ impl Text {
     pub fn iter_mut(&mut self) -> std::slice::IterMut<TextOrInline> {
         self.0.iter_mut()
     }
+
+    pub fn insert_front(&mut self, item: TextOrInline) {
+        self.0.insert(0, item);
+    }
 }
 
 impl IntoIterator for Text {
