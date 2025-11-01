@@ -63,8 +63,8 @@ fn create_test_book_manager() -> BookManager {
 }
 
 // Get default theme palette
-fn get_test_palette() -> Base16Palette {
-    bookokrat::theme::OCEANIC_NEXT
+fn get_test_palette() -> &'static Base16Palette {
+    &*bookokrat::theme::OCEANIC_NEXT
 }
 
 #[test]
@@ -83,7 +83,7 @@ fn test_book_list_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, &palette, &book_manager);
+            nav_panel.render(f, area, false, palette, &book_manager);
         })
         .unwrap();
 
@@ -122,7 +122,7 @@ fn test_book_list_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, &palette, &book_manager);
+            nav_panel.render(f, area, false, palette, &book_manager);
         })
         .unwrap();
 
@@ -184,7 +184,7 @@ fn test_navigation_panel_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, &palette, &book_manager);
+            nav_panel.render(f, area, false, palette, &book_manager);
         })
         .unwrap();
 
@@ -229,7 +229,7 @@ fn test_navigation_panel_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, &palette, &book_manager);
+            nav_panel.render(f, area, false, palette, &book_manager);
         })
         .unwrap();
 
@@ -274,7 +274,7 @@ fn test_text_reader_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, &palette, true);
+            text_reader.render(f, area, 1, 5, palette, true);
         })
         .unwrap();
 
@@ -324,7 +324,7 @@ fn test_text_reader_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, &palette, true);
+            text_reader.render(f, area, 1, 5, palette, true);
         })
         .unwrap();
 

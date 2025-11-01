@@ -41,8 +41,9 @@ use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
     Terminal,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
@@ -91,6 +92,7 @@ pub struct App {
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
     notifications: NotificationManager,
+    help_bar_area: Rect,
 }
 
 pub trait VimNavMotions {
@@ -316,6 +318,7 @@ impl App {
             book_search: None,
             help_popup: None,
             notifications: NotificationManager::new(),
+            help_bar_area: Rect::default(),
         };
 
         if auto_load_recent
@@ -335,6 +338,10 @@ impl App {
         }
 
         app
+    }
+
+    fn is_profiling(&self) -> bool {
+        self.profiler.lock().unwrap().is_some()
     }
 
     fn toggle_profiling(&self) {
@@ -806,6 +813,10 @@ impl App {
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if self.handle_help_bar_click(mouse_event.column, mouse_event.row) {
+                    return;
+                }
+
                 // Check if image popup is shown first - close it on any click
                 if matches!(
                     self.focused_panel,
@@ -1498,6 +1509,7 @@ impl App {
         }
 
         self.render_help_bar(f, chunks[1], fps_counter);
+        self.help_bar_area = chunks[1];
 
         if matches!(
             self.focused_panel,
@@ -1589,6 +1601,79 @@ impl App {
         f.render_widget(paragraph, area);
     }
 
+    fn handle_help_bar_click(&mut self, click_x: u16, click_y: u16) -> bool {
+        let area = self.help_bar_area;
+        if click_y < area.y || click_y >= area.y + area.height {
+            return false;
+        }
+        if click_x < area.x || click_x >= area.x + area.width {
+            return false;
+        }
+
+        let inner_x = click_x.saturating_sub(area.x + 1);
+        let inner_y = click_y.saturating_sub(area.y + 1);
+
+        if inner_y != 0 {
+            return false;
+        }
+
+        let width = area.width.saturating_sub(2);
+        let history_full = "[Space+h: History] ";
+        let stats_full = "[Space+d: Stats] ";
+        let help_full = "[?: Help]";
+
+        let total_len = (history_full.len() + stats_full.len() + help_full.len()) as u16;
+        let section_start = width.saturating_sub(total_len);
+
+        let history_start = section_start + "[".len() as u16;
+        let history_end = history_start + "Space+h: History".len() as u16;
+        let stats_start = section_start + history_full.len() as u16 + "[".len() as u16;
+        let stats_end = stats_start + "Space+d: Stats".len() as u16;
+        let help_start =
+            section_start + history_full.len() as u16 + stats_full.len() as u16 + "[".len() as u16;
+        let help_end = help_start + "?: Help".len() as u16;
+
+        if inner_x >= history_start && inner_x < history_end {
+            if let FocusedPanel::Main(panel) = self.focused_panel {
+                self.previous_main_panel = panel;
+            }
+            self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+            return true;
+        }
+
+        if inner_x >= stats_start && inner_x < stats_end {
+            if let Some(ref mut book) = self.current_book {
+                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+                if let Err(e) = self
+                    .book_stat
+                    .calculate_stats(&mut book.epub, terminal_size)
+                {
+                    error!("Failed to calculate book statistics: {e}");
+                    self.show_error(format!("Failed to calculate statistics: {e}"));
+                } else {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.book_stat.show();
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                }
+            }
+            return true;
+        }
+
+        if inner_x >= help_start && inner_x < help_end {
+            if let FocusedPanel::Main(panel) = self.focused_panel {
+                self.previous_main_panel = panel;
+            }
+            self.help_popup = Some(HelpPopup::new());
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+            return true;
+        }
+
+        false
+    }
+
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
         use crate::notification::NotificationLevel;
         let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
@@ -1630,10 +1715,10 @@ impl App {
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::NavigationList) => {
-                    "j/k: Navigate | Enter: Select | Space+h: History | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
+                    "j/k: Navigate | Enter: Select | h/l: Fold/Unfold | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Space+h: History | Tab: Switch | Space+o: Open | q: Quit"
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
                     "j/k: Navigate | Enter: Open | ESC: Close"
@@ -1650,23 +1735,58 @@ impl App {
             help_text.to_string()
         };
 
-        let help = Paragraph::new(format!(
-            "{} | FPS: {}",
-            help_content, fps_counter.current_fps
-        ))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(border_color))
-                .style(Style::default().bg(OCEANIC_NEXT.base_00)),
-        )
-        .style(
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .style(Style::default().bg(OCEANIC_NEXT.base_00));
+
+        let inner_area = block.inner(area);
+        f.render_widget(block, area);
+
+        let left_content = if self.is_profiling() {
+            format!("{} | FPS: {}", help_content, fps_counter.current_fps)
+        } else {
+            help_content
+        };
+        let left_para = Paragraph::new(left_content).style(
             Style::default()
                 .fg(OCEANIC_NEXT.base_03)
                 .bg(OCEANIC_NEXT.base_00),
         );
+        f.render_widget(left_para, inner_area);
 
-        f.render_widget(help, area);
+        let text_color = OCEANIC_NEXT.base_03;
+        let right_content = Line::from(vec![
+            Span::raw("["),
+            Span::styled(
+                "Space+h: History",
+                Style::default()
+                    .fg(text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw("] "),
+            Span::raw("["),
+            Span::styled(
+                "Space+d: Stats",
+                Style::default()
+                    .fg(text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw("] "),
+            Span::raw("["),
+            Span::styled(
+                "?: Help",
+                Style::default()
+                    .fg(text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw("]"),
+        ]);
+
+        let right_para = Paragraph::new(right_content)
+            .alignment(Alignment::Right)
+            .style(Style::default().bg(OCEANIC_NEXT.base_00));
+        f.render_widget(right_para, inner_area);
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus

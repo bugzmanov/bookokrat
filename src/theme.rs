@@ -4,6 +4,7 @@ use ratatui::style::Color;
 
 // Color palette structure
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct Base16Palette {
     pub base_00: Color, // Background
     pub base_01: Color, // Lighter background

@@ -528,7 +528,7 @@ fn query_with_timeout(
 mod tests {
     use std::assert_eq;
 
-    use super::picker::{Capability, Picker, ProtocolType};
+    use super::{Capability, Picker, ProtocolType};
 
     use super::{cap_parser::Response, interpret_parser_responses};
 

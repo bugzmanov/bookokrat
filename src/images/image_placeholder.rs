@@ -191,7 +191,7 @@ mod tests {
             "                   │                                        │",
             "                   │                                        │",
             "                   │                                        │",
-            "                   │    [image src=\"../images/test.png\"]    │",
+            "                   │                                        │",
             "                   │                                        │",
             "                   │                                        │",
             "                   │                                        │",
@@ -237,7 +237,7 @@ mod tests {
             "│                                      │",
             "│                                      │",
             "│                                      │",
-            "│    [image src=\"../images/test....    │",
+            "│                                      │",
             "│                                      │",
             "│                                      │",
             "│                                      │",
@@ -267,10 +267,21 @@ mod tests {
         let placeholder =
             ImagePlaceholder::new(long_src, 40, &config, true, LoadingStatus::Loading);
 
-        // Check that the text is truncated
+        // Placeholder should not render the raw image src on the canvas
         let middle_line = &placeholder.raw_lines[7];
-        assert!(middle_line.contains("..."));
-        assert!(!middle_line.contains("limit.png"));
+        assert!(
+            !middle_line.contains("[image"),
+            "Placeholder should not display the raw image source"
+        );
+        assert_eq!(
+            middle_line.chars().count(),
+            placeholder.raw_lines[0].chars().count(),
+            "Inner lines should match the border width"
+        );
+
+        // Status indicator remains visible on the last content line
+        let status_line = &placeholder.raw_lines[13];
+        assert!(status_line.contains("loading..."));
     }
 
     #[test]
