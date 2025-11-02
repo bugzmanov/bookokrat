@@ -1367,6 +1367,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     );
                 }
             }
+
+            if !matches!(
+                lines.last(),
+                Some(RenderedLine {
+                    line_type: LineType::Empty,
+                    ..
+                })
+            ) {
+                lines.push(RenderedLine::empty());
+                self.raw_text_lines.push(String::new());
+                *total_height += 1;
+            }
         }
 
         // Add line separator after the block
