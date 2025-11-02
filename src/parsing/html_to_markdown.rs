@@ -424,13 +424,12 @@ impl HtmlToMarkdownConverter {
             _ => HeadingLevel::H1,
         };
 
-        let content = self.extract_formatted_content(node);
-
         let id = self.get_attr_value(attrs, "id");
+        let heading_nodes = self.collect_heading_nodes(level, node, id);
 
-        let heading_block = Block::Heading { level, content };
-        let heading_node = Node::new_with_id(heading_block, 0..0, id); // Store HTML id for anchor resolution
-        document.blocks.push(heading_node);
+        for heading_node in heading_nodes {
+            document.blocks.push(heading_node);
+        }
     }
 
     fn handle_heading_with_id(
@@ -450,11 +449,10 @@ impl HtmlToMarkdownConverter {
             _ => HeadingLevel::H1,
         };
 
-        let content = self.extract_formatted_content(node);
-
-        let heading_block = Block::Heading { level, content };
-        let heading_node = Node::new_with_id(heading_block, 0..0, provided_id); // Use the provided ID from parent div
-        document.blocks.push(heading_node);
+        let heading_nodes = self.collect_heading_nodes(level, node, provided_id);
+        for heading_node in heading_nodes {
+            document.blocks.push(heading_node);
+        }
     }
 
     fn handle_paragraph(
@@ -508,6 +506,20 @@ impl HtmlToMarkdownConverter {
         }
     }
 
+    fn build_code_block_node(
+        &self,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        node: &Rc<markup5ever_rcdom::Node>,
+    ) -> Node {
+        let mut content = String::new();
+        Self::collect_text_from_node(node, &mut content);
+
+        let id = self.get_attr_value(attrs, "id");
+        let language = self.get_attr_value(attrs, "data-type");
+
+        Node::new_with_id(Block::CodeBlock { language, content }, 0..0, id)
+    }
+
     fn handle_pre(
         &mut self,
         attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
@@ -515,15 +527,7 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         // TODO: In the future, we should handle inline formatting like <sub> within <pre>
-        let mut content = String::new();
-        Self::collect_text_from_node(node, &mut content);
-
-        let id = self.get_attr_value(attrs, "id");
-
-        let language = self.get_attr_value(attrs, "data-type");
-
-        let code_block = Block::CodeBlock { language, content };
-        let code_node = Node::new_with_id(code_block, 0..0, id);
+        let code_node = self.build_code_block_node(attrs, node);
         document.blocks.push(code_node);
     }
 
@@ -1246,12 +1250,10 @@ impl HtmlToMarkdownConverter {
                                 _ => HeadingLevel::H1,
                             };
 
-                            let heading_content = self.extract_formatted_content(child);
-                            let heading_block = Block::Heading {
-                                level,
-                                content: heading_content,
-                            };
-                            content.push(Node::new(heading_block, 0..0));
+                            let heading_id = self.get_attr_value(attrs, "id");
+                            let heading_nodes =
+                                self.collect_heading_nodes(level, child, heading_id);
+                            content.extend(heading_nodes);
                         }
                         "p" => {
                             let para_content = self.extract_formatted_content(child);
@@ -1275,18 +1277,42 @@ impl HtmlToMarkdownConverter {
                             // For wrapper elements like div, recursively process their children
                             let mut temp_doc = Document::new();
                             for grandchild in child.children.borrow().iter() {
+                                let before_len = temp_doc.blocks.len();
                                 self.visit_node(grandchild, &mut temp_doc);
+                                if temp_doc.blocks.len() == before_len {
+                                    self.ensure_inline_placeholder(grandchild, &mut temp_doc);
+                                }
+                            }
+                            self.ensure_placeholder_block(child, &mut temp_doc);
+                            for block in temp_doc.blocks.iter_mut() {
+                                if let Block::Paragraph { content } = &mut block.block {
+                                    Self::clear_code_style_if_uniform_code(content);
+                                }
                             }
                             content.extend(temp_doc.blocks);
                         }
+                        "pre" => {
+                            let code_node = self.build_code_block_node(attrs, child);
+                            content.push(code_node);
+                        }
                         _ => {
-                            let blocks = self.extract_formatted_content_as_blocks(child, false);
+                            let mut blocks = self.extract_formatted_content_as_blocks(child, false);
+                            for block in blocks.iter_mut() {
+                                if let Block::Paragraph { content } = &mut block.block {
+                                    Self::clear_code_style_if_uniform_code(content);
+                                }
+                            }
                             content.extend(blocks);
                         }
                     }
                 }
                 _ => {
-                    let blocks = self.extract_formatted_content_as_blocks(child, false);
+                    let mut blocks = self.extract_formatted_content_as_blocks(child, false);
+                    for block in blocks.iter_mut() {
+                        if let Block::Paragraph { content } = &mut block.block {
+                            Self::clear_code_style_if_uniform_code(content);
+                        }
+                    }
                     content.extend(blocks);
                 }
             }
@@ -1644,6 +1670,20 @@ impl HtmlToMarkdownConverter {
                     current_text.push_inline(image_inline);
                 }
             }
+            "pre" => {
+                if !current_text.is_empty() {
+                    blocks.push(Node::new(
+                        Block::Paragraph {
+                            content: current_text.clone(),
+                        },
+                        0..0,
+                    ));
+                    *current_text = Text::default();
+                }
+
+                let code_node = self.build_code_block_node(attrs, node);
+                blocks.push(code_node);
+            }
             _ => {
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     current_text.push_inline(Inline::Anchor { id });
@@ -1653,6 +1693,213 @@ impl HtmlToMarkdownConverter {
                     self.collect_as_blocks(child, blocks, current_text, new_context.clone());
                 }
             }
+        }
+    }
+
+    fn collect_heading_nodes(
+        &self,
+        level: HeadingLevel,
+        node: &Rc<markup5ever_rcdom::Node>,
+        id: Option<String>,
+    ) -> Vec<Node> {
+        let mut heading_text = Text::default();
+        let mut trailing_text = Text::default();
+        let mut result = Vec::new();
+        let mut heading_emitted = false;
+        let mut encountered_block = false;
+
+        let base_context = ProcessingContext {
+            in_table: false,
+            current_style: None,
+            text_transform: None,
+        };
+
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Text { .. } => {
+                    if encountered_block {
+                        self.collect_as_text(child, &mut trailing_text, base_context.clone());
+                    } else {
+                        self.collect_as_text(child, &mut heading_text, base_context.clone());
+                    }
+                }
+                NodeData::Element { name, attrs, .. } => {
+                    let tag = name.local.as_ref();
+                    if tag.eq_ignore_ascii_case("pre") {
+                        if !heading_emitted && !heading_text.is_empty() {
+                            result.push(Node::new_with_id(
+                                Block::Heading {
+                                    level,
+                                    content: heading_text.clone(),
+                                },
+                                0..0,
+                                id.clone(),
+                            ));
+                            heading_emitted = true;
+                            heading_text = Text::default();
+                        }
+
+                        encountered_block = true;
+                        let code_node = self.build_code_block_node(attrs, child);
+                        result.push(code_node);
+                    } else if Self::is_heading_block_element(tag) {
+                        if !heading_emitted && !heading_text.is_empty() {
+                            result.push(Node::new_with_id(
+                                Block::Heading {
+                                    level,
+                                    content: heading_text.clone(),
+                                },
+                                0..0,
+                                id.clone(),
+                            ));
+                            heading_emitted = true;
+                            heading_text = Text::default();
+                        }
+
+                        encountered_block = true;
+                        let mut sub_blocks = self.extract_formatted_content_as_blocks(child, false);
+                        result.append(&mut sub_blocks);
+                    } else {
+                        if encountered_block {
+                            self.collect_as_text(child, &mut trailing_text, base_context.clone());
+                        } else {
+                            self.collect_as_text(child, &mut heading_text, base_context.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if !heading_emitted && !heading_text.is_empty() {
+            result.insert(
+                0,
+                Node::new_with_id(
+                    Block::Heading {
+                        level,
+                        content: heading_text.clone(),
+                    },
+                    0..0,
+                    id.clone(),
+                ),
+            );
+            heading_emitted = true;
+            heading_text = Text::default();
+        }
+
+        if encountered_block && !trailing_text.is_empty() {
+            Self::clear_code_style(&mut trailing_text);
+            result.push(Node::new(
+                Block::Paragraph {
+                    content: trailing_text,
+                },
+                0..0,
+            ));
+        } else if !heading_emitted && !heading_text.is_empty() {
+            // No block elements encountered; treat entire content as heading.
+            result.push(Node::new_with_id(
+                Block::Heading {
+                    level,
+                    content: heading_text,
+                },
+                0..0,
+                id.clone(),
+            ));
+            heading_emitted = true;
+        }
+
+        if !heading_emitted {
+            if let Some(id_value) = id {
+                if let Some(first) = result.first_mut() {
+                    if first.id.is_none() {
+                        first.id = Some(id_value);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    fn ensure_placeholder_block(&self, node: &Rc<markup5ever_rcdom::Node>, doc: &mut Document) {
+        if !doc.blocks.is_empty() {
+            return;
+        }
+
+        let mut inline_text = self.extract_formatted_content(node);
+        if inline_text.is_empty() {
+            return;
+        }
+
+        Self::clear_code_style(&mut inline_text);
+        let paragraph_block = Block::Paragraph {
+            content: inline_text,
+        };
+        doc.blocks.push(Node::new(paragraph_block, 0..0));
+    }
+
+    fn ensure_inline_placeholder(&self, node: &Rc<markup5ever_rcdom::Node>, doc: &mut Document) {
+        let mut inline_text = self.extract_formatted_content(node);
+        if inline_text.is_empty() {
+            return;
+        }
+        Self::clear_code_style(&mut inline_text);
+        doc.blocks.push(Node::new(
+            Block::Paragraph {
+                content: inline_text,
+            },
+            0..0,
+        ));
+    }
+
+    fn is_heading_block_element(tag: &str) -> bool {
+        matches!(
+            tag,
+            "div"
+                | "section"
+                | "article"
+                | "p"
+                | "ul"
+                | "ol"
+                | "table"
+                | "blockquote"
+                | "dl"
+                | "hr"
+                | "aside"
+                | "figure"
+                | "pre"
+        )
+    }
+
+    fn clear_code_style(text: &mut Text) {
+        for item in text.iter_mut() {
+            if let TextOrInline::Text(node) = item {
+                if matches!(node.style, Some(Style::Code)) {
+                    node.style = None;
+                }
+            }
+        }
+    }
+
+    fn clear_code_style_if_uniform_code(text: &mut Text) {
+        let mut saw_non_whitespace = false;
+        for item in text.iter() {
+            match item {
+                TextOrInline::Text(node) => {
+                    if node.content.trim().is_empty() {
+                        continue;
+                    }
+                    saw_non_whitespace = true;
+                    if !matches!(node.style, Some(Style::Code)) {
+                        return;
+                    }
+                }
+                _ => return,
+            }
+        }
+
+        if saw_non_whitespace {
+            Self::clear_code_style(text);
         }
     }
 
@@ -2068,7 +2315,6 @@ mod tests {
 
         let doc = converter.convert(html);
         let rendered = renderer.render(&doc);
-        eprintln!("{doc:#?}");
         let expected = r#"
 - Level 1 Item 1
 - Level 1 Item 2
@@ -2571,6 +2817,338 @@ The protocol operates on multiple layers:
 "#;
 
         assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_code_block_inside_epub_sidebar() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<aside class="not_desired_behavior" data-type="sidebar" epub:type="sidebar">
+    <div class="sidebar" id="id1591">
+        <h1>
+            <pre data-type="programlisting"><code>fn main() {</code>
+<code>    println!("hello world");</code>
+<code>}</code></pre>
+        </h1>
+    </div>
+</aside>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(doc.blocks.len(), 1, "Expected single EPUB block");
+
+        match &doc.blocks[0].block {
+            Block::EpubBlock { content, .. } => {
+                assert_eq!(content.len(), 1, "Sidebar should contain one block node");
+                match &content[0].block {
+                    Block::CodeBlock {
+                        content: code_content,
+                        ..
+                    } => {
+                        assert!(
+                            code_content.contains(r#"println!("hello world");"#),
+                            "Code block content should be preserved"
+                        );
+                    }
+                    other => panic!("Expected code block inside sidebar, found {other:?}"),
+                }
+            }
+            other => panic!("Expected EPUB block at root, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_heading_with_embedded_pre() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<h1>Intro<pre>fn main() {}</pre>Outro</h1>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(
+            doc.blocks.len(),
+            3,
+            "Heading should expand into three blocks"
+        );
+
+        match &doc.blocks[0].block {
+            Block::Heading { level, content } => {
+                assert_eq!(*level, HeadingLevel::H1);
+                let rendered = renderer.render_text(content);
+                assert!(
+                    rendered.contains("Intro"),
+                    "Heading should preserve leading text"
+                );
+            }
+            other => panic!("Expected heading block, found {other:?}"),
+        }
+
+        match &doc.blocks[1].block {
+            Block::CodeBlock { content, .. } => {
+                assert!(
+                    content.contains("fn main()"),
+                    "Code block should preserve inline pre content"
+                );
+            }
+            other => panic!("Expected code block, found {other:?}"),
+        }
+
+        match &doc.blocks[2].block {
+            Block::Paragraph { content } => {
+                let rendered = renderer.render_text(content);
+                assert!(
+                    rendered.contains("Outro"),
+                    "Trailing text should remain after code block"
+                );
+            }
+            other => panic!("Expected paragraph, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_heading_with_leading_text_pre_and_trailing_text() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
+
+        let html = r#"<h1>Yo! Lets check this out!<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A structure whose contents are public, so external users can construct</code>
+<code class="sd">/// instances of it.</code>
+<code class="cp">#[derive(Debug)]</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">ExposedStruct</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">data</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+
+
+<code class="w">    </code><code class="sd">/// Additional data that is required only when the `schema` feature</code>
+<code class="w">    </code><code class="sd">/// is enabled.</code>
+<code class="w">    </code><code class="cp">#[cfg(feature = </code><code class="s">"schema"</code><code class="cp">)]</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">schema</code>: <code class="nb">String</code><code class="p">,</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>Yo! Lets check this out!</h1>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(
+            doc.blocks.len(),
+            3,
+            "Heading should expand into heading + code block + trailing paragraph"
+        );
+
+        match &doc.blocks[0].block {
+            Block::Heading { level, content } => {
+                assert_eq!(*level, HeadingLevel::H1);
+                let rendered = renderer.render_text(content);
+                assert!(
+                    rendered.contains("Yo! Lets check this out!"),
+                    "Heading should keep the leading text"
+                );
+            }
+            other => panic!("Expected heading block, found {other:?}"),
+        }
+
+        match &doc.blocks[1].block {
+            Block::CodeBlock { content, .. } => {
+                assert!(
+                    content.contains("pub struct ExposedStruct"),
+                    "Code block should preserve the Rust snippet"
+                );
+            }
+            other => panic!("Expected code block, found {other:?}"),
+        }
+
+        match &doc.blocks[2].block {
+            Block::Paragraph { content } => {
+                let rendered = renderer.render_text(content);
+                assert_eq!(
+                    rendered.trim(),
+                    "Yo! Lets check this out!",
+                    "Trailing text should stay in paragraph"
+                );
+            }
+            other => panic!("Expected trailing paragraph, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_epub_sidebar_div_pre_and_trailing_div() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<aside class="not_desired_behavior" data-type="sidebar" epub:type="sidebar"><div class="sidebar" id="id1591">
+<div>
+    Yo! Lets check this out!
+</div>
+
+<h1/>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A structure whose contents are public, so external users can construct</code>
+<code class="sd">/// instances of it.</code>
+<code class="cp">#[derive(Debug)]</code><code class="w"/>
+<code class="k">pub</code><code class="w"> </code><code class="k">struct</code> <code class="nc">ExposedStruct</code><code class="w"> </code><code class="p">{</code><code class="w"/>
+
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">data</code>: <code class="nb">Vec</code><code class="o">&lt;</code><code class="kt">u8</code><code class="o">&gt;</code><code class="p">,</code><code class="w"/>
+
+
+<code class="w">    </code><code class="sd">/// Additional data that is required only when the `schema` feature</code>
+<code class="w">    </code><code class="sd">/// is enabled.</code>
+<code class="w">    </code><code class="cp">#[cfg(feature = </code><code class="s">"schema"</code><code class="cp">)]</code><code class="w"/>
+<code class="w">    </code><code class="k">pub</code><code class="w"> </code><code class="n">schema</code>: <code class="nb">String</code><code class="p">,</code><code class="w"/>
+<code class="p">}</code><code class="w"/></pre>
+</div>
+
+<div>
+    Yo! Lets check this out!
+</div>
+</aside>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(doc.blocks.len(), 1, "Expected single EPUB block");
+
+        match &doc.blocks[0].block {
+            Block::EpubBlock { content, .. } => {
+                assert_eq!(
+                    content.len(),
+                    3,
+                    "Sidebar should emit paragraph, code block, paragraph"
+                );
+
+                match &content[0].block {
+                    Block::Paragraph { content } => {
+                        let rendered = crate::parsing::markdown_renderer::MarkdownRenderer::new()
+                            .render_text(content);
+                        assert_eq!(
+                            rendered.trim(),
+                            "Yo! Lets check this out!",
+                            "Leading div text should be preserved"
+                        );
+                    }
+                    other => panic!("Expected leading paragraph, found {other:?}"),
+                }
+
+                match &content[1].block {
+                    Block::CodeBlock {
+                        content: code_content,
+                        ..
+                    } => {
+                        assert!(
+                            code_content.contains("pub struct ExposedStruct"),
+                            "Code block should preserve struct snippet"
+                        );
+                    }
+                    other => panic!("Expected middle block to be code, found {other:?}"),
+                }
+
+                match &content[2].block {
+                    Block::Paragraph { content } => {
+                        let rendered = crate::parsing::markdown_renderer::MarkdownRenderer::new()
+                            .render_text(content);
+                        assert_eq!(
+                            rendered.trim(),
+                            "Yo! Lets check this out!",
+                            "Trailing paragraph should render as plain text"
+                        );
+                    }
+                    other => panic!("Expected trailing paragraph, found {other:?}"),
+                }
+            }
+            other => panic!("Expected EPUB block, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_epub_sidebar_simple_div_text() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<aside class="not_desired_behavior" data-type="sidebar" epub:type="sidebar">
+<div>
+    Yo! Lets check this out!
+</div>
+</aside>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(doc.blocks.len(), 1, "Expected single EPUB block");
+
+        match &doc.blocks[0].block {
+            Block::EpubBlock { content, .. } => {
+                assert_eq!(content.len(), 1, "Sidebar should emit one paragraph block");
+                match &content[0].block {
+                    Block::Paragraph { content } => {
+                        let rendered = crate::parsing::markdown_renderer::MarkdownRenderer::new()
+                            .render_text(content);
+                        assert_eq!(
+                            rendered.trim(),
+                            "Yo! Lets check this out!",
+                            "Sidebar text should be preserved"
+                        );
+                    }
+                    other => panic!("Expected paragraph in sidebar, got {other:?}"),
+                }
+            }
+            other => panic!("Expected EPUB block, found {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_epub_sidebar_nested_div_text_and_code() {
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        let html = r#"<aside class="not_desired_behavior" data-type="sidebar" epub:type="sidebar">
+    <div><div>
+    Yo! Lets check this out! Step1
+        </div>
+<pre data-code-language="rust" data-type="programlisting"><code class="sd">/// A structure whose contents are public, so external users can construct</code>
+<code class="sd">/// instances of it.</code>
+</pre>
+    </div>
+<div>
+    Yo! Lets check this out! Step2
+</div>
+</aside>"#;
+
+        let doc = converter.convert(html);
+
+        assert_eq!(doc.blocks.len(), 1, "Expected single EPUB block");
+
+        match &doc.blocks[0].block {
+            Block::EpubBlock { content, .. } => {
+                assert_eq!(
+                    content.len(),
+                    3,
+                    "Sidebar should emit paragraph, code block, paragraph"
+                );
+
+                match &content[0].block {
+                    Block::Paragraph { content } => {
+                        let rendered = crate::parsing::markdown_renderer::MarkdownRenderer::new()
+                            .render_text(content);
+                        assert_eq!(
+                            rendered.trim(),
+                            "Yo! Lets check this out! Step1",
+                            "Nested div text should be preserved before code"
+                        );
+                    }
+                    other => panic!("Expected first block paragraph, got {other:?}"),
+                }
+
+                assert!(
+                    matches!(content[1].block, Block::CodeBlock { .. }),
+                    "Second block should be code"
+                );
+
+                match &content[2].block {
+                    Block::Paragraph { content } => {
+                        let rendered = crate::parsing::markdown_renderer::MarkdownRenderer::new()
+                            .render_text(content);
+                        assert_eq!(
+                            rendered.trim(),
+                            "Yo! Lets check this out! Step2",
+                            "Trailing div text should be preserved"
+                        );
+                    }
+                    other => panic!("Expected third block paragraph, got {other:?}"),
+                }
+            }
+            other => panic!("Expected EPUB block, found {other:?}"),
+        }
     }
 
     #[test]

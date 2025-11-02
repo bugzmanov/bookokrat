@@ -69,17 +69,13 @@ ideas to implement:
 bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reload
-[ ] Currently reading chpater in TOC highlitning is seriously broken
-[ ] Code block selection with mouse selects wrong lines
 [ ] Adding comments doesn't move image down. it stays covering the text
 [ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
-[ ] Careless people: current chanpter highlightning not working
+[ ] Careless people: current chapter highlightning not working
 [ ] Effective rust - chapter 4 
-  [ ] Lists have visual artefacts
-  [ ] footnote links are not propertly working
-[ ] Full Stack web developer. Chapter 2.2.5 - images are misplaced
+   [ ] Too much visual noise. (potentially because bg highlights)
 [ ] <i>code</i> will have bg color instead of being cursive
 
 Tools with cool ratatui UI:

@@ -9,6 +9,7 @@ default-run = "bookokrat"
 repository="https://github.com/bugzmanov/bookokrat"
 readme = "README.md"
 keywords = ["tui", "ratatui", "epub", "reader"]
+categories = ["command-line-interface"]
 
 [lib]
 name = "bookokrat"
