@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>bookokrat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', 'Courier', monospace;
+            background: #000;
+            color: #fff;
+            line-height: 1.5;
+            overflow-x: hidden;
+        }
+
+        /* Scanlines - DISABLED */
+        body::before {
+            display: none;
+        }
+
+        /* Exclude screenshots from scanlines */
+        .hero-screenshot {
+            isolation: isolate;
+        }
+
+        @keyframes scanlines {
+            0% {
+                transform: translateY(0);
+            }
+            100% {
+                transform: translateY(10px);
+            }
+        }
+
+        /* Vignette + Screen Curvature */
+        body::after {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10001;
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0) 0%, rgba(0,0,0,0.3) 100%);
+            box-shadow: inset 0 0 100px rgba(0,0,0,0.5);
+        }
+
+        /* Screen flicker - DISABLED */
+        html {
+            animation: none;
+        }
+
+        /* Screen curve effect - DISABLED */
+
+        /* Header */
+        header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            background: #000;
+            border-bottom: 1px solid #1a1a1a;
+            padding: 1.5rem 2rem;
+        }
+
+        nav {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1rem;
+            font-weight: 400;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .logo::before {
+            content: '/';
+            color: #00ff88;
+            font-size: 1.5rem;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+            list-style: none;
+        }
+
+        .nav-links a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 0.875rem;
+            transition: color 0.2s;
+            text-transform: uppercase;
+        }
+
+        .nav-links a:hover {
+            color: #00ff88;
+        }
+
+        /* Geometric decoration */
+        .geometric-bg {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 50%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .geometric-shape {
+            position: absolute;
+            border: 2px solid #00ff88;
+            opacity: 0.3;
+        }
+
+        .shape-1 {
+            top: 20%;
+            right: 10%;
+            width: 300px;
+            height: 300px;
+            clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        }
+
+        .shape-2 {
+            bottom: 15%;
+            right: 20%;
+            width: 200px;
+            height: 200px;
+            border-radius: 50%;
+        }
+
+        /* Hero */
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            padding: 8rem 2rem 4rem;
+            position: relative;
+            background: #000;
+        }
+
+        .hero-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6rem;
+            align-items: center;
+        }
+
+        .hero-text {
+            max-width: 600px;
+            position: relative;
+            z-index: 2;
+        }
+
+        .hero-screenshots {
+            position: relative;
+            z-index: 2;
+            width: 740px;
+            height: 462px;
+            overflow: hidden;
+        }
+
+        /* Vignette effect on entire slideshow */
+        .hero-screenshots::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            box-shadow: inset 0 0 150px 50px rgba(0, 0, 0, 0.95);
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        .screenshots-container {
+            display: flex;
+            transition: transform 0.5s ease;
+            height: 100%;
+        }
+
+        .hero-screenshot {
+            border: none;
+            overflow: hidden;
+            background: #000;
+            flex-shrink: 0;
+            width: 740px;
+            height: 100%;
+            isolation: isolate;
+            position: relative;
+        }
+
+        .hero-screenshot img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: contain;
+            position: relative;
+        }
+
+        .carousel-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #333;
+            color: #fff;
+            font-size: 1.5rem;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 10;
+            transition: all 0.2s;
+            font-family: monospace;
+        }
+
+        .carousel-nav:hover {
+            background: rgba(0, 255, 136, 0.2);
+            border-color: #00ff88;
+            color: #00ff88;
+        }
+
+        .carousel-prev {
+            left: 10px;
+        }
+
+        .carousel-next {
+            right: 10px;
+        }
+
+        .carousel-indicators {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 0.5rem;
+            z-index: 10;
+        }
+
+        .carousel-dot {
+            width: 8px;
+            height: 8px;
+            border: 1px solid #333;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .carousel-dot.active {
+            background: #00ff88;
+            border-color: #00ff88;
+        }
+
+        /* Remove CRT effects from images */
+        .hero-screenshot::before,
+        .hero-screenshot::after {
+            display: none !important;
+        }
+
+        .hero-screenshot,
+        .hero-screenshot img {
+            mix-blend-mode: normal;
+        }
+
+        /* Ensure screenshots container is above scanlines */
+        .hero-screenshots {
+            position: relative;
+            z-index: 10002;
+        }
+
+        .screenshot-placeholder {
+            width: 100%;
+            aspect-ratio: 3/2;
+            background: #0a0a0a;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        .screenshot-placeholder::before {
+            content: '';
+            position: absolute;
+            top: 10%;
+            left: 10%;
+            right: 10%;
+            bottom: 10%;
+            border: 1px solid #1a1a1a;
+        }
+
+        .placeholder-text {
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            color: #333;
+            z-index: 1;
+        }
+
+        .hero-tag {
+            display: inline-block;
+            border: 1px solid #fff;
+            padding: 0.5rem 1.5rem;
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            margin-bottom: 3rem;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            font-size: 5rem;
+            font-weight: 400;
+            line-height: 1.1;
+            margin-bottom: 3rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            position: relative;
+        }
+
+        h1::before {
+            content: attr(data-text);
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        h1 {
+            animation: textFlicker 0.3s infinite;
+        }
+
+        @keyframes textFlicker {
+            0% { opacity: 0.97; }
+            50% { opacity: 1; }
+            100% { opacity: 0.97; }
+        }
+
+        h1 .highlight {
+            color: #00ff88;
+            text-shadow: 
+                0 0 20px #00ff88, 
+                0 0 40px #00ff88,
+                0 0 60px #00ff88,
+                2px 0 2px rgba(255, 0, 0, 0.5),
+                -2px 0 2px rgba(0, 0, 255, 0.5);
+        }
+
+        .hero-subtitle {
+            font-size: 1rem;
+            max-width: 600px;
+            line-height: 1.8;
+            margin-bottom: 4rem;
+            color: #fff;
+        }
+
+        .hero-cta {
+            display: inline-block;
+            background: #00ff88;
+            color: #000;
+            padding: 1rem 3rem;
+            text-decoration: none;
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            transition: transform 0.2s;
+            text-shadow: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .hero-cta::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1),
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .hero-cta {
+            animation: buttonFlicker 0.4s infinite;
+        }
+
+        @keyframes buttonFlicker {
+            0% { opacity: 0.98; }
+            50% { opacity: 1; }
+            100% { opacity: 0.98; }
+        }
+
+        .hero-cta:hover {
+            transform: scale(1.05);
+        }
+
+        /* Section */
+        .section {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 8rem 2rem;
+            border-top: 1px solid #1a1a1a;
+            position: relative;
+            background: #000;
+        }
+
+        .section-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            margin-bottom: 3rem;
+            color: #999;
+            text-transform: uppercase;
+        }
+
+        .section-label::before {
+            content: '// ';
+            color: #00ff88;
+        }
+
+        .section-title {
+            font-size: 2.5rem;
+            font-weight: 400;
+            margin-bottom: 2rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .section-description {
+            font-size: 1rem;
+            color: #fff;
+            max-width: 600px;
+            margin-bottom: 4rem;
+            line-height: 1.8;
+        }
+
+        /* Features */
+        .features {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 3rem;
+        }
+
+        .feature {
+            border-left: 2px solid #1a1a1a;
+            padding-left: 2rem;
+            transition: border-color 0.3s;
+        }
+
+        .feature:hover {
+            border-left-color: #00ff88;
+        }
+
+        .feature-title {
+            font-size: 1.25rem;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .feature-description {
+            font-size: 0.9rem;
+            color: #fff;
+            line-height: 1.8;
+        }
+
+        /* Terminal */
+        .terminal-section {
+            padding: 6rem 2rem;
+            border-top: 1px solid #1a1a1a;
+            background: #000;
+        }
+
+        .terminal-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .terminal-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            margin-bottom: 2rem;
+            color: #999;
+            text-transform: uppercase;
+        }
+
+        .terminal-label::before {
+            content: '// ';
+            color: #00ff88;
+        }
+
+        .terminal {
+            background: #0a0a0a;
+            border: 1px solid #1a1a1a;
+            padding: 2rem;
+            font-size: 1rem;
+            line-height: 2;
+        }
+
+        .terminal-line {
+            display: flex;
+            gap: 1rem;
+        }
+
+        .terminal-prompt {
+            color: #00ff88;
+            text-shadow: 0 0 10px #00ff88;
+        }
+
+        .terminal-command {
+            color: #fff;
+        }
+
+        /* Install */
+        .install-section {
+            padding: 8rem 2rem;
+            border-top: 1px solid #1a1a1a;
+            background: #000;
+        }
+
+        .install-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .install-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            margin-bottom: 2rem;
+            color: #999;
+            text-transform: uppercase;
+        }
+
+        .install-label::before {
+            content: '// ';
+            color: #00ff88;
+        }
+
+        .install-title {
+            font-size: 2rem;
+            margin-bottom: 2rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .install-description {
+            font-size: 1rem;
+            color: #fff;
+            margin-bottom: 3rem;
+            line-height: 1.8;
+        }
+
+        .install-description a {
+            color: #00ff88;
+            text-decoration: none;
+        }
+
+        .install-description a:hover {
+            text-decoration: underline;
+        }
+
+        .install-box {
+            background: #0a0a0a;
+            border: 1px solid #1a1a1a;
+            padding: 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 2rem;
+            max-width: 800px;
+        }
+
+        .install-command {
+            flex: 1;
+            font-size: 1rem;
+        }
+
+        .copy-btn {
+            background: #00ff88;
+            color: #000;
+            border: none;
+            padding: 0.75rem 2rem;
+            font-family: 'Courier New', monospace;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: opacity 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            text-shadow: none;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .copy-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1),
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .copy-btn {
+            animation: buttonFlicker 0.4s infinite;
+        }
+
+        .copy-btn:hover {
+            opacity: 0.8;
+        }
+
+        /* Links */
+        .links-section {
+            padding: 6rem 2rem;
+            border-top: 1px solid #1a1a1a;
+            background: #000;
+        }
+
+        .links-wrapper {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .links-label {
+            font-size: 0.75rem;
+            letter-spacing: 0.2em;
+            margin-bottom: 2rem;
+            color: #999;
+            text-transform: uppercase;
+        }
+
+        .links-label::before {
+            content: '// ';
+            color: #00ff88;
+        }
+
+        .links-list {
+            list-style: none;
+        }
+
+        .links-list li {
+            border-bottom: 1px solid #1a1a1a;
+        }
+
+        .links-list a {
+            color: #fff;
+            text-decoration: none;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 0;
+            font-size: 1rem;
+            transition: color 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .links-list a:hover {
+            color: #00ff88;
+        }
+
+        .link-arrow {
+            color: #00ff88;
+        }
+
+        /* Footer */
+        footer {
+            border-top: 1px solid #1a1a1a;
+            padding: 3rem 2rem;
+            background: #000;
+        }
+
+        .footer-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.875rem;
+            color: #666;
+        }
+
+        .footer-links {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .footer-links a {
+            color: #666;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: #00ff88;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 {
+                font-size: 2.5rem;
+            }
+
+            .nav-links {
+                display: none;
+            }
+
+            .hero-content {
+                grid-template-columns: 1fr;
+                gap: 3rem;
+            }
+
+            .hero-screenshots {
+                width: 100%;
+                height: 400px;
+                margin-top: 2rem;
+            }
+
+            .hero-screenshot {
+                width: 280px;
+            }
+
+            .hero-screenshot:nth-child(1),
+            .hero-screenshot:nth-child(2),
+            .hero-screenshot:nth-child(3),
+            .hero-screenshot:nth-child(4) {
+                transform: none;
+                position: relative;
+                margin-bottom: 1rem;
+            }
+
+            .hero-screenshot:hover {
+                transform: scale(1.02);
+            }
+
+            .features {
+                grid-template-columns: 1fr;
+            }
+
+            .section-title {
+                font-size: 1.75rem;
+            }
+
+            .install-box {
+                flex-direction: column;
+                text-align: center;
+            }
+
+            .footer-content {
+                flex-direction: column;
+                gap: 2rem;
+                text-align: center;
+            }
+
+            .geometric-bg {
+                display: none;
+            }
+
+            .screenshots-grid {
+                gap: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="geometric-bg">
+        <div class="geometric-shape shape-1"></div>
+        <div class="geometric-shape shape-2"></div>
+    </div>
+
+    <header>
+        <nav>
+            <div class="logo">bookokrat</div>
+            <ul class="nav-links">
+                <li><a href="#features">features</a></li>
+                <li><a href="#install">install</a></li>
+                <li><a href="https://github.com/bugzmanov/bookokrat">github</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="hero-content">
+                <div class="hero-text">
+                    <div class="hero-tag">terminal epub reader</div>
+                    <h1>TERMINAL<br><span class="highlight">EPUB</span><br>READER</h1>
+                    <p class="hero-subtitle">// A POWERFUL EPUB READER BUILT FOR THE COMMAND LINE<br>WITH VIM-STYLE KEYBINDINGS, SPLIT-VIEW NAVIGATION,<br>AND FULL RENDERING SUPPORT</p>
+                    <a href="#install" class="hero-cta">get started</a>
+                </div>
+                <div class="hero-screenshots">
+                    <div class="screenshots-container">
+                        <div class="hero-screenshot">
+                            <img src="3.png" alt="Bookokrat help screen" onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>HELP SCREEN</div></div>'">
+                        </div>
+                        <div class="hero-screenshot">
+                            <img src="2.png" alt="Reading view" onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>READING VIEW</div></div>'">
+                        </div>
+                        <div class="hero-screenshot">
+                            <img src="4.png" alt="Book content" onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>BOOK CONTENT</div></div>'">
+                        </div>
+                        <div class="hero-screenshot">
+                            <img src="1.png" alt="Chapter navigation" onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>NAVIGATION</div></div>'">
+                        </div>
+                    </div>
+                    <button class="carousel-nav carousel-prev" onclick="prevSlide()">←</button>
+                    <button class="carousel-nav carousel-next" onclick="nextSlide()">→</button>
+                    <div class="carousel-indicators">
+                        <div class="carousel-dot active" onclick="goToSlide(0)"></div>
+                        <div class="carousel-dot" onclick="goToSlide(1)"></div>
+                        <div class="carousel-dot" onclick="goToSlide(2)"></div>
+                        <div class="carousel-dot" onclick="goToSlide(3)"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" id="features">
+            <div class="section-label">features</div>
+            <h2 class="section-title">Built for efficiency</h2>
+            <p class="section-description">Everything you need to read comfortably in your terminal</p>
+
+            <div class="features">
+                <div class="feature">
+                    <h3 class="feature-title">Split-view interface</h3>
+                    <p class="feature-description">Browse your library and read simultaneously. Navigate through the table of contents while maintaining your position in the text.</p>
+                </div>
+
+                <div class="feature">
+                    <h3 class="feature-title">Vim keybindings</h3>
+                    <p class="feature-description">Navigate efficiently with familiar shortcuts. Consistent controls throughout the interface for a seamless reading experience.</p>
+                </div>
+
+                <div class="feature">
+                    <h3 class="feature-title">Full rendering</h3>
+                    <p class="feature-description">Complete MathML and image support. Open images in-place and view mathematical formulas as intended.</p>
+                </div>
+
+                <div class="feature">
+                    <h3 class="feature-title">Smart features</h3>
+                    <p class="feature-description">Automatic bookmarks, inline annotations, powerful search, and reading statistics to enhance your experience.</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="terminal-section">
+            <div class="terminal-wrapper">
+                <div class="terminal-label">quick start</div>
+                <div class="terminal">
+                    <div class="terminal-line">
+                        <span class="terminal-prompt">$</span>
+                        <span class="terminal-command">cargo install bookokrat</span>
+                    </div>
+                    <div class="terminal-line">
+                        <span class="terminal-prompt">$</span>
+                        <span class="terminal-command">bookokrat</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="install-section" id="install">
+            <div class="install-wrapper">
+                <div class="install-label">installation</div>
+                <h2 class="install-title">Get Started</h2>
+                <p class="install-description">Requires Rust. Install from <a href="https://rustup.rs">rustup.rs</a></p>
+                <div class="install-box">
+                    <code class="install-command">cargo install bookokrat</code>
+                    <button class="copy-btn" onclick="copyCommand()">copy</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="links-section">
+            <div class="links-wrapper">
+                <div class="links-label">links</div>
+                <ul class="links-list">
+                    <li>
+                        <a href="https://github.com/bugzmanov/bookokrat">
+                            <span>github</span>
+                            <span class="link-arrow">→</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://github.com/bugzmanov/bookokrat/blob/main/LICENSE">
+                            <span>license</span>
+                            <span class="link-arrow">→</span>
+                        </a>
+                    </li>
+                    <li>
+                        <a href="https://github.com/dmitrysobolev/bookrat">
+                            <span>based on bookrat</span>
+                            <span class="link-arrow">→</span>
+                        </a>
+                    </li>
+                </ul>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <div>open source under mit license</div>
+            <div class="footer-links">
+                <a href="https://github.com/bugzmanov/bookokrat">github</a>
+                <a href="https://github.com/bugzmanov/bookokrat/blob/main/LICENSE">license</a>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function copyCommand() {
+            navigator.clipboard.writeText('cargo install bookokrat');
+            const btn = event.target;
+            btn.textContent = 'copied!';
+            setTimeout(() => {
+                btn.textContent = 'copy';
+            }, 2000);
+        }
+
+        // Slideshow functionality
+        let currentSlide = 0;
+        const container = document.querySelector('.screenshots-container');
+        const dots = document.querySelectorAll('.carousel-dot');
+        const totalSlides = document.querySelectorAll('.hero-screenshot').length;
+
+        function updateSlideshow() {
+            container.style.transform = `translateX(-${currentSlide * 740}px)`;
+            dots.forEach((dot, index) => {
+                dot.classList.toggle('active', index === currentSlide);
+            });
+        }
+
+        function nextSlide() {
+            currentSlide = (currentSlide + 1) % totalSlides;
+            updateSlideshow();
+        }
+
+        function prevSlide() {
+            currentSlide = (currentSlide - 1 + totalSlides) % totalSlides;
+            updateSlideshow();
+        }
+
+        function goToSlide(index) {
+            currentSlide = index;
+            updateSlideshow();
+        }
+
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') prevSlide();
+            if (e.key === 'ArrowRight') nextSlide();
+        });
+    </script>
+</body>
+</html>

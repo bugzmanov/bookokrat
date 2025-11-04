@@ -1339,7 +1339,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         *total_height += 1;
 
         // Render the content blocks with controlled spacing
-        for content_node in content.iter() {
+        for (idx, content_node) in content.iter().enumerate() {
             // Render the content node normally
             match &content_node.block {
                 MarkdownBlock::Heading { content, .. } => {
@@ -1368,13 +1368,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             }
 
-            if !matches!(
-                lines.last(),
-                Some(RenderedLine {
-                    line_type: LineType::Empty,
-                    ..
-                })
-            ) {
+            let next_block = content.get(idx + 1).map(|n| &n.block);
+            let needs_spacing = matches!(&content_node.block, MarkdownBlock::Paragraph { .. })
+                && next_block.is_some()
+                || matches!(
+                    (&content_node.block, next_block),
+                    (
+                        MarkdownBlock::CodeBlock { .. },
+                        Some(MarkdownBlock::Paragraph { .. })
+                    )
+                );
+
+            if needs_spacing
+                && !matches!(
+                    lines.last(),
+                    Some(RenderedLine {
+                        line_type: LineType::Empty,
+                        ..
+                    })
+                )
+            {
                 lines.push(RenderedLine::empty());
                 self.raw_text_lines.push(String::new());
                 *total_height += 1;
