@@ -3,7 +3,85 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>bookokrat</title>
+        <title>Bookokrat - Terminal EPUB Reader with Full HTML Rendering</title>
+
+        <!-- SEO Meta Tags -->
+        <meta name="description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal." />
+        <meta name="keywords" content="epub reader, terminal epub reader, tui epub, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application" />
+        <meta name="author" content="Rafael Bagmanov" />
+        <meta name="robots" content="index, follow" />
+        <link rel="canonical" href="https://github.com/bugzmanov/bookokrat" />
+
+        <!-- Open Graph Meta Tags (Facebook, LinkedIn) -->
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content="Bookokrat - Terminal EPUB Reader with Full HTML Rendering" />
+        <meta property="og:description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal." />
+        <meta property="og:url" content="https://github.com/bugzmanov/bookokrat" />
+        <meta property="og:image" content="https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8" />
+        <meta property="og:image:alt" content="Bookokrat terminal EPUB reader demo showing book reading interface" />
+        <meta property="og:site_name" content="Bookokrat" />
+
+        <!-- Twitter Card Meta Tags -->
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Bookokrat - Terminal EPUB Reader with Full HTML Rendering" />
+        <meta name="twitter:description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support." />
+        <meta name="twitter:image" content="https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8" />
+        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB reader demo" />
+
+        <!-- Additional SEO -->
+        <meta name="theme-color" content="#00ff88" />
+        <meta name="application-name" content="Bookokrat" />
+
+        <!-- Favicon -->
+        <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+
+        <!-- Structured Data (JSON-LD) -->
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "SoftwareApplication",
+          "name": "Bookokrat",
+          "applicationCategory": "DeveloperApplication",
+          "operatingSystem": "Linux, macOS, Windows",
+          "description": "Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
+          "url": "https://github.com/bugzmanov/bookokrat",
+          "downloadUrl": "https://crates.io/crates/bookokrat",
+          "softwareVersion": "0.1.1",
+          "author": {
+            "@type": "Person",
+            "name": "Rafael Bagmanov"
+          },
+          "offers": {
+            "@type": "Offer",
+            "price": "0",
+            "priceCurrency": "USD"
+          },
+          "license": "https://opensource.org/licenses/MIT",
+          "programmingLanguage": {
+            "@type": "ComputerLanguage",
+            "name": "Rust"
+          },
+          "codeRepository": "https://github.com/bugzmanov/bookokrat",
+          "keywords": "epub reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
+          "screenshot": "https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8",
+          "featureList": [
+            "Complete EPUB/HTML rendering with html5ever parser",
+            "Inline images in terminal",
+            "MathML rendering to ASCII art",
+            "Syntax-highlighted code blocks",
+            "Table rendering",
+            "Vim keybindings (j/k, gg/G, /, Ctrl+o/i)",
+            "Comprehensive mouse support",
+            "Inline annotations and timestamped notes",
+            "Full-text search across books",
+            "Automatic bookmarks",
+            "Reading history tracking",
+            "Jump list navigation"
+          ],
+          "requirements": "Rust toolchain (rustup) for installation",
+          "installUrl": "https://crates.io/crates/bookokrat"
+        }
+        </script>
         <style>
             * {
                 margin: 0;
@@ -842,6 +920,11 @@
                             >github</a
                         >
                     </li>
+                    <li>
+                        <a href="https://github.com/bugzmanov/bookokrat" target="_blank" rel="noopener">
+                            <img src="https://img.shields.io/github/stars/bugzmanov/bookokrat?style=social" alt="GitHub stars" style="vertical-align: middle; margin-top: -2px;">
+                        </a>
+                    </li>
                 </ul>
             </nav>
         </header>
@@ -997,6 +1080,16 @@
                             copy
                         </button>
                     </div>
+                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #1a1a1a; max-width: 800px;">
+                        <div style="font-size: 0.875rem; color: #999; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
+                            // Quick Start
+                        </div>
+                        <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
+                            1. Navigate to a directory with EPUB files<br/>
+                            2. Run <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">bookokrat</code><br/>
+                            3. Use <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">j/k</code> to navigate, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">Enter</code> to open a book, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">?</code> for help
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -1007,7 +1100,7 @@
                     Watch bookokrat handle real technical content
                 </p>
 
-                <div style="max-width: 1000px; margin: 0 auto">
+                <div style="max-width: 800px; margin: 0 auto">
                     <div
                         style="
                             background: #0a0a0a;
@@ -1854,7 +1947,12 @@
 
         <footer>
             <div class="footer-content">
-                <div>33,000+ lines of Rust. MIT licensed.</div>
+                <div>
+                    33,000+ lines of Rust. MIT licensed.<br/>
+                    <span style="font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem; display: inline-block;">
+                        Icon by <a href="https://vectordoodle.gumroad.com/l/FOCLd?ref=svgrepo.com" target="_blank" style="color: #666; text-decoration: underline;">Vectordoodle</a> in CC Attribution License via <a href="https://www.svgrepo.com/" target="_blank" style="color: #666; text-decoration: underline;">SVG Repo</a>
+                    </span>
+                </div>
                 <div class="footer-links">
                     <a href="https://github.com/bugzmanov/bookokrat">github</a>
                     <a
