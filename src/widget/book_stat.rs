@@ -107,8 +107,8 @@ impl BookStat {
                     // Try to find the chapter in the spine
                     let mut spine_index = None;
                     for (idx, spine_item) in epub.spine.iter().enumerate() {
-                        if let Some((path, _)) = epub.resources.get(&spine_item.idref) {
-                            let path_str = path.to_string_lossy();
+                        if let Some(resource) = epub.resources.get(&spine_item.idref) {
+                            let path_str = resource.path.to_string_lossy();
                             if path_str.ends_with(href) || href.ends_with(&*path_str) {
                                 spine_index = Some(idx);
                                 break;
@@ -127,9 +127,9 @@ impl BookStat {
                         let matching_id = epub
                             .resources
                             .iter()
-                            .find(|(_, (path, _))| {
-                                path.to_string_lossy() == *href
-                                    || path.to_string_lossy().ends_with(href)
+                            .find(|(_, resource)| {
+                                resource.path.to_string_lossy() == *href
+                                    || resource.path.to_string_lossy().ends_with(href)
                             })
                             .map(|(id, _)| id.clone());
 
@@ -175,8 +175,8 @@ impl BookStat {
                         // Try to find the section in the spine
                         let mut spine_index = None;
                         for (idx, spine_item) in epub.spine.iter().enumerate() {
-                            if let Some((path, _)) = epub.resources.get(&spine_item.idref) {
-                                let path_str = path.to_string_lossy();
+                            if let Some(resource) = epub.resources.get(&spine_item.idref) {
+                                let path_str = resource.path.to_string_lossy();
                                 if path_str.ends_with(href_str) || href_str.ends_with(&*path_str) {
                                     spine_index = Some(idx);
                                     break;
@@ -196,9 +196,9 @@ impl BookStat {
                             let matching_id = epub
                                 .resources
                                 .iter()
-                                .find(|(_, (path, _))| {
-                                    path.to_string_lossy() == *href_str
-                                        || path.to_string_lossy().ends_with(href_str)
+                                .find(|(_, resource)| {
+                                    resource.path.to_string_lossy() == *href_str
+                                        || resource.path.to_string_lossy().ends_with(href_str)
                                 })
                                 .map(|(id, _)| id.clone());
 

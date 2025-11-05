@@ -107,10 +107,10 @@ impl BookManager {
                     );
 
                     if let Some(title) = doc.mdata("title") {
-                        info!("EPUB title: {title}");
+                        info!("EPUB title: {value}", value = title.value);
                     }
                     if let Some(author) = doc.mdata("creator") {
-                        info!("EPUB author: {author}");
+                        info!("EPUB author: {value}", value = author.value);
                     }
 
                     match doc.get_current_str() {
@@ -132,8 +132,12 @@ impl BookManager {
                                     i, spine_item.idref, spine_item.linear
                                 );
                                 // Check if this spine item exists in resources
-                                if let Some((path, mime)) = doc.resources.get(&spine_item.idref) {
-                                    info!("    -> Resource exists: {path:?} ({mime})");
+                                if let Some(resource) = doc.resources.get(&spine_item.idref) {
+                                    info!(
+                                        "    -> Resource exists: {path:?} ({mime})",
+                                        path = resource.path,
+                                        mime = resource.mime
+                                    );
                                 } else {
                                     error!(
                                         "    -> Resource NOT FOUND in resources map for idref: {}",

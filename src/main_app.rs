@@ -545,8 +545,8 @@ impl App {
     ) -> Option<String> {
         if chapter_index < doc.spine.len() {
             let spine_item = &doc.spine[chapter_index];
-            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
-                return Some(path.to_string_lossy().to_string());
+            if let Some(resource) = doc.resources.get(&spine_item.idref) {
+                return Some(resource.path.to_string_lossy().to_string());
             }
         }
         None
@@ -558,8 +558,8 @@ impl App {
         target_href: &str,
     ) -> Option<usize> {
         for (index, spine_item) in doc.spine.iter().enumerate() {
-            if let Some((path, _)) = doc.resources.get(&spine_item.idref) {
-                let path_str = path.to_string_lossy();
+            if let Some(resource) = doc.resources.get(&spine_item.idref) {
+                let path_str = resource.path.to_string_lossy();
                 if path_str == target_href
                     || path_str.contains(target_href)
                     || target_href.contains(&*path_str)
@@ -1207,8 +1207,8 @@ impl App {
         let normalized_href = normalize_href(href);
 
         for (index, spine_item) in book.epub.spine.iter().enumerate() {
-            if let Some((path, _)) = book.epub.resources.get(&spine_item.idref) {
-                let path_str = path.to_string_lossy();
+            if let Some(resource) = book.epub.resources.get(&spine_item.idref) {
+                let path_str = resource.path.to_string_lossy();
                 let normalized_path = normalize_href(&path_str);
 
                 if normalized_path == normalized_href

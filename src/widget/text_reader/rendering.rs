@@ -570,10 +570,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     (palette.base_0c, Modifier::UNDERLINED) // Cyan + underlined
                                 }
                                 crate::markdown::LinkType::InternalChapter => {
-                                    (palette.base_0b, Modifier::UNDERLINED | Modifier::BOLD) // Green + bold underlined
+                                    (palette.base_0b, Modifier::UNDERLINED | Modifier::BOLD)
+                                    // Green + bold underlined
                                 }
                                 crate::markdown::LinkType::InternalAnchor => {
-                                    (palette.base_0a, Modifier::UNDERLINED | Modifier::ITALIC) // Yellow + italic underlined
+                                    (palette.base_0a, Modifier::UNDERLINED | Modifier::ITALIC)
+                                    // Yellow + italic underlined
                                 }
                             }
                         } else {
@@ -749,7 +751,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             };
 
-            // Track lines before rendering this item's FIRST block only
             let item_start_line = lines.len();
             let mut first_block_line_count = 0;
 

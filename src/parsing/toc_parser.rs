@@ -65,7 +65,7 @@ mod tests {
             label: label.to_string(),
             content: PathBuf::from(content),
             children,
-            play_order: 0,
+            play_order: Some(0),
         }
     }
 

@@ -95,12 +95,16 @@ impl ImageStorage {
         info!("Found {} resources in EPUB", resources.len());
 
         let mut image_count = 0;
-        for (id, (path, mime_type)) in resources.iter() {
-            if is_image_mime_type(mime_type) {
+        for (id, resource) in resources.iter() {
+            if is_image_mime_type(&resource.mime) {
                 image_count += 1;
-                debug!("Extracting image {id}: {path:?} ({mime_type})");
+                debug!(
+                    "Extracting image {id}: {path:?} ({mime})",
+                    path = resource.path,
+                    mime = resource.mime
+                );
                 if let Some((data, _mime)) = doc.get_resource(id) {
-                    let image_path = book_dir.join(path);
+                    let image_path = book_dir.join(&resource.path);
 
                     if let Some(parent) = image_path.parent() {
                         fs::create_dir_all(parent)

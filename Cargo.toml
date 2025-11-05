@@ -1,6 +1,6 @@
 [package]
 name = "bookokrat"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
 license = "MIT"
@@ -23,7 +23,7 @@ path = "src/main.rs"
 [dependencies]
 ratatui = "0.29.0"
 crossterm = "0.29.0"
-epub = "2.1.4"
+epub = "2.1.5"
 anyhow = "1.0.79"
 simplelog = "0.12.1"
 # html2text = "0.2.1"
