@@ -7,6 +7,7 @@ license = "MIT"
 description = "A terminal-based EPUB Books reader"
 default-run = "bookokrat"
 repository="https://github.com/bugzmanov/bookokrat"
+homepage="https://bugzmanov.github.io/bookokrat/"
 readme = "README.md"
 keywords = ["tui", "ratatui", "epub", "reader"]
 categories = ["command-line-interface"]

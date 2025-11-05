@@ -749,6 +749,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             };
 
+            // Track lines before rendering this item's FIRST block only
+            let item_start_line = lines.len();
+            let mut first_block_line_count = 0;
+
             // Render the list item content
             // List items can contain multiple blocks (paragraphs, nested lists, etc.)
             for (block_idx, block_node) in item.content.iter().enumerate() {
@@ -774,6 +778,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 false,
                             );
 
+                            first_block_line_count = lines.len() - lines_before;
+
                             for (i, line) in lines[lines_before..].iter_mut().enumerate() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
@@ -785,6 +791,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             }
                         }
                         _ => {
+                            let lines_before = lines.len();
                             self.render_node(
                                 block_node,
                                 lines,
@@ -796,6 +803,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 None,
                                 RenderContext::InsideContainer,
                             );
+                            first_block_line_count = lines.len() - lines_before;
                         }
                     }
                 } else {
@@ -813,7 +821,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             }
 
-            if idx + 1 < items.len() {
+            // Smart spacing: add empty line between items if first block is >2 lines
+            if idx + 1 < items.len() && first_block_line_count > 2 {
                 lines.push(RenderedLine::empty());
                 self.raw_text_lines.push(String::new());
                 *total_height += 1;
@@ -1230,7 +1239,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
     ) {
         // Render each term-definition pair
-        for item in items {
+        for (idx, item) in items.iter().enumerate() {
+            // Track lines for this entire definition item
+            let item_start_line = lines.len();
+
             // Render the term (dt) - bold and possibly colored
             let term_color = if is_focused {
                 palette.base_0c // Yellow for focused
@@ -1288,11 +1300,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             }
 
-            // Add a small spacing between definition items (but not after the last one)
-            if item != items.last().unwrap() {
-                lines.push(RenderedLine::empty());
-                self.raw_text_lines.push(String::new());
-                *total_height += 1;
+            // Smart spacing: add empty line between items if this entire item (term + definitions) is >2 lines
+            if idx + 1 < items.len() {
+                let item_line_count = lines.len() - item_start_line;
+                if item_line_count > 2 {
+                    lines.push(RenderedLine::empty());
+                    self.raw_text_lines.push(String::new());
+                    *total_height += 1;
+                }
             }
         }
 
