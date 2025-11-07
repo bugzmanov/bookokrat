@@ -102,7 +102,7 @@ impl BookStat {
             match item {
                 crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
                     // Find the spine index for this href
-                    let current_page = epub.get_current_page();
+                    let current_page = epub.get_current_chapter();
 
                     // Try to find the chapter in the spine
                     let mut spine_index = None;
@@ -117,7 +117,7 @@ impl BookStat {
                     }
 
                     let content_result = if let Some(idx) = spine_index {
-                        if epub.set_current_page(idx) {
+                        if epub.set_current_chapter(idx) {
                             epub.get_current_str().map(|(content, _)| content)
                         } else {
                             None
@@ -141,7 +141,7 @@ impl BookStat {
                     };
 
                     // Restore original page
-                    epub.set_current_page(current_page);
+                    epub.set_current_chapter(current_page);
 
                     match content_result {
                         Some(content) => {
@@ -170,7 +170,7 @@ impl BookStat {
                     // Process section if it has content
                     if let Some(href_str) = href {
                         // For sections, we need to find the actual chapter index from the epub spine
-                        let current_page = epub.get_current_page();
+                        let current_page = epub.get_current_chapter();
 
                         // Try to find the section in the spine
                         let mut spine_index = None;
@@ -186,7 +186,7 @@ impl BookStat {
 
                         let content_result = if let Some(idx) = spine_index {
                             // Use found index
-                            if epub.set_current_page(idx) {
+                            if epub.set_current_chapter(idx) {
                                 epub.get_current_str().map(|(content, _)| content)
                             } else {
                                 None
@@ -210,7 +210,7 @@ impl BookStat {
                         };
 
                         // Restore original page
-                        epub.set_current_page(current_page);
+                        epub.set_current_chapter(current_page);
 
                         match content_result {
                             Some(content) => {

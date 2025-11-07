@@ -15,11 +15,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Title: {:?}", doc.mdata("title"));
     println!("Creator: {:?}", doc.mdata("creator"));
-    println!("Total chapters: {}", doc.get_num_pages());
+    println!("Total chapters: {}", doc.get_num_chapters());
     println!("\n{}\n", "=".repeat(80));
 
     // Extract and display chapters to find actual content - showing every 10th chapter to understand structure
-    let total_chapters = doc.get_num_pages();
+    let total_chapters = doc.get_num_chapters();
     // Look at specific chapters where sections might be, plus every 5th chapter
     let mut chapters_to_show: Vec<usize> = (0..total_chapters).step_by(5).collect();
     // Add specific chapters that might contain section headers based on typical book structure
@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     chapters_to_show.sort();
 
     for &i in &chapters_to_show {
-        let _ = doc.set_current_page(i);
+        let _ = doc.set_current_chapter(i);
 
         println!("CHAPTER {} RAW HTML CONTENT:", i + 1);
         println!("{}", "-".repeat(60));

@@ -1050,16 +1050,17 @@ impl HtmlToMarkdownConverter {
                 }
 
                 let mut target_idx = None;
-                if index + 1 < content.len() {
-                    if matches!(content[index + 1].block, Block::Paragraph { .. }) {
-                        target_idx = Some(index + 1);
-                    }
+                if index + 1 < content.len()
+                    && matches!(content[index + 1].block, Block::Paragraph { .. })
+                {
+                    target_idx = Some(index + 1);
                 }
 
-                if target_idx.is_none() && index > 0 {
-                    if matches!(content[index - 1].block, Block::Paragraph { .. }) {
-                        target_idx = Some(index - 1);
-                    }
+                if target_idx.is_none()
+                    && index > 0
+                    && matches!(content[index - 1].block, Block::Paragraph { .. })
+                {
+                    target_idx = Some(index - 1);
                 }
 
                 if let Some(target) = target_idx {
@@ -1082,9 +1083,7 @@ impl HtmlToMarkdownConverter {
                             target_text.push_inline(anchor);
                         }
                         content.remove(index);
-                        if index > 0 {
-                            index -= 1;
-                        }
+                        index = index.saturating_sub(1);
                         continue;
                     }
                 }
@@ -1759,12 +1758,10 @@ impl HtmlToMarkdownConverter {
                         encountered_block = true;
                         let mut sub_blocks = self.extract_formatted_content_as_blocks(child, false);
                         result.append(&mut sub_blocks);
+                    } else if encountered_block {
+                        self.collect_as_text(child, &mut trailing_text, base_context.clone());
                     } else {
-                        if encountered_block {
-                            self.collect_as_text(child, &mut trailing_text, base_context.clone());
-                        } else {
-                            self.collect_as_text(child, &mut heading_text, base_context.clone());
-                        }
+                        self.collect_as_text(child, &mut heading_text, base_context.clone());
                     }
                 }
                 _ => {}

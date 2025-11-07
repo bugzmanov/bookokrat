@@ -100,8 +100,8 @@ impl BookManager {
                 Ok(mut doc) => {
                     info!("Successfully created EpubDoc for: {path}");
 
-                    let num_pages = doc.get_num_pages();
-                    let current_page = doc.get_current_page();
+                    let num_pages = doc.get_num_chapters();
+                    let current_page = doc.get_current_chapter();
                     info!(
                         "EPUB spine details: {num_pages} pages, current position: {current_page}"
                     );
@@ -303,7 +303,7 @@ impl BookManager {
         match EpubDoc::new(&temp_path) {
             Ok(mut doc) => {
                 info!("Successfully created fake EPUB from HTML: {original_path}");
-                let _ = doc.set_current_page(0);
+                let _ = doc.set_current_chapter(0);
                 Ok(doc)
             }
             Err(e) => {

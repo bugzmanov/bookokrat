@@ -755,7 +755,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             };
 
-            let item_start_line = lines.len();
             let mut first_block_line_count = 0;
 
             // Render the list item content

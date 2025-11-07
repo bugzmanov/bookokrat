@@ -57,11 +57,11 @@ impl EpubBook {
     }
 
     fn total_chapters(&self) -> usize {
-        self.epub.get_num_pages()
+        self.epub.get_num_chapters()
     }
 
     fn current_chapter(&self) -> usize {
-        self.epub.get_current_page()
+        self.epub.get_current_chapter()
     }
 }
 
@@ -400,7 +400,7 @@ impl App {
     /// Navigate to a specific chapter - ensures all state is properly updated
     pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
         if let Some(doc) = &mut self.current_book {
-            if doc.epub.set_current_page(chapter_index) {
+            if doc.epub.set_current_chapter(chapter_index) {
                 self.text_reader.clear_active_anchor();
                 self.update_content();
                 self.update_toc_state();
@@ -456,8 +456,8 @@ impl App {
         info!(
             "Successfully loaded EPUB document {}, total_chapter: {}, current position: {}",
             path,
-            doc.get_num_pages(),
-            doc.get_current_page()
+            doc.get_num_chapters(),
+            doc.get_current_chapter()
         );
 
         let path_buf = std::path::PathBuf::from(path);
@@ -484,10 +484,10 @@ impl App {
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
-                if !doc.set_current_page(chapter_index) {
+                if !doc.set_current_chapter(chapter_index) {
                     // Fallback: ensure we're within bounds
-                    let safe_chapter = chapter_index.min(doc.get_num_pages().saturating_sub(1));
-                    if !doc.set_current_page(safe_chapter) {
+                    let safe_chapter = chapter_index.min(doc.get_num_chapters().saturating_sub(1));
+                    if !doc.set_current_chapter(safe_chapter) {
                         error!("Failed to restore bookmark, staying at chapter 0");
                     }
                 }
@@ -498,26 +498,26 @@ impl App {
             } else {
                 warn!("Could not find chapter for href: {}", bookmark.chapter_href);
             }
-        } else if doc.get_num_pages() > 1 {
+        } else if doc.get_num_chapters() > 1 {
             if doc.go_next() {
                 if doc.get_current_str().is_none() {
                     error!(
                         "WARNING: No content at new position {} after go_next()",
-                        doc.get_current_page()
+                        doc.get_current_chapter()
                     );
                 }
             } else {
                 error!("Failed to move to next chapter with go_next()");
                 error!(
                     "Current position: {}, Total chapters: {}",
-                    doc.get_current_page(),
-                    doc.get_num_pages()
+                    doc.get_current_chapter(),
+                    doc.get_num_chapters()
                 );
 
-                // Try alternative: set_current_page
-                info!("Attempting fallback: set_current_page(1)");
-                if doc.set_current_page(1) {
-                    info!("Fallback successful: moved to chapter 1 using set_current_page");
+                // Try alternative: set_current_chapter
+                info!("Attempting fallback: set_current_chapter(1)");
+                if doc.set_current_chapter(1) {
+                    info!("Fallback successful: moved to chapter 1 using set_current_chapter");
                 } else {
                     error!("Fallback also failed - unable to navigate in this EPUB");
                     // Don't fail completely - stay at chapter 0
@@ -2509,8 +2509,8 @@ impl App {
         let mut converter = HtmlToMarkdownConverter::new();
 
         // Process all chapters to extract readable text
-        for chapter_index in 0..doc.get_num_pages() {
-            if doc.set_current_page(chapter_index) {
+        for chapter_index in 0..doc.get_num_chapters() {
+            if doc.set_current_chapter(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
                     let title = TextGenerator::extract_chapter_title(&raw_html)
                         .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
