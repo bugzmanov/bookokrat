@@ -437,14 +437,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         context: RenderContext,
     ) {
         if context == RenderContext::InsideContainer {
-            let text_content: String = content
-                .iter()
-                .filter_map(|item| match item {
-                    TextOrInline::Text(t) => Some(t.content.as_str()),
-                    _ => None,
-                })
-                .collect();
-            if text_content.trim().is_empty() {
+            let has_visible_content = content.iter().any(|item| match item {
+                TextOrInline::Text(t) => !t.content.trim().is_empty(),
+                TextOrInline::Inline(inline) => match inline {
+                    Inline::Image { .. } => true,
+                    Inline::Link { text, .. } => {
+                        !Self::text_to_string(text).trim().is_empty()
+                    }
+                    Inline::Anchor { .. } | Inline::LineBreak | Inline::SoftBreak => false,
+                },
+            });
+
+            if !has_visible_content {
                 return;
             }
         }
