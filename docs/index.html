@@ -1068,6 +1068,39 @@
                 <div class="install-wrapper">
                     <div class="install-label">installation</div>
                     <h2 class="install-title">Get Started</h2>
+
+                    <div style="margin-bottom: 3rem;">
+                        <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Prerequisites</h3>
+                        <p style="font-size: 0.95rem; color: #fff; margin-bottom: 1.5rem; line-height: 1.8;">
+                            Bookokrat requires a C compiler/linker to build dependencies. Install the build tools for your platform:
+                        </p>
+
+                        <div style="display: grid; gap: 1rem; max-width: 800px;">
+                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
+                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Linux (Ubuntu/Debian)</div>
+                                <code style="color: #fff; font-size: 0.9rem;">sudo apt update && sudo apt install build-essential</code>
+                            </div>
+
+                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
+                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Linux (Fedora/RHEL)</div>
+                                <code style="color: #fff; font-size: 0.9rem;">sudo dnf install gcc make</code>
+                            </div>
+
+                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
+                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">macOS</div>
+                                <code style="color: #fff; font-size: 0.9rem;">xcode-select --install</code>
+                            </div>
+
+                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
+                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Windows</div>
+                                <div style="color: #fff; font-size: 0.9rem;">
+                                    Install <a href="https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022" target="_blank" style="color: #00ff88; text-decoration: underline;">Visual Studio Build Tools</a> with "Desktop development with C++" workload
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Install Bookokrat</h3>
                     <p class="install-description">
                         Install with Cargo (Rust's package manager).
                         <a href="https://rustup.rs">Get it at rustup.rs</a>
@@ -1080,6 +1113,7 @@
                             copy
                         </button>
                     </div>
+
                     <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #1a1a1a; max-width: 800px;">
                         <div style="font-size: 0.875rem; color: #999; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
                             // Quick Start
@@ -1088,6 +1122,16 @@
                             1. Navigate to a directory with EPUB files<br/>
                             2. Run <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">bookokrat</code><br/>
                             3. Use <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">j/k</code> to navigate, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">Enter</code> to open a book, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">?</code> for help
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #ff6666; max-width: 800px;">
+                        <div style="font-size: 0.875rem; color: #ff6666; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
+                            // Troubleshooting
+                        </div>
+                        <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
+                            <strong style="color: #ff6666;">Error: "linker 'cc' not found"</strong><br/>
+                            This means you don't have a C compiler installed. Install the build tools for your platform (see Prerequisites above), then try again.
                         </div>
                     </div>
                 </div>

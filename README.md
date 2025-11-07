@@ -73,15 +73,46 @@ All popups (search results, reading history, book stats) support:
 - Click-and-drag to highlight text; release on a hyperlink to open it; drag past the viewport edges to auto-scroll.
 - Click images to open the zoom popup; click again or press any key to close; clicking history or stats entries activates them immediately.
 
-## Quick Start
-- Install Rust via https://rustup.rs if needed.
-- Install using Cargo:
+## Installation
+
+### Prerequisites
+Bookokrat requires a C compiler/linker to be installed on your system for building dependencies.
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install build-essential
+```
+
+**Linux (Fedora/RHEL):**
+```bash
+sudo dnf install gcc make
+```
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the "Desktop development with C++" workload.
+
+### Install Bookokrat
+
+1. Install Rust via https://rustup.rs if needed.
+2. Install bookokrat using Cargo:
 
 ```bash
 cargo install bookokrat
 ```
 
-- Place EPUB files alongside the binary (or run within your library directory) and navigate with the shortcuts above.
+3. Place EPUB files alongside the binary (or run within your library directory) and navigate with the shortcuts above.
+
+### Troubleshooting
+
+**Error: "linker 'cc' not found"**
+
+This means you don't have a C compiler installed. Install the build tools for your platform (see Prerequisites above), then try again.
 
 ## Attribution
 

@@ -1,7 +1,8 @@
 [package]
 name = "bookokrat"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
 license = "MIT"
 description = "A terminal-based EPUB Books reader"
@@ -62,6 +63,8 @@ base64 = "0.21.2"
 rand = "0.8.5"
 thiserror = "1.0.59"
 flate2 = "1.0"
+# Pin home to 0.5.11 to maintain compatibility with Rust 1.85 (0.5.12+ requires Rust 1.88)
+home = "=0.5.11"
 
 [target.'cfg(not(windows))'.dependencies]
 rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }
