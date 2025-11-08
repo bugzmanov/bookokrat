@@ -2807,6 +2807,22 @@ impl App {
             );
         }
     }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_current_chapter_file(&self) -> Option<String> {
+        self.text_reader.get_current_chapter_file().clone()
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_add_comment(&mut self, comment: crate::comments::Comment) {
+        let comments_arc = self.text_reader.get_comments();
+        if let Ok(mut guard) = comments_arc.lock() {
+            let _ = guard.add_comment(comment.clone());
+        }
+        self.text_reader.rebuild_chapter_comments();
+    }
 }
 
 pub struct FPSCounter {

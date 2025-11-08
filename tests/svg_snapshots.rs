@@ -1,25 +1,72 @@
+use bookokrat::comments::Comment;
+use bookokrat::main_app::{ChapterDirection, FPSCounter};
 use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
 };
 // SVG snapshot tests using snapbox
-use bookokrat::{App, main_app::FPSCounter};
+use bookokrat::App;
+use chrono::{TimeZone, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use std::ffi::OsString;
+use std::sync::{Once, OnceLock};
+use tempfile::TempDir;
 
 mod snapshot_assertions;
 mod svg_generation;
 mod test_report;
 mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
-use std::sync::Once;
 use svg_generation::terminal_to_svg;
 
 static INIT: Once = Once::new();
+static BASE_COMMENTS_DIR: OnceLock<TempDir> = OnceLock::new();
 
 fn ensure_test_report_initialized() {
     INIT.call_once(|| {
         test_report::init_test_report();
+        init_base_comments_dir();
     });
+}
+
+fn init_base_comments_dir() {
+    BASE_COMMENTS_DIR.get_or_init(|| {
+        let dir = TempDir::new().expect("Failed to create base temp comments dir");
+        unsafe {
+            std::env::set_var("BOOKOKRAT_COMMENTS_DIR", dir.path());
+        }
+        dir
+    });
+}
+
+struct TempCommentsDirGuard {
+    prev: Option<OsString>,
+    _dir: TempDir,
+}
+
+impl TempCommentsDirGuard {
+    fn new() -> Self {
+        let prev = std::env::var_os("BOOKOKRAT_COMMENTS_DIR");
+        let dir = TempDir::new().expect("Failed to create temp comments dir");
+        unsafe {
+            std::env::set_var("BOOKOKRAT_COMMENTS_DIR", dir.path());
+        }
+        Self { prev, _dir: dir }
+    }
+}
+
+impl Drop for TempCommentsDirGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.prev.clone() {
+            unsafe {
+                std::env::set_var("BOOKOKRAT_COMMENTS_DIR", prev);
+            }
+        } else {
+            unsafe {
+                std::env::remove_var("BOOKOKRAT_COMMENTS_DIR");
+            }
+        }
+    }
 }
 
 // Helper function to create FPSCounter for tests
@@ -79,6 +126,54 @@ fn create_test_failure_handler(
     }
 }
 
+fn open_first_test_book(app: &mut App) {
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+}
+
+fn seed_sample_comments(app: &mut App) {
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+    let chapter_a = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "chapter1.xhtml".to_string());
+
+    app.testing_add_comment(Comment {
+        chapter_href: chapter_a.clone(),
+        paragraph_index: 0,
+        word_range: None,
+        content: "Launch plan looks solid.".to_string(),
+        updated_at: base_time,
+    });
+
+    app.testing_add_comment(Comment {
+        chapter_href: chapter_a.clone(),
+        paragraph_index: 3,
+        word_range: None,
+        content: "Need to revisit risk section.".to_string(),
+        updated_at: base_time + chrono::Duration::minutes(5),
+    });
+
+    if app.navigate_chapter_relative(ChapterDirection::Next).is_ok() {
+        if let Some(chapter_b) = app.testing_current_chapter_file() {
+            app.testing_add_comment(Comment {
+                chapter_href: chapter_b.clone(),
+                paragraph_index: 2,
+                word_range: None,
+                content: "Great anecdote here.".to_string(),
+                updated_at: base_time + chrono::Duration::minutes(10),
+            });
+        }
+        let _ = app.navigate_chapter_relative(ChapterDirection::Previous);
+    }
+}
+
+fn open_comments_viewer(app: &mut App) {
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+}
+
 #[test]
 fn test_fake_books_file_list_svg() {
     ensure_test_report_initialized();
@@ -131,6 +226,75 @@ fn test_fake_books_file_list_svg() {
         std::path::Path::new("tests/snapshots/fake_books_file_list.svg"),
         "test_fake_books_file_list_svg",
         create_test_failure_handler("test_fake_books_file_list_svg"),
+    );
+}
+
+#[test]
+fn test_comments_viewer_chapter_mode_svg() {
+    ensure_test_report_initialized();
+    let _comments_guard = TempCommentsDirGuard::new();
+    let mut terminal = create_test_terminal(120, 36);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_comments_viewer_chapter_mode.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/comments_viewer_chapter_mode.svg"),
+        "test_comments_viewer_chapter_mode_svg",
+        create_test_failure_handler("test_comments_viewer_chapter_mode_svg"),
+    );
+}
+
+#[test]
+fn test_comments_viewer_global_mode_svg() {
+    ensure_test_report_initialized();
+    let _comments_guard = TempCommentsDirGuard::new();
+    let mut terminal = create_test_terminal(120, 36);
+    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+    app.press_key(crossterm::event::KeyCode::Char('?')); // toggle global search
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_comments_viewer_global_mode.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/comments_viewer_global_mode.svg"),
+        "test_comments_viewer_global_mode_svg",
+        create_test_failure_handler("test_comments_viewer_global_mode_svg"),
     );
 }
 
@@ -976,6 +1140,7 @@ fn test_text_selection_with_auto_scroll_svg() {
 #[test]
 fn test_continuous_auto_scroll_down_svg() {
     ensure_test_report_initialized();
+    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
     let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 
@@ -1092,6 +1257,7 @@ fn test_continuous_auto_scroll_down_svg() {
 #[test]
 fn test_continuous_auto_scroll_up_svg() {
     ensure_test_report_initialized();
+    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
     let mut app = App::new_with_config(Some("tests/testdata"), None, false);
 

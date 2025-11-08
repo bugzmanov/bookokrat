@@ -19,8 +19,37 @@ pub fn assert_svg_snapshot(
     }
 
     // If it failed, generate our custom report
-    let expected_data = Data::read_from(snapshot_path, None);
-    let expected = expected_data.to_string();
+    let expected = match std::fs::read_to_string(snapshot_path) {
+        Ok(s) => s,
+        Err(err) => {
+            let msg = format!(
+                "Failed to read {}: {}",
+                snapshot_path.to_string_lossy(),
+                err
+            );
+
+            let actual_lines: Vec<&str> = actual.lines().collect();
+            let actual_line_count = actual_lines.len();
+
+            on_failure(
+                msg.clone(),
+                actual.clone(),
+                snapshot_path.to_string_lossy().to_string(),
+                1,
+                actual_line_count,
+                1,
+                Some(1),
+            );
+
+            eprintln!("\n❌ SVG snapshot test failed: {test_name}");
+            eprintln!("   📊 Total lines: 1 (expected) vs {actual_line_count} (actual)");
+            eprintln!("   ⚠️  Lines with differences: {actual_line_count}");
+            eprintln!("   📍 Missing snapshot file.");
+            eprintln!("   💡 To update snapshot: SNAPSHOTS=overwrite cargo test {test_name}\n");
+
+            panic!("SVG snapshot mismatch");
+        }
+    };
 
     // Count differences for summary
     let actual_lines: Vec<&str> = actual.lines().collect();

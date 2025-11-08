@@ -404,6 +404,8 @@ impl MarkdownTextReader {
 
         // Second pass: draw inline images over the text block
         let scroll_offset = self.scroll_offset;
+        let textarea_insert_position = textarea_insert_position;
+        let textarea_lines_to_insert = textarea_lines_to_insert;
 
         if !self.show_raw_html {
             self.check_for_loaded_images();
@@ -412,8 +414,15 @@ impl MarkdownTextReader {
 
                 for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
                     let image_height_cells = embedded_image.height_cells as usize;
-                    let image_start_line = embedded_image.lines_before_image;
-                    let image_end_line = image_start_line + image_height_cells;
+                    let mut image_start_line = embedded_image.lines_before_image;
+                    let mut image_end_line = image_start_line + image_height_cells;
+
+                    if let Some(insert_pos) = textarea_insert_position {
+                        if image_start_line >= insert_pos {
+                            image_start_line += textarea_lines_to_insert;
+                            image_end_line += textarea_lines_to_insert;
+                        }
+                    }
 
                     if scroll_offset < image_end_line
                         && scroll_offset + area_height > image_start_line

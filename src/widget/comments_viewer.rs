@@ -1566,8 +1566,13 @@ impl CommentsViewer {
                     self.previous_match();
                     None
                 }
-                KeyCode::Char('d') if key_seq.handle_key('d') == "dd" => {
-                    Some(CommentsViewerAction::DeleteSelectedComment)
+                KeyCode::Char('d') => {
+                    if key_seq.handle_key('d') == "dd" {
+                        key_seq.clear();
+                        Some(CommentsViewerAction::DeleteSelectedComment)
+                    } else {
+                        None
+                    }
                 }
                 KeyCode::Esc => {
                     if self.search_state.active {
