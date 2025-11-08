@@ -3000,6 +3000,9 @@ impl App {
             KeyCode::Char('t') => {
                 self.handle_key_sequence('t');
             }
+            KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_language_select();
+            }
             KeyCode::Char('?') => {
                 self.help_popup = Some(HelpPopup::new());
                 self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
