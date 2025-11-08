@@ -346,13 +346,7 @@ impl CommentsViewer {
         let mut chapters = Vec::new();
         let mut href_to_index = HashMap::new();
         let mut seen_hrefs = HashSet::new();
-        Self::flatten_toc_items(
-            toc_items,
-            0,
-            &mut chapters,
-            &mut href_to_index,
-            &mut seen_hrefs,
-        );
+        Self::flatten_toc_items(toc_items, &mut chapters, &mut href_to_index, &mut seen_hrefs);
 
         let mut unmatched_counts: HashMap<String, usize> = HashMap::new();
         for entry in entries {
@@ -389,11 +383,11 @@ impl CommentsViewer {
         chapters
     }
 
-    fn normalize_href<'a>(href: &'a str) -> &'a str {
+    fn normalize_href(href: &str) -> &str {
         href.split('#').next().unwrap_or(href)
     }
 
-    fn chapter_basename<'a>(href: &'a str) -> &'a str {
+    fn chapter_basename(href: &str) -> &str {
         let normalized = Self::normalize_href(href);
         normalized.rsplit('/').next().unwrap_or(normalized)
     }
@@ -408,7 +402,7 @@ impl CommentsViewer {
                 chapter
                     .href
                     .as_deref()
-                    .map(|h| Self::normalize_href(h))
+                    .map(Self::normalize_href)
                     == Some(normalized_target)
             }) {
                 return idx;
@@ -419,7 +413,7 @@ impl CommentsViewer {
                 chapter
                     .href
                     .as_deref()
-                    .map(|h| Self::chapter_basename(h))
+                    .map(Self::chapter_basename)
                     == Some(target_basename)
             }) {
                 return idx;
@@ -434,7 +428,6 @@ impl CommentsViewer {
 
     fn flatten_toc_items(
         items: &[TocItem],
-        depth: usize,
         chapters: &mut Vec<ChapterDisplay>,
         href_to_index: &mut HashMap<String, usize>,
         seen_hrefs: &mut HashSet<String>,
@@ -469,26 +462,19 @@ impl CommentsViewer {
                             });
                         }
                     }
-                    Self::flatten_toc_items(
-                        children,
-                        depth + 1,
-                        chapters,
-                        href_to_index,
-                        seen_hrefs,
-                    );
+                    Self::flatten_toc_items(children, chapters, href_to_index, seen_hrefs);
                 }
             }
         }
     }
 
     fn fallback_chapter_title(href: &str) -> String {
-        href.split('/')
-            .last()
+        href.rsplit('/')
+            .next_back()
             .unwrap_or(href)
             .trim_end_matches(".xhtml")
             .trim_end_matches(".html")
-            .replace('-', " ")
-            .replace('_', " ")
+            .replace(['-', '_'], " ")
     }
 
     fn find_chapter_title(
@@ -533,8 +519,8 @@ impl CommentsViewer {
         }
 
         chapter_href
-            .split('/')
-            .last()
+            .rsplit('/')
+            .next_back()
             .unwrap_or(chapter_href)
             .trim_end_matches(".xhtml")
             .trim_end_matches(".html")
@@ -564,7 +550,7 @@ impl CommentsViewer {
                         let max_chars = 80;
                         if text.chars().count() > max_chars {
                             let truncated: String = text.chars().take(max_chars).collect();
-                            return format!("{}...", truncated);
+                            return format!("{truncated}...");
                         }
                         return text;
                     }
@@ -587,7 +573,7 @@ impl CommentsViewer {
             Block::CodeBlock { content, .. } => content.clone(),
             Block::Quote { content } => content
                 .iter()
-                .map(|n| Self::extract_text_from_node(n))
+                .map(Self::extract_text_from_node)
                 .collect::<Vec<_>>()
                 .join(" "),
             _ => String::new(),
@@ -691,7 +677,7 @@ impl CommentsViewer {
             .iter()
             .map(|chapter| chapter.comment_count)
             .sum();
-        let title = format!(" All Comments ({}) ", total_comments);
+        let title = format!(" All Comments ({total_comments}) ");
         let outer_block = self.build_outer_block(title);
         let inner_area = outer_block.inner(popup_area);
         f.render_widget(outer_block, popup_area);
@@ -786,7 +772,7 @@ impl CommentsViewer {
             }
 
             let line = Line::from(vec![
-                Span::styled(format!("({})", total), count_style),
+                Span::styled(format!("({total})"), count_style),
                 Span::raw(" "),
                 Span::styled("Comments Search", style),
             ])

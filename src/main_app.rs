@@ -2626,12 +2626,11 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                if !self.handle_key_sequence('a') {
-                    if self.text_reader.has_text_selection()
-                        && self.text_reader.start_comment_input()
-                    {
-                        debug!("Started comment input mode");
-                    }
+                if !self.handle_key_sequence('a')
+                    && self.text_reader.has_text_selection()
+                    && self.text_reader.start_comment_input()
+                {
+                    debug!("Started comment input mode");
                 }
             }
             KeyCode::Char('c') => {
