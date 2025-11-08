@@ -441,9 +441,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 TextOrInline::Text(t) => !t.content.trim().is_empty(),
                 TextOrInline::Inline(inline) => match inline {
                     Inline::Image { .. } => true,
-                    Inline::Link { text, .. } => {
-                        !Self::text_to_string(text).trim().is_empty()
-                    }
+                    Inline::Link { text, .. } => !Self::text_to_string(text).trim().is_empty(),
                     Inline::Anchor { .. } | Inline::LineBreak | Inline::SoftBreak => false,
                 },
             });

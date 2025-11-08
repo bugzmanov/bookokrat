@@ -166,6 +166,17 @@ Add notes directly to your books:
   [4] Press Esc to save the comment
   [5] Press 'd' when on a commented passage to delete it
 
+Review and manage notes efficiently:
+
+  ▸ Space+a (or the Comments button) opens the two-pane comments viewer
+  ▸ Left pane lists chapters and comment counts; right pane shows notes
+  ▸ Tab toggles focus between panes; mouse wheel scrolls the pane you hover
+  ▸ h / l jump to previous / next chapter while keeping the comments focus
+  ▸ ? (Shift+/) switches to global search mode to scan every comment at once
+  ▸ / searches within the current scope (chapter or global)
+  ▸ Enter or double-click jumps from a comment back into the reader
+  ▸ dd deletes the highlighted comment directly from the viewer
+
 Comments are saved per-book and persist across sessions.
 
 ===============================================================================

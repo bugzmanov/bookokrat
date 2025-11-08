@@ -233,22 +233,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Returns true if a comment was deleted
     pub fn delete_comment_at_cursor(&mut self) -> anyhow::Result<bool> {
         if let Some((chapter_href, paragraph_index, word_range)) = self.get_comment_at_cursor() {
-            if let Some(comments_arc) = &self.book_comments {
-                let mut comments = comments_arc.lock().unwrap();
-                comments.delete_comment(&chapter_href, paragraph_index, word_range)?;
-
-                drop(comments);
-                self.rebuild_chapter_comments();
-
-                self.cache_generation += 1;
-
-                self.text_selection.clear_selection();
-
-                return Ok(true);
-            }
+            self.delete_comment_by_location(&chapter_href, paragraph_index, word_range);
+            self.text_selection.clear_selection();
+            return Ok(true);
         }
 
         Ok(false)
+    }
+
+    pub fn delete_comment_by_location(
+        &mut self,
+        chapter_href: &str,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    ) {
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                let _ = comments.delete_comment(chapter_href, paragraph_index, word_range);
+            }
+        }
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
     }
 
     /// Find the visual line where a specific comment starts rendering

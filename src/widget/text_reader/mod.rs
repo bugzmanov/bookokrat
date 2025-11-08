@@ -220,6 +220,14 @@ impl MarkdownTextReader {
         let visible_end = (self.scroll_offset + self.visible_height).min(self.total_wrapped_lines);
         ((visible_end as f32 / self.total_wrapped_lines as f32) * 100.0) as u32
     }
+
+    pub fn get_comments(&self) -> Arc<Mutex<BookComments>> {
+        self.book_comments.clone().unwrap_or_else(|| {
+            Arc::new(Mutex::new(
+                BookComments::new(std::path::Path::new("")).unwrap(),
+            ))
+        })
+    }
 }
 
 impl MarkdownTextReader {

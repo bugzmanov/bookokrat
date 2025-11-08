@@ -314,6 +314,13 @@ impl NavigationPanel {
             _ => None,
         }
     }
+
+    pub fn get_toc_items(&self) -> Vec<TocItem> {
+        self.table_of_contents
+            .get_current_book_info()
+            .map(|info| info.toc_items.clone())
+            .unwrap_or_default()
+    }
 }
 
 impl VimNavMotions for NavigationPanel {

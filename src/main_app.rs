@@ -91,6 +91,7 @@ pub struct App {
     jump_list: JumpList,
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
+    comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     notifications: NotificationManager,
     help_bar_area: Rect,
 }
@@ -125,6 +126,7 @@ pub enum PopupWindow {
     ImagePopup,
     BookSearch,
     Help,
+    CommentsViewer,
 }
 
 impl Default for App {
@@ -317,6 +319,7 @@ impl App {
             jump_list: JumpList::new(20),
             book_search: None,
             help_popup: None,
+            comments_viewer: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
         };
@@ -433,6 +436,19 @@ impl App {
             }
         } else {
             anyhow::bail!("No document loaded")
+        }
+    }
+
+    pub fn navigate_to_chapter_by_href(&mut self, href: &str) -> Result<()> {
+        if let Some(ref mut book) = self.current_book {
+            let chapter_path = std::path::PathBuf::from(href);
+            if let Some(chapter_idx) = book.epub.resource_uri_to_chapter(&chapter_path) {
+                self.navigate_to_chapter(chapter_idx)
+            } else {
+                anyhow::bail!("Failed to find chapter with href: {}", href)
+            }
+        } else {
+            anyhow::bail!("No EPUB document loaded")
         }
     }
 
@@ -931,6 +947,61 @@ impl App {
                     return;
                 }
 
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::CommentsViewer)
+                ) {
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
+
+                    if let Some(ref mut viewer) = self.comments_viewer {
+                        // Check if click is outside popup area - close it
+                        if viewer.is_outside_popup_area(click_x, click_y) {
+                            viewer.save_position();
+                            self.comments_viewer = None;
+                            self.close_popup_to_previous();
+                            return;
+                        }
+
+                        let click_type = self
+                            .mouse_tracker
+                            .detect_click_type(mouse_event.column, mouse_event.row);
+
+                        match click_type {
+                            ClickType::Single | ClickType::Triple => {
+                                viewer.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                            ClickType::Double => {
+                                if viewer.handle_mouse_click(mouse_event.column, mouse_event.row) {
+                                    if let Some(entry) = viewer.selected_comment() {
+                                        let chapter_href = entry.chapter_href.clone();
+                                        let paragraph_index = entry.comment.paragraph_index;
+                                        viewer.save_position();
+                                        self.comments_viewer = None;
+                                        self.close_popup_to_previous();
+                                        self.set_main_panel_focus(MainPanel::Content);
+
+                                        // Ensure the reader restores to the correct node after navigation
+                                        self.text_reader.restore_to_node_index(paragraph_index);
+
+                                        if let Err(e) =
+                                            self.navigate_to_chapter_by_href(&chapter_href)
+                                        {
+                                            error!(
+                                                "Failed to navigate to chapter {chapter_href}: {e}"
+                                            );
+                                            self.show_error(format!(
+                                                "Failed to navigate to comment: {e}"
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
@@ -1369,6 +1440,26 @@ impl App {
             return;
         }
 
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::CommentsViewer)
+        ) {
+            if let Some(ref mut viewer) = self.comments_viewer {
+                if !viewer.handle_mouse_scroll(column, scroll_amount) {
+                    if scroll_amount > 0 {
+                        for _ in 0..scroll_amount.min(10) {
+                            viewer.handle_j();
+                        }
+                    } else {
+                        for _ in 0..(-scroll_amount).min(10) {
+                            viewer.handle_k();
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
         // Block scrolling for other popups
         if self.has_active_popup() {
             return;
@@ -1675,6 +1766,22 @@ impl App {
                 help_popup.render(f, f.area());
             }
         }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::CommentsViewer)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut comments_viewer) = self.comments_viewer {
+                comments_viewer.render(f, f.area());
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -1712,20 +1819,53 @@ impl App {
         }
 
         let width = area.width.saturating_sub(2);
+        let comments_full = "[Space+a: Comments] ";
         let history_full = "[Space+h: History] ";
         let stats_full = "[Space+d: Stats] ";
         let help_full = "[?: Help]";
 
-        let total_len = (history_full.len() + stats_full.len() + help_full.len()) as u16;
+        let total_len =
+            (comments_full.len() + history_full.len() + stats_full.len() + help_full.len()) as u16;
         let section_start = width.saturating_sub(total_len);
 
-        let history_start = section_start + "[".len() as u16;
+        let comments_start = section_start + "[".len() as u16;
+        let comments_end = comments_start + "Space+a: Comments".len() as u16;
+        let history_start = section_start + comments_full.len() as u16 + "[".len() as u16;
         let history_end = history_start + "Space+h: History".len() as u16;
-        let stats_start = section_start + history_full.len() as u16 + "[".len() as u16;
+        let stats_start = section_start
+            + comments_full.len() as u16
+            + history_full.len() as u16
+            + "[".len() as u16;
         let stats_end = stats_start + "Space+d: Stats".len() as u16;
-        let help_start =
-            section_start + history_full.len() as u16 + stats_full.len() as u16 + "[".len() as u16;
+        let help_start = section_start
+            + comments_full.len() as u16
+            + history_full.len() as u16
+            + stats_full.len() as u16
+            + "[".len() as u16;
         let help_end = help_start + "?: Help".len() as u16;
+
+        if inner_x >= comments_start && inner_x < comments_end {
+            if self.current_book.is_some() {
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
+                if let Some(ref mut book) = self.current_book {
+                    let toc_items = self.navigation_panel.get_toc_items();
+                    let current_chapter_href =
+                        Self::get_chapter_href(&book.epub, book.current_chapter());
+                    let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
+                        self.text_reader.get_comments(),
+                        &mut book.epub,
+                        &toc_items,
+                        current_chapter_href,
+                    );
+                    viewer.restore_position();
+                    self.comments_viewer = Some(viewer);
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
+                }
+            }
+            return true;
+        }
 
         if inner_x >= history_start && inner_x < history_end {
             if let FocusedPanel::Main(panel) = self.focused_panel {
@@ -1827,6 +1967,9 @@ impl App {
                 FocusedPanel::Popup(PopupWindow::Help) => {
                     "j/k/Ctrl+d/u: Scroll | gg/G: Top/Bottom | ESC/?: Close"
                 }
+                FocusedPanel::Popup(PopupWindow::CommentsViewer) => {
+                    "j/k/Ctrl+d/u: Scroll | /: Search | Enter/DblClick: Jump | ESC: Close"
+                }
             };
             help_text.to_string()
         };
@@ -1853,6 +1996,14 @@ impl App {
 
         let text_color = OCEANIC_NEXT.base_03;
         let right_content = Line::from(vec![
+            Span::raw("["),
+            Span::styled(
+                "Space+a: Comments",
+                Style::default()
+                    .fg(text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw("] "),
             Span::raw("["),
             Span::styled(
                 "Space+h: History",
@@ -2032,6 +2183,41 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " a" => {
+                // Handle Space->a to toggle comments viewer (global)
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::CommentsViewer)
+                ) {
+                    // Close comments viewer - return to previous panel
+                    if let Some(ref mut viewer) = self.comments_viewer {
+                        viewer.save_position();
+                    }
+                    self.close_popup_to_previous();
+                    self.comments_viewer = None;
+                } else if self.current_book.is_some() {
+                    // Open comments viewer - save current main panel
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    if let Some(ref mut book) = self.current_book {
+                        let toc_items = self.navigation_panel.get_toc_items();
+                        let current_chapter_href =
+                            Self::get_chapter_href(&book.epub, book.current_chapter());
+                        let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
+                            self.text_reader.get_comments(),
+                            &mut book.epub,
+                            &toc_items,
+                            current_chapter_href,
+                        );
+                        viewer.restore_position();
+                        self.comments_viewer = Some(viewer);
+                        self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             _ if sequence.len() >= 2 => {
                 // Unknown sequence of 2+ chars, reset
                 self.key_sequence.clear();
@@ -2160,6 +2346,85 @@ impl App {
             if let Some(HelpPopupAction::Close) = action {
                 self.close_popup_to_previous();
                 self.help_popup = None;
+            }
+            return None;
+        }
+
+        // If comments viewer popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::CommentsViewer) {
+            let action = if let Some(ref mut viewer) = self.comments_viewer {
+                viewer.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(action) = action {
+                use crate::widget::comments_viewer::CommentsViewerAction;
+                match action {
+                    CommentsViewerAction::Close => {
+                        if let Some(ref mut viewer) = self.comments_viewer {
+                            viewer.save_position();
+                        }
+                        self.close_popup_to_previous();
+                        self.comments_viewer = None;
+                    }
+                    CommentsViewerAction::JumpToComment {
+                        chapter_href,
+                        paragraph_index,
+                    } => {
+                        if let Some(ref mut viewer) = self.comments_viewer {
+                            viewer.save_position();
+                        }
+                        self.close_popup_to_previous();
+                        self.set_main_panel_focus(MainPanel::Content);
+
+                        // Set pending node restore before navigating
+                        self.text_reader.restore_to_node_index(paragraph_index);
+
+                        if let Err(e) = self.navigate_to_chapter_by_href(&chapter_href) {
+                            error!("Failed to navigate to chapter {chapter_href}: {e}");
+                            self.show_error(format!("Failed to navigate to comment: {e}"));
+                        }
+                    }
+                    CommentsViewerAction::DeleteSelectedComment => {
+                        if let Some(entry) =
+                            self.comments_viewer.as_ref().and_then(|v| v.selected_comment().cloned())
+                        {
+                            let mut delete_success = false;
+                            let comments = self.text_reader.get_comments();
+                            match comments.lock() {
+                                Ok(mut guard) => {
+                                    if let Err(e) = guard.delete_comment(
+                                        &entry.chapter_href,
+                                        entry.comment.paragraph_index,
+                                        entry.comment.word_range,
+                                    ) {
+                                        error!("Failed to delete comment: {e}");
+                                        self.show_error(format!("Failed to delete comment: {e}"));
+                                    } else {
+                                        delete_success = true;
+                                    }
+                                }
+                                Err(_) => {
+                                    error!("Failed to lock comments for deletion");
+                                    self.show_error("Failed to delete comment: lock error");
+                                }
+                            }
+
+                            if delete_success {
+                                self.text_reader.delete_comment_by_location(
+                                    &entry.chapter_href,
+                                    entry.comment.paragraph_index,
+                                    entry.comment.word_range,
+                                );
+                                if let Some(ref mut viewer) = self.comments_viewer {
+                                    viewer.remove_selected_comment();
+                                }
+                                self.show_info("Comment deleted");
+                            }
+                        }
+                    }
+                }
             }
             return None;
         }
@@ -2361,8 +2626,12 @@ impl App {
                 }
             }
             KeyCode::Char('a') => {
-                if self.text_reader.has_text_selection() && self.text_reader.start_comment_input() {
-                    debug!("Started comment input mode");
+                if !self.handle_key_sequence('a') {
+                    if self.text_reader.has_text_selection()
+                        && self.text_reader.start_comment_input()
+                    {
+                        debug!("Started comment input mode");
+                    }
                 }
             }
             KeyCode::Char('c') => {

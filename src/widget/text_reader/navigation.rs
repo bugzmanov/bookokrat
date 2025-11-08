@@ -82,6 +82,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    pub fn scroll_to_paragraph(&mut self, paragraph_index: usize) {
+        for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index == Some(paragraph_index) {
+                self.jump_to_line(line_idx);
+                return;
+            }
+        }
+    }
+
     pub fn get_anchor_position(&self, anchor_id: &str) -> Option<usize> {
         self.anchor_positions.get(anchor_id).copied()
     }
