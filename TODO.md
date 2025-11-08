@@ -49,8 +49,8 @@ ideas to implement:
  - [x] User errors & info message
  - [x] NOTES & comments
      - [ ] Notes should support markdown (maybe)
-     - [ ] List/summary of comments
-        - [ ] Search in comments
+     - [x] List/summary of comments
+        - [x] Search in comments
  - [ ] settings window
      - [ ] make margins configurable + text color
      - [ ] multiple themes
@@ -69,7 +69,6 @@ ideas to implement:
 bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reload
-[ ] Adding comments doesn't move image down. it stays covering the text
 [ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
