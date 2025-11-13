@@ -1,11 +1,13 @@
 // Export modules for use in tests
 pub mod book_manager;
 pub mod bookmarks;
+pub mod chatgpt_client;
 pub mod color_mode;
 pub mod comments;
 pub use inputs::event_source;
 pub mod components;
 pub mod images;
+pub mod preferences;
 // Vendored ratatui-image
 pub mod vendored;
 pub use vendored::ratatui_image;

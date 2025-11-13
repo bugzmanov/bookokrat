@@ -667,6 +667,26 @@ impl MarkdownTextReader {
     pub fn handle_terminal_resize(&mut self) {
         self.cache_generation += 1;
     }
+
+    pub fn get_screen_text(&self) -> Option<String> {
+        let visible_start = self.scroll_offset;
+        let visible_end =
+            (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
+
+        if visible_start >= visible_end {
+            return None;
+        }
+
+        let mut text = String::new();
+        for line in &self.rendered_content.lines[visible_start..visible_end] {
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&line.raw_text);
+        }
+
+        if text.is_empty() { None } else { Some(text) }
+    }
 }
 
 fn calculate_image_height_in_cells(image: &DynamicImage) -> u16 {

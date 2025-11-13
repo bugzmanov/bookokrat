@@ -14,6 +14,7 @@ use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents}
 use crate::notification::NotificationManager;
 use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
+use crate::preferences::Preferences;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
@@ -22,8 +23,10 @@ use crate::table_of_contents::TocItem;
 use crate::theme::OCEANIC_NEXT;
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
+use crate::widget::language_select_popup::Language;
 use image::GenericImageView;
 use log::warn;
+use std::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChapterDirection {
@@ -94,6 +97,12 @@ pub struct App {
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     notifications: NotificationManager,
     help_bar_area: Rect,
+    preferences: Preferences,
+    chatgpt_popup: Option<crate::widget::chatgpt_popup::ChatGPTPopup>,
+    language_select_popup: Option<crate::widget::language_select_popup::LanguageSelectPopup>,
+    summary_language: Language,
+    summary_sender: mpsc::Sender<Result<String, String>>,
+    summary_receiver: mpsc::Receiver<Result<String, String>>,
 }
 
 pub trait VimNavMotions {
@@ -127,6 +136,8 @@ pub enum PopupWindow {
     BookSearch,
     Help,
     CommentsViewer,
+    ChatGPT,
+    LanguageSelect,
 }
 
 impl Default for App {
@@ -298,6 +309,16 @@ impl App {
             Rect::new(0, 0, 80, 24)
         };
 
+        let preferences = Preferences::load_or_ephemeral(Some("preferences.json"));
+
+        let (summary_sender, summary_receiver) = mpsc::channel();
+
+        let summary_language = match preferences.summary_language.as_str() {
+            "中文" => Language::Chinese,
+            "Chinese" => Language::Chinese,
+            _ => Language::English,
+        };
+
         let mut app = Self {
             book_manager,
             navigation_panel,
@@ -322,6 +343,12 @@ impl App {
             comments_viewer: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
+            preferences,
+            chatgpt_popup: None,
+            language_select_popup: None,
+            summary_language,
+            summary_sender,
+            summary_receiver,
         };
 
         if auto_load_recent
@@ -1782,6 +1809,40 @@ impl App {
                 comments_viewer.render(f, f.area());
             }
         }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ChatGPT)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut popup) = self.chatgpt_popup {
+                let mut popup = popup.clone();
+                popup.render(f, f.area(), &OCEANIC_NEXT);
+            }
+        }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::LanguageSelect)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut popup) = self.language_select_popup {
+                let mut popup = popup.clone();
+                popup.render(f, f.area(), &OCEANIC_NEXT);
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -1969,6 +2030,12 @@ impl App {
                 }
                 FocusedPanel::Popup(PopupWindow::CommentsViewer) => {
                     "j/k/Ctrl+d/u: Scroll | /: Search | Enter/DblClick: Jump | ESC: Close"
+                }
+                FocusedPanel::Popup(PopupWindow::ChatGPT) => {
+                    "ESC: Close | Waiting for ChatGPT summary..."
+                }
+                FocusedPanel::Popup(PopupWindow::LanguageSelect) => {
+                    "j/k: Navigate | Enter: Select | ESC: Cancel"
                 }
             };
             help_text.to_string()
@@ -2387,8 +2454,10 @@ impl App {
                         }
                     }
                     CommentsViewerAction::DeleteSelectedComment => {
-                        if let Some(entry) =
-                            self.comments_viewer.as_ref().and_then(|v| v.selected_comment().cloned())
+                        if let Some(entry) = self
+                            .comments_viewer
+                            .as_ref()
+                            .and_then(|v| v.selected_comment().cloned())
                         {
                             let mut delete_success = false;
                             let comments = self.text_reader.get_comments();
@@ -2423,6 +2492,46 @@ impl App {
                                 self.show_info("Comment deleted");
                             }
                         }
+                    }
+                }
+            }
+            return None;
+        }
+
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ChatGPT) {
+            let action = if let Some(ref mut popup) = self.chatgpt_popup {
+                popup.handle_key(key)
+            } else {
+                None
+            };
+            if let Some(crate::widget::chatgpt_popup::ChatGPTPopupAction::Close) = action {
+                self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
+                self.chatgpt_popup = None;
+            }
+            return None;
+        }
+
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::LanguageSelect) {
+            let action = if let Some(ref mut popup) = self.language_select_popup {
+                popup.handle_key(key)
+            } else {
+                None
+            };
+            if let Some(action) = action {
+                use crate::widget::language_select_popup::LanguageSelectAction;
+                match action {
+                    LanguageSelectAction::Selected(lang) => {
+                        self.summary_language = lang;
+                        self.preferences.summary_language = lang.as_str().to_string();
+                        if let Err(e) = self.preferences.save() {
+                            error!("Failed to save preferences: {e}");
+                        }
+                        self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
+                        self.language_select_popup = None;
+                    }
+                    LanguageSelectAction::Close => {
+                        self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
+                        self.language_select_popup = None;
                     }
                 }
             }
@@ -2635,10 +2744,17 @@ impl App {
             }
             KeyCode::Char('c') => {
                 if !self.handle_key_sequence('c') {
-                    if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
-                        error!("Copy failed: {e}");
+                    if self.text_reader.has_text_selection() {
+                        if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
+                            error!("Copy failed: {e}");
+                        }
+                    } else if self.current_book.is_some() {
+                        self.open_chatgpt_summarization();
                     }
                 }
+            }
+            KeyCode::Char('u') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_language_select();
             }
             KeyCode::Char('?') => {
                 self.help_popup = Some(HelpPopup::new());
@@ -2822,6 +2938,80 @@ impl App {
         }
         self.text_reader.rebuild_chapter_comments();
     }
+
+    fn open_chatgpt_summarization(&mut self) {
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+
+        let popup = crate::widget::chatgpt_popup::ChatGPTPopup::new();
+
+        let api_key = std::env::var("OPENAI_API_KEY").ok();
+
+        if api_key.is_none() {
+            let mut error_popup = popup;
+            error_popup.set_error(
+                "ChatGPT API key not found. Please set OPENAI_API_KEY environment variable."
+                    .to_string(),
+            );
+            self.chatgpt_popup = Some(error_popup);
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::ChatGPT);
+            return;
+        }
+
+        if let Some(screen_text) = self.text_reader.get_screen_text() {
+            let chapter_text = screen_text.clone();
+            let api_key = api_key.unwrap();
+
+            self.chatgpt_popup = Some(popup);
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::ChatGPT);
+
+            let sender = self.summary_sender.clone();
+            let language_instruction = self.summary_language.prompt_instruction().to_string();
+
+            std::thread::spawn(move || {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        error!("Failed to create tokio runtime: {e}");
+                        let _ = sender.send(Err(format!("Failed to create async runtime: {e}")));
+                        return;
+                    }
+                };
+
+                let result = rt.block_on(async {
+                    let client = match crate::chatgpt_client::ChatGPTClient::new(api_key) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            return Err(e);
+                        }
+                    };
+
+                    client.summarize(&chapter_text, &language_instruction).await
+                });
+
+                let _ = sender.send(result.map_err(|e| e.to_string()));
+            });
+        } else {
+            let mut error_popup = popup;
+            error_popup.set_error("No screen text available to summarize.".to_string());
+            self.chatgpt_popup = Some(error_popup);
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::ChatGPT);
+        }
+    }
+
+    fn open_language_select(&mut self) {
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+
+        self.language_select_popup = Some(
+            crate::widget::language_select_popup::LanguageSelectPopup::with_selected(
+                self.summary_language,
+            ),
+        );
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::LanguageSelect);
+    }
 }
 
 pub struct FPSCounter {
@@ -2926,6 +3116,20 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                 needs_redraw = true;
             }
             last_tick = std::time::Instant::now();
+        }
+
+        if let Ok(result) = app.summary_receiver.try_recv() {
+            if let Some(ref mut popup) = app.chatgpt_popup {
+                match result {
+                    Ok(summary) => {
+                        popup.set_summary(summary);
+                    }
+                    Err(e) => {
+                        popup.set_error(format!("Failed to get ChatGPT summary: {e}"));
+                    }
+                }
+                needs_redraw = true;
+            }
         }
 
         if needs_redraw {
