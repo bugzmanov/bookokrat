@@ -1703,7 +1703,7 @@ impl App {
             // First render a dimming overlay
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10)) // Very dark but not black
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -1716,7 +1716,7 @@ impl App {
         if let Some(ref mut image_popup) = self.image_popup {
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10)) // todo: this is not from pallette
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -1730,7 +1730,7 @@ impl App {
         ) {
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10))
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -1746,7 +1746,7 @@ impl App {
         ) {
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10))
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -1757,7 +1757,7 @@ impl App {
         if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10))
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -1773,7 +1773,7 @@ impl App {
         ) {
             let dim_block = Block::default().style(
                 Style::default()
-                    .bg(Color::Rgb(10, 10, 10))
+                    .bg(Color::Reset)
                     .add_modifier(Modifier::DIM),
             );
             f.render_widget(dim_block, f.area());
@@ -2387,8 +2387,10 @@ impl App {
                         }
                     }
                     CommentsViewerAction::DeleteSelectedComment => {
-                        if let Some(entry) =
-                            self.comments_viewer.as_ref().and_then(|v| v.selected_comment().cloned())
+                        if let Some(entry) = self
+                            .comments_viewer
+                            .as_ref()
+                            .and_then(|v| v.selected_comment().cloned())
                         {
                             let mut delete_success = false;
                             let comments = self.text_reader.get_comments();
