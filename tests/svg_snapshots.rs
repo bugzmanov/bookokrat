@@ -155,7 +155,10 @@ fn seed_sample_comments(app: &mut App) {
         updated_at: base_time + chrono::Duration::minutes(5),
     });
 
-    if app.navigate_chapter_relative(ChapterDirection::Next).is_ok() {
+    if app
+        .navigate_chapter_relative(ChapterDirection::Next)
+        .is_ok()
+    {
         if let Some(chapter_b) = app.testing_current_chapter_file() {
             app.testing_add_comment(Comment {
                 chapter_href: chapter_b.clone(),

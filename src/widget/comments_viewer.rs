@@ -2,7 +2,7 @@ use crate::comments::{BookComments, Comment};
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown::Inline;
-use crate::search::{find_matches_in_text, SearchMode, SearchState, SearchablePanel};
+use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::table_of_contents::TocItem;
 use crate::theme::OCEANIC_NEXT;
 use epub::doc::EpubDoc;
@@ -12,9 +12,7 @@ use ratatui::{
     prelude::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{
-        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    },
+    widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
@@ -247,7 +245,8 @@ impl CommentsViewer {
             .map(|area| area.height as usize)
             .filter(|h| *h > 0)
             .unwrap_or(5);
-        let target = (self.selected_chapter_index + page).min(self.chapters.len().saturating_sub(1));
+        let target =
+            (self.selected_chapter_index + page).min(self.chapters.len().saturating_sub(1));
         self.select_chapter(target);
     }
 
@@ -279,11 +278,8 @@ impl CommentsViewer {
 
         for entry in self.rendered_entries.iter_mut() {
             let show_chapter_header = last_chapter_href.as_ref() != Some(&entry.chapter_href);
-            let entry_height = Self::calculate_entry_height_for_width(
-                entry,
-                content_width,
-                show_chapter_header,
-            );
+            let entry_height =
+                Self::calculate_entry_height_for_width(entry, content_width, show_chapter_header);
             entry.render_start_line = current_line;
             entry.render_end_line = current_line + entry_height;
             current_line = entry.render_end_line;
@@ -291,9 +287,7 @@ impl CommentsViewer {
         }
 
         self.total_rendered_lines = current_line;
-        let max_scroll = self
-            .total_rendered_lines
-            .saturating_sub(content_height);
+        let max_scroll = self.total_rendered_lines.saturating_sub(content_height);
         self.scroll_offset = self.scroll_offset.min(max_scroll);
     }
 
@@ -346,7 +340,12 @@ impl CommentsViewer {
         let mut chapters = Vec::new();
         let mut href_to_index = HashMap::new();
         let mut seen_hrefs = HashSet::new();
-        Self::flatten_toc_items(toc_items, &mut chapters, &mut href_to_index, &mut seen_hrefs);
+        Self::flatten_toc_items(
+            toc_items,
+            &mut chapters,
+            &mut href_to_index,
+            &mut seen_hrefs,
+        );
 
         let mut unmatched_counts: HashMap<String, usize> = HashMap::new();
         for entry in entries {
@@ -355,7 +354,9 @@ impl CommentsViewer {
                     chapter.comment_count += 1;
                 }
             } else {
-                *unmatched_counts.entry(entry.chapter_href.clone()).or_default() += 1;
+                *unmatched_counts
+                    .entry(entry.chapter_href.clone())
+                    .or_default() += 1;
             }
         }
 
@@ -392,29 +393,18 @@ impl CommentsViewer {
         normalized.rsplit('/').next().unwrap_or(normalized)
     }
 
-    fn initial_chapter_index(
-        current_href: Option<&str>,
-        chapters: &[ChapterDisplay],
-    ) -> usize {
+    fn initial_chapter_index(current_href: Option<&str>, chapters: &[ChapterDisplay]) -> usize {
         if let Some(target) = current_href {
             let normalized_target = Self::normalize_href(target);
             if let Some(idx) = chapters.iter().position(|chapter| {
-                chapter
-                    .href
-                    .as_deref()
-                    .map(Self::normalize_href)
-                    == Some(normalized_target)
+                chapter.href.as_deref().map(Self::normalize_href) == Some(normalized_target)
             }) {
                 return idx;
             }
 
             let target_basename = Self::chapter_basename(target);
             if let Some(idx) = chapters.iter().position(|chapter| {
-                chapter
-                    .href
-                    .as_deref()
-                    .map(Self::chapter_basename)
-                    == Some(target_basename)
+                chapter.href.as_deref().map(Self::chapter_basename) == Some(target_basename)
             }) {
                 return idx;
             }
@@ -778,7 +768,8 @@ impl CommentsViewer {
             ])
             .bg(background.bg.unwrap_or(OCEANIC_NEXT.base_00));
 
-            let paragraph = Paragraph::new(vec![line]).style(Style::default().bg(OCEANIC_NEXT.base_00));
+            let paragraph =
+                Paragraph::new(vec![line]).style(Style::default().bg(OCEANIC_NEXT.base_00));
             f.render_widget(paragraph, area);
             return;
         }
@@ -794,11 +785,8 @@ impl CommentsViewer {
 
         if self.selected_chapter_index < self.chapter_scroll_offset {
             self.chapter_scroll_offset = self.selected_chapter_index;
-        } else if self.selected_chapter_index
-            >= self.chapter_scroll_offset + visible_height
-        {
-            self.chapter_scroll_offset =
-                self.selected_chapter_index + 1 - visible_height;
+        } else if self.selected_chapter_index >= self.chapter_scroll_offset + visible_height {
+            self.chapter_scroll_offset = self.selected_chapter_index + 1 - visible_height;
         }
 
         let max_title_width = area.width.saturating_sub(4) as usize;
@@ -812,11 +800,7 @@ impl CommentsViewer {
             .take(visible_height)
         {
             let is_selected = idx == self.selected_chapter_index;
-            let mut title = format!(
-                "{}{}",
-                "  ".repeat(chapter.depth.min(4)),
-                chapter.title
-            );
+            let mut title = format!("{}{}", "  ".repeat(chapter.depth.min(4)), chapter.title);
             if title.len() > max_title_width {
                 title = Self::truncate_with_ellipsis(&title, max_title_width);
             }
@@ -889,7 +873,14 @@ impl CommentsViewer {
         for (idx, entry) in self.rendered_entries.iter().enumerate() {
             let is_selected = self.selected_index == idx;
             let show_header = idx == 0;
-            self.render_entry(entry, is_selected, idx, show_header, content_width, &mut lines);
+            self.render_entry(
+                entry,
+                is_selected,
+                idx,
+                show_header,
+                content_width,
+                &mut lines,
+            );
         }
 
         let paragraph = Paragraph::new(lines).scroll((self.scroll_offset as u16, 0));
@@ -1036,13 +1027,12 @@ impl CommentsViewer {
         for content_line in entry.comment.content.lines() {
             for wrapped in Self::wrap_text(content_line, comment_width) {
                 let mut spans = vec![Span::raw(comment_prefix)];
-                let highlighted = if self.search_state.active
-                    && self.search_state.is_match(entry_index)
-                {
-                    self.create_highlighted_text(&wrapped, entry_index, comment_style)
-                } else {
-                    vec![Span::styled(wrapped, comment_style)]
-                };
+                let highlighted =
+                    if self.search_state.active && self.search_state.is_match(entry_index) {
+                        self.create_highlighted_text(&wrapped, entry_index, comment_style)
+                    } else {
+                        vec![Span::styled(wrapped, comment_style)]
+                    };
                 spans.extend(highlighted);
                 lines.push(Line::from(spans));
             }
@@ -1145,8 +1135,7 @@ impl CommentsViewer {
             {
                 self.focus = ViewerFocus::Chapters;
                 let relative_y = y.saturating_sub(chapter_area.y);
-                let target_index =
-                    self.chapter_scroll_offset + relative_y as usize;
+                let target_index = self.chapter_scroll_offset + relative_y as usize;
                 if !self.global_search_mode && target_index < self.chapters.len() {
                     self.select_chapter(target_index);
                 }
