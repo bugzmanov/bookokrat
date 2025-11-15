@@ -32,7 +32,7 @@ pub enum ChapterDirection {
 }
 
 use std::io::BufReader;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -65,6 +65,13 @@ impl EpubBook {
     }
 }
 
+struct PdfLoadSuccess {
+    book_index: usize,
+    path: String,
+    page_count: usize,
+    text_content: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     Quit,
@@ -94,6 +101,12 @@ pub struct App {
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     notifications: NotificationManager,
     help_bar_area: Rect,
+    pdf_load_receiver: mpsc::Receiver<Result<PdfLoadSuccess, String>>,
+    pdf_load_sender: mpsc::Sender<Result<PdfLoadSuccess, String>>,
+    deferred_book_path: Option<String>,
+    deferred_book_index: Option<usize>,
+    progress_dialog: Arc<Mutex<crate::widget::progress_dialog::ProgressDialog>>,
+    should_update_content: bool,
 }
 
 pub trait VimNavMotions {
@@ -138,6 +151,16 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         Self::new_with_config(None, Some("bookmarks.json"), true)
+    }
+
+    fn setup_pdf_progress_callback(&mut self) {
+        let progress_dialog = self.progress_dialog.clone();
+        crate::pdf_handler::set_pdf_progress_callback(move |message: String, progress: u16| {
+            if let Ok(mut dialog) = progress_dialog.lock() {
+                dialog.set_message(message);
+                dialog.set_progress(progress);
+            }
+        });
     }
 
     /// Helper method to check if focus is on a main panel (not a popup)
@@ -298,6 +321,8 @@ impl App {
             Rect::new(0, 0, 80, 24)
         };
 
+        let (pdf_load_sender, pdf_load_receiver) = mpsc::channel();
+
         let mut app = Self {
             book_manager,
             navigation_panel,
@@ -322,6 +347,14 @@ impl App {
             comments_viewer: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
+            pdf_load_receiver,
+            pdf_load_sender,
+            deferred_book_path: None,
+            deferred_book_index: None,
+            progress_dialog: Arc::new(Mutex::new(
+                crate::widget::progress_dialog::ProgressDialog::new("Loading..."),
+            )),
+            should_update_content: false,
         };
 
         if auto_load_recent
@@ -339,6 +372,8 @@ impl App {
             app.help_popup = Some(HelpPopup::new());
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
         }
+
+        app.setup_pdf_progress_callback();
 
         app
     }
@@ -376,12 +411,29 @@ impl App {
     pub fn open_book_for_reading(&mut self, book_index: usize) -> Result<()> {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
             let path = book_info.path.clone();
+            let filename = book_info.display_name.clone();
 
-            self.save_bookmark_with_throttle(true);
-            self.load_epub(&path, false)?;
+            // Check if this is a PDF - if so, defer loading to show progress
+            let is_pdf = self.book_manager.is_pdf_file(&path);
 
-            self.navigation_panel.current_book_index = Some(book_index);
-            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+            if is_pdf {
+                // Show progress dialog for PDF
+                if let Ok(mut dialog) = self.progress_dialog.lock() {
+                    dialog.set_message(format!("Loading {}...", filename));
+                    dialog.set_progress(0);
+                    dialog.show();
+                }
+                // Defer PDF loading to allow progress updates
+                self.deferred_book_index = Some(book_index);
+                self.deferred_book_path = Some(path);
+            } else {
+                // Load EPUB immediately (they're usually faster)
+                self.save_bookmark_with_throttle(true);
+                self.load_epub(&path, false)?;
+
+                self.navigation_panel.current_book_index = Some(book_index);
+                self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+            }
 
             Ok(())
         } else {
@@ -1782,6 +1834,11 @@ impl App {
                 comments_viewer.render(f, f.area());
             }
         }
+
+        // Render progress dialog if visible
+        if let Ok(dialog) = self.progress_dialog.lock() {
+            dialog.render(f, f.area());
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -2387,8 +2444,10 @@ impl App {
                         }
                     }
                     CommentsViewerAction::DeleteSelectedComment => {
-                        if let Some(entry) =
-                            self.comments_viewer.as_ref().and_then(|v| v.selected_comment().cloned())
+                        if let Some(entry) = self
+                            .comments_viewer
+                            .as_ref()
+                            .and_then(|v| v.selected_comment().cloned())
                         {
                             let mut delete_success = false;
                             let comments = self.text_reader.get_comments();
@@ -2908,6 +2967,148 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
         if first_render {
             needs_redraw = true;
             first_render = false;
+
+            // Load deferred book (auto-loaded recent book) after first render
+            if let Some(path) = app.deferred_book_path.take() {
+                if app.book_manager.contains_book(&path) {
+                    if let Err(e) = app.open_book_for_reading_by_path(&path) {
+                        error!("Failed to auto-load most recent book: {e}");
+                        app.show_error(format!("Failed to auto-load recent book: {e}"));
+                    }
+                }
+            }
+        }
+
+        // Load deferred PDF/book that was selected by user (after initial render to show progress)
+        // Spawn loading in background thread to keep UI responsive
+        if let Some(book_index) = app.deferred_book_index.take() {
+            if let Some(path) = app.deferred_book_path.take() {
+                debug!("Spawning PDF loader for {}", path);
+                let sender = app.pdf_load_sender.clone();
+                std::thread::spawn(move || {
+                    crate::panic_handler::with_panic_exit_suppressed(|| {
+                        // Give the UI a moment to render the progress dialog
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+
+                        let result = std::panic::catch_unwind(|| {
+                            match crate::pdf_handler::PdfDocument::load(&path) {
+                                Ok(pdf_doc) => {
+                                    let page_count = pdf_doc.page_count();
+                                    let text_content = match pdf_doc.extract_text() {
+                                        Ok(text) => text,
+                                        Err(e) => {
+                                            warn!("Failed to extract text from PDF: {e}");
+                                            let filename = std::path::Path::new(&path)
+                                                .file_name()
+                                                .and_then(|name| name.to_str())
+                                                .unwrap_or("PDF Document");
+                                            let title =
+                                                filename.replace(".pdf", "").replace(".PDF", "");
+                                            format!(
+                                                "PDF Document\n\nFile: {}\nPages: {}\n\nCould not extract text from this PDF.",
+                                                title, page_count
+                                            )
+                                        }
+                                    };
+
+                                    Ok(PdfLoadSuccess {
+                                        book_index,
+                                        path,
+                                        page_count,
+                                        text_content,
+                                    })
+                                }
+                                Err(e) => Err(format!("Failed to load PDF: {e}")),
+                            }
+                        })
+                        .unwrap_or_else(|panic_payload| {
+                            let message = if let Some(msg) = panic_payload.downcast_ref::<&str>() {
+                                msg.to_string()
+                            } else if let Some(msg) = panic_payload.downcast_ref::<String>() {
+                                msg.clone()
+                            } else {
+                                "Unknown panic".to_string()
+                            };
+                            Err(format!("PDF loader panicked: {message}"))
+                        });
+
+                        if let Err(send_err) = sender.send(result) {
+                            warn!("Failed to send PDF load result: {send_err}");
+                        }
+                    });
+                });
+            }
+        }
+
+        // Check if PDF loading completed
+        if let Ok(result) = app.pdf_load_receiver.try_recv() {
+            match result {
+                Ok(success) => {
+                    debug!("PDF loaded successfully: {}", success.path);
+                    app.save_bookmark_with_throttle(true);
+
+                    match app.book_manager.create_fake_epub_from_pdf_parts(
+                        &success.path,
+                        success.page_count,
+                        success.text_content,
+                    ) {
+                        Ok(doc) => {
+                            // Create EpubBook - this is fast, just wraps the doc
+                            let current_book = EpubBook::new(success.path.clone(), doc);
+
+                            // Set navigation index and focus FIRST - this lets the UI respond to key input immediately
+                            app.navigation_panel.current_book_index = Some(success.book_index);
+                            app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+                            // NOW set the current book - this makes it available for update_content()
+                            app.current_book = Some(current_book);
+
+                            // Update content immediately so the PDF is displayed
+                            // This may block briefly for HTML parsing, but content will be visible
+                            debug!("Updating content for loaded PDF");
+                            app.update_content();
+                            debug!("Content update completed");
+
+                            needs_redraw = true;
+                        }
+                        Err(e) => {
+                            error!("Failed to build EPUB from PDF: {e}");
+                            app.show_error(format!("Failed to build EPUB from PDF: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("{e}");
+                    app.show_error(e);
+                }
+            }
+            // Hide progress dialog when done
+            if let Ok(mut dialog) = app.progress_dialog.lock() {
+                dialog.hide();
+                dialog.set_progress(100);
+            }
+        }
+
+        if let Ok(mut dialog) = app.progress_dialog.lock() {
+            if dialog.take_dirty() {
+                needs_redraw = true;
+            }
+        }
+
+        // Update content if deferred (e.g., after PDF loading completes)
+        // This happens AFTER processing all input events, so keyboard input can be processed while this runs
+        if app.should_update_content {
+            app.should_update_content = false;
+            let content_update_start = std::time::Instant::now();
+            app.update_content();
+            let content_update_duration = content_update_start.elapsed();
+            if content_update_duration.as_millis() > 100 {
+                debug!(
+                    "Content update (likely large PDF) took {}ms",
+                    content_update_duration.as_millis()
+                );
+            }
+            needs_redraw = true;
         }
 
         if last_tick.elapsed() >= tick_rate {

@@ -407,6 +407,21 @@ impl SearchablePanel for BookList {
             .map(|book| book.display_name.clone())
             .collect()
     }
+
+    // Note: These are placeholder methods for search input modes
+    // They exist in the upstream version but we use query string mode for now
+}
+
+impl BookList {
+    pub fn handle_search_char(&mut self, _c: char) {
+        // Stub: character-by-character input for book list search not implemented
+        // This is called when in InputMode, but we use traditional query string mode
+    }
+
+    pub fn handle_search_backspace(&mut self) {
+        // Stub: backspace handling for book list search not implemented
+        // This is called when in InputMode, but we use traditional query string mode
+    }
 }
 
 #[cfg(test)]

@@ -179,13 +179,23 @@ pub fn find_matches_in_text(query: &str, items: &[String]) -> Vec<SearchMatch> {
         let item_lower = item.to_lowercase();
 
         // Find all occurrences of the query in this item
-        let mut highlight_ranges = Vec::new();
-        let mut search_start = 0;
+        // Use character-based indexing to handle multi-byte Unicode characters
+        let item_chars: Vec<char> = item_lower.chars().collect();
+        let query_chars: Vec<char> = query_lower.chars().collect();
+        let query_len = query_chars.len();
 
-        while let Some(pos) = item_lower[search_start..].find(&query_lower) {
-            let actual_pos = search_start + pos;
-            highlight_ranges.push((actual_pos, actual_pos + query.len()));
-            search_start = actual_pos + 1; // Allow overlapping matches
+        let mut highlight_ranges = Vec::new();
+
+        for i in 0..=(item_chars.len().saturating_sub(query_len)) {
+            if &item_chars[i..i + query_len] == query_chars.as_slice() {
+                // Convert character indices back to byte indices for highlighting
+                let byte_start = item_chars[0..i].iter().collect::<String>().len();
+                let byte_end = item_chars[0..i + query_len]
+                    .iter()
+                    .collect::<String>()
+                    .len();
+                highlight_ranges.push((byte_start, byte_end));
+            }
         }
 
         if !highlight_ranges.is_empty() {

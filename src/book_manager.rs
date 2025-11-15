@@ -1,5 +1,6 @@
+use crate::pdf_handler::PdfDocument;
 use epub::doc::EpubDoc;
-use log::{error, info};
+use log::{error, info, warn};
 use std::io::BufReader;
 use std::path::Path;
 
@@ -45,7 +46,11 @@ impl BookManager {
                 let entry = entry.ok()?;
                 let path = entry.path();
                 let extension = path.extension()?.to_str()?;
-                if extension == "epub" || extension == "html" || extension == "htm" {
+                if extension == "epub"
+                    || extension == "html"
+                    || extension == "htm"
+                    || extension == "pdf"
+                {
                     let path_str = path.to_str()?.to_string();
                     let display_name = Self::extract_display_name(&path_str);
                     Some(BookInfo {
@@ -94,6 +99,8 @@ impl BookManager {
         if self.is_html_file(path) {
             // For HTML files, create a fake EPUB
             self.create_fake_epub_from_html(path)
+        } else if self.is_pdf_file(path) {
+            self.create_fake_epub_from_pdf(path)
         } else {
             info!("Attempting to load EPUB file: {path}");
             match EpubDoc::new(path) {
@@ -355,5 +362,86 @@ impl BookManager {
             Some(ext) => ext == "html" || ext == "htm",
             None => false,
         }
+    }
+
+    pub fn is_pdf_file(&self, path: &str) -> bool {
+        let path = Path::new(path);
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => ext == "pdf",
+            None => false,
+        }
+    }
+
+    fn create_fake_epub_from_pdf(
+        &self,
+        path: &str,
+    ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        info!("Creating fake EPUB from PDF: {path}");
+
+        match PdfDocument::load(path) {
+            Ok(pdf_doc) => {
+                let page_count = pdf_doc.page_count();
+                info!("PDF loaded with {page_count} pages");
+
+                let filename = Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("PDF Document");
+
+                let title = filename.replace(".pdf", "").replace(".PDF", "");
+
+                let text_content = match pdf_doc.extract_text() {
+                    Ok(text) => text,
+                    Err(e) => {
+                        warn!("Failed to extract text from PDF: {e}");
+                        format!(
+                            "PDF Document\n\nFile: {}\nPages: {}\n\nCould not extract text from this PDF.",
+                            title, page_count
+                        )
+                    }
+                };
+
+                self.create_fake_epub_from_pdf_parts(path, page_count, text_content)
+            }
+            Err(e) => {
+                error!("Failed to load PDF: {e}");
+                Err(format!("Failed to load PDF: {e}"))
+            }
+        }
+    }
+
+    pub fn create_fake_epub_from_pdf_parts(
+        &self,
+        path: &str,
+        page_count: usize,
+        text_content: String,
+    ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        let filename = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("PDF Document");
+
+        let title = filename.replace(".pdf", "").replace(".PDF", "");
+
+        let html_content = if text_content.trim().is_empty() {
+            format!(
+                r#"<h1>{}</h1>
+<p><em>PDF with {} pages</em></p>
+<p>This PDF appears to have no extractable text content.</p>"#,
+                title, page_count
+            )
+        } else {
+            format!(
+                r#"<h1>{}</h1>
+<p><em>PDF with {} pages</em></p>
+<hr/>
+<pre>{}</pre>"#,
+                title,
+                page_count,
+                html_escape::encode_text(&text_content)
+            )
+        };
+
+        self.create_minimal_epub_from_html(&html_content, path)
     }
 }
