@@ -160,6 +160,24 @@ impl NavigationPanel {
         }
     }
 
+    pub fn handle_search_char(&mut self, c: char) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.handle_search_char(c),
+            NavigationMode::TableOfContents => {
+                // TOC search doesn't support character-by-character input for now
+            }
+        }
+    }
+
+    pub fn handle_search_backspace(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => self.book_list.handle_search_backspace(),
+            NavigationMode::TableOfContents => {
+                // TOC search doesn't support backspace for now
+            }
+        }
+    }
+
     /// Get the currently selected index based on the mode
     pub fn get_selected_action(&self) -> SelectedActionOwned {
         match self.mode {

@@ -57,6 +57,8 @@ tui-textarea = "0.7"
 # ansi-to-tui = "7.0.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"
+oxidize-pdf = "1.6"
+html-escape = "0.2"
 # Vendored ratatui-image dependencies
 icy_sixel = "0.1.1"
 base64 = "0.21.2"

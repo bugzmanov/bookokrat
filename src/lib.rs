@@ -6,6 +6,7 @@ pub mod comments;
 pub use inputs::event_source;
 pub mod components;
 pub mod images;
+pub mod pdf_handler;
 // Vendored ratatui-image
 pub mod vendored;
 pub use vendored::ratatui_image;
@@ -24,6 +25,7 @@ pub use widget::reading_history;
 pub use widget::text_reader as markdown_text_reader;
 pub mod panic_handler;
 pub mod parsing;
+pub mod preferences;
 pub mod search;
 pub mod search_engine;
 pub mod system_command;
