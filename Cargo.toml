@@ -6,7 +6,7 @@ rust-version = "1.85"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
 license = "MIT"
 description = "A terminal-based EPUB Books reader"
-default-run = "bookokrat"
+default-run = "test-rat"
 repository="https://github.com/bugzmanov/bookokrat"
 homepage="https://bugzmanov.github.io/bookokrat/"
 readme = "README.md"
@@ -18,7 +18,7 @@ name = "bookokrat"
 path = "src/lib.rs"
 
 [[bin]]
-name = "bookokrat"
+name = "test-rat"
 path = "src/main.rs"
 
 [dependencies]
@@ -65,6 +65,7 @@ thiserror = "1.0.59"
 flate2 = "1.0"
 # Pin home to 0.5.11 to maintain compatibility with Rust 1.85 (0.5.12+ requires Rust 1.88)
 home = "=0.5.11"
+walkdir = "2.4"
 
 [target.'cfg(not(windows))'.dependencies]
 rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }
@@ -83,7 +84,6 @@ snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"
 tempfile = "3.8"
-walkdir = "2.4"
 
 [features]
 test-utils = []

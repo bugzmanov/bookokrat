@@ -2,6 +2,7 @@ use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::BufReader;
 use std::path::Path;
+use walkdir::WalkDir;
 
 pub struct BookManager {
     pub books: Vec<BookInfo>,
@@ -36,13 +37,11 @@ impl BookManager {
     }
 
     fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
-        std::fs::read_dir(dir)
-            .unwrap_or_else(|e| {
-                error!("Failed to read directory {dir}: {e}");
-                panic!("Failed to read directory {dir}: {e}");
-            })
+        WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_type().is_file())
             .filter_map(|entry| {
-                let entry = entry.ok()?;
                 let path = entry.path();
                 let extension = path.extension()?.to_str()?;
                 if extension == "epub" || extension == "html" || extension == "htm" {
