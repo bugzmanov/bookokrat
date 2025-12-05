@@ -94,6 +94,7 @@ pub struct App {
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     notifications: NotificationManager,
     help_bar_area: Rect,
+    zen_mode: bool,
 }
 
 pub trait VimNavMotions {
@@ -322,6 +323,7 @@ impl App {
             comments_viewer: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
+            zen_mode: false,
         };
 
         if auto_load_recent
@@ -1555,12 +1557,19 @@ impl App {
 
     /// Calculate the navigation panel width based on stored terminal width
     fn nav_panel_width(&self) -> u16 {
-        // 30% of terminal width, minimum 20 columns
-        ((self.terminal_size.width * 30) / 100).max(20)
+        if self.zen_mode {
+            0
+        } else {
+            // 30% of terminal width, minimum 20 columns
+            ((self.terminal_size.width * 30) / 100).max(20)
+        }
     }
 
     /// Get the navigation panel area based on current terminal size
     fn get_navigation_panel_area(&self) -> Rect {
+        if self.zen_mode {
+            return Rect::default(); // No navigation panel in zen mode
+        }
         use ratatui::layout::{Constraint, Direction, Layout};
         // Calculate the same layout as in render
         let chunks = Layout::default()
@@ -1662,39 +1671,57 @@ impl App {
         let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
         f.render_widget(background_block, f.area());
 
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(3)])
-            .split(f.area());
-
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(chunks[0]);
-
-        self.navigation_panel.render(
-            f,
-            main_chunks[0],
-            self.is_main_panel(MainPanel::NavigationList),
-            &OCEANIC_NEXT,
-            &self.book_manager,
-        );
-
-        if let Some(ref book) = self.current_book {
-            self.text_reader.render(
-                f,
-                main_chunks[1],
-                book.current_chapter(),
-                book.total_chapters(),
-                &OCEANIC_NEXT,
-                self.is_main_panel(MainPanel::Content),
-            );
+        if self.zen_mode {
+            // Zen mode: full screen content, no navigation panel or help bar
+            if let Some(ref book) = self.current_book {
+                self.text_reader.render(
+                    f,
+                    f.area(),
+                    book.current_chapter(),
+                    book.total_chapters(),
+                    &OCEANIC_NEXT,
+                    true, // always focused in zen mode
+                );
+            } else {
+                self.render_default_content(f, f.area(), "Select a file to view its content");
+            }
+            // Don't set help_bar_area in zen mode - it's hidden
         } else {
-            self.render_default_content(f, main_chunks[1], "Select a file to view its content");
-        }
+            // Normal mode: existing layout
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(0), Constraint::Length(3)])
+                .split(f.area());
 
-        self.render_help_bar(f, chunks[1], fps_counter);
-        self.help_bar_area = chunks[1];
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .split(chunks[0]);
+
+            self.navigation_panel.render(
+                f,
+                main_chunks[0],
+                self.is_main_panel(MainPanel::NavigationList),
+                &OCEANIC_NEXT,
+                &self.book_manager,
+            );
+
+            if let Some(ref book) = self.current_book {
+                self.text_reader.render(
+                    f,
+                    main_chunks[1],
+                    book.current_chapter(),
+                    book.total_chapters(),
+                    &OCEANIC_NEXT,
+                    self.is_main_panel(MainPanel::Content),
+                );
+            } else {
+                self.render_default_content(f, main_chunks[1], "Select a file to view its content");
+            }
+
+            self.render_help_bar(f, chunks[1], fps_counter);
+            self.help_bar_area = chunks[1];
+        }
 
         if matches!(
             self.focused_panel,
@@ -2387,8 +2414,10 @@ impl App {
                         }
                     }
                     CommentsViewerAction::DeleteSelectedComment => {
-                        if let Some(entry) =
-                            self.comments_viewer.as_ref().and_then(|v| v.selected_comment().cloned())
+                        if let Some(entry) = self
+                            .comments_viewer
+                            .as_ref()
+                            .and_then(|v| v.selected_comment().cloned())
                         {
                             let mut delete_success = false;
                             let comments = self.text_reader.get_comments();
@@ -2617,6 +2646,16 @@ impl App {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(visible_height) = screen_height {
                     self.scroll_half_screen_up(visible_height);
+                }
+            }
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.zen_mode = !self.zen_mode;
+                // When entering zen mode while on NavigationList, switch to Content
+                if self.zen_mode
+                    && self.is_main_panel(MainPanel::NavigationList)
+                    && self.current_book.is_some()
+                {
+                    self.set_main_panel_focus(MainPanel::Content);
                 }
             }
 
