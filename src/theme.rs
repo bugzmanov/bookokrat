@@ -27,7 +27,7 @@ pub struct Base16Palette {
 // Lazy initialization of the palette to support runtime color detection
 #[allow(dead_code)]
 pub static OCEANIC_NEXT: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
-    base_00: smart_color(0x1B2B34),
+    base_00: Color::Reset,
     base_01: smart_color(0x343D46),
     base_02: smart_color(0x4F5B66),
     base_03: smart_color(0x65737E),
