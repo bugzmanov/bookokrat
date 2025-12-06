@@ -45,6 +45,7 @@
 │ GLOBAL CONTROLS                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  q             Quit application                                             │
+│  Ctrl+z        Toggle zen mode (hide sidebar and status bar)                │
 │  Tab           Switch focus between library and reader                      │
 │  Esc           Clear selection, exit search, dismiss popups                 │
 │  Space+h       Toggle reading history popup                                 │
