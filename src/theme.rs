@@ -29,6 +29,8 @@ pub struct Base16Palette {
 pub enum ThemeId {
     OceanicNext = 0,
     CatppuccinMocha = 1,
+    Kanagawa = 2,
+    KanagawaDragon = 3,
 }
 
 impl ThemeId {
@@ -36,17 +38,26 @@ impl ThemeId {
         match self {
             ThemeId::OceanicNext => "Oceanic Next",
             ThemeId::CatppuccinMocha => "Catppuccin Mocha",
+            ThemeId::Kanagawa => "Kanagawa",
+            ThemeId::KanagawaDragon => "Kanagawa Dragon",
         }
     }
 
     pub fn all() -> &'static [ThemeId] {
-        &[ThemeId::OceanicNext, ThemeId::CatppuccinMocha]
+        &[
+            ThemeId::OceanicNext,
+            ThemeId::CatppuccinMocha,
+            ThemeId::Kanagawa,
+            ThemeId::KanagawaDragon,
+        ]
     }
 
     fn from_index(idx: usize) -> Self {
         match idx {
             0 => ThemeId::OceanicNext,
             1 => ThemeId::CatppuccinMocha,
+            2 => ThemeId::Kanagawa,
+            3 => ThemeId::KanagawaDragon,
             _ => ThemeId::OceanicNext,
         }
     }
@@ -66,6 +77,8 @@ pub fn current_theme() -> &'static Base16Palette {
     match current_theme_id() {
         ThemeId::OceanicNext => &OCEANIC_NEXT_PALETTE,
         ThemeId::CatppuccinMocha => &CATPPUCCIN_MOCHA_PALETTE,
+        ThemeId::Kanagawa => &KANAGAWA_PALETTE,
+        ThemeId::KanagawaDragon => &KANAGAWA_DRAGON_PALETTE,
     }
 }
 
@@ -111,6 +124,48 @@ static CATPPUCCIN_MOCHA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palett
     base_0d: smart_color(0x89B4FA), // blue - Blue
     base_0e: smart_color(0xCBA6F7), // mauve - Purple
     base_0f: smart_color(0xEBA0AC), // maroon - Brown
+});
+
+// Kanagawa theme - Japanese-inspired warm tones
+// by rebelot - remapped for proper text visibility
+static KANAGAWA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+    base_00: smart_color(0x1F1F28), // sumiInk1 - Background
+    base_01: smart_color(0x2A2A37), // sumiInk2 - Lighter background
+    base_02: smart_color(0x223249), // waveBlue1 - Selection background
+    base_03: smart_color(0x727169), // fujiGray - Comments
+    base_04: smart_color(0xC8C093), // oldWhite - Dark foreground
+    base_05: smart_color(0xDCD7BA), // fujiWhite - Default foreground
+    base_06: smart_color(0xDCD7BA), // fujiWhite - Light foreground (readable)
+    base_07: smart_color(0xE6E0C2), // Brightest text
+    base_08: smart_color(0xC34043), // autumnRed - Red
+    base_09: smart_color(0xFFA066), // surimiOrange - Orange
+    base_0a: smart_color(0xDCA561), // carpYellow - Yellow
+    base_0b: smart_color(0x98BB6C), // springGreen - Green
+    base_0c: smart_color(0x7FB4CA), // springBlue - Cyan
+    base_0d: smart_color(0x7E9CD8), // crystalBlue - Blue
+    base_0e: smart_color(0x957FB8), // oniViolet - Purple
+    base_0f: smart_color(0xD27E99), // sakuraPink - Pink
+});
+
+// Kanagawa Dragon theme - darker variant with cooler tones
+// by rebelot, ported by Lenny Lizowzskiy
+static KANAGAWA_DRAGON_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+    base_00: smart_color(0x181616), // Background (darker)
+    base_01: smart_color(0x0d0c0c), // Darker background
+    base_02: smart_color(0x2d4f67), // Selection background
+    base_03: smart_color(0xa6a69c), // Comments
+    base_04: smart_color(0x7fb4ca), // Dark foreground
+    base_05: smart_color(0xc5c9c5), // Default foreground
+    base_06: smart_color(0xc5c9c5), // Light foreground (readable)
+    base_07: smart_color(0xc5c9c5), // Brightest text
+    base_08: smart_color(0xc4746e), // Red
+    base_09: smart_color(0xe46876), // Orange/Pink
+    base_0a: smart_color(0xc4b28a), // Yellow
+    base_0b: smart_color(0x8a9a7b), // Green
+    base_0c: smart_color(0x8ea4a2), // Cyan
+    base_0d: smart_color(0x8ba4b0), // Blue
+    base_0e: smart_color(0xa292a3), // Purple
+    base_0f: smart_color(0x7aa89f), // Teal
 });
 
 // Backward compatibility alias
