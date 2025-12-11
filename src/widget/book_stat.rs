@@ -3,7 +3,7 @@ use crate::main_app::VimNavMotions;
 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 use crate::parsing::markdown_renderer::MarkdownRenderer;
 use crate::parsing::toc_parser::TocParser;
-use crate::theme::OCEANIC_NEXT;
+use crate::theme::current_theme;
 use anyhow::Result;
 use crossterm::event::KeyModifiers;
 use epub::doc::EpubDoc;
@@ -356,7 +356,7 @@ impl BookStat {
             // Show a message if no chapters found
             vec![ListItem::new(vec![Line::from(vec![Span::styled(
                 "No chapters found. Processing...",
-                Style::default().fg(OCEANIC_NEXT.base_0a),
+                Style::default().fg(current_theme().base_0a),
             )])])]
         } else {
             self.chapter_stats
@@ -381,13 +381,13 @@ impl BookStat {
                     let content = vec![Line::from(vec![
                         Span::styled(
                             format!("{percentage:3}% "),
-                            Style::default().fg(OCEANIC_NEXT.base_03),
+                            Style::default().fg(current_theme().base_03),
                         ),
                         Span::raw(stat.title.replace("\n", " ")),
                         Span::raw(" "),
                         Span::styled(
                             format!("[{screens_text}]"),
-                            Style::default().fg(OCEANIC_NEXT.base_0c),
+                            Style::default().fg(current_theme().base_0c),
                         ),
                     ])];
 
@@ -402,12 +402,12 @@ impl BookStat {
                 Block::default()
                     .title(" Chapter Statistics ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(OCEANIC_NEXT.base_0c))
-                    .style(Style::default().bg(OCEANIC_NEXT.base_00)),
+                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .style(Style::default().bg(current_theme().base_00)),
             )
             .highlight_style(
                 Style::default()
-                    .bg(OCEANIC_NEXT.base_02)
+                    .bg(current_theme().base_02)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("» ");
@@ -419,7 +419,7 @@ impl BookStat {
         let help_text =
             "j/k/Scroll: Navigate | Enter/DblClick: Jump | G/gg: Bottom/Top | Esc: Close";
         let help = Paragraph::new(help_text)
-            .style(Style::default().fg(OCEANIC_NEXT.base_03))
+            .style(Style::default().fg(current_theme().base_03))
             .alignment(Alignment::Center);
 
         let help_area = Rect {

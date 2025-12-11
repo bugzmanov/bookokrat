@@ -19,9 +19,10 @@ use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::OCEANIC_NEXT;
+use crate::theme::current_theme;
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
+use crate::widget::theme_selector::{ThemeSelector, ThemeSelectorAction};
 use image::GenericImageView;
 use log::warn;
 
@@ -92,6 +93,7 @@ pub struct App {
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
+    theme_selector: Option<ThemeSelector>,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -128,6 +130,7 @@ pub enum PopupWindow {
     BookSearch,
     Help,
     CommentsViewer,
+    ThemeSelector,
 }
 
 impl Default for App {
@@ -321,6 +324,7 @@ impl App {
             book_search: None,
             help_popup: None,
             comments_viewer: None,
+            theme_selector: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -1004,6 +1008,59 @@ impl App {
                     return;
                 }
 
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ThemeSelector)
+                ) {
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
+
+                    if let Some(ref mut selector) = self.theme_selector {
+                        // Check if click is outside popup area - close it
+                        if selector.is_outside_popup_area(click_x, click_y) {
+                            self.theme_selector = None;
+                            self.close_popup_to_previous();
+                            return;
+                        }
+
+                        let click_type = self
+                            .mouse_tracker
+                            .detect_click_type(mouse_event.column, mouse_event.row);
+
+                        match click_type {
+                            ClickType::Single | ClickType::Triple => {
+                                selector.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                            ClickType::Double => {
+                                if selector.handle_mouse_click(mouse_event.column, mouse_event.row)
+                                {
+                                    // Apply theme on double-click
+                                    if let Some(action) = selector.handle_key(
+                                        crossterm::event::KeyEvent::new(
+                                            crossterm::event::KeyCode::Enter,
+                                            crossterm::event::KeyModifiers::NONE,
+                                        ),
+                                        &mut self.key_sequence,
+                                    ) {
+                                        match action {
+                                            ThemeSelectorAction::ThemeChanged => {
+                                                self.show_info("Theme changed");
+                                                self.theme_selector = None;
+                                                self.close_popup_to_previous();
+                                            }
+                                            ThemeSelectorAction::Close => {
+                                                self.theme_selector = None;
+                                                self.close_popup_to_previous();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
@@ -1668,7 +1725,7 @@ impl App {
 
         self.terminal_size = f.area();
 
-        let background_block = Block::default().style(Style::default().bg(OCEANIC_NEXT.base_00));
+        let background_block = Block::default().style(Style::default().bg(current_theme().base_00));
         f.render_widget(background_block, f.area());
 
         if self.zen_mode {
@@ -1679,7 +1736,7 @@ impl App {
                     f.area(),
                     book.current_chapter(),
                     book.total_chapters(),
-                    &OCEANIC_NEXT,
+                    &current_theme(),
                     true, // always focused in zen mode
                 );
             } else {
@@ -1702,7 +1759,7 @@ impl App {
                 f,
                 main_chunks[0],
                 self.is_main_panel(MainPanel::NavigationList),
-                &OCEANIC_NEXT,
+                &current_theme(),
                 &self.book_manager,
             );
 
@@ -1712,7 +1769,7 @@ impl App {
                     main_chunks[1],
                     book.current_chapter(),
                     book.total_chapters(),
-                    &OCEANIC_NEXT,
+                    &current_theme(),
                     self.is_main_panel(MainPanel::Content),
                 );
             } else {
@@ -1763,7 +1820,7 @@ impl App {
             f.render_widget(dim_block, f.area());
 
             if let Some(ref mut book_search) = self.book_search {
-                book_search.render(f, f.area(), &OCEANIC_NEXT);
+                book_search.render(f, f.area(), &current_theme());
             }
         }
 
@@ -1809,22 +1866,38 @@ impl App {
                 comments_viewer.render(f, f.area());
             }
         }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ThemeSelector)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut theme_selector) = self.theme_selector {
+                theme_selector.render(f, f.area());
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
         // Use focus-aware colors instead of hardcoded false
         let (text_color, border_color, _bg_color) =
-            OCEANIC_NEXT.get_panel_colors(self.is_main_panel(MainPanel::Content));
+            current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
 
         let content_border = Block::default()
             .borders(Borders::ALL)
             .title("Content")
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(OCEANIC_NEXT.base_00));
+            .style(Style::default().bg(current_theme().base_00));
 
         let paragraph = Paragraph::new(content)
             .block(content_border)
-            .style(Style::default().fg(text_color).bg(OCEANIC_NEXT.base_00));
+            .style(Style::default().fg(text_color).bg(current_theme().base_00));
 
         f.render_widget(paragraph, area);
     }
@@ -1937,7 +2010,7 @@ impl App {
 
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
         use crate::notification::NotificationLevel;
-        let (_, _, border_color, _, _) = OCEANIC_NEXT.get_interface_colors(false);
+        let (_, _, border_color, _, _) = current_theme().get_interface_colors(false);
 
         let help_content = if let Some(notification) = self.notifications.get_current() {
             let level_str = match notification.level {
@@ -1997,6 +2070,9 @@ impl App {
                 FocusedPanel::Popup(PopupWindow::CommentsViewer) => {
                     "j/k/Ctrl+d/u: Scroll | /: Search | Enter/DblClick: Jump | ESC: Close"
                 }
+                FocusedPanel::Popup(PopupWindow::ThemeSelector) => {
+                    "j/k: Navigate | Enter: Apply | ESC: Close"
+                }
             };
             help_text.to_string()
         };
@@ -2004,7 +2080,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(OCEANIC_NEXT.base_00));
+            .style(Style::default().bg(current_theme().base_00));
 
         let inner_area = block.inner(area);
         f.render_widget(block, area);
@@ -2016,12 +2092,12 @@ impl App {
         };
         let left_para = Paragraph::new(left_content).style(
             Style::default()
-                .fg(OCEANIC_NEXT.base_03)
-                .bg(OCEANIC_NEXT.base_00),
+                .fg(current_theme().base_03)
+                .bg(current_theme().base_00),
         );
         f.render_widget(left_para, inner_area);
 
-        let text_color = OCEANIC_NEXT.base_03;
+        let text_color = current_theme().base_03;
         let right_content = Line::from(vec![
             Span::raw("["),
             Span::styled(
@@ -2059,7 +2135,7 @@ impl App {
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
-            .style(Style::default().bg(OCEANIC_NEXT.base_00));
+            .style(Style::default().bg(current_theme().base_00));
         f.render_widget(right_para, inner_area);
     }
 
@@ -2241,6 +2317,26 @@ impl App {
                         self.comments_viewer = Some(viewer);
                         self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
                     }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " t" => {
+                // Handle Space->t to toggle theme selector (global)
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ThemeSelector)
+                ) {
+                    // Close theme selector - return to previous panel
+                    self.close_popup_to_previous();
+                    self.theme_selector = None;
+                } else {
+                    // Open theme selector - save current main panel
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.theme_selector = Some(ThemeSelector::new());
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ThemeSelector);
                 }
                 self.key_sequence.clear();
                 true
@@ -2452,6 +2548,30 @@ impl App {
                                 self.show_info("Comment deleted");
                             }
                         }
+                    }
+                }
+            }
+            return None;
+        }
+
+        // If theme selector popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ThemeSelector) {
+            let action = if let Some(ref mut selector) = self.theme_selector {
+                selector.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(action) = action {
+                match action {
+                    ThemeSelectorAction::Close => {
+                        self.close_popup_to_previous();
+                        self.theme_selector = None;
+                    }
+                    ThemeSelectorAction::ThemeChanged => {
+                        self.show_info("Theme changed");
+                        self.close_popup_to_previous();
+                        self.theme_selector = None;
                     }
                 }
             }
@@ -2678,6 +2798,9 @@ impl App {
                         error!("Copy failed: {e}");
                     }
                 }
+            }
+            KeyCode::Char('t') => {
+                self.handle_key_sequence('t');
             }
             KeyCode::Char('?') => {
                 self.help_popup = Some(HelpPopup::new());

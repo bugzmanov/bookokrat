@@ -1,6 +1,7 @@
 use crate::color_mode::smart_color;
 use once_cell::sync::Lazy;
 use ratatui::style::Color;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // Color palette structure
 #[allow(dead_code)]
@@ -24,9 +25,52 @@ pub struct Base16Palette {
     pub base_0f: Color, // Brown
 }
 
-// Lazy initialization of the palette to support runtime color detection
-#[allow(dead_code)]
-pub static OCEANIC_NEXT: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ThemeId {
+    OceanicNext = 0,
+    CatppuccinMocha = 1,
+}
+
+impl ThemeId {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ThemeId::OceanicNext => "Oceanic Next",
+            ThemeId::CatppuccinMocha => "Catppuccin Mocha",
+        }
+    }
+
+    pub fn all() -> &'static [ThemeId] {
+        &[ThemeId::OceanicNext, ThemeId::CatppuccinMocha]
+    }
+
+    fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => ThemeId::OceanicNext,
+            1 => ThemeId::CatppuccinMocha,
+            _ => ThemeId::OceanicNext,
+        }
+    }
+}
+
+static CURRENT_THEME_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+pub fn current_theme_id() -> ThemeId {
+    ThemeId::from_index(CURRENT_THEME_INDEX.load(Ordering::Relaxed))
+}
+
+pub fn set_theme(theme: ThemeId) {
+    CURRENT_THEME_INDEX.store(theme as usize, Ordering::Relaxed);
+}
+
+pub fn current_theme() -> &'static Base16Palette {
+    match current_theme_id() {
+        ThemeId::OceanicNext => &OCEANIC_NEXT_PALETTE,
+        ThemeId::CatppuccinMocha => &CATPPUCCIN_MOCHA_PALETTE,
+    }
+}
+
+// Oceanic Next theme
+static OCEANIC_NEXT_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
     base_00: smart_color(0x1B2B34),
     base_01: smart_color(0x343D46),
     base_02: smart_color(0x4F5B66),
@@ -44,6 +88,34 @@ pub static OCEANIC_NEXT: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
     base_0e: smart_color(0xC594C5),
     base_0f: smart_color(0xAB7967),
 });
+
+// Catppuccin Mocha theme
+// Mapped from: base=#1E1E2E, surface0=#313244, surface1=#45475A, overlay0=#6C7086
+// overlay1=#7F849C, subtext0=#A6ADC8, text=#CDD6F4, rosewater=#F5E0DC
+// red=#F38BA8, peach=#FAB387, yellow=#F9E2AF, green=#A6E3A1
+// teal=#94E2D5, blue=#89B4FA, mauve=#CBA6F7, maroon=#EBA0AC
+static CATPPUCCIN_MOCHA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+    base_00: smart_color(0x1E1E2E), // base - Background
+    base_01: smart_color(0x313244), // surface0 - Lighter background
+    base_02: smart_color(0x45475A), // surface1 - Selection background
+    base_03: smart_color(0x6C7086), // overlay0 - Comments, invisibles
+    base_04: smart_color(0x7F849C), // overlay1 - Dark foreground
+    base_05: smart_color(0xA6ADC8), // subtext0 - Default foreground
+    base_06: smart_color(0xCDD6F4), // text - Light foreground
+    base_07: smart_color(0xF5E0DC), // rosewater - Light background
+    base_08: smart_color(0xF38BA8), // red - Red
+    base_09: smart_color(0xFAB387), // peach - Orange
+    base_0a: smart_color(0xF9E2AF), // yellow - Yellow
+    base_0b: smart_color(0xA6E3A1), // green - Green
+    base_0c: smart_color(0x94E2D5), // teal - Cyan
+    base_0d: smart_color(0x89B4FA), // blue - Blue
+    base_0e: smart_color(0xCBA6F7), // mauve - Purple
+    base_0f: smart_color(0xEBA0AC), // maroon - Brown
+});
+
+// Backward compatibility alias
+#[allow(dead_code)]
+pub static OCEANIC_NEXT: &Lazy<Base16Palette> = &OCEANIC_NEXT_PALETTE;
 
 // Color utilities for focus states
 impl Base16Palette {

@@ -4,7 +4,7 @@ use crate::main_app::VimNavMotions;
 use crate::markdown::Inline;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::table_of_contents::TocItem;
-use crate::theme::OCEANIC_NEXT;
+use crate::theme::current_theme;
 use epub::doc::EpubDoc;
 use ratatui::{
     Frame,
@@ -679,7 +679,7 @@ impl CommentsViewer {
 
         let chapter_block = Block::default()
             .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(OCEANIC_NEXT.base_02));
+            .border_style(Style::default().fg(current_theme().base_02));
         let chapter_inner = chapter_block.inner(columns[0]);
         self.last_chapter_area = Some(chapter_inner);
         f.render_widget(chapter_block, columns[0]);
@@ -724,41 +724,41 @@ impl CommentsViewer {
                     Span::styled(
                         search_text,
                         Style::default()
-                            .fg(OCEANIC_NEXT.base_0a)
+                            .fg(current_theme().base_0a)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ]))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(OCEANIC_NEXT.base_0d))
-                .style(Style::default().bg(OCEANIC_NEXT.base_00))
+                .border_style(Style::default().fg(current_theme().base_0d))
+                .style(Style::default().bg(current_theme().base_00))
         } else {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(OCEANIC_NEXT.base_0d))
-                .style(Style::default().bg(OCEANIC_NEXT.base_00))
+                .border_style(Style::default().fg(current_theme().base_0d))
+                .style(Style::default().bg(current_theme().base_00))
         }
     }
 
     fn render_chapter_list(&mut self, f: &mut Frame, area: Rect) {
         if self.global_search_mode {
             let total = self.all_entries.len();
-            let mut style = Style::default().fg(OCEANIC_NEXT.base_05);
+            let mut style = Style::default().fg(current_theme().base_05);
             let mut count_style = Style::default()
-                .fg(OCEANIC_NEXT.base_0e)
+                .fg(current_theme().base_0e)
                 .add_modifier(Modifier::BOLD);
-            let mut background = Style::default().bg(OCEANIC_NEXT.base_00);
+            let mut background = Style::default().bg(current_theme().base_00);
 
             if self.focus == ViewerFocus::Chapters {
                 style = Style::default()
-                    .fg(OCEANIC_NEXT.base_00)
-                    .bg(OCEANIC_NEXT.base_02)
+                    .fg(current_theme().base_00)
+                    .bg(current_theme().base_02)
                     .add_modifier(Modifier::BOLD);
                 count_style = Style::default()
-                    .fg(OCEANIC_NEXT.base_00)
-                    .bg(OCEANIC_NEXT.base_02)
+                    .fg(current_theme().base_00)
+                    .bg(current_theme().base_02)
                     .add_modifier(Modifier::BOLD);
-                background = Style::default().bg(OCEANIC_NEXT.base_02);
+                background = Style::default().bg(current_theme().base_02);
             }
 
             let line = Line::from(vec![
@@ -766,10 +766,10 @@ impl CommentsViewer {
                 Span::raw(" "),
                 Span::styled("Comments Search", style),
             ])
-            .bg(background.bg.unwrap_or(OCEANIC_NEXT.base_00));
+            .bg(background.bg.unwrap_or(current_theme().base_00));
 
             let paragraph =
-                Paragraph::new(vec![line]).style(Style::default().bg(OCEANIC_NEXT.base_00));
+                Paragraph::new(vec![line]).style(Style::default().bg(current_theme().base_00));
             f.render_widget(paragraph, area);
             return;
         }
@@ -806,37 +806,37 @@ impl CommentsViewer {
             }
 
             let base_style = if chapter.comment_count == 0 {
-                Style::default().fg(OCEANIC_NEXT.base_03)
+                Style::default().fg(current_theme().base_03)
             } else {
-                Style::default().fg(OCEANIC_NEXT.base_05)
+                Style::default().fg(current_theme().base_05)
             };
 
             let mut title_style = base_style;
             let mut count_style = if chapter.comment_count == 0 {
-                Style::default().fg(OCEANIC_NEXT.base_03)
+                Style::default().fg(current_theme().base_03)
             } else {
                 Style::default()
-                    .fg(OCEANIC_NEXT.base_0e)
+                    .fg(current_theme().base_0e)
                     .add_modifier(Modifier::BOLD)
             };
-            let mut background_style = Style::default().bg(OCEANIC_NEXT.base_00);
+            let mut background_style = Style::default().bg(current_theme().base_00);
             if self.focus == ViewerFocus::Chapters {
                 if is_selected {
                     title_style = Style::default()
-                        .fg(OCEANIC_NEXT.base_00)
-                        .bg(OCEANIC_NEXT.base_02)
+                        .fg(current_theme().base_00)
+                        .bg(current_theme().base_02)
                         .add_modifier(Modifier::BOLD);
                     count_style = count_style
-                        .fg(OCEANIC_NEXT.base_00)
-                        .bg(OCEANIC_NEXT.base_02);
-                    background_style = Style::default().bg(OCEANIC_NEXT.base_02);
+                        .fg(current_theme().base_00)
+                        .bg(current_theme().base_02);
+                    background_style = Style::default().bg(current_theme().base_02);
                 }
             } else if is_selected {
                 title_style = Style::default()
-                    .fg(OCEANIC_NEXT.base_08)
+                    .fg(current_theme().base_08)
                     .add_modifier(Modifier::BOLD);
                 count_style = Style::default()
-                    .fg(OCEANIC_NEXT.base_0d)
+                    .fg(current_theme().base_0d)
                     .add_modifier(Modifier::BOLD);
             };
             let count_text = if chapter.comment_count == 0 {
@@ -851,11 +851,11 @@ impl CommentsViewer {
                     Span::raw(" "),
                     Span::styled(title, title_style),
                 ])
-                .bg(background_style.bg.unwrap_or(OCEANIC_NEXT.base_00)),
+                .bg(background_style.bg.unwrap_or(current_theme().base_00)),
             );
         }
 
-        let paragraph = Paragraph::new(lines).style(Style::default().bg(OCEANIC_NEXT.base_00));
+        let paragraph = Paragraph::new(lines).style(Style::default().bg(current_theme().base_00));
         f.render_widget(paragraph, area);
     }
 
@@ -888,7 +888,7 @@ impl CommentsViewer {
 
         if self.total_rendered_lines > content_height {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .style(Style::default().fg(OCEANIC_NEXT.base_03));
+                .style(Style::default().fg(current_theme().base_03));
             let mut scrollbar_state =
                 ScrollbarState::new(self.total_rendered_lines).position(self.scroll_offset);
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
@@ -945,13 +945,13 @@ impl CommentsViewer {
             Line::from(Span::styled(
                 "No comments in this chapter",
                 Style::default()
-                    .fg(OCEANIC_NEXT.base_03)
+                    .fg(current_theme().base_03)
                     .add_modifier(Modifier::ITALIC),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "Select text and press 'a' to add a note",
-                Style::default().fg(OCEANIC_NEXT.base_04),
+                Style::default().fg(current_theme().base_04),
             )),
         ])
         .alignment(ratatui::layout::Alignment::Center);
@@ -969,29 +969,29 @@ impl CommentsViewer {
         lines: &mut Vec<Line<'static>>,
     ) {
         let chapter_style = Style::default()
-            .fg(OCEANIC_NEXT.base_0c)
+            .fg(current_theme().base_0c)
             .add_modifier(Modifier::BOLD);
 
         let quote_style = if is_selected {
             Style::default()
-                .fg(OCEANIC_NEXT.base_04)
+                .fg(current_theme().base_04)
                 .add_modifier(Modifier::ITALIC)
-                .bg(OCEANIC_NEXT.base_01)
+                .bg(current_theme().base_01)
         } else {
             Style::default()
-                .fg(OCEANIC_NEXT.base_03)
+                .fg(current_theme().base_03)
                 .add_modifier(Modifier::ITALIC)
         };
 
         let comment_style = if is_selected {
             Style::default()
-                .fg(OCEANIC_NEXT.base_05)
-                .bg(OCEANIC_NEXT.base_01)
+                .fg(current_theme().base_05)
+                .bg(current_theme().base_01)
         } else {
-            Style::default().fg(OCEANIC_NEXT.base_05)
+            Style::default().fg(current_theme().base_05)
         };
 
-        let timestamp_style = Style::default().fg(OCEANIC_NEXT.base_03);
+        let timestamp_style = Style::default().fg(current_theme().base_03);
 
         // Chapter title - only show if this is a new chapter
         if show_chapter_header {
@@ -1100,7 +1100,7 @@ impl CommentsViewer {
                 // Other matches: dim yellow background
                 Style::default()
                     .bg(Color::Rgb(100, 100, 0))
-                    .fg(base_style.fg.unwrap_or(OCEANIC_NEXT.base_05))
+                    .fg(base_style.fg.unwrap_or(current_theme().base_05))
             };
 
             let end_pos = actual_pos + self.search_state.query.len();
