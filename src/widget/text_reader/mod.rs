@@ -103,6 +103,9 @@ pub struct MarkdownTextReader {
     comment_input: CommentInputState,
 
     chapter_title: Option<String>,
+
+    /// Content margin level (0-20), each level adds 2 columns on each side
+    content_margin: u16,
 }
 
 impl Default for MarkdownTextReader {
@@ -209,6 +212,7 @@ impl MarkdownTextReader {
             current_chapter_comments: HashMap::new(),
             comment_input: CommentInputState::default(),
             chapter_title: None,
+            content_margin: 0,
         }
     }
 
@@ -250,8 +254,9 @@ impl MarkdownTextReader {
             return;
         }
 
-        // Account for borders and side padding
-        let width = area.width.saturating_sub(4) as usize;
+        // Account for borders, side padding, and content margin
+        let margin_width = (self.content_margin * 2) as usize;
+        let width = area.width.saturating_sub(4) as usize - margin_width * 2;
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -297,6 +302,11 @@ impl MarkdownTextReader {
         inner_area.y = inner_area.y.saturating_add(1);
         inner_area.height = inner_area.height.saturating_sub(1);
         inner_area.x = inner_area.x.saturating_add(1);
+
+        // Apply content margin
+        let margin_pixels = self.content_margin * 2;
+        inner_area.x = inner_area.x.saturating_add(margin_pixels);
+        inner_area.width = inner_area.width.saturating_sub(margin_pixels * 2);
 
         // Remember the focused text area for mouse hover/selection logic
         self.last_inner_text_area = Some(inner_area);
@@ -686,6 +696,20 @@ impl MarkdownTextReader {
         }
 
         if text.is_empty() { None } else { Some(text) }
+    }
+
+    pub fn increase_margin(&mut self) {
+        self.content_margin = self.content_margin.saturating_add(1).min(20);
+        self.cache_generation += 1;
+    }
+
+    pub fn decrease_margin(&mut self) {
+        self.content_margin = self.content_margin.saturating_sub(1);
+        self.cache_generation += 1;
+    }
+
+    pub fn invalidate_render_cache(&mut self) {
+        self.cache_generation += 1;
     }
 }
 
