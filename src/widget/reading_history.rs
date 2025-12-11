@@ -1,7 +1,7 @@
 use crate::bookmarks::Bookmarks;
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
-use crate::theme::OCEANIC_NEXT;
+use crate::theme::current_theme;
 use chrono::{DateTime, Local, TimeZone};
 use log::debug;
 use ratatui::{
@@ -112,10 +112,10 @@ impl ReadingHistory {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(date_str, Style::default().fg(OCEANIC_NEXT.base_03)),
+                    Span::styled(date_str, Style::default().fg(current_theme().base_03)),
                     Span::raw(" : "),
-                    Span::styled(&item.title, Style::default().fg(OCEANIC_NEXT.base_05)),
-                    Span::styled(progress_str, Style::default().fg(OCEANIC_NEXT.base_03)),
+                    Span::styled(&item.title, Style::default().fg(current_theme().base_05)),
+                    Span::styled(progress_str, Style::default().fg(current_theme().base_03)),
                 ]))
             })
             .collect();
@@ -125,12 +125,12 @@ impl ReadingHistory {
                 Block::default()
                     .title(" Reading History ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(OCEANIC_NEXT.base_0c))
-                    .style(Style::default().bg(OCEANIC_NEXT.base_00)), // Use theme background
+                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .style(Style::default().bg(current_theme().base_00)), // Use theme background
             )
             .highlight_style(
                 Style::default()
-                    .bg(OCEANIC_NEXT.base_02)
+                    .bg(current_theme().base_02)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("» ");

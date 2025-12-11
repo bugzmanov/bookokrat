@@ -1,5 +1,5 @@
 use crate::inputs::KeySeq;
-use crate::theme::OCEANIC_NEXT;
+use crate::theme::current_theme;
 use codepage_437::{BorrowFromCp437, CP437_CONTROL};
 use once_cell::sync::Lazy;
 use ratatui::{
@@ -68,7 +68,7 @@ impl HelpPopup {
                     let final_bg = if ch == " " && !matches!(bg, Color::Reset) {
                         bg
                     } else if matches!(bg, Color::Reset | Color::Rgb(0, 0, 0)) {
-                        OCEANIC_NEXT.base_00
+                        current_theme().base_00
                     } else {
                         bg
                     };
@@ -97,7 +97,7 @@ impl HelpPopup {
         for line in readme.lines() {
             lines.push(Line::from(Span::styled(
                 format!("  {line}"),
-                Style::default().fg(OCEANIC_NEXT.base_05),
+                Style::default().fg(current_theme().base_05),
             )));
         }
 
@@ -130,8 +130,8 @@ impl HelpPopup {
                 Block::default()
                     .title(" Help - Press ? or ESC to close ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(OCEANIC_NEXT.base_0c))
-                    .style(Style::default().bg(OCEANIC_NEXT.base_00)),
+                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .style(Style::default().bg(current_theme().base_00)),
             )
             .wrap(Wrap { trim: false });
 
@@ -139,7 +139,7 @@ impl HelpPopup {
 
         // Render scrollbar
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .style(Style::default().fg(OCEANIC_NEXT.base_04))
+            .style(Style::default().fg(current_theme().base_04))
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"));
 
