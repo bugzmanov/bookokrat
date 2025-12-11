@@ -1044,6 +1044,7 @@ impl App {
                                     ) {
                                         match action {
                                             ThemeSelectorAction::ThemeChanged => {
+                                                self.text_reader.invalidate_render_cache();
                                                 self.show_info(&format!(
                                                     "Theme: {}",
                                                     current_theme_name()
@@ -2572,6 +2573,7 @@ impl App {
                         self.theme_selector = None;
                     }
                     ThemeSelectorAction::ThemeChanged => {
+                        self.text_reader.invalidate_render_cache();
                         self.show_info(&format!("Theme: {}", current_theme_name()));
                         self.close_popup_to_previous();
                         self.theme_selector = None;
@@ -2821,6 +2823,12 @@ impl App {
                 } else if self.is_in_search_mode() {
                     self.cancel_current_search();
                 }
+            }
+            KeyCode::Char('=') => {
+                self.text_reader.increase_margin();
+            }
+            KeyCode::Char('-') => {
+                self.text_reader.decrease_margin();
             }
             _ => {}
         }
