@@ -14,6 +14,7 @@ use simplelog::{LevelFilter, WriteLogger};
 use bookokrat::event_source::KeyboardEventSource;
 use bookokrat::main_app::{App, run_app_with_event_source};
 use bookokrat::panic_handler;
+use bookokrat::theme::load_custom_themes;
 
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
@@ -38,6 +39,9 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+
+    // Load custom themes from themes/ directory
+    load_custom_themes();
 
     // Create app and run it
     let mut app = App::new();
