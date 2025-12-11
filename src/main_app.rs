@@ -20,7 +20,7 @@ use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::{OCEANIC_NEXT, current_theme};
+use crate::theme::{OCEANIC_NEXT, current_theme, current_theme_name};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::language_select_popup::Language;
@@ -1071,7 +1071,10 @@ impl App {
                                     ) {
                                         match action {
                                             ThemeSelectorAction::ThemeChanged => {
-                                                self.show_info("Theme changed");
+                                                self.show_info(&format!(
+                                                    "Theme: {}",
+                                                    current_theme_name()
+                                                ));
                                                 self.theme_selector = None;
                                                 self.close_popup_to_previous();
                                             }
@@ -2675,7 +2678,7 @@ impl App {
                         self.theme_selector = None;
                     }
                     ThemeSelectorAction::ThemeChanged => {
-                        self.show_info("Theme changed");
+                        self.show_info(&format!("Theme: {}", current_theme_name()));
                         self.close_popup_to_previous();
                         self.theme_selector = None;
                     }

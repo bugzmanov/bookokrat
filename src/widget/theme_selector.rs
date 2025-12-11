@@ -1,6 +1,6 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
-use crate::theme::{ThemeId, current_theme, current_theme_id, set_theme};
+use crate::theme::{all_theme_names, current_theme, current_theme_index, set_theme_by_index};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -16,7 +16,7 @@ pub enum ThemeSelectorAction {
 
 pub struct ThemeSelector {
     state: ListState,
-    themes: Vec<ThemeId>,
+    theme_names: Vec<String>,
     last_popup_area: Option<Rect>,
 }
 
@@ -28,39 +28,38 @@ impl Default for ThemeSelector {
 
 impl ThemeSelector {
     pub fn new() -> Self {
-        let themes: Vec<ThemeId> = ThemeId::all().to_vec();
-        let current_idx = themes
-            .iter()
-            .position(|&t| t == current_theme_id())
-            .unwrap_or(0);
+        let theme_names = all_theme_names();
+        let current_idx = current_theme_index();
 
         let mut state = ListState::default();
         state.select(Some(current_idx));
 
         ThemeSelector {
             state,
-            themes,
+            theme_names,
             last_popup_area: None,
         }
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        let popup_area = centered_rect(40, 30, area);
+        let popup_area = centered_rect(40, 50, area);
         self.last_popup_area = Some(popup_area);
 
         f.render_widget(Clear, popup_area);
 
         let palette = current_theme();
+        let current_idx = current_theme_index();
 
         let items: Vec<ListItem> = self
-            .themes
+            .theme_names
             .iter()
-            .map(|theme| {
-                let is_current = *theme == current_theme_id();
+            .enumerate()
+            .map(|(idx, name)| {
+                let is_current = idx == current_idx;
                 let marker = if is_current { " (current)" } else { "" };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(theme.name(), Style::default().fg(palette.base_06)),
+                    Span::styled(name, Style::default().fg(palette.base_06)),
                     Span::styled(marker, Style::default().fg(palette.base_03)),
                 ]))
             })
@@ -87,7 +86,7 @@ impl ThemeSelector {
     fn next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.themes.len() - 1 {
+                if i >= self.theme_names.len() - 1 {
                     0
                 } else {
                     i + 1
@@ -102,7 +101,7 @@ impl ThemeSelector {
         let i = match self.state.selected() {
             Some(i) => {
                 if i == 0 {
-                    self.themes.len().saturating_sub(1)
+                    self.theme_names.len().saturating_sub(1)
                 } else {
                     i - 1
                 }
@@ -114,11 +113,9 @@ impl ThemeSelector {
 
     fn apply_selected_theme(&self) -> bool {
         if let Some(idx) = self.state.selected() {
-            if let Some(&theme) = self.themes.get(idx) {
-                if theme != current_theme_id() {
-                    set_theme(theme);
-                    return true;
-                }
+            if idx != current_theme_index() {
+                set_theme_by_index(idx);
+                return true;
             }
         }
         false
@@ -135,7 +132,7 @@ impl ThemeSelector {
                 let offset = self.state.offset();
                 let new_index = offset + relative_y as usize;
 
-                if new_index < self.themes.len() {
+                if new_index < self.theme_names.len() {
                     self.state.select(Some(new_index));
                     return true;
                 }
@@ -216,7 +213,7 @@ impl VimNavMotions for ThemeSelector {
     fn handle_ctrl_d(&mut self) {
         for _ in 0..5 {
             let current = self.state.selected().unwrap_or(0);
-            if current < self.themes.len() - 1 {
+            if current < self.theme_names.len() - 1 {
                 self.next();
             } else {
                 break;
@@ -236,14 +233,14 @@ impl VimNavMotions for ThemeSelector {
     }
 
     fn handle_gg(&mut self) {
-        if !self.themes.is_empty() {
+        if !self.theme_names.is_empty() {
             self.state.select(Some(0));
         }
     }
 
     fn handle_upper_g(&mut self) {
-        if !self.themes.is_empty() {
-            self.state.select(Some(self.themes.len() - 1));
+        if !self.theme_names.is_empty() {
+            self.state.select(Some(self.theme_names.len() - 1));
         }
     }
 }

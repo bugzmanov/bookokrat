@@ -1,0 +1,91 @@
+# Bookokrat Custom Theme Template
+# ================================
+# Copy this file and rename it to create your own theme.
+# All custom themes in the themes/ directory will be automatically loaded.
+#
+# Color format: 6-digit hex without '#' prefix (e.g., "1F1F28")
+# You can find Base16 themes at: https://github.com/tinted-theming/schemes
+
+# Theme name displayed in the selector
+scheme: "My Custom Theme"
+
+# Theme author (optional)
+author: "Your Name"
+
+# ============================================================================
+# Background colors (base00-base02)
+# ============================================================================
+
+# base00: Main background color
+# Used for: main window background, content area background
+base00: "1F1F28"
+
+# base01: Lighter background
+# Used for: status bars, line numbers, panel backgrounds
+base01: "2A2A37"
+
+# base02: Selection background
+# Used for: text selection, highlighted lines, cursor line
+base02: "223249"
+
+# ============================================================================
+# Foreground colors (base03-base07)
+# ============================================================================
+
+# base03: Comments and invisibles
+# Used for: muted text, comments, line numbers, disabled items
+base03: "727169"
+
+# base04: Dark foreground
+# Used for: status bar text, secondary text, borders
+base04: "C8C093"
+
+# base05: Default foreground
+# Used for: main text, normal content
+base05: "DCD7BA"
+
+# base06: Light foreground
+# Used for: emphasized text, headings, bright content
+# NOTE: Should be readable - avoid muted/accent colors here
+base06: "DCD7BA"
+
+# base07: Brightest text
+# Used for: titles, focused panel text, maximum emphasis
+# NOTE: Should be the brightest readable text color
+base07: "E6E0C2"
+
+# ============================================================================
+# Accent colors (base08-base0F)
+# ============================================================================
+
+# base08: Red
+# Used for: errors, deletions, warnings
+base08: "C34043"
+
+# base09: Orange
+# Used for: constants, numbers, special values
+base09: "FFA066"
+
+# base0A: Yellow
+# Used for: classes, search highlights, warnings
+base0A: "DCA561"
+
+# base0B: Green
+# Used for: strings, success messages, additions
+base0B: "98BB6C"
+
+# base0C: Cyan
+# Used for: escape characters, regex, special strings
+base0C: "7FB4CA"
+
+# base0D: Blue
+# Used for: functions, methods, links
+base0D: "7E9CD8"
+
+# base0E: Purple/Magenta
+# Used for: keywords, tags, annotations
+base0E: "957FB8"
+
+# base0F: Brown/Pink
+# Used for: deprecated, special punctuation
+base0F: "D27E99"
