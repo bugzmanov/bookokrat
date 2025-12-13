@@ -1,10 +1,8 @@
 use crate::color_mode::smart_color;
+use crate::settings::{self, YamlTheme};
 use log::{debug, warn};
 use once_cell::sync::Lazy;
 use ratatui::style::Color;
-use serde::Deserialize;
-use std::fs;
-use std::path::Path;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -28,36 +26,6 @@ pub struct Base16Palette {
     pub base_0d: Color, // Blue
     pub base_0e: Color, // Purple
     pub base_0f: Color, // Brown
-}
-
-// YAML theme file structure
-#[derive(Deserialize)]
-struct YamlTheme {
-    scheme: String,
-    #[allow(dead_code)]
-    author: Option<String>,
-    base00: String,
-    base01: String,
-    base02: String,
-    base03: String,
-    base04: String,
-    base05: String,
-    base06: String,
-    base07: String,
-    base08: String,
-    base09: String,
-    #[serde(alias = "base0A")]
-    base0a: String,
-    #[serde(alias = "base0B")]
-    base0b: String,
-    #[serde(alias = "base0C")]
-    base0c: String,
-    #[serde(alias = "base0D")]
-    base0d: String,
-    #[serde(alias = "base0E")]
-    base0e: String,
-    #[serde(alias = "base0F")]
-    base0f: String,
 }
 
 // Named theme with palette
@@ -110,38 +78,20 @@ impl BuiltinTheme {
 static CUSTOM_THEMES: Lazy<RwLock<Vec<Theme>>> = Lazy::new(|| RwLock::new(Vec::new()));
 static CURRENT_THEME_INDEX: AtomicUsize = AtomicUsize::new(0);
 
-/// Initialize and load custom themes from the themes/ directory
+/// Load custom themes from settings and apply saved theme selection
 pub fn load_custom_themes() {
-    let themes_dir = Path::new("themes");
-    if !themes_dir.exists() {
-        debug!("No themes/ directory found, using built-in themes only");
-        return;
-    }
-
-    let entries = match fs::read_dir(themes_dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            warn!("Failed to read themes/ directory: {}", e);
-            return;
-        }
-    };
+    let yaml_themes = settings::get_custom_themes();
 
     let mut custom_themes = Vec::new();
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|ext| ext == "yaml" || ext == "yml")
-        {
-            match load_theme_from_file(&path) {
-                Ok(theme) => {
-                    debug!("Loaded custom theme: {}", theme.name);
-                    custom_themes.push(theme);
-                }
-                Err(e) => {
-                    warn!("Failed to load theme from {:?}: {}", path, e);
-                }
+    for yaml in yaml_themes {
+        match theme_from_yaml(&yaml) {
+            Ok(theme) => {
+                debug!("Loaded custom theme: {}", theme.name);
+                custom_themes.push(theme);
+            }
+            Err(e) => {
+                warn!("Failed to load custom theme '{}': {}", yaml.scheme, e);
             }
         }
     }
@@ -152,12 +102,18 @@ pub fn load_custom_themes() {
     if let Ok(mut themes) = CUSTOM_THEMES.write() {
         *themes = custom_themes;
     }
+
+    // Apply saved theme from settings
+    let saved_theme = settings::get_theme_name();
+    if let Some(index) = get_theme_index_by_name(&saved_theme) {
+        CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
+        debug!("Applied saved theme: {}", saved_theme);
+    } else {
+        warn!("Saved theme '{}' not found, using default", saved_theme);
+    }
 }
 
-fn load_theme_from_file(path: &Path) -> Result<Theme, String> {
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let yaml: YamlTheme = serde_yaml::from_str(&content).map_err(|e| e.to_string())?;
-
+fn theme_from_yaml(yaml: &YamlTheme) -> Result<Theme, String> {
     let palette = Base16Palette {
         base_00: parse_hex_color(&yaml.base00)?,
         base_01: parse_hex_color(&yaml.base01)?,
@@ -178,7 +134,7 @@ fn load_theme_from_file(path: &Path) -> Result<Theme, String> {
     };
 
     Ok(Theme {
-        name: yaml.scheme,
+        name: yaml.scheme.clone(),
         palette,
         is_builtin: false,
     })
@@ -233,6 +189,49 @@ pub fn current_theme_index() -> usize {
 pub fn set_theme_by_index(index: usize) {
     if index < theme_count() {
         CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
+    }
+}
+
+/// Get theme index by name
+pub fn get_theme_index_by_name(name: &str) -> Option<usize> {
+    let builtin_count = BuiltinTheme::all().len();
+
+    // Check built-in themes
+    for (i, theme) in BuiltinTheme::all().iter().enumerate() {
+        if theme.name() == name {
+            return Some(i);
+        }
+    }
+
+    // Check custom themes
+    if let Ok(custom) = CUSTOM_THEMES.read() {
+        for (i, theme) in custom.iter().enumerate() {
+            if theme.name == name {
+                return Some(builtin_count + i);
+            }
+        }
+    }
+
+    None
+}
+
+/// Set theme by name and save to settings
+pub fn set_theme_by_name(name: &str) -> bool {
+    if let Some(index) = get_theme_index_by_name(name) {
+        CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
+        settings::set_theme_name(name);
+        true
+    } else {
+        false
+    }
+}
+
+/// Set theme by index and save to settings
+pub fn set_theme_by_index_and_save(index: usize) {
+    if index < theme_count() {
+        CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
+        let name = theme_name(index);
+        settings::set_theme_name(&name);
     }
 }
 

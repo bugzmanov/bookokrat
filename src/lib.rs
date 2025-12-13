@@ -26,6 +26,7 @@ pub mod panic_handler;
 pub mod parsing;
 pub mod search;
 pub mod search_engine;
+pub mod settings;
 pub mod system_command;
 pub use components::table;
 pub mod theme;

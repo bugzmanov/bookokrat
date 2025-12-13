@@ -14,6 +14,7 @@ use simplelog::{LevelFilter, WriteLogger};
 use bookokrat::event_source::KeyboardEventSource;
 use bookokrat::main_app::{App, run_app_with_event_source};
 use bookokrat::panic_handler;
+use bookokrat::settings;
 use bookokrat::theme::load_custom_themes;
 
 fn main() -> Result<()> {
@@ -40,7 +41,10 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Load custom themes from themes/ directory
+    // Load settings from ~/.bookokrat_settings.yaml
+    settings::load_settings();
+
+    // Load custom themes from settings and apply saved theme
     load_custom_themes();
 
     // Create app and run it

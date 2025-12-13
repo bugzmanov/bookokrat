@@ -1,6 +1,8 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
-use crate::theme::{all_theme_names, current_theme, current_theme_index, set_theme_by_index};
+use crate::theme::{
+    all_theme_names, current_theme, current_theme_index, set_theme_by_index_and_save,
+};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -114,7 +116,7 @@ impl ThemeSelector {
     fn apply_selected_theme(&self) -> bool {
         if let Some(idx) = self.state.selected() {
             if idx != current_theme_index() {
-                set_theme_by_index(idx);
+                set_theme_by_index_and_save(idx);
                 return true;
             }
         }
