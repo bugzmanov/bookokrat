@@ -1,6 +1,6 @@
 # Bookokrat
 
-Bookokrat is a terminal-based EPUB reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, and inline annotations.
+Bookokrat is a terminal-based EPUB reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, inline annotations, and customizable themes.
 
 ## Demo
 
@@ -12,6 +12,7 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 - Search inside the current chapter or across the whole book, jump through a per-book history, and inspect reading statistics.
 - Highlight text, attach comments, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
+- Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
 
 ## Keyboard Reference
 
@@ -21,6 +22,10 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `q` - Quit application
 - `Tab` - Switch focus between library/TOC and content panels
 - `Esc` - Clear selection/search or dismiss popups
+- `Ctrl+z` - Toggle zen mode (hide sidebar/status bar)
+- `?` - Show help screen
+- `Space+t` - Open theme selector
+- `+` / `-` - Increase/decrease content margins
 
 ### Navigation (Vim-style)
 - `j/k` - Move down/up (works in all lists and reader)
@@ -56,6 +61,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 ### Popups & External Actions
 - `Space+h` - Toggle reading history popup
 - `Space+d` - Show book statistics popup
+- `Space+a` - Open comments/annotations viewer
 - `Space+o` - Open current book in OS viewer
 - `Enter` - Open image popup (when on image) or activate popup selection
 
