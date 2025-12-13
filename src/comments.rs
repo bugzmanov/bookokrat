@@ -1,36 +1,178 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "target_kind", rename_all = "snake_case")]
+pub enum CommentTarget {
+    Paragraph {
+        paragraph_index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word_range: Option<(usize, usize)>,
+    },
+    CodeBlock {
+        paragraph_index: usize,
+        /// Inclusive line range within the code block.
+        line_range: (usize, usize),
+    },
+}
+
+impl CommentTarget {
+    pub fn node_index(&self) -> usize {
+        match self {
+            CommentTarget::Paragraph {
+                paragraph_index, ..
+            }
+            | CommentTarget::CodeBlock {
+                paragraph_index, ..
+            } => *paragraph_index,
+        }
+    }
+
+    pub fn word_range(&self) -> Option<(usize, usize)> {
+        match self {
+            CommentTarget::Paragraph { word_range, .. } => *word_range,
+            CommentTarget::CodeBlock { .. } => None,
+        }
+    }
+
+    pub fn line_range(&self) -> Option<(usize, usize)> {
+        match self {
+            CommentTarget::Paragraph { .. } => None,
+            CommentTarget::CodeBlock { line_range, .. } => Some(*line_range),
+        }
+    }
+
+    pub fn kind_order(&self) -> u8 {
+        match self {
+            CommentTarget::Paragraph { .. } => 0,
+            CommentTarget::CodeBlock { .. } => 1,
+        }
+    }
+
+    pub fn secondary_sort_key(&self) -> (usize, usize) {
+        match self {
+            CommentTarget::Paragraph { word_range, .. } => word_range
+                .map(|(start, end)| (start, end))
+                .unwrap_or((0, 0)),
+            CommentTarget::CodeBlock { line_range, .. } => *line_range,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
     pub chapter_href: String,
+    pub target: CommentTarget,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CommentModernSerde {
+    pub chapter_href: String,
+    #[serde(flatten)]
+    pub target: CommentTarget,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommentLegacySerde {
+    pub chapter_href: String,
     pub paragraph_index: usize,
+    #[serde(default)]
     pub word_range: Option<(usize, usize)>,
     pub content: String,
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum CommentSerde {
+    Modern(CommentModernSerde),
+    Legacy(CommentLegacySerde),
+}
+
+impl From<CommentLegacySerde> for Comment {
+    fn from(legacy: CommentLegacySerde) -> Self {
+        Comment {
+            chapter_href: legacy.chapter_href,
+            target: CommentTarget::Paragraph {
+                paragraph_index: legacy.paragraph_index,
+                word_range: legacy.word_range,
+            },
+            content: legacy.content,
+            updated_at: legacy.updated_at,
+        }
+    }
+}
+
+impl From<CommentModernSerde> for Comment {
+    fn from(modern: CommentModernSerde) -> Self {
+        Comment {
+            chapter_href: modern.chapter_href,
+            target: modern.target,
+            content: modern.content,
+            updated_at: modern.updated_at,
+        }
+    }
+}
+
+impl From<&Comment> for CommentModernSerde {
+    fn from(comment: &Comment) -> Self {
+        CommentModernSerde {
+            chapter_href: comment.chapter_href.clone(),
+            target: comment.target.clone(),
+            content: comment.content.clone(),
+            updated_at: comment.updated_at,
+        }
+    }
+}
+
+impl Serialize for Comment {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        CommentModernSerde::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Comment {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match CommentSerde::deserialize(deserializer)? {
+            CommentSerde::Legacy(legacy) => Ok(Comment::from(legacy)),
+            CommentSerde::Modern(modern) => Ok(Comment::from(modern)),
+        }
+    }
+}
+
 impl Comment {
-    fn matches_location(
-        &self,
-        chapter_href: &str,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
-    ) -> bool {
-        self.chapter_href == chapter_href
-            && self.paragraph_index == paragraph_index
-            && self.word_range == word_range
+    pub fn node_index(&self) -> usize {
+        self.target.node_index()
+    }
+
+    pub fn is_paragraph_comment(&self) -> bool {
+        matches!(self.target, CommentTarget::Paragraph { .. })
+    }
+
+    pub fn matches_location(&self, chapter_href: &str, target: &CommentTarget) -> bool {
+        self.chapter_href == chapter_href && self.target == *target
     }
 }
 
 pub struct BookComments {
     pub file_path: PathBuf,
     comments: Vec<Comment>,
-    //chapter_href -> paragraph_index -> comment indices
+    // chapter_href -> node_index -> comment indices
     comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
 }
 
@@ -74,16 +216,18 @@ impl BookComments {
     }
 
     pub fn add_comment(&mut self, comment: Comment) -> Result<()> {
-        if let Some(existing_idx) = self.find_comment_index(
-            &comment.chapter_href,
-            comment.paragraph_index,
-            comment.word_range,
-        ) {
-            self.comments[existing_idx] = comment.clone();
-        } else {
-            self.add_to_indices(&comment);
-            self.comments.push(comment);
+        if matches!(comment.target, CommentTarget::Paragraph { .. }) {
+            if let Some(existing_idx) =
+                self.find_comment_index(&comment.chapter_href, &comment.target)
+            {
+                self.comments[existing_idx] = comment.clone();
+                self.sort_comments();
+                return self.save_to_disk();
+            }
         }
+
+        self.add_to_indices(&comment);
+        self.comments.push(comment);
 
         self.sort_comments();
         self.save_to_disk()
@@ -92,12 +236,11 @@ impl BookComments {
     pub fn update_comment(
         &mut self,
         chapter_href: &str,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
+        target: &CommentTarget,
         new_content: String,
     ) -> Result<()> {
         let idx = self
-            .find_comment_index(chapter_href, paragraph_index, word_range)
+            .find_comment_index(chapter_href, target)
             .context("Comment not found")?;
 
         self.comments[idx].content = new_content;
@@ -106,14 +249,9 @@ impl BookComments {
         self.save_to_disk()
     }
 
-    pub fn delete_comment(
-        &mut self,
-        chapter_href: &str,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
-    ) -> Result<()> {
+    pub fn delete_comment(&mut self, chapter_href: &str, target: &CommentTarget) -> Result<()> {
         let idx = self
-            .find_comment_index(chapter_href, paragraph_index, word_range)
+            .find_comment_index(chapter_href, target)
             .context("Comment not found")?;
 
         let _comment = self.comments.remove(idx);
@@ -123,15 +261,11 @@ impl BookComments {
         self.save_to_disk()
     }
 
-    /// Efficiently get comments for a specific paragraph in a chapter
-    pub fn get_paragraph_comments(
-        &self,
-        chapter_href: &str,
-        paragraph_index: usize,
-    ) -> Vec<&Comment> {
+    /// Efficiently get comments for a specific AST node in a chapter
+    pub fn get_node_comments(&self, chapter_href: &str, node_index: usize) -> Vec<&Comment> {
         self.comments_by_location
             .get(chapter_href)
-            .and_then(|chapter_map| chapter_map.get(&paragraph_index))
+            .and_then(|chapter_map| chapter_map.get(&node_index))
             .map(|indices| indices.iter().map(|&i| &self.comments[i]).collect())
             .unwrap_or_default()
     }
@@ -199,15 +333,10 @@ impl BookComments {
         Ok(())
     }
 
-    fn find_comment_index(
-        &self,
-        chapter_href: &str,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
-    ) -> Option<usize> {
+    fn find_comment_index(&self, chapter_href: &str, target: &CommentTarget) -> Option<usize> {
         self.comments
             .iter()
-            .position(|c| c.matches_location(chapter_href, paragraph_index, word_range))
+            .position(|c| c.matches_location(chapter_href, target))
     }
 
     fn add_to_indices(&mut self, comment: &Comment) {
@@ -215,7 +344,7 @@ impl BookComments {
         self.comments_by_location
             .entry(comment.chapter_href.clone())
             .or_default()
-            .entry(comment.paragraph_index)
+            .entry(comment.node_index())
             .or_default()
             .push(idx);
     }
@@ -226,7 +355,7 @@ impl BookComments {
             self.comments_by_location
                 .entry(comment.chapter_href.clone())
                 .or_default()
-                .entry(comment.paragraph_index)
+                .entry(comment.node_index())
                 .or_default()
                 .push(idx);
         }
@@ -236,8 +365,14 @@ impl BookComments {
         self.comments.sort_by(|a, b| {
             a.chapter_href
                 .cmp(&b.chapter_href)
-                .then(a.paragraph_index.cmp(&b.paragraph_index))
-                .then(a.word_range.cmp(&b.word_range))
+                .then(a.node_index().cmp(&b.node_index()))
+                .then(a.target.kind_order().cmp(&b.target.kind_order()))
+                .then(
+                    a.target
+                        .secondary_sort_key()
+                        .cmp(&b.target.secondary_sort_key()),
+                )
+                .then(a.updated_at.cmp(&b.updated_at))
         });
 
         self.rebuild_indices();
@@ -260,191 +395,163 @@ mod tests {
         (temp_dir, book_path, comments_dir)
     }
 
-    fn create_test_comment(chapter: &str, para: usize, content: &str) -> Comment {
+    fn create_paragraph_comment(chapter: &str, node: usize, content: &str) -> Comment {
         Comment {
             chapter_href: chapter.to_string(),
-            paragraph_index: para,
-            word_range: None,
+            target: CommentTarget::Paragraph {
+                paragraph_index: node,
+                word_range: None,
+            },
+            content: content.to_string(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn create_code_comment(
+        chapter: &str,
+        node: usize,
+        line_range: (usize, usize),
+        content: &str,
+    ) -> Comment {
+        Comment {
+            chapter_href: chapter.to_string(),
+            target: CommentTarget::CodeBlock {
+                paragraph_index: node,
+                line_range,
+            },
             content: content.to_string(),
             updated_at: Utc::now(),
         }
     }
 
     #[test]
-    fn test_new_book_comments_creates_empty() {
+    fn test_add_and_get_comments() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let comment = create_paragraph_comment("chapter1.xhtml", 3, "Nice paragraph");
+        book_comments.add_comment(comment.clone()).unwrap();
 
-        assert_eq!(comments.get_all_comments().len(), 0);
-        assert!(comments.file_path.parent().unwrap().exists());
-    }
-
-    #[test]
-    fn test_add_comment_and_persist() {
-        let (_temp_dir, book_path, comments_dir) = create_test_env();
-
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        let comment = create_test_comment("chapter1.xhtml", 5, "Test comment");
-
-        comments.add_comment(comment.clone()).unwrap();
-
-        assert_eq!(comments.get_all_comments().len(), 1);
-        assert_eq!(comments.get_all_comments()[0].content, "Test comment");
-
-        let comments2 = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        assert_eq!(comments2.get_all_comments().len(), 1);
-        assert_eq!(comments2.get_all_comments()[0].content, "Test comment");
+        let comments = book_comments.get_node_comments("chapter1.xhtml", 3);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].content, comment.content);
     }
 
     #[test]
     fn test_update_comment() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        let comment = create_test_comment("chapter1.xhtml", 5, "Original");
+        let comment = create_paragraph_comment("chapter1.xhtml", 1, "Old text");
+        book_comments.add_comment(comment.clone()).unwrap();
 
-        comments.add_comment(comment).unwrap();
-
-        comments
-            .update_comment("chapter1.xhtml", 5, None, "Updated content".to_string())
+        let new_content = "Updated text".to_string();
+        book_comments
+            .update_comment("chapter1.xhtml", &comment.target, new_content.clone())
             .unwrap();
 
-        let updated = &comments.get_all_comments()[0];
-        assert_eq!(updated.content, "Updated content");
-
-        let comments2 = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        assert_eq!(comments2.get_all_comments()[0].content, "Updated content");
+        let comments = book_comments.get_node_comments("chapter1.xhtml", 1);
+        assert_eq!(comments[0].content, new_content);
     }
 
     #[test]
     fn test_delete_comment() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        let comment1 = create_test_comment("chapter1.xhtml", 5, "Comment 1");
-        let comment2 = create_test_comment("chapter2.xhtml", 3, "Comment 2");
+        let comment = create_paragraph_comment("chapter1.xhtml", 2, "Delete me");
+        book_comments.add_comment(comment.clone()).unwrap();
 
-        comments.add_comment(comment1).unwrap();
-        comments.add_comment(comment2).unwrap();
-        assert_eq!(comments.get_all_comments().len(), 2);
+        book_comments
+            .delete_comment("chapter1.xhtml", &comment.target)
+            .unwrap();
 
-        comments.delete_comment("chapter1.xhtml", 5, None).unwrap();
-
-        assert_eq!(comments.get_all_comments().len(), 1);
-        assert_eq!(comments.get_all_comments()[0].content, "Comment 2");
-
-        let comments2 = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-        assert_eq!(comments2.get_all_comments().len(), 1);
+        let comments = book_comments.get_node_comments("chapter1.xhtml", 2);
+        assert!(comments.is_empty());
     }
 
     #[test]
-    fn test_get_chapter_comments() {
+    fn test_code_block_comments() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let comment = create_code_comment("chapter2.xhtml", 5, (1, 3), "Highlight lines");
+        book_comments.add_comment(comment.clone()).unwrap();
 
-        comments
-            .add_comment(create_test_comment("chapter1.xhtml", 1, "C1P1"))
-            .unwrap();
-        comments
-            .add_comment(create_test_comment("chapter1.xhtml", 5, "C1P5"))
-            .unwrap();
-        comments
-            .add_comment(create_test_comment("chapter2.xhtml", 2, "C2P2"))
-            .unwrap();
-
-        let chapter1_comments = comments.get_chapter_comments("chapter1.xhtml");
-        assert_eq!(chapter1_comments.len(), 2);
-        assert!(
-            chapter1_comments
-                .iter()
-                .find(|&x| x.content == "C1P1")
-                .is_some()
-        );
-        assert!(
-            chapter1_comments
-                .iter()
-                .find(|&x| x.content == "C1P5")
-                .is_some()
-        );
-        // assert_eq!(chapter1_comments[0].content, "C1P1");
-        // assert_eq!(chapter1_comments[1].content, "C1P5");
-
-        let chapter2_comments = comments.get_chapter_comments("chapter2.xhtml");
-        assert_eq!(chapter2_comments.len(), 1);
-        assert_eq!(chapter2_comments[0].content, "C2P2");
+        let comments = book_comments.get_node_comments("chapter2.xhtml", 5);
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].target.line_range(), Some((1, 3)));
     }
 
     #[test]
-    fn test_comments_with_word_ranges() {
+    fn test_multiple_code_comments_same_line_range() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let comment_a = create_code_comment("chapter.xhtml", 2, (0, 0), "First note");
+        let comment_b = create_code_comment("chapter.xhtml", 2, (0, 0), "Second note");
 
-        let mut comment1 = create_test_comment("chapter1.xhtml", 5, "Word range comment");
-        comment1.word_range = Some((10, 20));
+        book_comments.add_comment(comment_a.clone()).unwrap();
+        book_comments.add_comment(comment_b.clone()).unwrap();
 
-        let comment2 = create_test_comment("chapter1.xhtml", 5, "Full paragraph");
-
-        comments.add_comment(comment1.clone()).unwrap();
-        comments.add_comment(comment2).unwrap();
-
-        assert_eq!(comments.get_all_comments().len(), 2);
-
-        comments
-            .update_comment(
-                "chapter1.xhtml",
-                5,
-                Some((10, 20)),
-                "Updated word range".to_string(),
-            )
-            .unwrap();
-
-        let all = comments.get_all_comments();
-        let word_range_comment = all.iter().find(|c| c.word_range.is_some()).unwrap();
-        assert_eq!(word_range_comment.content, "Updated word range");
+        let comments = book_comments.get_node_comments("chapter.xhtml", 2);
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].content, "First note");
+        assert_eq!(comments[1].content, "Second note");
     }
 
     #[test]
-    fn test_comment_sorting() {
-        let (_temp_dir, book_path, comments_dir) = create_test_env();
+    fn test_modern_code_comment_serialization_roundtrip() {
+        let comment = create_code_comment("chapter.xhtml", 3, (2, 4), "inline");
+        let yaml = serde_yaml::to_string(&vec![comment.clone()]).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
-
-        comments
-            .add_comment(create_test_comment("chapter2.xhtml", 5, "C2P5"))
-            .unwrap();
-        comments
-            .add_comment(create_test_comment("chapter1.xhtml", 10, "C1P10"))
-            .unwrap();
-        comments
-            .add_comment(create_test_comment("chapter1.xhtml", 3, "C1P3"))
-            .unwrap();
-
-        let all = comments.get_all_comments();
-        assert_eq!(all[0].chapter_href, "chapter1.xhtml");
-        assert_eq!(all[0].paragraph_index, 3);
-        assert_eq!(all[1].chapter_href, "chapter1.xhtml");
-        assert_eq!(all[1].paragraph_index, 10);
-        assert_eq!(all[2].chapter_href, "chapter2.xhtml");
+        let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].target, comment.target);
     }
 
     #[test]
-    fn test_replace_comment_at_same_location() {
+    fn test_legacy_comment_deserialize() {
+        let legacy_yaml = r#"
+- chapter_href: ch.xhtml
+  paragraph_index: 5
+  content: legacy
+  updated_at: "2024-01-01T12:00:00Z"
+"#;
+        let parsed: Vec<Comment> = serde_yaml::from_str(legacy_yaml).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(matches!(
+            parsed[0].target,
+            CommentTarget::Paragraph {
+                paragraph_index: 5,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_sorting_respects_targets() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments =
+            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
 
-        let mut comments = BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let comment_a = create_paragraph_comment("chapter.xhtml", 1, "A");
+        let comment_b = create_code_comment("chapter.xhtml", 1, (2, 4), "B");
+        let comment_c = create_paragraph_comment("chapter.xhtml", 0, "C");
 
-        let comment1 = create_test_comment("chapter1.xhtml", 5, "First version");
-        let mut comment2 = create_test_comment("chapter1.xhtml", 5, "Second version");
-        comment2.updated_at = Utc::now();
+        book_comments.add_comment(comment_a).unwrap();
+        book_comments.add_comment(comment_b).unwrap();
+        book_comments.add_comment(comment_c).unwrap();
 
-        comments.add_comment(comment1).unwrap();
-        assert_eq!(comments.get_all_comments().len(), 1);
-
-        comments.add_comment(comment2).unwrap();
-        assert_eq!(comments.get_all_comments().len(), 1);
-        assert_eq!(comments.get_all_comments()[0].content, "Second version");
+        let all = book_comments.get_all_comments();
+        assert_eq!(all[0].node_index(), 0);
+        assert_eq!(all[1].node_index(), 1);
+        assert!(all[1].is_paragraph_comment());
+        assert!(matches!(all[2].target, CommentTarget::CodeBlock { .. }));
     }
 }

@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::comments::{Comment, CommentTarget};
 use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
@@ -194,6 +195,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_focused,
                     indent,
                     Self::last_line_has_content(lines),
+                    node_index,
                 );
             }
 
@@ -377,6 +379,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             });
 
             self.raw_text_lines.push(wrapped_line.to_string());
@@ -404,6 +408,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             });
 
             self.raw_text_lines.push(decoration);
@@ -418,6 +424,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -436,6 +444,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         context: RenderContext,
     ) {
+        let _paragraph_lines_start = lines.len();
         if context == RenderContext::InsideContainer {
             let has_visible_content = content.iter().any(|item| match item {
                 TextOrInline::Text(t) => !t.content.trim().is_empty(),
@@ -467,6 +476,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             width,
                             indent,
                             false, // don't add empty line after
+                            node_index,
                         );
                         current_rich_spans.clear();
                     }
@@ -494,6 +504,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 width,
                 indent,
                 add_empty_line,
+                node_index,
             );
         } else if !has_content {
             // Empty paragraph - just add an empty line
@@ -504,10 +515,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
         }
+
+        let _paragraph_lines_end = lines.len();
 
         if let Some(node_idx) = node_index {
             let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
@@ -668,11 +683,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         content: &str,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
-        _width: usize, //todo: not supported yet
+        width: usize,
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
         add_spacing_before: bool,
+        node_index: Option<usize>,
     ) {
         // TODO: Implement syntax highlighting if language is provided
         if add_spacing_before {
@@ -682,9 +698,38 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         let indent_str = "  ".repeat(indent);
-        let code_lines: Vec<&str> = content.lines().collect();
+        let code_lines: Vec<&str> = if content.is_empty() {
+            vec![""]
+        } else {
+            content.lines().collect()
+        };
+        let total_code_lines = code_lines.len();
 
-        for code_line in code_lines {
+        let mut coverage_counts = vec![0usize; total_code_lines];
+        let mut inline_comments: Vec<Vec<Comment>> = vec![Vec::new(); total_code_lines];
+
+        if let Some(node_idx) = node_index {
+            if let Some(node_comments) = self.current_chapter_comments.get(&node_idx) {
+                for comment in node_comments {
+                    if let CommentTarget::CodeBlock { line_range, .. } = comment.target {
+                        if total_code_lines == 0 {
+                            continue;
+                        }
+                        let mut start = line_range.0.min(total_code_lines.saturating_sub(1));
+                        let mut end = line_range.1.min(total_code_lines.saturating_sub(1));
+                        if end < start {
+                            std::mem::swap(&mut start, &mut end);
+                        }
+                        for idx in start..=end {
+                            coverage_counts[idx] = coverage_counts[idx].saturating_add(1);
+                        }
+                        inline_comments[end].push(comment.clone());
+                    }
+                }
+            }
+        }
+
+        for (line_idx, code_line) in code_lines.iter().enumerate() {
             let mut spans = Vec::new();
             let mut display_text = String::new();
 
@@ -693,21 +738,102 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 display_text.push_str(&indent_str);
             }
 
-            let styled_span = Span::styled(
-                code_line.to_string(),
-                RatatuiStyle::default()
-                    .fg(if is_focused {
-                        palette.base_0b
-                    } else {
-                        palette.base_03
-                    })
-                    .bg(palette.base_00),
-            );
+            let mut style = RatatuiStyle::default().fg(if is_focused {
+                palette.base_0b
+            } else {
+                palette.base_03
+            });
+            style = style.bg(palette.base_00);
+
+            if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
+                style = style.bg(palette.base_01);
+            }
+
+            let styled_span = Span::styled(code_line.to_string(), style);
 
             display_text.push_str(code_line);
             spans.push(styled_span);
 
-            lines.push(RenderedLine {
+            let mut single_line_comments: Vec<Comment> = Vec::new();
+            let mut multi_line_comments: Vec<Comment> = Vec::new();
+            if let Some(comments) = inline_comments.get(line_idx) {
+                for comment in comments {
+                    if let CommentTarget::CodeBlock { line_range, .. } = comment.target {
+                        let single_line_range = line_range.0 == line_range.1;
+                        let comment_body = comment.content.trim_end_matches(['\n', '\r']);
+                        let multiline_text = comment_body.contains('\n');
+
+                        if single_line_range && !multiline_text {
+                            single_line_comments.push(comment.clone());
+                        } else {
+                            multi_line_comments.push(comment.clone());
+                        }
+                    }
+                }
+            }
+
+            let mut inline_fragments = Vec::new();
+
+            if !single_line_comments.is_empty() {
+                let comment_style = RatatuiStyle::default().fg(palette.base_0e);
+                let mut appended_chars = display_text.chars().count();
+
+                for (idx, comment) in single_line_comments.into_iter().enumerate() {
+                    let prefix = if idx == 0 { "  ⟵ " } else { " | ⟵ " };
+                    let prefix_len = prefix.chars().count();
+                    let available_width = width.saturating_sub(appended_chars);
+
+                    let mut piece = prefix.to_string();
+                    let fragment_start = appended_chars;
+
+                    let mut comment_line = comment
+                        .content
+                        .lines()
+                        .find(|line| !line.trim().is_empty())
+                        .unwrap_or("(comment)")
+                        .trim()
+                        .to_string();
+
+                    let available_for_text = available_width.saturating_sub(prefix_len);
+                    if available_for_text == 0 {
+                        // Only room for prefix arrow
+                        appended_chars += piece.chars().count();
+                        display_text.push_str(&piece);
+                        spans.push(Span::styled(piece.clone(), comment_style));
+                        inline_fragments.push(InlineCodeCommentFragment {
+                            chapter_href: comment.chapter_href.clone(),
+                            target: comment.target.clone(),
+                            start_column: fragment_start,
+                            end_column: appended_chars,
+                        });
+                        continue;
+                    }
+
+                    if comment_line.chars().count() > available_for_text {
+                        let allowed = available_for_text.saturating_sub(1);
+                        if allowed == 0 {
+                            comment_line = "…".to_string();
+                        } else {
+                            let truncated: String = comment_line.chars().take(allowed).collect();
+                            comment_line = format!("{truncated}…");
+                        }
+                    }
+
+                    piece.push_str(&comment_line);
+                    appended_chars += piece.chars().count();
+                    display_text.push_str(&piece);
+                    spans.push(Span::styled(piece.clone(), comment_style));
+
+                    inline_fragments.push(InlineCodeCommentFragment {
+                        chapter_href: comment.chapter_href.clone(),
+                        target: comment.target.clone(),
+                        start_column: fragment_start,
+                        end_column: appended_chars,
+                    });
+                }
+            }
+
+            let rendered_line = RenderedLine {
                 spans,
                 raw_text: display_text.clone(),
                 line_type: LineType::CodeBlock {
@@ -715,11 +841,30 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
-                node_index: None,
-            });
+                node_index,
+                code_line: node_index.map(|idx| CodeLineMetadata {
+                    node_index: idx,
+                    line_index: line_idx,
+                    total_lines: total_code_lines,
+                }),
+                inline_code_comments: inline_fragments,
+            };
+
+            lines.push(rendered_line);
 
             self.raw_text_lines.push(display_text);
             *total_height += 1;
+
+            for comment in multi_line_comments {
+                self.render_inline_code_comment(
+                    &comment,
+                    lines,
+                    total_height,
+                    width,
+                    indent,
+                    palette,
+                );
+            }
         }
 
         lines.push(RenderedLine::empty());
@@ -727,6 +872,77 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
+
+    fn render_inline_code_comment(
+        &mut self,
+        comment: &Comment,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        indent: usize,
+        palette: &Base16Palette,
+    ) {
+        let indent_prefix = "  ".repeat(indent);
+        let arrow_prefix = format!("{indent_prefix}⟵ ");
+        let continuation_prefix = format!("{indent_prefix}   ");
+        let available_width = width.saturating_sub(arrow_prefix.len()).max(10);
+        let style = RatatuiStyle::default().fg(palette.base_0e);
+        let normalized_content = comment.content.trim_end_matches(['\n', '\r']).to_string();
+
+        let mut wrapped_lines = Vec::new();
+        let mut previous_blank = false;
+        if normalized_content.trim().is_empty() {
+            wrapped_lines.push("(no content)".to_string());
+        } else {
+            for raw_line in normalized_content.split('\n') {
+                let line_no_cr = raw_line.trim_end_matches('\r');
+                if line_no_cr.trim().is_empty() {
+                    if !previous_blank {
+                        wrapped_lines.push(String::new());
+                        previous_blank = true;
+                    }
+                    continue;
+                }
+
+                for seg in textwrap::wrap(line_no_cr, available_width) {
+                    wrapped_lines.push(seg.into_owned());
+                }
+                previous_blank = false;
+            }
+        }
+
+        for (idx, segment) in wrapped_lines.iter().enumerate() {
+            let prefix = if idx == 0 {
+                arrow_prefix.clone()
+            } else {
+                continuation_prefix.clone()
+            };
+            let raw_text = if segment.is_empty() {
+                prefix.clone()
+            } else {
+                format!("{prefix}{segment}")
+            };
+            lines.push(RenderedLine {
+                spans: vec![
+                    Span::styled(prefix.clone(), style),
+                    Span::styled(segment.clone(), style),
+                ],
+                raw_text: raw_text.clone(),
+                line_type: LineType::Comment {
+                    chapter_href: comment.chapter_href.clone(),
+                    target: comment.target.clone(),
+                },
+                link_nodes: vec![],
+                node_anchor: None,
+                node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
+            });
+            self.raw_text_lines.push(raw_text);
+            *total_height += 1;
+        }
+    }
+
 
     #[allow(clippy::too_many_arguments)]
     pub fn render_list(
@@ -778,6 +994,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 width,
                                 indent,
                                 false,
+                                None,
                             );
 
                             first_block_line_count = lines.len() - lines_before;
@@ -956,6 +1173,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             };
 
             lines.push(rendered_line);
@@ -992,6 +1211,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1171,6 +1392,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         width,
                         indent,
                         false, // don't add empty line after
+                        None,
                     );
                 }
                 _ => {
@@ -1219,6 +1441,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         });
 
         self.raw_text_lines.push(hr_line);
@@ -1283,6 +1507,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 width,
                 0,     // no indentation for terms
                 false, // don't add empty line after
+                None,
             );
 
             // Render each definition (dd) - as blocks with indentation
@@ -1347,6 +1572,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         });
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
@@ -1426,6 +1653,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             link_nodes: vec![],
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -1446,6 +1675,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         indent: usize,
         add_empty_line_after: bool,
+        node_index: Option<usize>,
     ) {
         let prefix_text = prefix.unwrap_or("");
         let prefix_width = prefix_text.chars().count();
@@ -1556,7 +1786,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_type: LineType::Text,
                 link_nodes: line_links, // Captured links!
                 node_anchor: None,
-                node_index: None,
+                node_index,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             });
 
             self.raw_text_lines.push(final_raw_text);
@@ -1784,6 +2016,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                code_line: None,
+                inline_code_comments: Vec::new(),
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync

@@ -983,14 +983,14 @@ impl App {
                                 if viewer.handle_mouse_click(mouse_event.column, mouse_event.row) {
                                     if let Some(entry) = viewer.selected_comment() {
                                         let chapter_href = entry.chapter_href.clone();
-                                        let paragraph_index = entry.comment.paragraph_index;
+                                        let node_index = entry.primary_comment().node_index();
                                         viewer.save_position();
                                         self.comments_viewer = None;
                                         self.close_popup_to_previous();
                                         self.set_main_panel_focus(MainPanel::Content);
 
                                         // Ensure the reader restores to the correct node after navigation
-                                        self.text_reader.restore_to_node_index(paragraph_index);
+                                        self.text_reader.restore_to_node_index(node_index);
 
                                         if let Err(e) =
                                             self.navigate_to_chapter_by_href(&chapter_href)
@@ -2499,7 +2499,7 @@ impl App {
                     }
                     CommentsViewerAction::JumpToComment {
                         chapter_href,
-                        paragraph_index,
+                        target,
                     } => {
                         if let Some(ref mut viewer) = self.comments_viewer {
                             viewer.save_position();
@@ -2508,7 +2508,7 @@ impl App {
                         self.set_main_panel_focus(MainPanel::Content);
 
                         // Set pending node restore before navigating
-                        self.text_reader.restore_to_node_index(paragraph_index);
+                        self.text_reader.restore_to_node_index(target.node_index());
 
                         if let Err(e) = self.navigate_to_chapter_by_href(&chapter_href) {
                             error!("Failed to navigate to chapter {chapter_href}: {e}");
@@ -2525,14 +2525,17 @@ impl App {
                             let comments = self.text_reader.get_comments();
                             match comments.lock() {
                                 Ok(mut guard) => {
-                                    if let Err(e) = guard.delete_comment(
-                                        &entry.chapter_href,
-                                        entry.comment.paragraph_index,
-                                        entry.comment.word_range,
-                                    ) {
-                                        error!("Failed to delete comment: {e}");
-                                        self.show_error(format!("Failed to delete comment: {e}"));
-                                    } else {
+                                    for comment in &entry.comments {
+                                        if let Err(e) = guard
+                                            .delete_comment(&entry.chapter_href, &comment.target)
+                                        {
+                                            error!("Failed to delete comment: {e}");
+                                            self.show_error(format!(
+                                                "Failed to delete comment: {e}"
+                                            ));
+                                            delete_success = false;
+                                            break;
+                                        }
                                         delete_success = true;
                                     }
                                 }
@@ -2543,15 +2546,21 @@ impl App {
                             }
 
                             if delete_success {
-                                self.text_reader.delete_comment_by_location(
-                                    &entry.chapter_href,
-                                    entry.comment.paragraph_index,
-                                    entry.comment.word_range,
-                                );
+                                for comment in &entry.comments {
+                                    self.text_reader.delete_comment_by_location(
+                                        &entry.chapter_href,
+                                        &comment.target,
+                                    );
+                                }
                                 if let Some(ref mut viewer) = self.comments_viewer {
                                     viewer.remove_selected_comment();
                                 }
-                                self.show_info("Comment deleted");
+                                let msg = if entry.comments.len() > 1 {
+                                    "Comments deleted"
+                                } else {
+                                    "Comment deleted"
+                                };
+                                self.show_info(msg);
                             }
                         }
                     }
