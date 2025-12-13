@@ -708,6 +708,15 @@ impl MarkdownTextReader {
         self.cache_generation += 1;
     }
 
+    pub fn set_margin(&mut self, margin: u16) {
+        self.content_margin = margin.min(20);
+        self.cache_generation += 1;
+    }
+
+    pub fn get_margin(&self) -> u16 {
+        self.content_margin
+    }
+
     pub fn invalidate_render_cache(&mut self) {
         self.cache_generation += 1;
     }

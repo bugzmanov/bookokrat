@@ -18,6 +18,7 @@ use crate::preferences::Preferences;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
 use crate::search_engine::SearchEngine;
+use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
 use crate::theme::{OCEANIC_NEXT, current_theme, current_theme_name};
@@ -295,7 +296,8 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
-        let text_reader = MarkdownTextReader::new();
+        let mut text_reader = MarkdownTextReader::new();
+        text_reader.set_margin(settings::get_margin());
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
         let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
@@ -2939,9 +2941,11 @@ impl App {
             }
             KeyCode::Char('=') => {
                 self.text_reader.increase_margin();
+                settings::set_margin(self.text_reader.get_margin());
             }
             KeyCode::Char('-') => {
                 self.text_reader.decrease_margin();
+                settings::set_margin(self.text_reader.get_margin());
             }
             _ => {}
         }
