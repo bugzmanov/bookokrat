@@ -1928,10 +1928,14 @@ impl App {
         let comments_full = "[Space+a: Comments] ";
         let history_full = "[Space+h: History] ";
         let stats_full = "[Space+d: Stats] ";
+        let theme_full = "[Space+t: Theme] ";
         let help_full = "[?: Help]";
 
-        let total_len =
-            (comments_full.len() + history_full.len() + stats_full.len() + help_full.len()) as u16;
+        let total_len = (comments_full.len()
+            + history_full.len()
+            + stats_full.len()
+            + theme_full.len()
+            + help_full.len()) as u16;
         let section_start = width.saturating_sub(total_len);
 
         let comments_start = section_start + "[".len() as u16;
@@ -1943,10 +1947,17 @@ impl App {
             + history_full.len() as u16
             + "[".len() as u16;
         let stats_end = stats_start + "Space+d: Stats".len() as u16;
+        let theme_start = section_start
+            + comments_full.len() as u16
+            + history_full.len() as u16
+            + stats_full.len() as u16
+            + "[".len() as u16;
+        let theme_end = theme_start + "Space+t: Theme".len() as u16;
         let help_start = section_start
             + comments_full.len() as u16
             + history_full.len() as u16
             + stats_full.len() as u16
+            + theme_full.len() as u16
             + "[".len() as u16;
         let help_end = help_start + "?: Help".len() as u16;
 
@@ -1999,6 +2010,15 @@ impl App {
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
                 }
             }
+            return true;
+        }
+
+        if inner_x >= theme_start && inner_x < theme_end {
+            if let FocusedPanel::Main(panel) = self.focused_panel {
+                self.previous_main_panel = panel;
+            }
+            self.theme_selector = Some(ThemeSelector::new());
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::ThemeSelector);
             return true;
         }
 
@@ -2124,6 +2144,14 @@ impl App {
             Span::raw("["),
             Span::styled(
                 "Space+d: Stats",
+                Style::default()
+                    .fg(text_color)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+            Span::raw("] "),
+            Span::raw("["),
+            Span::styled(
+                "Space+t: Theme",
                 Style::default()
                     .fg(text_color)
                     .add_modifier(Modifier::UNDERLINED),
@@ -2839,7 +2867,7 @@ impl App {
                     self.cancel_current_search();
                 }
             }
-            KeyCode::Char('=') => {
+            KeyCode::Char('=') | KeyCode::Char('+') => {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.increase_margin();
                 self.text_reader.restore_to_node_index(current_node);

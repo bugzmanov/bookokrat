@@ -37,6 +37,13 @@
     ▸ Performance profiling overlay
     ▸ Book statistics popup
 
+  [CUSTOMIZATION]
+    ▸ Multiple built-in color themes (Oceanic Next, Catppuccin, Kanagawa)
+    ▸ Custom theme support via Base16 color schemes
+    ▸ Adjustable content margins
+    ▸ Zen mode - distraction-free reading
+    ▸ Persistent settings across sessions (~/.bookokrat_settings.yaml)
+
 ===============================================================================
 
                             KEYBOARD REFERENCE CARD
@@ -48,9 +55,13 @@
 │  Ctrl+z        Toggle zen mode (hide sidebar and status bar)                │
 │  Tab           Switch focus between library and reader                      │
 │  Esc           Clear selection, exit search, dismiss popups                 │
+│  ?             Toggle this help screen                                      │
+│  Space+t       Open theme selector                                          │
+│  + / -         Increase / decrease content margins                          │
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system EPUB viewer                      │
+│  Space+a       Open comments/annotations viewer                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -132,6 +143,27 @@
 │  Esc           Close popup                                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ COMMENTS VIEWER (Space+a)                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Tab           Switch focus between chapter list and comments pane          │
+│  j / k         Navigate entries in focused pane                             │
+│  h / l         Jump to previous / next chapter (in comments pane)           │
+│  /             Search within current scope                                  │
+│  ?             Toggle global search mode (search all comments)              │
+│  Enter         Jump to comment location in reader                           │
+│  dd            Delete highlighted comment                                   │
+│  Esc           Close viewer                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ THEME SELECTOR (Space+t)                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  j / k         Navigate themes                                              │
+│  Enter         Apply selected theme                                         │
+│  Esc           Close without changing                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
 ===============================================================================
 
                                  MOUSE SUPPORT
@@ -167,9 +199,15 @@ Add notes directly to your books:
   [4] Press Esc to save the comment
   [5] Press 'd' when on a commented passage to delete it
 
+Code block annotations:
+
+  ▸ Click on a code block line to position cursor
+  ▸ Press 'a' to annotate a single line or selected range
+  ▸ Line-specific comments display next to the code
+
 Review and manage notes efficiently:
 
-  ▸ Space+a (or the Comments button) opens the two-pane comments viewer
+  ▸ Space+a opens the two-pane comments viewer
   ▸ Left pane lists chapters and comment counts; right pane shows notes
   ▸ Tab toggles focus between panes; mouse wheel scrolls the pane you hover
   ▸ h / l jump to previous / next chapter while keeping the comments focus
@@ -213,6 +251,38 @@ Comments are saved per-book and persist across sessions.
   ▸ Debug view: Press Space+s to toggle raw HTML for rendering issues
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
+  ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
+  ▸ Adjust margins: Press + or - to widen or narrow content
+  ▸ Theme switching: Press Space+t to browse and apply color themes
+
+===============================================================================
+
+                               CUSTOMIZATION
+
+  [SETTINGS FILE]
+    Bookokrat saves your preferences to ~/.bookokrat_settings.yaml:
+      • Selected theme
+      • Content margin setting
+      • Custom color themes
+
+    Settings persist across sessions and apply to all book directories.
+
+  [COLOR THEMES]
+    Built-in themes:
+      • Oceanic Next (default)
+      • Catppuccin Mocha
+      • Kanagawa
+      • Kanagawa Dragon
+
+    Add custom themes using Base16 color schemes. Edit your settings file
+    and add entries to the custom_themes section. See the commented template
+    in the settings file for the full color format.
+
+  [ZEN MODE]
+    Press Ctrl+z to toggle zen mode for distraction-free reading:
+      • Hides the sidebar (library/TOC panel)
+      • Hides the status bar
+      • Maximizes the reading area
 
 ===============================================================================
 
