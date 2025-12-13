@@ -5,7 +5,7 @@ Parses MathML expressions and generates properly positioned ASCII art.
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Error types for MathML processing
 #[derive(Debug)]
@@ -133,6 +133,24 @@ static UNICODE_SUPERSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
         (')', '⁾'),
         ('θ', 'ᶿ'),
         ('\'', '′'), // Prime symbol
+        ('⊺', 'ᵀ'),  // Transpose symbol → superscript T
+        (' ', ' '),  // Space stays as-is
+        ('*', '·'),  // Asterisk → middle dot in superscript
+    ]
+    .iter()
+    .copied()
+    .collect()
+});
+
+/// Symbols that are already superscript-sized and can be rendered inline
+static INLINE_SUPERSCRIPT_SYMBOLS: Lazy<HashSet<char>> = Lazy::new(|| {
+    [
+        '′', // Prime
+        '″', // Double prime
+        '‴', // Triple prime
+        '†', // Dagger
+        '‡', // Double dagger
+        '°', // Degree
     ]
     .iter()
     .copied()
@@ -239,13 +257,29 @@ impl MathMLParser {
             return None;
         }
 
-        // Special heuristic: for single-character common notation, use inline
-        if text.len() == 1 && matches!(text.chars().next(), Some('\'') | Some('"') | Some('*')) {
-            return Some(text.to_string());
-        }
+        // For math expressions with operators, strip spaces for cleaner output (e.g., "z * 5" → "ᶻ·⁵")
+        // For text without operators, keep spaces (e.g., "next step" → "ⁿᵉˣᵗ ˢᵗᵉᵖ")
+        let has_math_operators = text.chars().any(|c| matches!(c, '*' | '/' | '='));
+        let normalized: String = if has_math_operators {
+            text.split_whitespace().collect::<Vec<_>>().join("")
+        } else {
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
 
-        text.chars()
-            .map(|c| UNICODE_SUPERSCRIPTS.get(&c).copied())
+        normalized
+            .chars()
+            .map(|c| {
+                // First try Unicode superscript conversion
+                if let Some(&converted) = UNICODE_SUPERSCRIPTS.get(&c) {
+                    Some(converted)
+                }
+                // Then check if it's already an inline superscript symbol
+                else if INLINE_SUPERSCRIPT_SYMBOLS.contains(&c) {
+                    Some(c)
+                } else {
+                    None
+                }
+            })
             .collect::<Option<String>>()
     }
 
@@ -281,8 +315,15 @@ impl MathMLParser {
             "math" => {
                 // Process the content of math element
                 let children: Vec<_> = node.children().filter(|n| n.is_element()).collect();
-                if !children.is_empty() {
+                if children.len() == 1 {
                     self.process_element(&children[0])
+                } else if children.len() > 1 {
+                    // Multiple children - concatenate horizontally
+                    let boxes: Result<Vec<_>, _> = children
+                        .iter()
+                        .map(|child| self.process_element(child))
+                        .collect();
+                    Ok(self.horizontal_concat(boxes?))
                 } else {
                     Ok(MathBox::new(node.text().unwrap_or("")))
                 }
@@ -2073,7 +2114,7 @@ y = ─ + ─
         "#;
 
         let expected = r#"
-x' = γx₁ + (1 - γ)x₂"#
+x′ = γx₁ + (1 - γ)x₂"#
             .trim();
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected);
@@ -2349,11 +2390,10 @@ Attention(Q,K,V) =  softmax ⎜────⎟V
         "#;
 
         let expected = r#"
-      ⟋─────────────────────────
-     ╱       x² + b_c
-    ╱  ─────────────────────
-_  ╱                   z * 5
- \╱    sin(x)ᶜᵒˢ⁽ʸ⁾ + e"#;
+      ⟋───────────────────────
+    ╱      x² + b_c
+_  ╱  ───────────────────
+ \╱   sin(x)ᶜᵒˢ⁽ʸ⁾ + eᶻ·⁵"#;
 
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_eq!(result.trim(), expected.trim());
@@ -2680,5 +2720,57 @@ RMSE(𝐗,𝐲,h) =  _  ╱  ─     ∑   (h(𝐱⁽ⁱ⁾) - y⁽ⁱ⁾)²
    \╱   z - 1"#;
         let result = mathml_to_ascii(mathml, true).unwrap();
         assert_multiline_eq(result.trim_start(), expected.trim_start());
+    }
+
+    #[test]
+    fn test_transpose_symbol_inline() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <mrow>
+        <msup>
+            <mi>X</mi>
+            <mo>⊺</mo>
+        </msup>
+        <mi>X</mi>
+    </mrow>
+</math>
+        "#;
+
+        let expected = "XᵀX";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
+    }
+
+    #[test]
+    fn test_gradient_descent_superscript_with_text() {
+        let mathml = r#"
+<math xmlns="http://www.w3.org/1998/Math/MathML">
+    <msup>
+        <mi>θ</mi>
+        <mrow>
+            <mo>(</mo>
+            <mtext>next step</mtext>
+            <mo>)</mo>
+        </mrow>
+    </msup>
+    <mo>=</mo>
+    <mi>θ</mi>
+    <mo>-</mo>
+    <mi>η</mi>
+    <msub>
+        <mo>∇</mo>
+        <mi>θ</mi>
+    </msub>
+    <mo> </mo>
+    <mtext>MSE</mtext>
+    <mo>(</mo>
+    <mi>θ</mi>
+    <mo>)</mo>
+</math>
+        "#;
+
+        let expected = "θ⁽ⁿᵉˣᵗ ˢᵗᵉᵖ⁾ = θ - η∇_θ MSE(θ)";
+        let result = mathml_to_ascii(mathml, true).unwrap();
+        assert_eq!(result.trim(), expected);
     }
 }
