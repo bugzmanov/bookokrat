@@ -1,3 +1,4 @@
+use crate::comments::CommentTarget;
 use crate::ratatui_image::protocol::StatefulProtocol;
 use image::DynamicImage;
 use ratatui::text::Span;
@@ -28,6 +29,8 @@ pub struct RenderedLine {
     pub link_nodes: Vec<LinkInfo>, // Links that are visible on this line
     pub node_anchor: Option<String>, // Anchor/id from the Node if present
     pub node_index: Option<usize>, // Index of the node in the document this line belongs to
+    pub code_line: Option<CodeLineMetadata>,
+    pub inline_code_comments: Vec<InlineCodeCommentFragment>,
 }
 
 impl RenderedLine {
@@ -39,8 +42,25 @@ impl RenderedLine {
             link_nodes: Vec::new(),
             node_anchor: None,
             node_index: None,
+            code_line: None,
+            inline_code_comments: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodeLineMetadata {
+    pub node_index: usize,
+    pub line_index: usize,
+    pub total_lines: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct InlineCodeCommentFragment {
+    pub chapter_href: String,
+    pub target: CommentTarget,
+    pub start_column: usize,
+    pub end_column: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,8 +84,7 @@ pub enum LineType {
     Empty,
     Comment {
         chapter_href: String,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
+        target: CommentTarget,
     },
 }
 
@@ -194,8 +213,7 @@ pub enum CommentEditMode {
     Creating,
     Editing {
         chapter_href: String,
-        paragraph_index: usize,
-        word_range: Option<(usize, usize)>,
+        target: CommentTarget,
     },
 }
 
@@ -205,6 +223,7 @@ pub struct CommentInputState {
     pub target_node_index: Option<usize>,
     pub target_line: Option<usize>,
     pub edit_mode: Option<CommentEditMode>,
+    pub target: Option<CommentTarget>,
 }
 
 impl CommentInputState {
@@ -213,6 +232,7 @@ impl CommentInputState {
         self.target_node_index = None;
         self.target_line = None;
         self.edit_mode = None;
+        self.target = None;
     }
 
     pub fn is_active(&self) -> bool {
