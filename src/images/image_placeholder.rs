@@ -93,9 +93,9 @@ impl ImagePlaceholder {
         });
 
         // Middle lines (total_height - 2 for top/bottom borders)
-        let middle_lines = config.total_height - 2;
+        let middle_lines = config.total_height.saturating_sub(2);
         let _center_line = middle_lines / 2;
-        let status_info_line = middle_lines - 1; // Show status info on the last line before bottom border
+        let status_info_line = middle_lines.saturating_sub(1); // Show status info on the last line before bottom border
 
         for i in 0..middle_lines {
             let middle_line = if visible {

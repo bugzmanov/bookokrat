@@ -15,6 +15,30 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use std::io::{Read, Seek};
 
+/// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
+fn percent_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            result.push('%');
+            result.push_str(&hex);
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 pub struct BookStat {
     chapter_stats: Vec<ChapterStat>,
     list_state: ListState,
@@ -103,13 +127,17 @@ impl BookStat {
                 crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
                     // Find the spine index for this href
                     let current_page = epub.get_current_chapter();
+                    // URL-decode the href (NCX files may have URL-encoded paths like %27 for ')
+                    let decoded_href = percent_decode(href);
 
                     // Try to find the chapter in the spine
                     let mut spine_index = None;
                     for (idx, spine_item) in epub.spine.iter().enumerate() {
                         if let Some(resource) = epub.resources.get(&spine_item.idref) {
                             let path_str = resource.path.to_string_lossy();
-                            if path_str.ends_with(href) || href.ends_with(&*path_str) {
+                            if path_str.ends_with(&decoded_href)
+                                || decoded_href.ends_with(&*path_str)
+                            {
                                 spine_index = Some(idx);
                                 break;
                             }
@@ -128,8 +156,8 @@ impl BookStat {
                             .resources
                             .iter()
                             .find(|(_, resource)| {
-                                resource.path.to_string_lossy() == *href
-                                    || resource.path.to_string_lossy().ends_with(href)
+                                let path_str = resource.path.to_string_lossy();
+                                path_str == decoded_href || path_str.ends_with(&decoded_href)
                             })
                             .map(|(id, _)| id.clone());
 
@@ -171,13 +199,17 @@ impl BookStat {
                     if let Some(href_str) = href {
                         // For sections, we need to find the actual chapter index from the epub spine
                         let current_page = epub.get_current_chapter();
+                        // URL-decode the href (NCX files may have URL-encoded paths like %27 for ')
+                        let decoded_href = percent_decode(href_str);
 
                         // Try to find the section in the spine
                         let mut spine_index = None;
                         for (idx, spine_item) in epub.spine.iter().enumerate() {
                             if let Some(resource) = epub.resources.get(&spine_item.idref) {
                                 let path_str = resource.path.to_string_lossy();
-                                if path_str.ends_with(href_str) || href_str.ends_with(&*path_str) {
+                                if path_str.ends_with(&decoded_href)
+                                    || decoded_href.ends_with(&*path_str)
+                                {
                                     spine_index = Some(idx);
                                     break;
                                 }
@@ -197,8 +229,8 @@ impl BookStat {
                                 .resources
                                 .iter()
                                 .find(|(_, resource)| {
-                                    resource.path.to_string_lossy() == *href_str
-                                        || resource.path.to_string_lossy().ends_with(href_str)
+                                    let path_str = resource.path.to_string_lossy();
+                                    path_str == decoded_href || path_str.ends_with(&decoded_href)
                                 })
                                 .map(|(id, _)| id.clone());
 
