@@ -70,6 +70,32 @@ impl EpubBook {
     }
 }
 
+/// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
+fn percent_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '%' {
+            // Try to read two hex digits
+            let hex: String = chars.by_ref().take(2).collect();
+            if hex.len() == 2 {
+                if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                    result.push(byte as char);
+                    continue;
+                }
+            }
+            // If parsing failed, just keep the original %XX sequence
+            result.push('%');
+            result.push_str(&hex);
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     Quit,
@@ -1358,11 +1384,14 @@ impl App {
                 .trim_start_matches("OEBPS/");
 
             // Remove fragment identifiers (e.g., "#ch1", "#tit") for matching
-            if let Some(fragment_pos) = normalized.find('#') {
-                normalized[..fragment_pos].to_string()
+            let without_fragment = if let Some(fragment_pos) = normalized.find('#') {
+                &normalized[..fragment_pos]
             } else {
-                normalized.to_string()
-            }
+                normalized
+            };
+
+            // URL-decode percent-encoded characters (e.g., %27 -> ')
+            percent_decode(without_fragment)
         }
 
         let book = self.current_book.as_ref()?;
