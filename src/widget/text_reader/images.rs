@@ -66,7 +66,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                 let chapter_path = self.current_chapter_file.as_deref();
                 match book_images.get_image_size_with_context(url, chapter_path) {
-                    Some((w, h)) if w >= 64 && h >= 64 => {
+                    Some((w, h)) => {
                         let height_cells = EmbeddedImage::height_in_cells(w, h);
                         self.embedded_images.borrow_mut().insert(
                             url.clone(),
@@ -80,10 +80,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             },
                         );
                         Some((url.clone(), height_cells))
-                    }
-                    Some((w, h)) => {
-                        warn!("Ignoring small image ({w}x{h}): {url}");
-                        None
                     }
                     None => {
                         warn!("Could not get dimensions for: {url}");

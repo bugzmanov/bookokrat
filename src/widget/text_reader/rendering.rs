@@ -943,7 +943,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
-
     #[allow(clippy::too_many_arguments)]
     pub fn render_list(
         &mut self,

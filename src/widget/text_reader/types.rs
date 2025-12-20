@@ -11,8 +11,12 @@ use crate::types::LinkInfo;
 pub const IMAGE_HEIGHT_REGULAR: u16 = 15;
 /// Height for wide images (aspect ratio > 3:1) in terminal cells
 pub const IMAGE_HEIGHT_WIDE: u16 = 7;
+/// Height for small images (< 64px) in terminal cells
+pub const IMAGE_HEIGHT_SMALL: u16 = 2;
 /// Aspect ratio threshold for wide images
 pub const WIDE_IMAGE_ASPECT_RATIO: f32 = 3.0;
+/// Threshold for small images (pixels)
+pub const SMALL_IMAGE_THRESHOLD: u32 = 64;
 
 /// Pre-processed rendering structure
 pub struct RenderedContent {
@@ -140,7 +144,9 @@ impl EmbeddedImage {
     pub fn height_in_cells(width: u32, height: u32) -> u16 {
         let aspect_ratio = width as f32 / height as f32;
 
-        if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO || height < 150 {
+        if width < SMALL_IMAGE_THRESHOLD || height < SMALL_IMAGE_THRESHOLD {
+            IMAGE_HEIGHT_SMALL
+        } else if aspect_ratio > WIDE_IMAGE_ASPECT_RATIO || height < 150 {
             IMAGE_HEIGHT_WIDE
         } else {
             IMAGE_HEIGHT_REGULAR
