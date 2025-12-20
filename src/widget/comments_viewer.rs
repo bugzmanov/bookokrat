@@ -2,17 +2,17 @@ use crate::comments::{BookComments, Comment, CommentTarget};
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown::Inline;
-use crate::search::{find_matches_in_text, SearchMode, SearchState, SearchablePanel};
+use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
 use epub::doc::EpubDoc;
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     prelude::Stylize,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
