@@ -4,10 +4,12 @@ use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
 };
+use bookokrat::theme::set_theme_by_index;
 // SVG snapshot tests using snapbox
 use bookokrat::App;
 use chrono::{TimeZone, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use serial_test::{parallel, serial};
 use std::sync::Once;
 use tempfile::TempDir;
 
@@ -27,6 +29,8 @@ fn ensure_test_report_initialized() {
 }
 
 fn create_test_app_isolated() -> (App, TempDir) {
+    // Reset theme to default (index 0 = Oceanic Next) to prevent leaking from other tests
+    set_theme_by_index(0);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let app = App::new_with_config(
         Some("tests/testdata"),
@@ -152,6 +156,7 @@ fn open_comments_viewer(app: &mut App) {
 }
 
 #[test]
+#[parallel]
 fn test_fake_books_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
@@ -207,6 +212,7 @@ fn test_fake_books_file_list_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_comments_viewer_chapter_mode_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 36);
@@ -240,6 +246,7 @@ fn test_comments_viewer_chapter_mode_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_comments_viewer_global_mode_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 36);
@@ -274,6 +281,7 @@ fn test_comments_viewer_global_mode_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_content_view_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -302,6 +310,7 @@ fn test_content_view_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_content_scrolling_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -365,6 +374,7 @@ fn test_content_scrolling_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_chapter_title_normal_length_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
@@ -424,6 +434,7 @@ fn test_chapter_title_normal_length_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_chapter_title_narrow_terminal_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 24); // Narrow terminal
@@ -484,6 +495,7 @@ fn test_chapter_title_narrow_terminal_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_mouse_scroll_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
@@ -545,6 +557,7 @@ fn test_mouse_scroll_file_list_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_mouse_scroll_bounds_checking_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -613,6 +626,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_mouse_event_batching_svg() {
     use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
@@ -706,6 +720,7 @@ fn test_mouse_event_batching_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_horizontal_scroll_handling_svg() {
     use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
@@ -836,6 +851,7 @@ fn test_horizontal_scroll_handling_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_edge_case_mouse_coordinates_svg() {
     use bookokrat::event_source::{EventSource, SimulatedEventSource};
 
@@ -935,6 +951,7 @@ fn test_edge_case_mouse_coordinates_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_text_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1022,6 +1039,7 @@ fn test_text_selection_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_text_selection_with_auto_scroll_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1113,6 +1131,7 @@ fn test_text_selection_with_auto_scroll_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_continuous_auto_scroll_down_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1229,6 +1248,7 @@ fn test_continuous_auto_scroll_down_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_continuous_auto_scroll_up_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1351,6 +1371,7 @@ fn test_continuous_auto_scroll_up_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_timer_based_auto_scroll_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1478,6 +1499,7 @@ fn test_timer_based_auto_scroll_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_auto_scroll_stops_when_cursor_returns_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1594,6 +1616,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_double_click_word_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1693,6 +1716,7 @@ fn test_double_click_word_selection_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_triple_click_paragraph_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1808,6 +1832,7 @@ fn test_triple_click_paragraph_selection_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_text_selection_click_on_book_text_bug_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1896,6 +1921,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_toc_navigation_bug_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -1966,6 +1992,7 @@ fn test_toc_navigation_bug_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_toc_back_to_books_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -2003,6 +2030,7 @@ fn test_toc_back_to_books_list_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_toc_chapter_navigation_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -2042,6 +2070,7 @@ fn test_toc_chapter_navigation_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_mathml_content_rendering_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40);
@@ -2162,6 +2191,7 @@ fn test_mathml_content_rendering_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_book_reading_history_with_many_entries_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40); // Larger terminal for better visibility
@@ -2313,6 +2343,7 @@ fn test_book_reading_history_with_many_entries_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_headings_h1_to_h6_rendering_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40);
@@ -2389,6 +2420,7 @@ fn test_headings_h1_to_h6_rendering_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_table_with_links_and_linebreaks_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(140, 50);
@@ -2498,6 +2530,7 @@ fn test_table_with_links_and_linebreaks_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_basic_markdown_elements_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 80);
@@ -2666,6 +2699,7 @@ fetchData('https://api.example.com/data')
 }
 
 #[test]
+#[parallel]
 fn test_epub_type_attributes_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -2741,6 +2775,7 @@ fn test_epub_type_attributes_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_complex_table_with_code_and_linebreaks_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(140, 50);
@@ -2831,6 +2866,7 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_html_subscript_rendering_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40);
@@ -2900,6 +2936,7 @@ Q = xW<sub>Q</sub></pre>
 }
 
 #[test]
+#[parallel]
 fn test_definition_list_with_complex_content_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(120, 40);
@@ -3015,6 +3052,7 @@ fn test_definition_list_with_complex_content_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_lists_with_tables_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(140, 50);
@@ -3253,6 +3291,7 @@ fn test_lists_with_tables_svg() {
 }
 
 #[test]
+#[parallel]
 fn test_content_search_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 35);
@@ -3378,6 +3417,7 @@ hello_world()</code></pre>
 }
 
 #[test]
+#[parallel]
 fn test_toc_search_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 35);
@@ -3436,4 +3476,111 @@ fn test_toc_search_svg() {
         "test_toc_search_svg",
         create_test_failure_handler("test_toc_search_svg"),
     );
+}
+
+#[test]
+#[serial]
+fn test_theme_selector_modal_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    // Open first book
+    open_first_test_book(&mut app);
+
+    // Initial draw to establish content
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Open theme selector with Space+t
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('t'));
+
+    // Navigate down a couple of times to show navigation works
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    // Draw to show theme selector modal with navigation
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_theme_selector_modal.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/theme_selector_modal.svg"),
+        "test_theme_selector_modal_svg",
+        create_test_failure_handler("test_theme_selector_modal_svg"),
+    );
+}
+
+#[test]
+#[serial]
+fn test_theme_catppuccin_mocha_applied_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    // Open first book
+    open_first_test_book(&mut app);
+
+    // Initial draw to establish content
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Open theme selector with Space+t
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('t'));
+
+    // Navigate to Catppuccin Mocha (it's at index 1, after Oceanic Next at index 0)
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    // Select the theme with Enter
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    // Draw to show the book with Catppuccin Mocha colors applied
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_theme_catppuccin_mocha_applied.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/theme_catppuccin_mocha_applied.svg"),
+        "test_theme_catppuccin_mocha_applied_svg",
+        create_test_failure_handler("test_theme_catppuccin_mocha_applied_svg"),
+    );
+
+    // Reset theme back to default to prevent leaking into other tests
+    set_theme_by_index(0);
 }

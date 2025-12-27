@@ -84,6 +84,7 @@ anstyle = "1.0"
 anstyle-svg = "0.1.5"
 tempfile = "3.8"
 walkdir = "2.4"
+serial_test = "3.2"
 
 [features]
 test-utils = []
