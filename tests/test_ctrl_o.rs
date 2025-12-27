@@ -15,6 +15,7 @@ fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
         Some("/dev/null"),
         false,
         mock_executor,
+        None,
     );
 
     // Load an EPUB file first
@@ -57,6 +58,7 @@ fn test_ctrl_o_works_without_epub_loaded() {
         Some("/dev/null"),
         false,
         mock_executor,
+        None,
     );
 
     // Don't load any EPUB - test that Ctrl+O works in all cases now
@@ -93,6 +95,7 @@ fn test_ctrl_o_handles_no_epub_gracefully() {
         Some("/dev/null"),
         false,
         mock_executor,
+        None,
     );
 
     // Don't load any EPUB - test that Ctrl+O still works

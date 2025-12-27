@@ -177,20 +177,18 @@ pub struct BookComments {
 }
 
 impl BookComments {
-    pub fn new(book_path: &Path) -> Result<Self> {
+    pub fn new(book_path: &Path, comments_dir: Option<&Path>) -> Result<Self> {
         let book_hash = Self::compute_book_hash(book_path);
-        let comments_dir = Self::get_comments_dir()?;
-        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
-        Self::new_with_path(file_path)
-    }
-
-    #[cfg(test)]
-    pub fn new_with_custom_dir(book_path: &Path, comments_dir: &Path) -> Result<Self> {
-        let book_hash = Self::compute_book_hash(book_path);
-        if !comments_dir.exists() {
-            fs::create_dir_all(comments_dir)?;
-        }
-        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
+        let resolved_dir = match comments_dir {
+            Some(dir) => {
+                if !dir.exists() {
+                    fs::create_dir_all(dir)?;
+                }
+                dir.to_path_buf()
+            }
+            None => Self::get_comments_dir()?,
+        };
+        let file_path = resolved_dir.join(format!("book_{book_hash}.yaml"));
         Self::new_with_path(file_path)
     }
 
@@ -427,8 +425,7 @@ mod tests {
     #[test]
     fn test_add_and_get_comments() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment = create_paragraph_comment("chapter1.xhtml", 3, "Nice paragraph");
         book_comments.add_comment(comment.clone()).unwrap();
@@ -441,8 +438,7 @@ mod tests {
     #[test]
     fn test_update_comment() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment = create_paragraph_comment("chapter1.xhtml", 1, "Old text");
         book_comments.add_comment(comment.clone()).unwrap();
@@ -459,8 +455,7 @@ mod tests {
     #[test]
     fn test_delete_comment() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment = create_paragraph_comment("chapter1.xhtml", 2, "Delete me");
         book_comments.add_comment(comment.clone()).unwrap();
@@ -476,8 +471,7 @@ mod tests {
     #[test]
     fn test_code_block_comments() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment = create_code_comment("chapter2.xhtml", 5, (1, 3), "Highlight lines");
         book_comments.add_comment(comment.clone()).unwrap();
@@ -490,8 +484,7 @@ mod tests {
     #[test]
     fn test_multiple_code_comments_same_line_range() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment_a = create_code_comment("chapter.xhtml", 2, (0, 0), "First note");
         let comment_b = create_code_comment("chapter.xhtml", 2, (0, 0), "Second note");
@@ -537,8 +530,7 @@ mod tests {
     #[test]
     fn test_sorting_respects_targets() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
-        let mut book_comments =
-            BookComments::new_with_custom_dir(&book_path, &comments_dir).unwrap();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
         let comment_a = create_paragraph_comment("chapter.xhtml", 1, "A");
         let comment_b = create_code_comment("chapter.xhtml", 1, (2, 4), "B");

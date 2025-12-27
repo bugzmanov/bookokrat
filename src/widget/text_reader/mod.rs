@@ -228,7 +228,7 @@ impl MarkdownTextReader {
     pub fn get_comments(&self) -> Arc<Mutex<BookComments>> {
         self.book_comments.clone().unwrap_or_else(|| {
             Arc::new(Mutex::new(
-                BookComments::new(std::path::Path::new("")).unwrap(),
+                BookComments::new(std::path::Path::new(""), None).unwrap(),
             ))
         })
     }
