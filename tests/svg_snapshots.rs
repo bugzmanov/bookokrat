@@ -1,5 +1,6 @@
 use bookokrat::comments::{Comment, CommentTarget};
 use bookokrat::main_app::{ChapterDirection, FPSCounter};
+use bookokrat::settings::set_margin;
 use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
@@ -29,8 +30,9 @@ fn ensure_test_report_initialized() {
 }
 
 fn create_test_app_isolated() -> (App, TempDir) {
-    // Reset theme to default (index 0 = Oceanic Next) to prevent leaking from other tests
+    // Reset theme and margin to defaults to prevent leaking from other tests
     set_theme_by_index(0);
+    set_margin(0);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let app = App::new_with_config(
         Some("tests/testdata"),
@@ -49,6 +51,11 @@ fn create_test_fps_counter() -> FPSCounter {
 /// Helper trait for simpler key event handling in tests
 trait TestKeyEventHandler {
     fn press_key(&mut self, key: crossterm::event::KeyCode);
+    fn press_key_with_modifiers(
+        &mut self,
+        key: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    );
     fn press_char_times(&mut self, ch: char, times: usize);
 }
 
@@ -58,6 +65,22 @@ impl TestKeyEventHandler for App {
             crossterm::event::KeyEvent {
                 code: key,
                 modifiers: crossterm::event::KeyModifiers::empty(),
+                kind: crossterm::event::KeyEventKind::Press,
+                state: crossterm::event::KeyEventState::NONE,
+            },
+            None,
+        );
+    }
+
+    fn press_key_with_modifiers(
+        &mut self,
+        key: crossterm::event::KeyCode,
+        modifiers: crossterm::event::KeyModifiers,
+    ) {
+        self.handle_key_event_with_screen_height(
+            crossterm::event::KeyEvent {
+                code: key,
+                modifiers,
                 kind: crossterm::event::KeyEventKind::Press,
                 state: crossterm::event::KeyEventState::NONE,
             },
@@ -3583,4 +3606,113 @@ fn test_theme_catppuccin_mocha_applied_svg() {
 
     // Reset theme back to default to prevent leaking into other tests
     set_theme_by_index(0);
+}
+
+#[test]
+#[parallel]
+fn test_zen_mode_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    // Open first book
+    open_first_test_book(&mut app);
+
+    // Scroll down a bit to show we're in the middle of content
+    for _ in 0..5 {
+        app.press_key(crossterm::event::KeyCode::Char('j'));
+    }
+
+    // Draw normal mode first
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Toggle zen mode with Ctrl+z
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+
+    // Draw zen mode - should show full screen content, no navigation panel
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_zen_mode.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/zen_mode.svg"),
+        "test_zen_mode_svg",
+        create_test_failure_handler("test_zen_mode_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_margin_change_no_position_jump_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    // Open first book
+    open_first_test_book(&mut app);
+
+    // Enter zen mode for full-screen view
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+
+    // Scroll down significantly to be in the middle of the chapter
+    for _ in 0..10 {
+        app.press_key(crossterm::event::KeyCode::Char('j'));
+    }
+
+    // Draw to establish position
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Increase margin 5 times with '='
+    for _ in 0..5 {
+        app.press_key(crossterm::event::KeyCode::Char('='));
+    }
+
+    // Draw after margin increase - should show visible margins and same content position
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_margin_change_no_position_jump.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/margin_change_no_position_jump.svg"),
+        "test_margin_change_no_position_jump_svg",
+        create_test_failure_handler("test_margin_change_no_position_jump_svg"),
+    );
 }
