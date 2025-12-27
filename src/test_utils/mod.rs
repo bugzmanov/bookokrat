@@ -160,6 +160,7 @@ pub mod test_helpers {
             Some("tests/testdata"), // Use tests/testdata directory
             Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
             false,                  // Don't auto-load recent books
+            None,                   // Use default comments directory
         )
     }
 
@@ -226,6 +227,7 @@ pub mod test_helpers {
             Some(&temp_manager.get_directory()), // Use temporary directory with fake books
             Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
             false,                               // Don't auto-load recent books
+            None,                                // Use default comments directory
         );
 
         (app, temp_manager)
@@ -242,9 +244,24 @@ pub mod test_helpers {
             Some(&temp_manager.get_directory()), // Use temporary directory with fake books
             Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
             false,                               // Don't auto-load recent books
+            None,                                // Use default comments directory
         );
 
         (app, temp_manager)
+    }
+
+    /// Create a test App instance with isolated comments directory
+    /// - Uses testdata directory for EPUBs
+    /// - No bookmark file (starts with empty bookmarks)
+    /// - No auto-loading of recent books
+    /// - Uses provided temp directory for comments (test isolation)
+    pub fn create_test_app_with_comments_dir(comments_dir: &std::path::Path) -> crate::App {
+        crate::App::new_with_config(
+            Some("tests/testdata"), // Use tests/testdata directory
+            Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
+            false,                  // Don't auto-load recent books
+            Some(comments_dir),     // Use isolated comments directory
+        )
     }
 }
 

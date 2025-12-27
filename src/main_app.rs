@@ -34,6 +34,7 @@ pub enum ChapterDirection {
 }
 
 use std::io::BufReader;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -124,6 +125,7 @@ pub struct App {
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
+    comments_dir: Option<PathBuf>,
 }
 
 pub trait VimNavMotions {
@@ -168,7 +170,7 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        Self::new_with_config(None, Some("bookmarks.json"), true)
+        Self::new_with_config(None, Some("bookmarks.json"), true, None)
     }
 
     /// Helper method to check if focus is on a main panel (not a popup)
@@ -277,12 +279,14 @@ impl App {
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         system_executor: crate::system_command::MockSystemCommandExecutor,
+        comments_dir: Option<&Path>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
             bookmark_file,
             auto_load_recent,
             Box::new(system_executor),
+            comments_dir,
         )
     }
 
@@ -290,12 +294,14 @@ impl App {
         book_directory: Option<&str>,
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
+        comments_dir: Option<&Path>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
             bookmark_file,
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
+            comments_dir,
         )
     }
 
@@ -304,6 +310,7 @@ impl App {
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         system_executor: Box<dyn SystemCommandExecutor>,
+        comments_dir: Option<&Path>,
     ) -> Self {
         let book_manager = match book_directory {
             Some(dir) => BookManager::new_with_directory(dir),
@@ -356,6 +363,7 @@ impl App {
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
+            comments_dir: comments_dir.map(|p| p.to_path_buf()),
         };
 
         if auto_load_recent
@@ -517,7 +525,7 @@ impl App {
 
         self.initialize_search_engine(&mut doc);
 
-        match BookComments::new(&path_buf) {
+        match BookComments::new(&path_buf, self.comments_dir.as_deref()) {
             Ok(comments) => {
                 let comments_arc = Arc::new(Mutex::new(comments));
                 self.text_reader.set_book_comments(comments_arc);

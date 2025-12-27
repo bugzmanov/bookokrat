@@ -8,8 +8,7 @@ use bookokrat::test_utils::test_helpers::{
 use bookokrat::App;
 use chrono::{TimeZone, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use std::ffi::OsString;
-use std::sync::{Once, OnceLock};
+use std::sync::Once;
 use tempfile::TempDir;
 
 mod snapshot_assertions;
@@ -20,53 +19,22 @@ use snapshot_assertions::assert_svg_snapshot;
 use svg_generation::terminal_to_svg;
 
 static INIT: Once = Once::new();
-static BASE_COMMENTS_DIR: OnceLock<TempDir> = OnceLock::new();
 
 fn ensure_test_report_initialized() {
     INIT.call_once(|| {
         test_report::init_test_report();
-        init_base_comments_dir();
     });
 }
 
-fn init_base_comments_dir() {
-    BASE_COMMENTS_DIR.get_or_init(|| {
-        let dir = TempDir::new().expect("Failed to create base temp comments dir");
-        unsafe {
-            std::env::set_var("BOOKOKRAT_COMMENTS_DIR", dir.path());
-        }
-        dir
-    });
-}
-
-struct TempCommentsDirGuard {
-    prev: Option<OsString>,
-    _dir: TempDir,
-}
-
-impl TempCommentsDirGuard {
-    fn new() -> Self {
-        let prev = std::env::var_os("BOOKOKRAT_COMMENTS_DIR");
-        let dir = TempDir::new().expect("Failed to create temp comments dir");
-        unsafe {
-            std::env::set_var("BOOKOKRAT_COMMENTS_DIR", dir.path());
-        }
-        Self { prev, _dir: dir }
-    }
-}
-
-impl Drop for TempCommentsDirGuard {
-    fn drop(&mut self) {
-        if let Some(prev) = self.prev.clone() {
-            unsafe {
-                std::env::set_var("BOOKOKRAT_COMMENTS_DIR", prev);
-            }
-        } else {
-            unsafe {
-                std::env::remove_var("BOOKOKRAT_COMMENTS_DIR");
-            }
-        }
-    }
+fn create_test_app_isolated() -> (App, TempDir) {
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let app = App::new_with_config(
+        Some("tests/testdata"),
+        Some("/dev/null"),
+        false,
+        Some(comments_dir.path()),
+    );
+    (app, comments_dir)
 }
 
 // Helper function to create FPSCounter for tests
@@ -241,9 +209,8 @@ fn test_fake_books_file_list_svg() {
 #[test]
 fn test_comments_viewer_chapter_mode_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(120, 36);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     open_first_test_book(&mut app);
     seed_sample_comments(&mut app);
@@ -275,9 +242,8 @@ fn test_comments_viewer_chapter_mode_svg() {
 #[test]
 fn test_comments_viewer_global_mode_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(120, 36);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     open_first_test_book(&mut app);
     seed_sample_comments(&mut app);
@@ -310,9 +276,8 @@ fn test_comments_viewer_global_mode_svg() {
 #[test]
 fn test_content_view_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Switch to content view
 
@@ -339,9 +304,8 @@ fn test_content_view_svg() {
 #[test]
 fn test_content_scrolling_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -404,7 +368,7 @@ fn test_content_scrolling_svg() {
 fn test_chapter_title_normal_length_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the 7-chapter test book to get chapter with title
     if let Some(book_info) = app.book_manager.get_book_info(1) {
@@ -463,7 +427,7 @@ fn test_chapter_title_normal_length_svg() {
 fn test_chapter_title_narrow_terminal_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 24); // Narrow terminal
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the 7-chapter test book to get chapter with title
     if let Some(book_info) = app.book_manager.get_book_info(1) {
@@ -523,7 +487,7 @@ fn test_chapter_title_narrow_terminal_svg() {
 fn test_mouse_scroll_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Ensure we're in file list mode
 
@@ -584,7 +548,7 @@ fn test_mouse_scroll_file_list_svg() {
 fn test_mouse_scroll_bounds_checking_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -654,7 +618,7 @@ fn test_mouse_event_batching_svg() {
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -747,7 +711,7 @@ fn test_horizontal_scroll_handling_svg() {
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -877,7 +841,7 @@ fn test_edge_case_mouse_coordinates_svg() {
 
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -974,7 +938,7 @@ fn test_edge_case_mouse_coordinates_svg() {
 fn test_text_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1061,7 +1025,7 @@ fn test_text_selection_svg() {
 fn test_text_selection_with_auto_scroll_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1151,9 +1115,8 @@ fn test_text_selection_with_auto_scroll_svg() {
 #[test]
 fn test_continuous_auto_scroll_down_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1268,9 +1231,8 @@ fn test_continuous_auto_scroll_down_svg() {
 #[test]
 fn test_continuous_auto_scroll_up_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1392,7 +1354,7 @@ fn test_continuous_auto_scroll_up_svg() {
 fn test_timer_based_auto_scroll_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1518,9 +1480,8 @@ fn test_timer_based_auto_scroll_svg() {
 #[test]
 fn test_auto_scroll_stops_when_cursor_returns_svg() {
     ensure_test_report_initialized();
-    let _comments_guard = TempCommentsDirGuard::new();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1636,7 +1597,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
 fn test_double_click_word_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1735,7 +1696,7 @@ fn test_double_click_word_selection_svg() {
 fn test_triple_click_paragraph_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1850,7 +1811,7 @@ fn test_triple_click_paragraph_selection_svg() {
 fn test_text_selection_click_on_book_text_bug_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and ensure we're in content view
     if let Some(book_info) = app.book_manager.get_book_info(0) {
@@ -1938,7 +1899,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
 fn test_toc_navigation_bug_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load a book that has hierarchical TOC structure
     if let Some(book_info) = app.book_manager.get_book_info(1) {
@@ -2008,7 +1969,7 @@ fn test_toc_navigation_bug_svg() {
 fn test_toc_back_to_books_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load a book to enter TOC mode
     app.press_key(crossterm::event::KeyCode::Enter);
@@ -2045,7 +2006,7 @@ fn test_toc_back_to_books_list_svg() {
 fn test_toc_chapter_navigation_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
-    let mut app = App::new_with_config(Some("tests/testdata"), None, false);
+    let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load a book to enter TOC mode
     app.press_key(crossterm::event::KeyCode::Enter);
@@ -2164,7 +2125,13 @@ fn test_mathml_content_rendering_svg() {
     let temp_html_path = temp_dir.path().join("mathml_test.html");
     std::fs::write(&temp_html_path, mathml_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2291,10 +2258,12 @@ fn test_book_reading_history_with_many_entries_svg() {
     println!("Created {} bookmarks using production code", 100);
 
     // Now reload the app to pick up the bookmarks
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = bookokrat::App::new_with_config(
         Some(&temp_manager.get_directory()),
         Some(&bookmark_path.to_string_lossy()),
         false,
+        Some(comments_dir.path()),
     );
 
     // Now show the reading history popup with capital H
@@ -2383,7 +2352,13 @@ fn test_headings_h1_to_h6_rendering_svg() {
     let temp_html_path = temp_dir.path().join("headings_test.html");
     std::fs::write(&temp_html_path, headings_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2486,7 +2461,13 @@ fn test_table_with_links_and_linebreaks_svg() {
     let temp_html_path = temp_dir.path().join("table_with_links_test.html");
     std::fs::write(&temp_html_path, table_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2648,7 +2629,13 @@ fetchData('https://api.example.com/data')
     let temp_html_path = temp_dir.path().join("basic_markdown_test.html");
     std::fs::write(&temp_html_path, basic_elements_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2717,7 +2704,13 @@ fn test_epub_type_attributes_svg() {
     let temp_html_path = temp_dir.path().join("epub_types_test.html");
     std::fs::write(&temp_html_path, epub_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2801,7 +2794,13 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
     let temp_html_path = temp_dir.path().join("complex_table_test.html");
     std::fs::write(&temp_html_path, table_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2864,7 +2863,13 @@ Q = xW<sub>Q</sub></pre>
     let temp_html_path = temp_dir.path().join("subscript_test.html");
     std::fs::write(&temp_html_path, subscript_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -2973,7 +2978,13 @@ fn test_definition_list_with_complex_content_svg() {
     let temp_html_path = temp_dir.path().join("dl_complex_test.html");
     std::fs::write(&temp_html_path, dl_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -3209,7 +3220,13 @@ fn test_lists_with_tables_svg() {
     let temp_html_path = temp_dir.path().join("list_tables_test.html");
     std::fs::write(&temp_html_path, list_table_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     if let Some(book_info) = app.book_manager.get_book_info(0) {
         let path = book_info.path.clone();
@@ -3306,7 +3323,13 @@ hello_world()</code></pre>
     let temp_html_path = temp_dir.path().join("search_test.html");
     std::fs::write(&temp_html_path, search_content).unwrap();
 
-    let mut app = App::new_with_config(Some(temp_dir.path().to_str().unwrap()), None, false);
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
 
     // Load the test document
     if let Some(book_info) = app.book_manager.get_book_info(0) {
