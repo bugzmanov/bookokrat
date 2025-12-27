@@ -46,7 +46,7 @@
           "description": "Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
           "url": "https://github.com/bugzmanov/bookokrat",
           "downloadUrl": "https://crates.io/crates/bookokrat",
-          "softwareVersion": "0.1.1",
+          "softwareVersion": "0.2.1",
           "author": {
             "@type": "Person",
             "name": "Rafael Bagmanov"
@@ -66,7 +66,7 @@
           "screenshot": "https://bugzmanov.github.io/bookokrat/3.png",
           "featureList": [
             "Complete EPUB/HTML rendering with html5ever parser",
-            "Inline images in terminal",
+            "Inline images in terminal (Kitty, Sixel, iTerm2, Halfblocks)",
             "MathML rendering to ASCII art",
             "Syntax-highlighted code blocks",
             "Table rendering",
@@ -76,10 +76,12 @@
             "Full-text search across books",
             "Automatic bookmarks",
             "Reading history tracking",
-            "Jump list navigation"
+            "Jump list navigation",
+            "True color with 256-color fallback",
+            "Cross-platform (macOS, Linux, Windows)"
           ],
-          "requirements": "Rust toolchain (rustup) for installation",
-          "installUrl": "https://crates.io/crates/bookokrat"
+          "requirements": "None for pre-built binaries; Rust toolchain for building from source",
+          "installUrl": "https://github.com/bugzmanov/bookokrat/releases"
         }
         </script>
         <style>
@@ -1061,6 +1063,25 @@
                             Jump list remembers your navigation path.
                         </p>
                     </div>
+
+                    <div class="feature">
+                        <h3 class="feature-title">Works in any terminal</h3>
+                        <p class="feature-description">
+                            Auto-detects true color (24-bit) or falls back to
+                            256-color palette. Images render via Kitty, Sixel,
+                            iTerm2, or Unicode halfblocks—whatever your terminal
+                            supports.
+                        </p>
+                    </div>
+
+                    <div class="feature">
+                        <h3 class="feature-title">Cross-platform</h3>
+                        <p class="feature-description">
+                            Native binaries for macOS (Intel & Apple Silicon) and
+                            Linux. Install via Homebrew, download pre-built binaries,
+                            or build from source on any platform including Windows.
+                        </p>
+                    </div>
                 </div>
             </section>
 
@@ -1069,10 +1090,37 @@
                     <div class="install-label">installation</div>
                     <h2 class="install-title">Get Started</h2>
 
-                    <div style="margin-bottom: 3rem;">
-                        <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Prerequisites</h3>
+                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Homebrew (macOS)</h3>
+                    <div class="install-box" style="margin-bottom: 2rem;">
+                        <code class="install-command">brew tap bugzmanov/bookokrat && brew install bookokrat</code>
+                        <button class="copy-btn" onclick="copyText('brew tap bugzmanov/bookokrat && brew install bookokrat', this)">
+                            copy
+                        </button>
+                    </div>
+
+                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Pre-built Binary (Linux)</h3>
+                    <p class="install-description">
+                        Download from <a href="https://github.com/bugzmanov/bookokrat/releases">GitHub Releases</a>. Static musl binary works on all distributions.
+                    </p>
+                    <div class="install-box" style="margin-bottom: 2rem;">
+                        <code class="install-command" style="font-size: 0.85rem;">curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz</code>
+                        <button class="copy-btn" onclick="copyText('curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz && tar -xzf bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz && sudo mv bookokrat /usr/local/bin/', this)">
+                            copy
+                        </button>
+                    </div>
+
+                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Cargo (all platforms)</h3>
+                    <p class="install-description">
+                        Build from source with Cargo (Rust's package manager).
+                        <a href="https://rustup.rs">Get Rust at rustup.rs</a>
+                    </p>
+
+                    <div style="margin-bottom: 2rem;">
+                        <div style="font-size: 0.875rem; color: #999; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
+                            // Prerequisites (Cargo only)
+                        </div>
                         <p style="font-size: 0.95rem; color: #fff; margin-bottom: 1.5rem; line-height: 1.8;">
-                            Bookokrat requires a C compiler/linker to build dependencies. Install the build tools for your platform:
+                            Building from source requires a C compiler/linker:
                         </p>
 
                         <div style="display: grid; gap: 1rem; max-width: 800px;">
@@ -1100,16 +1148,11 @@
                         </div>
                     </div>
 
-                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Install Bookokrat</h3>
-                    <p class="install-description">
-                        Install with Cargo (Rust's package manager).
-                        <a href="https://rustup.rs">Get it at rustup.rs</a>
-                    </p>
                     <div class="install-box">
                         <code class="install-command"
                             >cargo install bookokrat</code
                         >
-                        <button class="copy-btn" onclick="copyCommand()">
+                        <button class="copy-btn" onclick="copyText('cargo install bookokrat', this)">
                             copy
                         </button>
                     </div>
@@ -1125,13 +1168,13 @@
                         </div>
                     </div>
 
-                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #ff6666; max-width: 800px;">
+                    <div id="troubleshooting" style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #ff6666; max-width: 800px;">
                         <div style="font-size: 0.875rem; color: #ff6666; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
                             // Troubleshooting
                         </div>
                         <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
                             <strong style="color: #ff6666;">Error: "linker 'cc' not found"</strong><br/>
-                            This means you don't have a C compiler installed. Install the build tools for your platform (see Prerequisites above), then try again.
+                            Install a C compiler: <code style="color: #00ff88;">xcode-select --install</code> (macOS), <code style="color: #00ff88;">sudo apt install build-essential</code> (Debian/Ubuntu), or <code style="color: #00ff88;">sudo dnf install gcc make</code> (Fedora).
                         </div>
                     </div>
                 </div>
@@ -2008,9 +2051,8 @@
         </footer>
 
         <script>
-            function copyCommand() {
-                navigator.clipboard.writeText("cargo install bookokrat");
-                const btn = event.target;
+            function copyText(text, btn) {
+                navigator.clipboard.writeText(text);
                 btn.textContent = "copied!";
                 setTimeout(() => {
                     btn.textContent = "copy";
