@@ -14,6 +14,60 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
 
+## Installation
+
+### Homebrew (macOS)
+
+```bash
+brew install bookokrat
+```
+
+### Pre-built Binaries (Linux)
+
+Download from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases):
+
+```bash
+# x86_64 (Intel/AMD)
+curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz
+tar -xzf bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz
+sudo mv bookokrat /usr/local/bin/
+```
+
+### Cargo (all platforms)
+
+Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
+
+<details>
+<summary>Prerequisites (click to expand)</summary>
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update && sudo apt install build-essential
+```
+
+**Linux (Fedora/RHEL):**
+```bash
+sudo dnf install gcc make
+```
+
+**macOS:**
+```bash
+xcode-select --install
+```
+
+**Windows:**
+Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the "Desktop development with C++" workload.
+
+</details>
+
+```bash
+cargo install bookokrat
+```
+
+### Getting Started
+
+Navigate to a directory with EPUB files and run `bookokrat`. Use `j/k` to navigate, `Enter` to open a book, and `?` for help.
+
 ## Keyboard Reference
 
 Bookokrat follows Vim-style keybindings throughout the interface for consistent, efficient navigation.
@@ -78,66 +132,6 @@ All popups (search results, reading history, book stats) support:
 - Single-click focuses a pane; double-click in the library opens the selection; double-click in the reader selects a word; triple-click selects the paragraph.
 - Click-and-drag to highlight text; release on a hyperlink to open it; drag past the viewport edges to auto-scroll.
 - Click images to open the zoom popup; click again or press any key to close; clicking history or stats entries activates them immediately.
-
-## Installation
-
-### Homebrew (macOS)
-
-```bash
-brew tap bugzmanov/bookokrat
-brew install bookokrat
-```
-
-### Pre-built Binaries (Linux)
-
-Download the latest release from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases):
-
-```bash
-# For most Linux distributions (static binary, works everywhere)
-curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz
-tar -xzf bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz
-sudo mv bookokrat /usr/local/bin/
-```
-
-### Cargo (all platforms)
-
-Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
-
-#### Prerequisites (Cargo only)
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt update && sudo apt install build-essential
-```
-
-**Linux (Fedora/RHEL):**
-```bash
-sudo dnf install gcc make
-```
-
-**macOS:**
-```bash
-xcode-select --install
-```
-
-**Windows:**
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the "Desktop development with C++" workload.
-
-Then install via Cargo:
-
-```bash
-cargo install bookokrat
-```
-
-### Getting Started
-
-Navigate to a directory with EPUB files and run `bookokrat`. Use `j/k` to navigate, `Enter` to open a book, and `?` for help.
-
-### Troubleshooting
-
-**Error: "linker 'cc' not found"**
-
-This means you don't have a C compiler installed. Install the build tools for your platform (see Cargo prerequisites above), then try again.
 
 ## Attribution
 
