@@ -91,6 +91,49 @@ struct ProcessingContext {
     text_transform: Option<TextTransform>,
 }
 
+/// Analysis result for detecting layout tables vs data tables
+#[derive(Debug, Default)]
+struct LayoutTableAnalysis {
+    total_cells: usize,
+    empty_cells: usize,
+    content_cells: usize,
+    spacer_images: usize,
+    has_complex_spanning: bool,
+    nested_table_count: usize,
+    max_content_per_row: usize,
+}
+
+impl LayoutTableAnalysis {
+    fn is_layout_table(&self) -> bool {
+        // Heuristic 1: Single-cell tables are layout (used for alignment/styling)
+        if self.total_cells == 1 {
+            return true;
+        }
+
+        // Heuristic 2: Mostly empty cells (>50%)
+        if self.total_cells > 0 && self.empty_cells as f32 / self.total_cells as f32 > 0.5 {
+            return true;
+        }
+
+        // Heuristic 3: Contains spacer images
+        if self.spacer_images > 0 {
+            return true;
+        }
+
+        // Heuristic 4: Only 1-2 cells contain real content but many total cells
+        if self.content_cells <= 2 && self.total_cells > 4 {
+            return true;
+        }
+
+        // Heuristic 5: Each row has at most 1 content cell (vertical layout table)
+        if self.max_content_per_row <= 1 && self.total_cells > 3 {
+            return true;
+        }
+
+        false
+    }
+}
+
 /// Converts HTML content to clean Markdown AST with text formatting and cleanup.
 ///
 /// This converter is responsible for the first phase of the HTML→Markdown→Text pipeline.
@@ -595,6 +638,16 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         document: &mut Document,
     ) {
+        // First, analyze the table to determine if it's a layout table
+        let analysis = self.analyze_table_structure(node);
+
+        if analysis.is_layout_table() {
+            // Extract content from layout table as paragraphs
+            self.extract_layout_table_content(node, document);
+            return;
+        }
+
+        // Original data table handling
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut max_columns = 0;
@@ -676,6 +729,323 @@ impl HtmlToMarkdownConverter {
             };
             let table_node = Node::new_with_id(table_block, 0..0, id);
             document.blocks.push(table_node);
+        }
+    }
+
+    /// Analyze a table's structure to determine if it's a layout table
+    fn analyze_table_structure(&self, node: &Rc<markup5ever_rcdom::Node>) -> LayoutTableAnalysis {
+        let mut analysis = LayoutTableAnalysis::default();
+        self.analyze_table_node(node, &mut analysis);
+        analysis
+    }
+
+    fn analyze_table_node(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        analysis: &mut LayoutTableAnalysis,
+    ) {
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "tr" => {
+                            let row_content_cells = self.analyze_table_row(child, analysis);
+                            if row_content_cells > analysis.max_content_per_row {
+                                analysis.max_content_per_row = row_content_cells;
+                            }
+                        }
+                        "thead" | "tbody" | "tfoot" => {
+                            self.analyze_table_node(child, analysis);
+                        }
+                        "td" | "th" => {
+                            self.analyze_table_cell(child, attrs, analysis);
+                        }
+                        "table" => {
+                            analysis.nested_table_count += 1;
+                        }
+                        _ => {
+                            self.analyze_table_node(child, analysis);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn analyze_table_row(
+        &self,
+        row_node: &Rc<markup5ever_rcdom::Node>,
+        analysis: &mut LayoutTableAnalysis,
+    ) -> usize {
+        let mut row_content_cells = 0;
+
+        for child in row_node.children.borrow().iter() {
+            if let NodeData::Element { name, attrs, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                if tag_name == "td" || tag_name == "th" {
+                    let has_content = self.analyze_table_cell(child, attrs, analysis);
+                    if has_content {
+                        row_content_cells += 1;
+                    }
+                }
+            }
+        }
+
+        row_content_cells
+    }
+
+    fn analyze_table_cell(
+        &self,
+        cell_node: &Rc<markup5ever_rcdom::Node>,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        analysis: &mut LayoutTableAnalysis,
+    ) -> bool {
+        analysis.total_cells += 1;
+
+        // Check for rowspan/colspan indicating complex layout
+        let rowspan = self
+            .get_attr_value(attrs, "rowspan")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1);
+        let colspan = self
+            .get_attr_value(attrs, "colspan")
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(1);
+
+        if rowspan > 2 || colspan > 2 {
+            analysis.has_complex_spanning = true;
+        }
+
+        // Analyze cell content
+        let (has_text, has_spacer) = self.analyze_cell_content(cell_node);
+
+        if has_spacer {
+            analysis.spacer_images += 1;
+        }
+
+        if has_text {
+            analysis.content_cells += 1;
+            true
+        } else {
+            analysis.empty_cells += 1;
+            false
+        }
+    }
+
+    fn analyze_cell_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> (bool, bool) {
+        let mut has_text = false;
+        let mut has_spacer = false;
+
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Text { contents } => {
+                    if !contents.borrow().trim().is_empty() {
+                        has_text = true;
+                    }
+                }
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    if tag_name == "img" {
+                        if self.is_spacer_image(attrs) {
+                            has_spacer = true;
+                        }
+                    } else if tag_name == "table" {
+                        // Nested tables usually indicate layout
+                        has_spacer = true;
+                    } else {
+                        let (child_text, child_spacer) = self.analyze_cell_content(child);
+                        has_text = has_text || child_text;
+                        has_spacer = has_spacer || child_spacer;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        (has_text, has_spacer)
+    }
+
+    fn is_spacer_image(&self, attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>) -> bool {
+        let width = self
+            .get_attr_value(attrs, "width")
+            .and_then(|s| s.parse::<u32>().ok());
+        let height = self
+            .get_attr_value(attrs, "height")
+            .and_then(|s| s.parse::<u32>().ok());
+
+        // Spacer images are typically 1x1, 1x24, 24x1 or similar small dimensions
+        match (width, height) {
+            (Some(w), Some(h)) if w <= 2 || h <= 2 => true,
+            (Some(w), None) if w <= 2 => true,
+            (None, Some(h)) if h <= 2 => true,
+            _ => false,
+        }
+    }
+
+    /// Extract content from a layout table as paragraphs
+    fn extract_layout_table_content(
+        &mut self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        self.extract_layout_content_recursive(node, document);
+    }
+
+    fn extract_layout_content_recursive(
+        &mut self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "td" | "th" => {
+                            // Extract content from this cell
+                            self.extract_cell_content_as_blocks(child, document);
+                        }
+                        "img" => {
+                            // Skip spacer images
+                            if !self.is_spacer_image(attrs) {
+                                if let Some(src) = self.get_attr_value(attrs, "src") {
+                                    let alt_text =
+                                        self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                    let title = self.get_attr_value(attrs, "title");
+
+                                    let mut text = Text::default();
+                                    text.push_inline(Inline::Image {
+                                        alt_text,
+                                        url: src,
+                                        title,
+                                    });
+
+                                    let para = Block::Paragraph { content: text };
+                                    document.blocks.push(Node::new(para, 0..0));
+                                }
+                            }
+                        }
+                        "table" => {
+                            // Recursively handle nested tables
+                            self.handle_table(attrs, child, document);
+                        }
+                        _ => {
+                            self.extract_layout_content_recursive(child, document);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn extract_cell_content_as_blocks(
+        &mut self,
+        cell_node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        let mut current_text = Text::default();
+
+        for child in cell_node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, attrs, .. } => {
+                    let tag_name = name.local.as_ref();
+                    match tag_name {
+                        "p" => {
+                            // Flush current text first
+                            if !current_text.is_empty() {
+                                let para = Block::Paragraph {
+                                    content: current_text,
+                                };
+                                document.blocks.push(Node::new(para, 0..0));
+                                current_text = Text::default();
+                            }
+                            // Extract paragraph content
+                            let para_blocks =
+                                self.extract_formatted_content_as_blocks(child, false);
+                            for block in para_blocks {
+                                document.blocks.push(block);
+                            }
+                        }
+                        "br" => {
+                            // Line break - flush current text as paragraph
+                            if !current_text.is_empty() {
+                                let para = Block::Paragraph {
+                                    content: current_text,
+                                };
+                                document.blocks.push(Node::new(para, 0..0));
+                                current_text = Text::default();
+                            }
+                        }
+                        "img" => {
+                            // Skip spacer images
+                            if !self.is_spacer_image(attrs) {
+                                if let Some(src) = self.get_attr_value(attrs, "src") {
+                                    let alt_text =
+                                        self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                    let title = self.get_attr_value(attrs, "title");
+                                    current_text.push_inline(Inline::Image {
+                                        alt_text,
+                                        url: src,
+                                        title,
+                                    });
+                                }
+                            }
+                        }
+                        "table" => {
+                            // Flush current text first
+                            if !current_text.is_empty() {
+                                let para = Block::Paragraph {
+                                    content: current_text,
+                                };
+                                document.blocks.push(Node::new(para, 0..0));
+                                current_text = Text::default();
+                            }
+                            // Handle nested table
+                            self.handle_table(attrs, child, document);
+                        }
+                        "font" | "span" | "div" | "strong" | "b" | "em" | "i" | "u" | "sup"
+                        | "sub" => {
+                            // Collect inline content
+                            let context = ProcessingContext {
+                                in_table: false,
+                                current_style: None,
+                                text_transform: None,
+                            };
+                            self.collect_as_text(child, &mut current_text, context);
+                        }
+                        _ => {
+                            // Recurse for other elements
+                            self.extract_cell_content_as_blocks(child, document);
+                        }
+                    }
+                }
+                NodeData::Text { contents } => {
+                    let text_content = contents.borrow();
+                    let trimmed = text_content.trim();
+                    if !trimmed.is_empty() {
+                        // Normalize whitespace
+                        let normalized = text_content
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        if !normalized.is_empty() {
+                            current_text.push_text(TextNode::new(normalized, None));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Flush any remaining text
+        if !current_text.is_empty() {
+            let para = Block::Paragraph {
+                content: current_text,
+            };
+            document.blocks.push(Node::new(para, 0..0));
         }
     }
 

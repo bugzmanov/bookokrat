@@ -40,6 +40,18 @@ impl BackgroundImageLoader {
         cell_width: u16,
         cell_height: u16,
     ) -> bool {
+        self.start_loading_with_context(images_to_load, book_images, cell_width, cell_height, None)
+    }
+
+    /// Start loading images with chapter context for path resolution
+    pub fn start_loading_with_context(
+        &mut self,
+        images_to_load: Vec<(String, u16)>, // (src, height_cells)
+        book_images: &BookImages,
+        cell_width: u16,
+        cell_height: u16,
+        chapter_path: Option<String>,
+    ) -> bool {
         // Don't start if already loading
         if self.loading_in_progress {
             debug!("Background image loading already in progress, skipping");
@@ -62,6 +74,7 @@ impl BackgroundImageLoader {
                 book_images,
                 cell_width,
                 cell_height,
+                chapter_path,
                 cancel_flag,
                 sender,
             );
@@ -106,6 +119,7 @@ impl BackgroundImageLoader {
         book_images: BookImages,
         cell_width: u16,
         cell_height: u16,
+        chapter_path: Option<String>,
         cancel_flag: Arc<AtomicBool>,
         sender: Sender<ImagesLoadedMessage>,
     ) {
@@ -118,8 +132,14 @@ impl BackgroundImageLoader {
                 return;
             }
 
-            if let Some((scaled_image, _width_cells, _height_cells_result)) =
-                book_images.load_and_resize_image(&img_src, height_cells, cell_width, cell_height)
+            if let Some((scaled_image, _width_cells, _height_cells_result)) = book_images
+                .load_and_resize_image_with_context(
+                    &img_src,
+                    height_cells,
+                    cell_width,
+                    cell_height,
+                    chapter_path.as_deref(),
+                )
             {
                 loaded_images.insert(img_src.clone(), scaled_image);
             } else {

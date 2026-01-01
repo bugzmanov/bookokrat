@@ -109,11 +109,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 if let Some(ref picker) = self.image_picker {
                     let font_size = picker.font_size();
                     let (cell_width, cell_height) = (font_size.0, font_size.1);
-                    self.background_loader.start_loading(
+                    let chapter_path = self.current_chapter_file.clone();
+                    self.background_loader.start_loading_with_context(
                         images_to_load.clone(),
                         book_images,
                         cell_width,
                         cell_height,
+                        chapter_path,
                     );
                     for (img_src, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img_src)

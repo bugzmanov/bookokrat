@@ -143,9 +143,7 @@ impl ImageStorage {
         // e.g., "ops/vol_14_9781400850853.opf" -> "ops"
         let content_root = content_root_from_rootfile(&doc.root_file);
 
-        info!(
-            "Extracted {image_count} images to {book_dir:?} (content_root: {content_root:?})"
-        );
+        info!("Extracted {image_count} images to {book_dir:?} (content_root: {content_root:?})");
         self.book_dirs.lock().unwrap().insert(
             epub_path_str,
             BookDirInfo {
@@ -183,15 +181,14 @@ impl ImageStorage {
         let mut resolved_rel = if let Some(chapter) = chapter_path {
             let chapter = chapter.trim_start_matches('/');
             let chapter_path = Path::new(chapter);
-            let chapter_rel = if !content_root.as_os_str().is_empty()
-                && chapter_path.starts_with(content_root)
-            {
-                chapter_path
-                    .strip_prefix(content_root)
-                    .unwrap_or(chapter_path)
-            } else {
-                chapter_path
-            };
+            let chapter_rel =
+                if !content_root.as_os_str().is_empty() && chapter_path.starts_with(content_root) {
+                    chapter_path
+                        .strip_prefix(content_root)
+                        .unwrap_or(chapter_path)
+                } else {
+                    chapter_path
+                };
             let base_dir = chapter_rel.parent().unwrap_or_else(|| Path::new(""));
             normalize_path(&base_dir.join(clean_href))
         } else {
@@ -203,13 +200,12 @@ impl ImageStorage {
         }
 
         // Primary, spec-aligned resolution: content root + resolved href.
-        let resolved_from_root = if !content_root.as_os_str().is_empty()
-            && resolved_rel.starts_with(content_root)
-        {
-            normalize_path(&resolved_rel)
-        } else {
-            normalize_path(&content_root.join(&resolved_rel))
-        };
+        let resolved_from_root =
+            if !content_root.as_os_str().is_empty() && resolved_rel.starts_with(content_root) {
+                normalize_path(&resolved_rel)
+            } else {
+                normalize_path(&content_root.join(&resolved_rel))
+            };
         paths_to_try.push(book_dir.join(&resolved_from_root));
 
         // Fallback: some older EPUBs hardcode OEBPS.
@@ -261,7 +257,9 @@ fn content_root_from_epub(epub_path: &Path) -> Result<Option<PathBuf>> {
             .descendants()
             .find(|n| n.has_tag_name("rootfile"))
             .and_then(|n| n.attribute("full-path"));
-        Ok(rootfile.map(|path| content_root_from_rootfile(Path::new(path))).flatten())
+        Ok(rootfile
+            .map(|path| content_root_from_rootfile(Path::new(path)))
+            .flatten())
     } else {
         let file = fs::File::open(epub_path)
             .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;
