@@ -7,10 +7,21 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use roxmltree::Document;
+
+/// Info about an extracted book's image directory
+#[derive(Clone, Debug)]
+struct BookDirInfo {
+    /// The temp directory where images are extracted (e.g., temp_images/jung/)
+    temp_dir: PathBuf,
+    /// The content root directory from the EPUB's rootfile (e.g., "ops" or "OEBPS")
+    content_root: Option<PathBuf>,
+}
+
 #[derive(Clone)]
 pub struct ImageStorage {
     base_dir: PathBuf,
-    book_dirs: Arc<Mutex<HashMap<String, PathBuf>>>,
+    book_dirs: Arc<Mutex<HashMap<String, BookDirInfo>>>,
 }
 
 impl ImageStorage {
@@ -75,10 +86,14 @@ impl ImageStorage {
 
             if has_images {
                 info!("Found existing images in directory: {book_dir:?}");
-                self.book_dirs
-                    .lock()
-                    .unwrap()
-                    .insert(epub_path_str, book_dir);
+                let content_root = content_root_from_epub(epub_path).ok().flatten();
+                self.book_dirs.lock().unwrap().insert(
+                    epub_path_str,
+                    BookDirInfo {
+                        temp_dir: book_dir,
+                        content_root,
+                    },
+                );
                 return Ok(());
             }
         }
@@ -124,11 +139,20 @@ impl ImageStorage {
             }
         }
 
-        info!("Extracted {image_count} images to {book_dir:?}");
-        self.book_dirs
-            .lock()
-            .unwrap()
-            .insert(epub_path_str, book_dir);
+        // Extract content root directory from the epub's root_file path
+        // e.g., "ops/vol_14_9781400850853.opf" -> "ops"
+        let content_root = content_root_from_rootfile(&doc.root_file);
+
+        info!(
+            "Extracted {image_count} images to {book_dir:?} (content_root: {content_root:?})"
+        );
+        self.book_dirs.lock().unwrap().insert(
+            epub_path_str,
+            BookDirInfo {
+                temp_dir: book_dir,
+                content_root,
+            },
+        );
 
         Ok(())
     }
@@ -141,7 +165,10 @@ impl ImageStorage {
     ) -> Option<PathBuf> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
 
-        let book_dir = self
+        let BookDirInfo {
+            temp_dir: book_dir,
+            content_root,
+        } = self
             .book_dirs
             .lock()
             .unwrap()
@@ -150,44 +177,49 @@ impl ImageStorage {
 
         let mut paths_to_try = Vec::new();
         let clean_href = image_href.trim_start_matches('/');
-        if let Some(chapter) = chapter_path {
-            if clean_href.starts_with("../") {
-                let chapter_path = Path::new(chapter);
-                if let Some(chapter_dir) = chapter_path.parent() {
-                    let resolved = chapter_dir.join(clean_href);
+        let content_root = content_root.as_deref().unwrap_or_else(|| Path::new(""));
 
-                    let normalized = normalize_path(&resolved);
-                    paths_to_try.push(book_dir.join(&normalized));
+        // Resolve href against chapter path if present; otherwise resolve against content root.
+        let mut resolved_rel = if let Some(chapter) = chapter_path {
+            let chapter = chapter.trim_start_matches('/');
+            let chapter_path = Path::new(chapter);
+            let chapter_rel = if !content_root.as_os_str().is_empty()
+                && chapter_path.starts_with(content_root)
+            {
+                chapter_path
+                    .strip_prefix(content_root)
+                    .unwrap_or(chapter_path)
+            } else {
+                chapter_path
+            };
+            let base_dir = chapter_rel.parent().unwrap_or_else(|| Path::new(""));
+            normalize_path(&base_dir.join(clean_href))
+        } else {
+            normalize_path(Path::new(clean_href))
+        };
 
-                    if let Ok(stripped) = normalized.strip_prefix("OEBPS/") {
-                        paths_to_try.push(book_dir.join(stripped));
-                    }
-                }
-            }
+        if chapter_path.is_none() {
+            resolved_rel = strip_leading_parents(&resolved_rel);
         }
 
-        // TODO: this is garbage of an approach
-        //
-        // Strategy 1: Direct path from book root
-        paths_to_try.push(book_dir.join(clean_href));
+        // Primary, spec-aligned resolution: content root + resolved href.
+        let resolved_from_root = if !content_root.as_os_str().is_empty()
+            && resolved_rel.starts_with(content_root)
+        {
+            normalize_path(&resolved_rel)
+        } else {
+            normalize_path(&content_root.join(&resolved_rel))
+        };
+        paths_to_try.push(book_dir.join(&resolved_from_root));
 
-        // Strategy 2: Remove OEBPS prefix if present
-        let without_oebps = clean_href.strip_prefix("OEBPS/").unwrap_or(clean_href);
-        paths_to_try.push(book_dir.join(without_oebps));
-
-        // Strategy 3: If it's a relative path with ../, resolve it from common directories
-        if clean_href.starts_with("../") {
-            // Remove the ../ prefix
-            let without_parent = clean_href.strip_prefix("../").unwrap_or(clean_href);
-            // Try from OEBPS directory
-            paths_to_try.push(book_dir.join("OEBPS").join(without_parent));
-            // Try directly from book root (for case where images are at root level)
-            paths_to_try.push(book_dir.join(without_parent));
-        }
-
-        // Strategy 4: Try adding OEBPS prefix if not present
-        if !clean_href.starts_with("OEBPS/") && !clean_href.starts_with("../") {
-            paths_to_try.push(book_dir.join("OEBPS").join(clean_href));
+        // Fallback: some older EPUBs hardcode OEBPS.
+        if content_root != Path::new("OEBPS") {
+            let resolved_oebps = if resolved_rel.starts_with("OEBPS") {
+                normalize_path(&resolved_rel)
+            } else {
+                normalize_path(&Path::new("OEBPS").join(&resolved_rel))
+            };
+            paths_to_try.push(book_dir.join(resolved_oebps));
         }
 
         // Try each path in order
@@ -202,6 +234,40 @@ impl ImageStorage {
             "Image not found: '{image_href}' with chapter context {chapter_path:?} (tried: {paths_to_try:?})"
         );
         None
+    }
+}
+
+fn content_root_from_rootfile(root_file: &Path) -> Option<PathBuf> {
+    root_file.parent().and_then(|parent| {
+        if parent.as_os_str().is_empty() {
+            None
+        } else {
+            Some(parent.to_path_buf())
+        }
+    })
+}
+
+fn content_root_from_epub(epub_path: &Path) -> Result<Option<PathBuf>> {
+    if epub_path.is_dir() {
+        let container_path = epub_path.join("META-INF").join("container.xml");
+        if !container_path.is_file() {
+            return Ok(None);
+        }
+        let xml = fs::read_to_string(&container_path)
+            .with_context(|| format!("Failed to read container.xml: {container_path:?}"))?;
+        let doc = Document::parse(&xml)
+            .with_context(|| format!("Failed to parse container.xml: {container_path:?}"))?;
+        let rootfile = doc
+            .descendants()
+            .find(|n| n.has_tag_name("rootfile"))
+            .and_then(|n| n.attribute("full-path"));
+        Ok(rootfile.map(|path| content_root_from_rootfile(Path::new(path))).flatten())
+    } else {
+        let file = fs::File::open(epub_path)
+            .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;
+        let doc = EpubDoc::from_reader(BufReader::new(file))
+            .with_context(|| format!("Failed to parse EPUB: {epub_path:?}"))?;
+        Ok(content_root_from_rootfile(&doc.root_file))
     }
 }
 
@@ -316,6 +382,21 @@ fn normalize_path(path: &Path) -> PathBuf {
                 components.push(component);
             }
         }
+    }
+
+    components.iter().collect()
+}
+
+fn strip_leading_parents(path: &Path) -> PathBuf {
+    let mut components = Vec::new();
+    let mut skipping = true;
+
+    for component in path.components() {
+        if skipping && matches!(component, std::path::Component::ParentDir) {
+            continue;
+        }
+        skipping = false;
+        components.push(component);
     }
 
     components.iter().collect()
