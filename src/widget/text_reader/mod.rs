@@ -134,8 +134,27 @@ impl MarkdownTextReader {
                     .iter()
                     .any(|c| matches!(c, Capability::Sixel));
 
+                // Detect if we're in WezTerm.
+                // WezTerm's Kitty graphics implementation is buggy - it maps images to terminal
+                // cells differently than Kitty, causing artifacts when text overwrites images.
+                // iTerm2 protocol works best in WezTerm.
+                // See: https://github.com/wezterm/wezterm/issues/986
+                let is_wezterm = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("WezTerm"));
+
+                // Detect if we're in iTerm2.
+                // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
+                let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
+
                 // Prefer: Kitty > Sixel > iTerm > Halfblocks
-                let chosen_protocol = if has_kitty {
+                // For WezTerm: Force iTerm2 protocol
+                // For iTerm2: Try Sixel
+                let chosen_protocol = if is_iterm2 {
+                    info!("iTerm2 detected. Using Sixel protocol.");
+                    ProtocolType::Sixel
+                } else if is_wezterm {
+                    info!("WezTerm detected. Using iTerm2 protocol.");
+                    ProtocolType::Iterm2
+                } else if has_kitty {
                     info!("Kitty protocol detected, using Kitty");
                     ProtocolType::Kitty
                 } else if has_sixel {

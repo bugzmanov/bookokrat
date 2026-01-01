@@ -2030,6 +2030,109 @@
                     </div>
                 </div>
             </section>
+
+            <section class="section" id="terminals" style="padding: 6rem 2rem">
+                <div class="section-label">terminal support</div>
+                <h2 class="section-title">Image Rendering</h2>
+                <p class="section-description">
+                    Bookokrat auto-detects the best image protocol for your terminal. Here's what to expect.
+                </p>
+
+                <div style="max-width: 900px;">
+                    <!-- Experience tiers -->
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 3rem;">
+                        <div style="background: linear-gradient(180deg, rgba(0,255,136,0.1) 0%, transparent 100%); border: 1px solid #00ff88; padding: 1.5rem; text-align: center;">
+                            <div style="color: #00ff88; font-size: 1.5rem; margin-bottom: 0.5rem;">★★★</div>
+                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #00ff88; margin-bottom: 1rem;">EXCELLENT</div>
+                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
+                                Kitty<br/>Ghostty<br/>iTerm2
+                            </div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.02); border: 1px solid #666; padding: 1.5rem; text-align: center;">
+                            <div style="color: #666; font-size: 1.5rem; margin-bottom: 0.5rem;">★★☆</div>
+                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #666; margin-bottom: 1rem;">GOOD</div>
+                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
+                                WezTerm<br/><span style="font-size: 0.75rem; color: #666;">(some flickering)</span>
+                            </div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.02); border: 1px solid #333; padding: 1.5rem; text-align: center;">
+                            <div style="color: #333; font-size: 1.5rem; margin-bottom: 0.5rem;">★☆☆</div>
+                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #333; margin-bottom: 1rem;">BASIC</div>
+                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
+                                Alacritty<br/>Linux default terminal<br/><span style="font-size: 0.75rem; color: #666;">(halfblocks)</span>
+                            </div>
+                        </div>
+                        <div style="background: rgba(255,0,0,0.02); border: 1px solid #ff6666; padding: 1.5rem; text-align: center;">
+                            <div style="color: #ff6666; font-size: 1.5rem; margin-bottom: 0.5rem;">✗</div>
+                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #ff6666; margin-bottom: 1rem;">NO IMAGES</div>
+                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
+                                macOS<br/>Terminal.app
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Protocol details table -->
+                    <table style="border-collapse: collapse; width: 100%; font-size: 0.875rem; background: #0a0a0a; border: 1px solid #1a1a1a;">
+                        <thead>
+                            <tr style="background: #000;">
+                                <th style="text-align: left; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Terminal</th>
+                                <th style="text-align: center; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Protocol</th>
+                                <th style="text-align: left; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Kitty</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Kitty</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native support</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Ghostty</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Kitty</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native support</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">iTerm2</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Sixel</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native protocol causes flickering; Kitty buggy in recent betas</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">WezTerm</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">iTerm2</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">
+                                    Kitty buggy (<a href="https://github.com/wezterm/wezterm/issues/986" target="_blank" style="color: #00ff88;">#986</a>);
+                                    Sixel broken on Windows (<a href="https://github.com/wezterm/wezterm/issues/5758" target="_blank" style="color: #00ff88;">#5758</a>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Alacritty</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Halfblocks</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">
+                                    No graphics protocol support (<a href="https://github.com/alacritty/alacritty/issues/910" target="_blank" style="color: #00ff88;">#910</a>)
+                                </td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Others</td>
+                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Auto-detect</td>
+                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Kitty → Sixel → iTerm2 → Halfblocks</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <!-- Call to action -->
+                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #1a1a1a; display: flex; align-items: center; gap: 1rem;">
+                        <span style="color: #00ff88; font-size: 1.5rem;">?</span>
+                        <div style="flex: 1;">
+                            <div style="color: #fff; font-size: 0.95rem;">
+                                Images look wrong? Check <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem;">bookokrat.log</code> for the detected protocol.
+                            </div>
+                            <div style="color: #666; font-size: 0.875rem; margin-top: 0.5rem;">
+                                Experiencing issues not covered above? Just <a href="https://github.com/bugzmanov/bookokrat/issues" target="_blank" style="color: #00ff88;">open an issue</a> — happy to help!
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
         </main>
 
         <footer>

@@ -127,6 +127,27 @@ All popups (search results, reading history, book stats) support:
 - `Enter` - Activate selection
 - `Esc` - Close popup
 
+## Image Rendering
+
+Bookokrat automatically selects the best image protocol for your terminal:
+
+| Terminal | Protocol | Reason |
+|----------|----------|--------|
+| **Kitty** | Kitty | Native support |
+| **Ghostty** | Kitty | Native support |
+| **iTerm2** | Sixel | Native protocol causes flickering; Kitty buggy in recent betas |
+| **WezTerm** | iTerm2 | Kitty is buggy ([#986](https://github.com/wezterm/wezterm/issues/986)); Sixel broken on Windows ([#5758](https://github.com/wezterm/wezterm/issues/5758)); some flickering expected |
+| **Alacritty** | Halfblocks | No graphics protocol support ([#910](https://github.com/alacritty/alacritty/issues/910)) |
+| **Others** | Auto-detected | Kitty > Sixel > iTerm2 > Halfblocks |
+
+**Experience by terminal:**
+- **Excellent:** Kitty, Ghostty, iTerm2
+- **Good:** WezTerm (some flickering)
+- **Basic:** Alacritty, Linux default terminals (Halfblocks fallback)
+- **No images:** macOS Terminal.app (no graphics protocol support)
+
+If images look wrong, check `bookokrat.log` for the detected protocol. Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
+
 ## Mouse Support
 - Scroll with the wheel over either pane; Bookokrat batches rapid wheel events for smooth scrolling.
 - Single-click focuses a pane; double-click in the library opens the selection; double-click in the reader selects a word; triple-click selects the paragraph.
