@@ -94,6 +94,8 @@ impl BookManager {
         if self.is_html_file(path) {
             // For HTML files, create a fake EPUB
             self.create_fake_epub_from_html(path)
+        } else if Self::is_epub_directory(Path::new(path)) {
+            self.create_epub_from_directory(Path::new(path))
         } else {
             info!("Attempting to load EPUB file: {path}");
             match EpubDoc::new(path) {
@@ -154,6 +156,100 @@ impl BookManager {
                     error!("Failed to create EpubDoc for {path}: {e}");
                     Err(format!("Failed to load EPUB: {e}"))
                 }
+            }
+        }
+    }
+
+    fn is_epub_directory(path: &Path) -> bool {
+        if !path.is_dir() {
+            return false;
+        }
+
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some(ext) => ext == "epub",
+            None => false,
+        }
+    }
+
+    fn create_epub_from_directory(
+        &self,
+        dir: &Path,
+    ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use walkdir::WalkDir;
+        use zip::write::FileOptions;
+
+        info!("Creating temporary EPUB from directory: {dir:?}");
+
+        let temp_file =
+            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
+        let temp_path = temp_file.path().to_path_buf();
+
+        {
+            let file = std::fs::File::create(&temp_path)
+                .map_err(|e| format!("Failed to create temp EPUB file: {e}"))?;
+            let mut zip = zip::ZipWriter::new(file);
+
+            let stored = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+            let deflated =
+                FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+            let mimetype_path = dir.join("mimetype");
+            if mimetype_path.is_file() {
+                let data = std::fs::read(&mimetype_path)
+                    .map_err(|e| format!("Failed to read mimetype: {e}"))?;
+                zip.start_file("mimetype", stored)
+                    .map_err(|e| format!("Failed to add mimetype: {e}"))?;
+                zip.write_all(&data)
+                    .map_err(|e| format!("Failed to write mimetype: {e}"))?;
+            } else {
+                info!("Exploded EPUB missing mimetype file: {mimetype_path:?}");
+            }
+
+            let mut files = Vec::new();
+            for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+                if entry.file_type().is_file() {
+                    if entry.file_name() == ".DS_Store" {
+                        continue;
+                    }
+
+                    let rel = entry
+                        .path()
+                        .strip_prefix(dir)
+                        .map_err(|e| format!("Failed to strip prefix: {e}"))?;
+                    if rel == Path::new("mimetype") {
+                        continue;
+                    }
+                    files.push(rel.to_path_buf());
+                }
+            }
+
+            files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+            for rel in files {
+                let full_path = dir.join(&rel);
+                let zip_path = rel.to_string_lossy().replace('\\', "/");
+                zip.start_file(zip_path, deflated)
+                    .map_err(|e| format!("Failed to add file to EPUB: {e}"))?;
+                let data = std::fs::read(&full_path)
+                    .map_err(|e| format!("Failed to read file {full_path:?}: {e}"))?;
+                zip.write_all(&data)
+                    .map_err(|e| format!("Failed to write file {full_path:?}: {e}"))?;
+            }
+
+            zip.finish()
+                .map_err(|e| format!("Failed to finish EPUB ZIP: {e}"))?;
+        }
+
+        match EpubDoc::new(&temp_path) {
+            Ok(mut doc) => {
+                info!("Successfully created EPUB from directory: {dir:?}");
+                let _ = doc.set_current_chapter(0);
+                Ok(doc)
+            }
+            Err(e) => {
+                error!("Failed to open created EPUB from directory: {e}");
+                Err(format!("Failed to open created EPUB: {e}"))
             }
         }
     }
@@ -355,5 +451,103 @@ impl BookManager {
             Some(ext) => ext == "html" || ext == "htm",
             None => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn write_file(path: &Path, contents: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, contents.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn load_exploded_epub_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let book_dir = temp_dir.path().join("book.epub");
+
+        fs::create_dir_all(&book_dir).unwrap();
+
+        write_file(book_dir.join("mimetype").as_path(), "application/epub+zip");
+
+        write_file(
+            book_dir.join("META-INF/container.xml").as_path(),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+        );
+
+        write_file(
+            book_dir.join("OEBPS/content.opf").as_path(),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Exploded</dc:title>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="bookid">exploded-1</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+    </metadata>
+    <manifest>
+        <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="chapter1"/>
+    </spine>
+</package>"#,
+        );
+
+        write_file(
+            book_dir.join("OEBPS/toc.ncx").as_path(),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="exploded-1"/>
+        <meta name="dtb:depth" content="1"/>
+        <meta name="dtb:totalPageCount" content="0"/>
+        <meta name="dtb:maxPageNumber" content="0"/>
+    </head>
+    <docTitle>
+        <text>Exploded</text>
+    </docTitle>
+    <navMap>
+        <navPoint id="chapter1" playOrder="1">
+            <navLabel>
+                <text>Chapter 1</text>
+            </navLabel>
+            <content src="chapter1.xhtml"/>
+        </navPoint>
+    </navMap>
+</ncx>"#,
+        );
+
+        write_file(
+            book_dir.join("OEBPS/chapter1.xhtml").as_path(),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Exploded</title>
+</head>
+<body>
+    <p>Hello</p>
+</body>
+</html>"#,
+        );
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let book_path = book_dir.to_str().unwrap();
+        let mut doc = manager.load_epub(book_path).unwrap();
+
+        assert!(doc.get_num_chapters() >= 1);
+        assert!(doc.get_current_str().is_some());
     }
 }

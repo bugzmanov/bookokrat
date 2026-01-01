@@ -86,10 +86,15 @@ impl ImageStorage {
         fs::create_dir_all(&book_dir)
             .with_context(|| format!("Failed to create book directory: {book_dir:?}"))?;
 
-        let file = fs::File::open(epub_path)
-            .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;
-        let mut doc = EpubDoc::from_reader(BufReader::new(file))
-            .with_context(|| format!("Failed to parse EPUB: {epub_path:?}"))?;
+        let mut doc = if epub_path.is_dir() {
+            create_epub_from_directory(epub_path)
+                .with_context(|| format!("Failed to open exploded EPUB: {epub_path:?}"))?
+        } else {
+            let file = fs::File::open(epub_path)
+                .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;
+            EpubDoc::from_reader(BufReader::new(file))
+                .with_context(|| format!("Failed to parse EPUB: {epub_path:?}"))?
+        };
 
         let resources = doc.resources.clone();
         info!("Found {} resources in EPUB", resources.len());
@@ -200,6 +205,75 @@ impl ImageStorage {
     }
 }
 
+fn create_epub_from_directory(dir: &Path) -> Result<EpubDoc<BufReader<std::fs::File>>> {
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+    use walkdir::WalkDir;
+    use zip::write::FileOptions;
+
+    info!("Creating temporary EPUB from directory: {dir:?}");
+
+    let temp_file = NamedTempFile::new().context("Failed to create temp file")?;
+    let temp_path = temp_file.path().to_path_buf();
+
+    {
+        let file = std::fs::File::create(&temp_path)
+            .with_context(|| format!("Failed to create temp EPUB file: {temp_path:?}"))?;
+        let mut zip = zip::ZipWriter::new(file);
+
+        let stored = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let deflated = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        let mimetype_path = dir.join("mimetype");
+        if mimetype_path.is_file() {
+            let data = std::fs::read(&mimetype_path)
+                .with_context(|| format!("Failed to read mimetype: {mimetype_path:?}"))?;
+            zip.start_file("mimetype", stored)
+                .context("Failed to add mimetype to zip")?;
+            zip.write_all(&data)
+                .context("Failed to write mimetype to zip")?;
+        } else {
+            warn!("Exploded EPUB missing mimetype file: {mimetype_path:?}");
+        }
+
+        let mut files = Vec::new();
+        for entry in WalkDir::new(dir).into_iter().filter_map(Result::ok) {
+            if entry.file_type().is_file() {
+                if entry.file_name() == ".DS_Store" {
+                    continue;
+                }
+
+                let rel = entry
+                    .path()
+                    .strip_prefix(dir)
+                    .context("Failed to strip prefix for EPUB directory entry")?;
+                if rel == Path::new("mimetype") {
+                    continue;
+                }
+                files.push(rel.to_path_buf());
+            }
+        }
+
+        files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        for rel in files {
+            let full_path = dir.join(&rel);
+            let zip_path = rel.to_string_lossy().replace('\\', "/");
+            zip.start_file(zip_path, deflated)
+                .context("Failed to add file to EPUB zip")?;
+            let data = std::fs::read(&full_path)
+                .with_context(|| format!("Failed to read file {full_path:?}"))?;
+            zip.write_all(&data)
+                .with_context(|| format!("Failed to write file {full_path:?}"))?;
+        }
+
+        zip.finish().context("Failed to finish EPUB zip")?;
+    }
+
+    let file = std::fs::File::open(&temp_path)
+        .with_context(|| format!("Failed to open temp EPUB file: {temp_path:?}"))?;
+    EpubDoc::from_reader(BufReader::new(file)).context("Failed to parse temp EPUB")
+}
+
 fn is_image_mime_type(mime_type: &str) -> bool {
     mime_type.starts_with("image/")
         || matches!(
@@ -272,6 +346,7 @@ fn collect_images_recursive(dir: &Path, images: &mut Vec<PathBuf>) -> Result<()>
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use walkdir::WalkDir;
 
     #[test]
     fn test_image_storage_creation() {
@@ -299,5 +374,95 @@ mod tests {
             sanitize_filename("name:with*special?chars"),
             "name_with_special_chars"
         );
+    }
+
+    #[test]
+    fn extract_images_from_exploded_epub() {
+        let base_dir = TempDir::new().unwrap();
+        let book_dir_root = TempDir::new().unwrap();
+        let book_dir = book_dir_root.path().join("book.epub");
+
+        fs::create_dir_all(&book_dir).unwrap();
+        fs::write(book_dir.join("mimetype"), b"application/epub+zip").unwrap();
+
+        let container_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#;
+        fs::create_dir_all(book_dir.join("META-INF")).unwrap();
+        fs::write(book_dir.join("META-INF/container.xml"), container_xml).unwrap();
+
+        let content_opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="bookid" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Exploded</dc:title>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="bookid">exploded-2</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+    </metadata>
+    <manifest>
+        <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+        <item id="cover" href="images/cover.jpg" media-type="image/jpeg"/>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="chapter1"/>
+    </spine>
+</package>"#;
+        fs::create_dir_all(book_dir.join("OEBPS/images")).unwrap();
+        fs::write(book_dir.join("OEBPS/content.opf"), content_opf).unwrap();
+        fs::write(
+            book_dir.join("OEBPS/chapter1.xhtml"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Exploded</title>
+</head>
+<body>
+    <p>Hi</p>
+</body>
+</html>"#,
+        )
+        .unwrap();
+        fs::write(
+            book_dir.join("OEBPS/toc.ncx"),
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="exploded-2"/>
+        <meta name="dtb:depth" content="1"/>
+        <meta name="dtb:totalPageCount" content="0"/>
+        <meta name="dtb:maxPageNumber" content="0"/>
+    </head>
+    <docTitle>
+        <text>Exploded</text>
+    </docTitle>
+    <navMap>
+        <navPoint id="chapter1" playOrder="1">
+            <navLabel>
+                <text>Chapter 1</text>
+            </navLabel>
+            <content src="chapter1.xhtml"/>
+        </navPoint>
+    </navMap>
+</ncx>"#,
+        )
+        .unwrap();
+        fs::write(book_dir.join("OEBPS/images/cover.jpg"), b"fakejpg").unwrap();
+
+        let storage = ImageStorage::new(base_dir.path().to_path_buf()).unwrap();
+        storage.extract_images(&book_dir).unwrap();
+
+        let mut found = false;
+        for entry in WalkDir::new(base_dir.path()).into_iter().flatten() {
+            if entry.path().extension().and_then(|e| e.to_str()) == Some("jpg") {
+                found = true;
+                break;
+            }
+        }
+
+        assert!(found, "expected extracted .jpg in image storage");
     }
 }

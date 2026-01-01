@@ -3675,6 +3675,7 @@ fn test_margin_change_no_position_jump_svg() {
     );
 
     // Scroll down significantly to be in the middle of the chapter
+    app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
     for _ in 0..10 {
         app.press_key(crossterm::event::KeyCode::Char('j'));
     }
