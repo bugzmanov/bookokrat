@@ -8,7 +8,7 @@ mod selection;
 mod text_selection;
 mod types;
 
-pub use normal_mode::{PendingCharMotion, PendingYank};
+pub use normal_mode::{PendingCharMotion, PendingYank, VisualMode};
 pub use types::*;
 
 use crate::comments::{BookComments, Comment};
@@ -432,6 +432,9 @@ impl MarkdownTextReader {
 
                 // Apply yank highlight (before cursor so cursor shows on top)
                 line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
+
+                // Apply visual mode selection highlight
+                line_spans = self.apply_visual_highlight(line_idx, line_spans, palette);
 
                 if self.normal_mode.is_active() {
                     line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);

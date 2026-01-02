@@ -2922,6 +2922,211 @@ impl App {
                 }
             }
 
+            // Handle visual mode keys when active
+            if self.text_reader.is_visual_mode_active() {
+                use crate::markdown_text_reader::VisualMode;
+                let visual_mode = self.text_reader.get_visual_mode();
+
+                // Check for pending f/F/t/T motion in visual mode
+                if self.text_reader.has_pending_motion() {
+                    if let KeyCode::Char(ch) = key.code {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.execute_pending_find(ch);
+                        }
+                    } else {
+                        self.text_reader.clear_pending_motion();
+                        self.text_reader.clear_count();
+                    }
+                    return None;
+                }
+
+                match key.code {
+                    KeyCode::Char('y') => {
+                        if let Some(text) = self.text_reader.yank_visual_selection() {
+                            let _ = self.text_reader.copy_to_clipboard(text);
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Esc => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('v') if visual_mode == VisualMode::CharacterWise => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('V') if visual_mode == VisualMode::LineWise => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('v') if visual_mode == VisualMode::LineWise => {
+                        self.text_reader
+                            .enter_visual_mode(VisualMode::CharacterWise);
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('V') if visual_mode == VisualMode::CharacterWise => {
+                        self.text_reader.enter_visual_mode(VisualMode::LineWise);
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    // Navigation keys in visual mode - same as normal mode
+                    KeyCode::Char('h') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_left();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('j') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_down();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('k') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_up();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('l') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_right();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('w') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_word_forward();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('W') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_big_word_forward();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('e') | KeyCode::Char('E') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_word_end();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('b') | KeyCode::Char('B') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_word_backward();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('0') => {
+                        self.text_reader.clear_count();
+                        self.text_reader.normal_mode_line_start();
+                        return None;
+                    }
+                    KeyCode::Char('^') => {
+                        self.text_reader.clear_count();
+                        self.text_reader.normal_mode_first_non_whitespace();
+                        return None;
+                    }
+                    KeyCode::Char('$') => {
+                        self.text_reader.clear_count();
+                        self.text_reader.normal_mode_line_end();
+                        return None;
+                    }
+                    KeyCode::Char('{') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_paragraph_up();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('}') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.normal_mode_paragraph_down();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('g') => {
+                        let seq = self.key_sequence.handle_key('g');
+                        if seq == "gg" {
+                            self.text_reader.clear_count();
+                            self.text_reader.normal_mode_document_top();
+                            self.key_sequence.clear();
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('G') => {
+                        self.text_reader.clear_count();
+                        self.text_reader.normal_mode_document_bottom();
+                        return None;
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.text_reader.clear_count();
+                        if let Some(h) = screen_height {
+                            self.text_reader.normal_mode_half_page_down(h);
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.text_reader.clear_count();
+                        if let Some(h) = screen_height {
+                            self.text_reader.normal_mode_half_page_up(h);
+                        }
+                        return None;
+                    }
+                    KeyCode::Char('f') => {
+                        self.text_reader.set_pending_find_forward();
+                        return None;
+                    }
+                    KeyCode::Char('F') => {
+                        self.text_reader.set_pending_find_backward();
+                        return None;
+                    }
+                    KeyCode::Char('t') => {
+                        self.text_reader.set_pending_till_forward();
+                        return None;
+                    }
+                    KeyCode::Char('T') => {
+                        self.text_reader.set_pending_till_backward();
+                        return None;
+                    }
+                    KeyCode::Char(';') => {
+                        let count = self.text_reader.take_count();
+                        for _ in 0..count {
+                            self.text_reader.repeat_last_find();
+                        }
+                        return None;
+                    }
+                    _ => {
+                        // Handle digit input in visual mode
+                        if let KeyCode::Char(ch) = key.code {
+                            if ch.is_ascii_digit()
+                                && (ch != '0' || self.text_reader.has_pending_count())
+                            {
+                                self.text_reader.append_count_digit(ch);
+                                return None;
+                            }
+                        }
+                    }
+                }
+                return None;
+            }
+
             // Handle digit input for count prefix (1-9, or 0 if count already started)
             if let KeyCode::Char(ch) = key.code {
                 if ch.is_ascii_digit() {
@@ -2935,6 +3140,19 @@ impl App {
             }
 
             match key.code {
+                KeyCode::Char('v') => {
+                    use crate::markdown_text_reader::VisualMode;
+                    self.text_reader
+                        .enter_visual_mode(VisualMode::CharacterWise);
+                    self.text_reader.clear_count();
+                    return None;
+                }
+                KeyCode::Char('V') => {
+                    use crate::markdown_text_reader::VisualMode;
+                    self.text_reader.enter_visual_mode(VisualMode::LineWise);
+                    self.text_reader.clear_count();
+                    return None;
+                }
                 KeyCode::Char('y') => {
                     self.text_reader.start_yank();
                     return None;

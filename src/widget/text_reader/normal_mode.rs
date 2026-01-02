@@ -26,6 +26,14 @@ pub enum PendingCharMotion {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum VisualMode {
+    #[default]
+    None,
+    CharacterWise, // v
+    LineWise,      // V
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PendingYank {
     #[default]
     None,
@@ -77,6 +85,8 @@ pub struct NormalModeState {
     pub pending_yank: PendingYank,
     pub yank_highlight: Option<YankHighlight>,
     pub count: Option<usize>,
+    pub visual_mode: VisualMode,
+    pub visual_anchor: Option<CursorPosition>,
 }
 
 impl Default for NormalModeState {
@@ -90,6 +100,8 @@ impl Default for NormalModeState {
             pending_yank: PendingYank::None,
             yank_highlight: None,
             count: None,
+            visual_mode: VisualMode::None,
+            visual_anchor: None,
         }
     }
 }
@@ -106,6 +118,8 @@ impl NormalModeState {
 
     pub fn deactivate(&mut self) {
         self.active = false;
+        self.visual_mode = VisualMode::None;
+        self.visual_anchor = None;
     }
 
     pub fn is_active(&self) -> bool {
@@ -131,8 +145,11 @@ impl MarkdownTextReader {
                 self.normal_mode.active = true;
                 self.clamp_column_to_line_length();
             } else {
-                // Position outside viewport or on invalid line - place at top-left
-                let mut initial_line = self.scroll_offset;
+                // Position outside viewport or on invalid line - place with scrolloff margin
+                let scrolloff = self.normal_mode.scrolloff;
+                let mut initial_line = self.scroll_offset + scrolloff;
+                // Clamp to valid range
+                initial_line = initial_line.min(self.total_wrapped_lines.saturating_sub(1));
                 initial_line = self.find_next_valid_line(initial_line, 1);
                 let initial_column = self.get_first_non_whitespace_column(initial_line);
                 self.normal_mode.activate(initial_line, initial_column);
@@ -1852,6 +1869,173 @@ impl MarkdownTextReader {
                 while end_pos < span_len {
                     let next_global = current_column + end_pos;
                     if highlight.contains(line_idx, next_global) != is_highlighted {
+                        break;
+                    }
+                    end_pos += 1;
+                }
+
+                segments.push((pos, end_pos, is_highlighted));
+                pos = end_pos;
+            }
+
+            for (start, end, is_highlighted) in segments {
+                let text: String = span_text[start..end].iter().collect();
+                let style = if is_highlighted {
+                    highlight_style
+                } else {
+                    span.style
+                };
+                result_spans.push(Span::styled(text, style));
+            }
+
+            current_column = span_end;
+        }
+
+        result_spans
+    }
+
+    // ==================== VISUAL MODE ====================
+
+    pub fn enter_visual_mode(&mut self, mode: VisualMode) {
+        if !self.normal_mode.active {
+            return;
+        }
+        self.normal_mode.visual_mode = mode;
+        self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
+    }
+
+    pub fn exit_visual_mode(&mut self) {
+        self.normal_mode.visual_mode = VisualMode::None;
+        self.normal_mode.visual_anchor = None;
+    }
+
+    pub fn is_visual_mode_active(&self) -> bool {
+        self.normal_mode.visual_mode != VisualMode::None
+    }
+
+    pub fn get_visual_mode(&self) -> VisualMode {
+        self.normal_mode.visual_mode
+    }
+
+    pub fn get_visual_selection_range(&self) -> Option<(usize, usize, usize, usize)> {
+        let anchor = self.normal_mode.visual_anchor.as_ref()?;
+        let cursor = &self.normal_mode.cursor;
+
+        match self.normal_mode.visual_mode {
+            VisualMode::None => None,
+            VisualMode::CharacterWise => {
+                let (start_line, start_col, end_line, end_col) = if anchor.line < cursor.line
+                    || (anchor.line == cursor.line && anchor.column <= cursor.column)
+                {
+                    (anchor.line, anchor.column, cursor.line, cursor.column + 1)
+                } else {
+                    (cursor.line, cursor.column, anchor.line, anchor.column + 1)
+                };
+                Some((start_line, start_col, end_line, end_col))
+            }
+            VisualMode::LineWise => {
+                let (start_line, end_line) = if anchor.line <= cursor.line {
+                    (anchor.line, cursor.line)
+                } else {
+                    (cursor.line, anchor.line)
+                };
+                let end_len = self
+                    .raw_text_lines
+                    .get(end_line)
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0);
+                Some((start_line, 0, end_line, end_len))
+            }
+        }
+    }
+
+    pub fn yank_visual_selection(&mut self) -> Option<String> {
+        let (start_line, start_col, end_line, end_col) = self.get_visual_selection_range()?;
+
+        let text = match self.normal_mode.visual_mode {
+            VisualMode::LineWise => self.extract_lines(start_line, end_line)?,
+            VisualMode::CharacterWise => {
+                self.extract_text(start_line, start_col, end_line, end_col)?
+            }
+            VisualMode::None => return None,
+        };
+
+        self.set_yank_highlight(start_line, start_col, end_line, end_col);
+
+        // Move cursor to start of selection (vim behavior)
+        self.normal_mode.cursor.line = start_line;
+        self.normal_mode.cursor.column = start_col;
+
+        self.exit_visual_mode();
+        Some(text)
+    }
+
+    pub fn is_in_visual_selection(&self, line: usize, col: usize) -> bool {
+        let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
+        else {
+            return false;
+        };
+
+        if line < start_line || line > end_line {
+            return false;
+        }
+
+        match self.normal_mode.visual_mode {
+            VisualMode::LineWise => true,
+            VisualMode::CharacterWise => {
+                if start_line == end_line {
+                    col >= start_col && col < end_col
+                } else if line == start_line {
+                    col >= start_col
+                } else if line == end_line {
+                    col < end_col
+                } else {
+                    true
+                }
+            }
+            VisualMode::None => false,
+        }
+    }
+
+    pub fn apply_visual_highlight(
+        &self,
+        line_idx: usize,
+        spans: Vec<Span<'static>>,
+        palette: &Base16Palette,
+    ) -> Vec<Span<'static>> {
+        if !self.is_visual_mode_active() {
+            return spans;
+        }
+
+        let Some((start_line, _, end_line, _)) = self.get_visual_selection_range() else {
+            return spans;
+        };
+
+        if line_idx < start_line || line_idx > end_line {
+            return spans;
+        }
+
+        let mut result_spans = Vec::new();
+        let mut current_column = 0;
+
+        let highlight_style = RatatuiStyle::default().bg(palette.base_02);
+
+        for span in spans {
+            let span_text: Vec<char> = span.content.chars().collect();
+            let span_len = span_text.len();
+            let span_end = current_column + span_len;
+
+            let mut segments: Vec<(usize, usize, bool)> = vec![];
+            let mut pos = 0;
+
+            while pos < span_len {
+                let global_col = current_column + pos;
+                let is_highlighted = self.is_in_visual_selection(line_idx, global_col);
+
+                let mut end_pos = pos + 1;
+                while end_pos < span_len {
+                    let next_global = current_column + end_pos;
+                    if self.is_in_visual_selection(line_idx, next_global) != is_highlighted {
                         break;
                     }
                     end_pos += 1;
