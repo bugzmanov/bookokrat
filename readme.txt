@@ -4,6 +4,7 @@
 
   [LIBRARY]
     ▸ Automatic EPUB discovery in current directory
+    ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
     ▸ Split-view interface with library browser and reader
     ▸ Hierarchical table of contents with expandable sections
     ▸ Automatic bookmarks - resume exactly where you left off
@@ -13,9 +14,10 @@
     ▸ Full MathML rendering with ASCII art conversion
     ▸ Embedded image display with zoom popup viewer
     ▸ Syntax-highlighted code blocks
-    ▸ Formatted tables rendered for terminal
+    ▸ Advanced table rendering with rich cell content
     ▸ Raw HTML view for debugging
     ▸ Reading progress tracking with time estimates
+    ▸ Auto-selected image protocol per terminal (Kitty/Sixel/iTerm2/Halfblocks)
 
   [SEARCH & NAVIGATION]
     ▸ Chapter-level search with fuzzy matching
@@ -32,6 +34,7 @@
 
   [POWER USER]
     ▸ Vim-like keybindings throughout
+    ▸ Reader normal mode with motions, counts, visual selection, and yanks
     ▸ Full keyboard and mouse control
     ▸ External EPUB reader integration
     ▸ Performance profiling overlay
@@ -88,6 +91,7 @@
 │  h / l         Previous / next chapter                                      │
 │  Ctrl+o        Jump backward in history                                     │
 │  Ctrl+i        Jump forward in history                                      │
+│  n             Toggle normal mode                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -97,6 +101,19 @@
 │  n / N         Next / previous search result                                │
 │  Space+f       Reopen last book-wide search                                 │
 │  Space+F       Start fresh book-wide search                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ READER PANEL - NORMAL MODE (press n to enter/exit)                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  h/j/k/l       Move cursor                                                   │
+│  w/W/b/e       Word motions (small/Big)                                      │
+│  0/^/$         Line start / first non-space / end                            │
+│  gg / G        Top / bottom of document                                     │
+│  f/F/t/T ;     Find/till char and repeat                                    │
+│  v / V         Visual selection (char/line)                                 │
+│  y             Yank (copy) with motions/objects or visual selection          │
+│  Esc           Exit visual mode                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐

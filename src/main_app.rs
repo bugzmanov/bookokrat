@@ -16,7 +16,7 @@ use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
-use crate::search_engine::SearchEngine;
+use crate::search_engine::{SearchEngine, SearchLine};
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
@@ -2210,10 +2210,25 @@ impl App {
         f.render_widget(right_para, inner_area);
     }
 
+    fn toggle_zen_mode(&mut self) {
+        // Save current content position before toggling zen mode
+        let current_node = self.text_reader.get_current_node_index();
+        self.zen_mode = !self.zen_mode;
+        // Restore position after width change causes re-render
+        self.text_reader.restore_to_node_index(current_node);
+        // When entering zen mode while on NavigationList, switch to Content
+        if self.zen_mode
+            && self.is_main_panel(MainPanel::NavigationList)
+            && self.current_book.is_some()
+        {
+            self.set_main_panel_focus(MainPanel::Content);
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
             KeyCode::Char('?') => {
@@ -2232,6 +2247,10 @@ impl App {
             KeyCode::Char(c) if self.key_sequence.current_sequence() == " " => {
                 // Handle space + key combinations (global across all panels)
                 self.handle_key_sequence(c)
+            }
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_zen_mode();
+                true
             }
             _ => false,
         }
@@ -2424,6 +2443,187 @@ impl App {
         }
     }
 
+    fn handle_pending_find_motion(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        if self.text_reader.has_pending_motion() {
+            if let KeyCode::Char(ch) = key.code {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.execute_pending_find(ch);
+                }
+            } else {
+                self.text_reader.clear_pending_motion();
+                self.text_reader.clear_count();
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_normal_mode_count_prefix(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        if let KeyCode::Char(ch) = key.code {
+            if ch.is_ascii_digit() {
+                if ch != '0' || self.text_reader.has_pending_count() {
+                    return self.text_reader.append_count_digit(ch);
+                }
+            }
+        }
+
+        false
+    }
+
+    fn handle_common_normal_mode_motions(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+        screen_height: Option<usize>,
+    ) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
+            KeyCode::Char('h') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_left();
+                }
+                true
+            }
+            KeyCode::Char('j') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_down();
+                }
+                true
+            }
+            KeyCode::Char('k') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_up();
+                }
+                true
+            }
+            KeyCode::Char('l') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_right();
+                }
+                true
+            }
+            KeyCode::Char('w') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_forward();
+                }
+                true
+            }
+            KeyCode::Char('W') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_forward();
+                }
+                true
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_end();
+                }
+                true
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_backward();
+                }
+                true
+            }
+            KeyCode::Char('0') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_line_start();
+                true
+            }
+            KeyCode::Char('^') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_first_non_whitespace();
+                true
+            }
+            KeyCode::Char('$') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_line_end();
+                true
+            }
+            KeyCode::Char('{') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_paragraph_up();
+                }
+                true
+            }
+            KeyCode::Char('}') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_paragraph_down();
+                }
+                true
+            }
+            KeyCode::Char('g') => {
+                let seq = self.key_sequence.handle_key('g');
+                if seq == "gg" {
+                    self.text_reader.clear_count();
+                    self.text_reader.normal_mode_document_top();
+                    self.key_sequence.clear();
+                }
+                true
+            }
+            KeyCode::Char('G') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_document_bottom();
+                true
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_half_page_down(h);
+                }
+                true
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_half_page_up(h);
+                }
+                true
+            }
+            KeyCode::Char('f') => {
+                self.text_reader.set_pending_find_forward();
+                true
+            }
+            KeyCode::Char('F') => {
+                self.text_reader.set_pending_find_backward();
+                true
+            }
+            KeyCode::Char('t') => {
+                self.text_reader.set_pending_till_forward();
+                true
+            }
+            KeyCode::Char('T') => {
+                self.text_reader.set_pending_till_backward();
+                true
+            }
+            KeyCode::Char(';') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.repeat_last_find();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Handle a single key event with optional screen height for half-screen scrolling
     pub fn handle_key_event_with_screen_height(
         &mut self,
@@ -2464,14 +2664,18 @@ impl App {
                 match action {
                     BookSearchAction::JumpToChapter {
                         chapter_index,
-                        line_number,
+                        node_index,
+                        line_number: _,
+                        query,
                     } => {
                         self.set_main_panel_focus(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {chapter_index}: {e}");
                             self.show_error(format!("Failed to navigate to chapter: {e}"));
                         } else {
-                            self.text_reader.scroll_to_line(line_number);
+                            self.text_reader.restore_to_node_index(node_index);
+                            self.text_reader
+                                .queue_global_search_activation(query, node_index);
                         }
                     }
                     BookSearchAction::Close => {
@@ -2737,6 +2941,279 @@ impl App {
             }
         }
 
+        // Handle vim normal mode keys when active
+        if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
+            // Clear expired yank highlight
+            self.text_reader.clear_expired_yank_highlight();
+
+            // Check for pending f/F motion first
+            if self.handle_pending_find_motion(&key) {
+                return None;
+            }
+
+            // Check for pending yank
+            if self.text_reader.has_pending_yank() {
+                use crate::markdown_text_reader::{PendingCharMotion, PendingYank};
+                let pending = self.text_reader.get_pending_yank();
+
+                match pending {
+                    PendingYank::WaitingForMotion => {
+                        if let KeyCode::Char(ch) = key.code {
+                            // Check for sub-state transitions first (don't consume count)
+                            match ch {
+                                'g' => {
+                                    self.text_reader.set_pending_yank(PendingYank::WaitingForG);
+                                    return None;
+                                }
+                                'i' => {
+                                    self.text_reader
+                                        .set_pending_yank(PendingYank::WaitingForInnerObject);
+                                    return None;
+                                }
+                                'a' => {
+                                    self.text_reader
+                                        .set_pending_yank(PendingYank::WaitingForAroundObject);
+                                    return None;
+                                }
+                                'f' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::FindForward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                'F' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::FindBackward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                't' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::TillForward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                'T' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::TillBackward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                _ => {}
+                            }
+                            // Now consume count for actual yank operations
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'y' => self.text_reader.yank_line(count),
+                                'w' => self.text_reader.yank_word_forward(count),
+                                'W' => self.text_reader.yank_big_word_forward(count),
+                                'e' => self.text_reader.yank_word_end(count),
+                                'b' => self.text_reader.yank_word_backward(count),
+                                '$' => self.text_reader.yank_to_line_end(),
+                                '0' => self.text_reader.yank_to_line_start(),
+                                '^' => self.text_reader.yank_to_first_non_whitespace(),
+                                '{' => self.text_reader.yank_paragraph_up(count),
+                                '}' => self.text_reader.yank_paragraph_down(count),
+                                'G' => self.text_reader.yank_to_document_bottom(),
+                                _ => {
+                                    self.text_reader.clear_pending_yank();
+                                    self.text_reader.clear_count();
+                                    None
+                                }
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        } else {
+                            self.text_reader.clear_pending_yank();
+                            self.text_reader.clear_count();
+                        }
+                        return None;
+                    }
+                    PendingYank::WaitingForG => {
+                        self.text_reader.clear_count();
+                        if let KeyCode::Char('g') = key.code {
+                            if let Some(text) = self.text_reader.yank_to_document_top() {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForInnerObject => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'w' => self.text_reader.yank_inner_word(),
+                                'W' => self.text_reader.yank_inner_big_word(),
+                                'p' => self.text_reader.yank_inner_paragraph(count),
+                                '"' => self.text_reader.yank_inner_quotes('"'),
+                                '\'' => self.text_reader.yank_inner_quotes('\''),
+                                '`' => self.text_reader.yank_inner_quotes('`'),
+                                '(' | ')' => self.text_reader.yank_inner_brackets('(', ')'),
+                                '[' | ']' => self.text_reader.yank_inner_brackets('[', ']'),
+                                '{' | '}' => self.text_reader.yank_inner_brackets('{', '}'),
+                                '<' | '>' => self.text_reader.yank_inner_brackets('<', '>'),
+                                _ => None,
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForAroundObject => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'w' => self.text_reader.yank_a_word(),
+                                'W' => self.text_reader.yank_a_big_word(),
+                                'p' => self.text_reader.yank_a_paragraph(count),
+                                '"' => self.text_reader.yank_around_quotes('"'),
+                                '\'' => self.text_reader.yank_around_quotes('\''),
+                                '`' => self.text_reader.yank_around_quotes('`'),
+                                '(' | ')' => self.text_reader.yank_around_brackets('(', ')'),
+                                '[' | ']' => self.text_reader.yank_around_brackets('[', ']'),
+                                '{' | '}' => self.text_reader.yank_around_brackets('{', '}'),
+                                '<' | '>' => self.text_reader.yank_around_brackets('<', '>'),
+                                _ => None,
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForFindChar(motion) => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            if let Some(text) = self
+                                .text_reader
+                                .yank_find_char_with_count(motion, ch, count)
+                            {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        } else {
+                            self.text_reader.clear_count();
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::None => {}
+                }
+            }
+
+            // Handle visual mode keys when active
+            if self.text_reader.is_visual_mode_active() {
+                use crate::markdown_text_reader::VisualMode;
+                let visual_mode = self.text_reader.get_visual_mode();
+
+                match key.code {
+                    KeyCode::Char('y') => {
+                        if let Some(text) = self.text_reader.yank_visual_selection() {
+                            let _ = self.text_reader.copy_to_clipboard(text);
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Esc => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('v') if visual_mode == VisualMode::CharacterWise => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('V') if visual_mode == VisualMode::LineWise => {
+                        self.text_reader.exit_visual_mode();
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('v') if visual_mode == VisualMode::LineWise => {
+                        self.text_reader
+                            .enter_visual_mode(VisualMode::CharacterWise);
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('V') if visual_mode == VisualMode::CharacterWise => {
+                        self.text_reader.enter_visual_mode(VisualMode::LineWise);
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    _ => {
+                        if self.handle_common_normal_mode_motions(&key, screen_height) {
+                            return None;
+                        }
+                        if self.handle_normal_mode_count_prefix(&key) {
+                            return None;
+                        }
+                    }
+                }
+                return None;
+            }
+
+            // Handle digit input for count prefix (1-9, or 0 if count already started)
+            if self.handle_normal_mode_count_prefix(&key) {
+                return None;
+            }
+
+            if self.handle_common_normal_mode_motions(&key, screen_height) {
+                return None;
+            }
+
+            match key.code {
+                KeyCode::Char('v') => {
+                    use crate::markdown_text_reader::VisualMode;
+                    self.text_reader
+                        .enter_visual_mode(VisualMode::CharacterWise);
+                    self.text_reader.clear_count();
+                    return None;
+                }
+                KeyCode::Char('V') => {
+                    use crate::markdown_text_reader::VisualMode;
+                    self.text_reader.enter_visual_mode(VisualMode::LineWise);
+                    self.text_reader.clear_count();
+                    return None;
+                }
+                KeyCode::Char('y') => {
+                    self.text_reader.start_yank();
+                    return None;
+                }
+                KeyCode::Char('n') => {
+                    // If in search navigation mode, 'n' goes to next match
+                    // Otherwise, toggle normal mode off
+                    if self.text_reader.is_searching() {
+                        let search_state = self.text_reader.get_search_state();
+                        if search_state.mode == SearchMode::NavigationMode {
+                            self.text_reader.next_match();
+                            return None;
+                        }
+                    }
+                    self.text_reader.clear_count();
+                    self.text_reader.toggle_normal_mode();
+                    return None;
+                }
+                KeyCode::Esc => {
+                    self.text_reader.clear_count();
+                    self.text_reader.toggle_normal_mode();
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Char('/') => {
                 if self.is_main_panel(MainPanel::Content) {
@@ -2771,6 +3248,11 @@ impl App {
                     } else {
                         self.handle_search_input('N');
                     }
+                }
+            }
+            KeyCode::Char('n') if !self.is_in_search_mode() => {
+                if self.is_main_panel(MainPanel::Content) {
+                    self.text_reader.toggle_normal_mode();
                 }
             }
             KeyCode::Char('f') => if self.handle_key_sequence('f') {},
@@ -2850,18 +3332,7 @@ impl App {
                 }
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Save current content position before toggling zen mode
-                let current_node = self.text_reader.get_current_node_index();
-                self.zen_mode = !self.zen_mode;
-                // Restore position after width change causes re-render
-                self.text_reader.restore_to_node_index(current_node);
-                // When entering zen mode while on NavigationList, switch to Content
-                if self.zen_mode
-                    && self.is_main_panel(MainPanel::NavigationList)
-                    && self.current_book.is_some()
-                {
-                    self.set_main_panel_focus(MainPanel::Content);
-                }
+                self.toggle_zen_mode();
             }
 
             KeyCode::Char('G') => {
@@ -2928,76 +3399,99 @@ impl App {
 
     //todo this does extra parsing of a book. damn claude is dumb
     fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
-        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> String {
+        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> Vec<SearchLine> {
             let mut lines = Vec::new();
-            for node in &doc.blocks {
-                extract_text_from_block(&node.block, &mut lines);
+            for (node_index, node) in doc.blocks.iter().enumerate() {
+                extract_text_from_block(&node.block, node_index, &mut lines);
             }
-            lines.join("\n")
+            lines
         }
 
-        fn extract_text_from_block(block: &crate::markdown::Block, lines: &mut Vec<String>) {
+        fn extract_text_from_block(
+            block: &crate::markdown::Block,
+            node_index: usize,
+            lines: &mut Vec<SearchLine>,
+        ) {
             use crate::markdown::Block;
 
             match block {
                 Block::Paragraph { content } | Block::Heading { content, .. } => {
                     let plain_text = extract_text_from_text(content);
                     if !plain_text.trim().is_empty() {
-                        lines.push(plain_text);
+                        lines.push(SearchLine {
+                            text: plain_text,
+                            node_index,
+                        });
                     }
                 }
                 Block::List { items, .. } => {
                     for item in items {
                         // ListItem content is Vec<Node>, so process each node
                         for node in &item.content {
-                            extract_text_from_block(&node.block, lines);
+                            extract_text_from_block(&node.block, node_index, lines);
                         }
                     }
                 }
                 Block::Quote { content } => {
                     for node in content {
-                        extract_text_from_block(&node.block, lines);
+                        extract_text_from_block(&node.block, node_index, lines);
                     }
                 }
                 Block::CodeBlock { content, .. } => {
-                    lines.push(content.clone());
+                    lines.push(SearchLine {
+                        text: content.clone(),
+                        node_index,
+                    });
                 }
                 Block::Table { rows, header, .. } => {
                     if let Some(header_row) = header {
                         let row_text: Vec<String> = header_row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_text(&cell.content))
+                            .map(|cell| {
+                                extract_text_from_cell_content(&cell.content, node_index, lines)
+                            })
                             .collect();
                         if !row_text.is_empty() {
-                            lines.push(row_text.join(" "));
+                            lines.push(SearchLine {
+                                text: row_text.join(" "),
+                                node_index,
+                            });
                         }
                     }
                     for row in rows {
                         let row_text: Vec<String> = row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_text(&cell.content))
+                            .map(|cell| {
+                                extract_text_from_cell_content(&cell.content, node_index, lines)
+                            })
                             .collect();
                         if !row_text.is_empty() {
-                            lines.push(row_text.join(" "));
+                            lines.push(SearchLine {
+                                text: row_text.join(" "),
+                                node_index,
+                            });
                         }
                     }
                 }
                 Block::DefinitionList { items } => {
                     for item in items {
-                        lines.push(extract_text_from_text(&item.term));
+                        lines.push(SearchLine {
+                            text: extract_text_from_text(&item.term),
+                            node_index,
+                        });
                         // Process each definition (Vec<Vec<Node>>)
                         for definition in &item.definitions {
                             for node in definition {
-                                extract_text_from_block(&node.block, lines);
+                                extract_text_from_block(&node.block, node_index, lines);
                             }
                         }
                     }
                 }
                 Block::EpubBlock { content, .. } => {
                     for node in content {
-                        extract_text_from_block(&node.block, lines);
+                        extract_text_from_block(&node.block, node_index, lines);
                     }
                 }
                 _ => {}
@@ -3028,6 +3522,85 @@ impl App {
             }
 
             result
+        }
+
+        fn extract_text_from_cell_content(
+            content: &crate::markdown::TableCellContent,
+            node_index: usize,
+            lines: &mut Vec<SearchLine>,
+        ) -> String {
+            match content {
+                crate::markdown::TableCellContent::Simple(text) => extract_text_from_text(text),
+                crate::markdown::TableCellContent::Rich(nodes) => {
+                    let mut result = String::new();
+                    for node in nodes {
+                        extract_text_from_block(&node.block, node_index, lines);
+                        // Also collect text inline
+                        result.push_str(&extract_node_text(node));
+                    }
+                    result
+                }
+            }
+        }
+
+        fn extract_node_text(node: &crate::markdown::Node) -> String {
+            use crate::markdown::Block;
+            match &node.block {
+                Block::Paragraph { content } => extract_text_from_text(content),
+                Block::Heading { content, .. } => extract_text_from_text(content),
+                Block::CodeBlock { content, .. } => content.clone(),
+                Block::Quote { content } => content
+                    .iter()
+                    .map(extract_node_text)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Block::List { items, .. } => items
+                    .iter()
+                    .flat_map(|item| item.content.iter().map(extract_node_text))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Block::Table { header, rows, .. } => {
+                    let mut text = String::new();
+                    if let Some(h) = header {
+                        text.push_str(
+                            &h.cells
+                                .iter()
+                                .map(|c| match &c.content {
+                                    crate::markdown::TableCellContent::Simple(t) => {
+                                        extract_text_from_text(t)
+                                    }
+                                    crate::markdown::TableCellContent::Rich(n) => n
+                                        .iter()
+                                        .map(extract_node_text)
+                                        .collect::<Vec<_>>()
+                                        .join(" "),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        );
+                    }
+                    for row in rows {
+                        text.push_str(
+                            &row.cells
+                                .iter()
+                                .map(|c| match &c.content {
+                                    crate::markdown::TableCellContent::Simple(t) => {
+                                        extract_text_from_text(t)
+                                    }
+                                    crate::markdown::TableCellContent::Rich(n) => n
+                                        .iter()
+                                        .map(extract_node_text)
+                                        .collect::<Vec<_>>()
+                                        .join(" "),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        );
+                    }
+                    text
+                }
+                _ => String::new(),
+            }
         }
 
         let mut search_engine = SearchEngine::new();
@@ -3080,6 +3653,12 @@ impl App {
             let _ = guard.add_comment(comment.clone());
         }
         self.text_reader.rebuild_chapter_comments();
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_last_copied_text(&self) -> Option<String> {
+        self.text_reader.get_last_copied_text()
     }
 }
 

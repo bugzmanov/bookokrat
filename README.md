@@ -13,6 +13,9 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 - Highlight text, attach comments, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
+- Enter a Vim-style normal mode in the reader for precise motions, visual selection, and yanking to clipboard.
+- Load EPUB bundles (exploded `.epub` directories, including Apple Books exports) without repackaging.
+- Read complex HTML tables and rich cell content with improved rendering and image support.
 
 ## Installation
 
@@ -107,6 +110,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+z` - Copy debug transcript
 - `c` or `Ctrl+C` - Copy selection
 - `p` - Toggle profiler overlay
+- `n` - Toggle normal mode (Vim motions, visual selection, yanking)
+- `v` / `V` (normal mode) - Enter visual character/line selection; `y` to yank, `Esc` to exit
 
 ### Comments & Annotations
 - `a` - Create or edit comment on selection
@@ -126,6 +131,27 @@ All popups (search results, reading history, book stats) support:
 - `gg` / `G` - Jump to top/bottom
 - `Enter` - Activate selection
 - `Esc` - Close popup
+
+## Image Rendering
+
+Bookokrat automatically selects the best image protocol for your terminal:
+
+| Terminal | Protocol | Reason |
+|----------|----------|--------|
+| **Kitty** | Kitty | Native support |
+| **Ghostty** | Kitty | Native support |
+| **iTerm2** | Sixel | Native protocol causes flickering; Kitty buggy in recent betas |
+| **WezTerm** | iTerm2 | Kitty is buggy ([#986](https://github.com/wezterm/wezterm/issues/986)); Sixel broken on Windows ([#5758](https://github.com/wezterm/wezterm/issues/5758)); some flickering expected |
+| **Alacritty** | Halfblocks | No graphics protocol support ([#910](https://github.com/alacritty/alacritty/issues/910)) |
+| **Others** | Auto-detected | Kitty > Sixel > iTerm2 > Halfblocks |
+
+**Experience by terminal:**
+- **Excellent:** Kitty, Ghostty, iTerm2
+- **Good:** WezTerm (some flickering)
+- **Basic:** Alacritty, Linux default terminals (Halfblocks fallback)
+- **No images:** macOS Terminal.app (no graphics protocol support)
+
+If images look wrong, check `bookokrat.log` for the detected protocol. Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
 
 ## Mouse Support
 - Scroll with the wheel over either pane; Bookokrat batches rapid wheel events for smooth scrolling.

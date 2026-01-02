@@ -7,7 +7,7 @@ use bookokrat::test_utils::test_helpers::{
 };
 use bookokrat::theme::set_theme_by_index;
 // SVG snapshot tests using snapbox
-use bookokrat::App;
+use bookokrat::{App, FocusedPanel, MainPanel};
 use chrono::{TimeZone, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use serial_test::{parallel, serial};
@@ -3675,6 +3675,7 @@ fn test_margin_change_no_position_jump_svg() {
     );
 
     // Scroll down significantly to be in the middle of the chapter
+    app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
     for _ in 0..10 {
         app.press_key(crossterm::event::KeyCode::Char('j'));
     }
@@ -3714,5 +3715,246 @@ fn test_margin_change_no_position_jump_svg() {
         std::path::Path::new("tests/snapshots/margin_change_no_position_jump.svg"),
         "test_margin_change_no_position_jump_svg",
         create_test_failure_handler("test_margin_change_no_position_jump_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_normal_mode_visual_selection_yank_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("visual_selection_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Visual Selection Test</title>
+</head>
+<body>
+    <p>magna beta gamma delta</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('v'));
+    app.press_key(crossterm::event::KeyCode::Char('e'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_normal_mode_visual_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/normal_mode_visual_selection.svg"),
+        "test_normal_mode_visual_selection_yank_svg",
+        create_test_failure_handler("test_normal_mode_visual_selection_yank_svg"),
+    );
+
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+    let copied = app.testing_last_copied_text().unwrap_or_default();
+    assert_eq!(copied, "magna");
+}
+
+#[test]
+#[parallel]
+fn test_normal_mode_jump_to_bottom_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let mut paragraphs = String::new();
+    for idx in 0..80 {
+        paragraphs.push_str(&format!(
+            "    <p>Paragraph {idx}: lorem ipsum dolor sit amet.</p>\n"
+        ));
+    }
+    paragraphs.push_str("    <p>THE END</p>\n");
+
+    let content = format!(
+        r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Jump Test</title>
+</head>
+<body>
+    <h1>Jump Test Document</h1>
+{paragraphs}
+</body>
+</html>
+"#
+    );
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("jump_test.html");
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('G'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_normal_mode_jump_to_bottom.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+    let copied = app.testing_last_copied_text().unwrap_or_default();
+    assert_eq!(copied, "THE END");
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/normal_mode_jump_to_bottom.svg"),
+        "test_normal_mode_jump_to_bottom_svg",
+        create_test_failure_handler("test_normal_mode_jump_to_bottom_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_normal_mode_counted_motion_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let mut paragraphs = String::new();
+    for idx in 1..=20 {
+        paragraphs.push_str(&format!("    <p>Line {:02}</p>\n", idx));
+    }
+
+    let content = format!(
+        r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Count Motion Test</title>
+</head>
+<body>
+{paragraphs}
+</body>
+</html>
+"#
+    );
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("count_motion_test.html");
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('1'));
+    app.press_key(crossterm::event::KeyCode::Char('2'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_normal_mode_counted_motion.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+    let copied = app.testing_last_copied_text().unwrap_or_default();
+    assert_eq!(copied, "Line 13");
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/normal_mode_counted_motion.svg"),
+        "test_normal_mode_counted_motion_svg",
+        create_test_failure_handler("test_normal_mode_counted_motion_svg"),
     );
 }

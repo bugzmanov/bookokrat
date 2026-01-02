@@ -1,12 +1,14 @@
 mod comments;
 mod images;
 mod navigation;
+mod normal_mode;
 mod rendering;
 mod search;
 mod selection;
 mod text_selection;
 mod types;
 
+pub use normal_mode::{PendingCharMotion, PendingYank, VisualMode};
 pub use types::*;
 
 use crate::comments::{BookComments, Comment};
@@ -19,6 +21,7 @@ use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use image::{DynamicImage, GenericImageView};
 use log::{info, warn};
+use normal_mode::NormalModeState;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -56,6 +59,7 @@ pub struct MarkdownTextReader {
     // Text selection
     text_selection: TextSelection,
     raw_text_lines: Vec<String>, // Still needed for clipboard
+    last_copied_text: Option<String>,
     last_content_area: Option<Rect>,
 
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
@@ -95,6 +99,9 @@ pub struct MarkdownTextReader {
     /// Last active anchor for maintaining continuous highlighting
     last_active_anchor: Option<String>,
 
+    /// Pending local search activation after a global search jump
+    pending_global_search: Option<(String, usize)>,
+
     /// Book comments to display alongside paragraphs
     book_comments: Option<Arc<Mutex<BookComments>>>,
     current_chapter_comments: HashMap<usize, Vec<Comment>>,
@@ -106,6 +113,9 @@ pub struct MarkdownTextReader {
 
     /// Content margin level (0-20), each level adds 2 columns on each side
     content_margin: u16,
+
+    /// Vim normal mode state
+    normal_mode: NormalModeState,
 }
 
 impl Default for MarkdownTextReader {
@@ -134,8 +144,27 @@ impl MarkdownTextReader {
                     .iter()
                     .any(|c| matches!(c, Capability::Sixel));
 
+                // Detect if we're in WezTerm.
+                // WezTerm's Kitty graphics implementation is buggy - it maps images to terminal
+                // cells differently than Kitty, causing artifacts when text overwrites images.
+                // iTerm2 protocol works best in WezTerm.
+                // See: https://github.com/wezterm/wezterm/issues/986
+                let is_wezterm = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("WezTerm"));
+
+                // Detect if we're in iTerm2.
+                // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
+                let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
+
                 // Prefer: Kitty > Sixel > iTerm > Halfblocks
-                let chosen_protocol = if has_kitty {
+                // For WezTerm: Force iTerm2 protocol
+                // For iTerm2: Try Sixel
+                let chosen_protocol = if is_iterm2 {
+                    info!("iTerm2 detected. Using Sixel protocol.");
+                    ProtocolType::Sixel
+                } else if is_wezterm {
+                    info!("WezTerm detected. Using iTerm2 protocol.");
+                    ProtocolType::Iterm2
+                } else if has_kitty {
                     info!("Kitty protocol detected, using Kitty");
                     ProtocolType::Kitty
                 } else if has_sixel {
@@ -191,6 +220,7 @@ impl MarkdownTextReader {
             last_focus_state: false,
             text_selection: TextSelection::new(),
             raw_text_lines: Vec::new(),
+            last_copied_text: None,
             last_content_area: None,
             last_inner_text_area: None,
             auto_scroll_active: false,
@@ -208,11 +238,13 @@ impl MarkdownTextReader {
             search_state: SearchState::new(),
             pending_anchor_scroll: None,
             last_active_anchor: None,
+            pending_global_search: None,
             book_comments: None,
             current_chapter_comments: HashMap::new(),
             comment_input: CommentInputState::default(),
             chapter_title: None,
             content_margin: 0,
+            normal_mode: NormalModeState::new(),
         }
     }
 
@@ -281,6 +313,10 @@ impl MarkdownTextReader {
                     } else {
                         warn!("Pending anchor '{anchor_id}' not found after re-render");
                     }
+                }
+
+                if let Some((query, node_index)) = self.pending_global_search.take() {
+                    self.activate_local_search_from_global(query, node_index);
                 }
             }
         }
@@ -396,6 +432,16 @@ impl MarkdownTextReader {
 
                 line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
 
+                // Apply yank highlight (before cursor so cursor shows on top)
+                line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
+
+                // Apply visual mode selection highlight
+                line_spans = self.apply_visual_highlight(line_idx, line_spans, palette);
+
+                if self.normal_mode.is_active() {
+                    line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);
+                }
+
                 visible_lines.push(Line::from(line_spans));
             }
         }
@@ -406,9 +452,8 @@ impl MarkdownTextReader {
 
         frame.render_widget(paragraph, area);
 
-        let inner_text_paragraph = Paragraph::new(visible_lines)
-            .block(Block::default().borders(Borders::NONE))
-            .wrap(ratatui::widgets::Wrap { trim: false });
+        let inner_text_paragraph =
+            Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
 
         frame.render_widget(inner_text_paragraph, inner_area);
 

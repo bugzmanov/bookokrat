@@ -39,6 +39,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
                 vec
             }
+            Table { header, rows, .. } => {
+                let mut vec = Vec::new();
+                // Extract images from header row
+                if let Some(header_row) = header {
+                    for cell in &header_row.cells {
+                        vec.append(
+                            &mut self.extract_images_from_cell_content(&cell.content, book_images),
+                        );
+                    }
+                }
+                // Extract images from data rows
+                for row in rows {
+                    for cell in &row.cells {
+                        vec.append(
+                            &mut self.extract_images_from_cell_content(&cell.content, book_images),
+                        );
+                    }
+                }
+                vec
+            }
             _ => Vec::new(),
         }
     }
@@ -94,6 +114,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    fn extract_images_from_cell_content(
+        &mut self,
+        content: &crate::markdown::TableCellContent,
+        book_images: &BookImages,
+    ) -> Vec<(String, u16)> {
+        use crate::markdown::TableCellContent;
+        match content {
+            TableCellContent::Simple(text) => self.extract_images_from_text(text, book_images),
+            TableCellContent::Rich(nodes) => {
+                let mut vec = Vec::new();
+                for node in nodes {
+                    vec.append(&mut self.extract_images_from_node(node, book_images));
+                }
+                vec
+            }
+        }
+    }
+
     pub fn preload_image_dimensions(&mut self, book_images: &BookImages) {
         if let Some(doc) = self.markdown_document.clone() {
             self.background_loader.cancel_loading();
@@ -109,11 +147,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 if let Some(ref picker) = self.image_picker {
                     let font_size = picker.font_size();
                     let (cell_width, cell_height) = (font_size.0, font_size.1);
-                    self.background_loader.start_loading(
+                    let chapter_path = self.current_chapter_file.clone();
+                    self.background_loader.start_loading_with_context(
                         images_to_load.clone(),
                         book_images,
                         cell_width,
                         cell_height,
+                        chapter_path,
                     );
                     for (img_src, _) in images_to_load.iter() {
                         if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img_src)

@@ -121,6 +121,11 @@ impl SearchState {
             .map(|m| m.index)
     }
 
+    pub fn get_current_match_full(&self) -> Option<&SearchMatch> {
+        self.current_match_index
+            .and_then(|idx| self.matches.get(idx))
+    }
+
     pub fn is_match(&self, index: usize) -> bool {
         self.matches.iter().any(|m| m.index == index)
     }

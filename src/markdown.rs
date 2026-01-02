@@ -136,9 +136,18 @@ pub struct TableRow {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TableCell {
-    pub content: Text,
+    pub content: TableCellContent,
     pub is_header: bool,
     pub rowspan: u32,
+    pub colspan: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableCellContent {
+    /// Simple text content (most common case)
+    Simple(Text),
+    /// Rich content including nested tables, images, lists, etc.
+    Rich(Vec<Node>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -273,33 +282,81 @@ impl DefinitionListItem {
 impl TableCell {
     pub fn new(content: Text) -> Self {
         TableCell {
-            content,
+            content: TableCellContent::Simple(content),
             is_header: false,
             rowspan: 1,
+            colspan: 1,
         }
     }
 
     pub fn new_header(content: Text) -> Self {
         TableCell {
-            content,
+            content: TableCellContent::Simple(content),
             is_header: true,
             rowspan: 1,
+            colspan: 1,
         }
     }
 
     pub fn new_with_rowspan(content: Text, rowspan: u32) -> Self {
         TableCell {
-            content,
+            content: TableCellContent::Simple(content),
             is_header: false,
             rowspan,
+            colspan: 1,
         }
     }
 
     pub fn new_header_with_rowspan(content: Text, rowspan: u32) -> Self {
         TableCell {
-            content,
+            content: TableCellContent::Simple(content),
             is_header: true,
             rowspan,
+            colspan: 1,
+        }
+    }
+
+    pub fn new_with_spans(content: Text, rowspan: u32, colspan: u32) -> Self {
+        TableCell {
+            content: TableCellContent::Simple(content),
+            is_header: false,
+            rowspan,
+            colspan,
+        }
+    }
+
+    pub fn new_header_with_spans(content: Text, rowspan: u32, colspan: u32) -> Self {
+        TableCell {
+            content: TableCellContent::Simple(content),
+            is_header: true,
+            rowspan,
+            colspan,
+        }
+    }
+
+    pub fn new_rich(content: Vec<Node>) -> Self {
+        TableCell {
+            content: TableCellContent::Rich(content),
+            is_header: false,
+            rowspan: 1,
+            colspan: 1,
+        }
+    }
+
+    pub fn new_rich_with_spans(content: Vec<Node>, rowspan: u32, colspan: u32) -> Self {
+        TableCell {
+            content: TableCellContent::Rich(content),
+            is_header: false,
+            rowspan,
+            colspan,
+        }
+    }
+
+    /// Check if this cell has any meaningful content
+    pub fn is_empty(&self) -> bool {
+        match &self.content {
+            TableCellContent::Simple(text) => text.is_empty(),
+            TableCellContent::Rich(nodes) => nodes.is_empty(),
         }
     }
 }

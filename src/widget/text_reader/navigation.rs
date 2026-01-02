@@ -111,11 +111,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     //todo: remove
     pub fn update_highlight(&mut self) -> bool {
+        let mut changed = false;
+
         if self.highlight_visual_line.is_some() && Instant::now() > self.highlight_end_time {
             self.highlight_visual_line = None;
-            return true;
+            changed = true;
         }
-        false
+
+        // Check for expired yank highlight
+        if let Some(ref highlight) = self.normal_mode.yank_highlight {
+            if highlight.is_expired() {
+                self.normal_mode.yank_highlight = None;
+                changed = true;
+            }
+        }
+
+        changed
     }
 
     pub fn perform_auto_scroll(&mut self) {

@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 pub enum BookSearchAction {
     JumpToChapter {
         chapter_index: usize,
+        node_index: usize,
         line_number: usize,
+        query: String,
     },
     Close,
 }
@@ -188,7 +190,9 @@ impl BookSearch {
                     self.active = false;
                     return Some(BookSearchAction::JumpToChapter {
                         chapter_index: result.chapter_index,
+                        node_index: result.node_index,
                         line_number: result.line_number,
+                        query: self.search_input.clone(),
                     });
                 }
             }

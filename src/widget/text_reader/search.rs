@@ -4,6 +4,49 @@ use ratatui::style::{Color, Style as RatatuiStyle};
 use ratatui::text::Span;
 
 impl crate::markdown_text_reader::MarkdownTextReader {
+    pub fn queue_global_search_activation(&mut self, query: String, node_index: usize) {
+        self.pending_global_search = Some((query, node_index));
+    }
+
+    pub fn activate_local_search_from_global(&mut self, query: String, node_index: usize) {
+        let trimmed = query.trim();
+        let normalized = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() > 2
+        {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+
+        if normalized.is_empty() {
+            return;
+        }
+
+        self.search_state.start_search(self.scroll_offset);
+        self.search_state.update_query(normalized.to_string());
+
+        let searchable = self.get_searchable_content();
+        let matches = find_matches_in_text(normalized, &searchable);
+        self.search_state.set_matches(matches);
+        self.search_state.confirm_search();
+
+        if let Some(target_line_idx) = self
+            .rendered_content
+            .lines
+            .iter()
+            .position(|line| line.node_index == Some(node_index))
+        {
+            if let Some(match_idx) = self
+                .search_state
+                .matches
+                .iter()
+                .position(|m| m.index == target_line_idx)
+            {
+                self.search_state.current_match_index = Some(match_idx);
+                self.jump_to_match(target_line_idx);
+            }
+        }
+    }
+
     /// Get searchable content (visible lines as text)
     pub fn get_visible_text(&self) -> Vec<String> {
         self.rendered_content
@@ -147,8 +190,9 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
         self.search_state.set_matches(matches);
 
         // Jump to match if found
-        if let Some(match_index) = self.search_state.get_current_match() {
-            self.jump_to_match(match_index);
+        if let Some((line, column)) = self.get_current_match_position() {
+            self.jump_to_match(line);
+            self.update_normal_mode_cursor(line, column);
         }
     }
 
@@ -161,8 +205,9 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
             let next_idx = (current_idx + 1) % self.search_state.matches.len();
             self.search_state.current_match_index = Some(next_idx);
 
-            if let Some(search_match) = self.search_state.matches.get(next_idx) {
-                self.jump_to_match(search_match.index);
+            if let Some((line, column)) = self.get_match_position(next_idx) {
+                self.jump_to_match(line);
+                self.update_normal_mode_cursor(line, column);
             }
         } else {
             let current_position = self.scroll_offset;
@@ -179,8 +224,9 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
             let target_idx = next_match_idx.unwrap_or(0);
             self.search_state.current_match_index = Some(target_idx);
 
-            if let Some(search_match) = self.search_state.matches.get(target_idx) {
-                self.jump_to_match(search_match.index);
+            if let Some((line, column)) = self.get_match_position(target_idx) {
+                self.jump_to_match(line);
+                self.update_normal_mode_cursor(line, column);
             }
         }
     }
@@ -198,8 +244,9 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
             };
             self.search_state.current_match_index = Some(prev_idx);
 
-            if let Some(search_match) = self.search_state.matches.get(prev_idx) {
-                self.jump_to_match(search_match.index);
+            if let Some((line, column)) = self.get_match_position(prev_idx) {
+                self.jump_to_match(line);
+                self.update_normal_mode_cursor(line, column);
             }
         } else {
             let current_position = self.scroll_offset;
@@ -215,8 +262,9 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
             let target_idx = prev_match_idx.unwrap_or(self.search_state.matches.len() - 1);
             self.search_state.current_match_index = Some(target_idx);
 
-            if let Some(search_match) = self.search_state.matches.get(target_idx) {
-                self.jump_to_match(search_match.index);
+            if let Some((line, column)) = self.get_match_position(target_idx) {
+                self.jump_to_match(line);
+                self.update_normal_mode_cursor(line, column);
             }
         }
     }
@@ -239,5 +287,29 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
 
     fn get_searchable_content(&self) -> Vec<String> {
         self.get_visible_text()
+    }
+}
+
+impl crate::markdown_text_reader::MarkdownTextReader {
+    fn get_match_position(&self, match_idx: usize) -> Option<(usize, usize)> {
+        self.search_state.matches.get(match_idx).map(|m| {
+            let column = m
+                .highlight_ranges
+                .first()
+                .map(|(start, _)| *start)
+                .unwrap_or(0);
+            (m.index, column)
+        })
+    }
+
+    fn get_current_match_position(&self) -> Option<(usize, usize)> {
+        self.search_state.get_current_match_full().map(|m| {
+            let column = m
+                .highlight_ranges
+                .first()
+                .map(|(start, _)| *start)
+                .unwrap_or(0);
+            (m.index, column)
+        })
     }
 }

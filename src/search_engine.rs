@@ -5,6 +5,7 @@ pub struct BookSearchResult {
     pub chapter_index: usize,
     pub chapter_title: String,
     pub line_number: usize,
+    pub node_index: usize,
     pub snippet: String,
     pub context_before: String,
     pub context_after: String,
@@ -12,13 +13,17 @@ pub struct BookSearchResult {
     pub match_positions: Vec<usize>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SearchLine {
+    pub text: String,
+    pub node_index: usize,
+}
+
 #[derive(Debug)]
 struct ProcessedChapter {
     index: usize,
     title: String,
-    lines: Vec<String>,
-    #[allow(dead_code)]
-    raw_text: String,
+    lines: Vec<SearchLine>,
 }
 
 pub struct SearchEngine {
@@ -38,17 +43,13 @@ impl SearchEngine {
         }
     }
 
-    pub fn process_chapters(&mut self, chapters: Vec<(usize, String, String)>) {
+    pub fn process_chapters(&mut self, chapters: Vec<(usize, String, Vec<SearchLine>)>) {
         self.chapters = chapters
             .into_iter()
-            .map(|(index, title, content)| {
-                let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-                ProcessedChapter {
-                    index,
-                    title,
-                    lines,
-                    raw_text: content,
-                }
+            .map(|(index, title, lines)| ProcessedChapter {
+                index,
+                title,
+                lines,
             })
             .collect();
     }
@@ -82,7 +83,7 @@ impl SearchEngine {
 
         for chapter in &self.chapters {
             for (line_idx, line) in chapter.lines.iter().enumerate() {
-                let line_lower = line.to_lowercase();
+                let line_lower = line.text.to_lowercase();
 
                 let line_words: Vec<&str> = line_lower.split_whitespace().collect();
 
@@ -104,7 +105,9 @@ impl SearchEngine {
                             word_found = true;
 
                             if let Some(pos) = line_lower.find(query_word.as_str()) {
-                                for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
+                                for (char_pos, (byte_idx, _ch)) in
+                                    line.text.char_indices().enumerate()
+                                {
                                     if byte_idx >= pos && byte_idx < pos + query_word.len() {
                                         all_match_positions.push(char_pos);
                                     }
@@ -136,17 +139,18 @@ impl SearchEngine {
 
                     // Truncate very long snippet lines to keep results readable
                     let max_snippet_chars = 300;
-                    let snippet = if line.chars().count() > max_snippet_chars {
-                        let truncated: String = line.chars().take(max_snippet_chars).collect();
+                    let snippet = if line.text.chars().count() > max_snippet_chars {
+                        let truncated: String = line.text.chars().take(max_snippet_chars).collect();
                         format!("{truncated}...")
                     } else {
-                        line.clone()
+                        line.text.clone()
                     };
 
                     results.push(BookSearchResult {
                         chapter_index: chapter.index,
                         chapter_title: chapter.title.clone(),
                         line_number: line_idx,
+                        node_index: line.node_index,
                         snippet,
                         context_before,
                         context_after,
@@ -183,7 +187,7 @@ impl SearchEngine {
 
         for chapter in &self.chapters {
             for (line_idx, line) in chapter.lines.iter().enumerate() {
-                let line_lower = line.to_lowercase();
+                let line_lower = line.text.to_lowercase();
 
                 let mut search_start = 0;
                 let mut match_positions_in_line = Vec::new();
@@ -192,7 +196,7 @@ impl SearchEngine {
                     let absolute_start = search_start + match_start;
 
                     let mut positions = Vec::new();
-                    for (char_pos, (byte_idx, _ch)) in line.char_indices().enumerate() {
+                    for (char_pos, (byte_idx, _ch)) in line.text.char_indices().enumerate() {
                         if byte_idx >= absolute_start && byte_idx < absolute_start + phrase.len() {
                             positions.push(char_pos);
                         }
@@ -206,17 +210,18 @@ impl SearchEngine {
                     let (context_before, context_after) = self.extract_context(chapter, line_idx);
 
                     let max_snippet_chars = 300;
-                    let snippet = if line.chars().count() > max_snippet_chars {
-                        let truncated: String = line.chars().take(max_snippet_chars).collect();
+                    let snippet = if line.text.chars().count() > max_snippet_chars {
+                        let truncated: String = line.text.chars().take(max_snippet_chars).collect();
                         format!("{truncated}...")
                     } else {
-                        line.clone()
+                        line.text.clone()
                     };
 
                     results.push(BookSearchResult {
                         chapter_index: chapter.index,
                         chapter_title: chapter.title.clone(),
                         line_number: line_idx,
+                        node_index: line.node_index,
                         snippet,
                         context_before,
                         context_after,
@@ -247,14 +252,14 @@ impl SearchEngine {
         let context_before = if before_start < before_end {
             chapter.lines[before_start..before_end]
                 .iter()
-                .filter(|line| !line.trim().is_empty())
+                .filter(|line| !line.text.trim().is_empty())
                 .take(1)
                 .map(|line| {
-                    if line.chars().count() > max_line_length {
-                        let truncated: String = line.chars().take(max_line_length).collect();
+                    if line.text.chars().count() > max_line_length {
+                        let truncated: String = line.text.chars().take(max_line_length).collect();
                         format!("{truncated}...")
                     } else {
-                        line.clone()
+                        line.text.clone()
                     }
                 })
                 .collect::<Vec<_>>()
@@ -268,14 +273,14 @@ impl SearchEngine {
         let context_after = if after_start < after_end {
             chapter.lines[after_start..after_end]
                 .iter()
-                .filter(|line| !line.trim().is_empty())
+                .filter(|line| !line.text.trim().is_empty())
                 .take(1)
                 .map(|line| {
-                    if line.chars().count() > max_line_length {
-                        let truncated: String = line.chars().take(max_line_length).collect();
+                    if line.text.chars().count() > max_line_length {
+                        let truncated: String = line.text.chars().take(max_line_length).collect();
                         format!("{truncated}...")
                     } else {
-                        line.clone()
+                        line.text.clone()
                     }
                 })
                 .collect::<Vec<_>>()
