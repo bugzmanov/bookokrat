@@ -2424,6 +2424,187 @@ impl App {
         }
     }
 
+    fn handle_pending_find_motion(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        if self.text_reader.has_pending_motion() {
+            if let KeyCode::Char(ch) = key.code {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.execute_pending_find(ch);
+                }
+            } else {
+                self.text_reader.clear_pending_motion();
+                self.text_reader.clear_count();
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_normal_mode_count_prefix(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        if let KeyCode::Char(ch) = key.code {
+            if ch.is_ascii_digit() {
+                if ch != '0' || self.text_reader.has_pending_count() {
+                    return self.text_reader.append_count_digit(ch);
+                }
+            }
+        }
+
+        false
+    }
+
+    fn handle_common_normal_mode_motions(
+        &mut self,
+        key: &crossterm::event::KeyEvent,
+        screen_height: Option<usize>,
+    ) -> bool {
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match key.code {
+            KeyCode::Char('h') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_left();
+                }
+                true
+            }
+            KeyCode::Char('j') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_down();
+                }
+                true
+            }
+            KeyCode::Char('k') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_up();
+                }
+                true
+            }
+            KeyCode::Char('l') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_right();
+                }
+                true
+            }
+            KeyCode::Char('w') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_forward();
+                }
+                true
+            }
+            KeyCode::Char('W') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_forward();
+                }
+                true
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_end();
+                }
+                true
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_backward();
+                }
+                true
+            }
+            KeyCode::Char('0') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_line_start();
+                true
+            }
+            KeyCode::Char('^') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_first_non_whitespace();
+                true
+            }
+            KeyCode::Char('$') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_line_end();
+                true
+            }
+            KeyCode::Char('{') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_paragraph_up();
+                }
+                true
+            }
+            KeyCode::Char('}') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_paragraph_down();
+                }
+                true
+            }
+            KeyCode::Char('g') => {
+                let seq = self.key_sequence.handle_key('g');
+                if seq == "gg" {
+                    self.text_reader.clear_count();
+                    self.text_reader.normal_mode_document_top();
+                    self.key_sequence.clear();
+                }
+                true
+            }
+            KeyCode::Char('G') => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_document_bottom();
+                true
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_half_page_down(h);
+                }
+                true
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_half_page_up(h);
+                }
+                true
+            }
+            KeyCode::Char('f') => {
+                self.text_reader.set_pending_find_forward();
+                true
+            }
+            KeyCode::Char('F') => {
+                self.text_reader.set_pending_find_backward();
+                true
+            }
+            KeyCode::Char('t') => {
+                self.text_reader.set_pending_till_forward();
+                true
+            }
+            KeyCode::Char('T') => {
+                self.text_reader.set_pending_till_backward();
+                true
+            }
+            KeyCode::Char(';') => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.repeat_last_find();
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Handle a single key event with optional screen height for half-screen scrolling
     pub fn handle_key_event_with_screen_height(
         &mut self,
@@ -2747,16 +2928,7 @@ impl App {
             self.text_reader.clear_expired_yank_highlight();
 
             // Check for pending f/F motion first
-            if self.text_reader.has_pending_motion() {
-                if let KeyCode::Char(ch) = key.code {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.execute_pending_find(ch);
-                    }
-                } else {
-                    self.text_reader.clear_pending_motion();
-                    self.text_reader.clear_count();
-                }
+            if self.handle_pending_find_motion(&key) {
                 return None;
             }
 
@@ -2927,20 +3099,6 @@ impl App {
                 use crate::markdown_text_reader::VisualMode;
                 let visual_mode = self.text_reader.get_visual_mode();
 
-                // Check for pending f/F/t/T motion in visual mode
-                if self.text_reader.has_pending_motion() {
-                    if let KeyCode::Char(ch) = key.code {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.execute_pending_find(ch);
-                        }
-                    } else {
-                        self.text_reader.clear_pending_motion();
-                        self.text_reader.clear_count();
-                    }
-                    return None;
-                }
-
                 match key.code {
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
@@ -2975,152 +3133,12 @@ impl App {
                         self.text_reader.clear_count();
                         return None;
                     }
-                    // Navigation keys in visual mode - same as normal mode
-                    KeyCode::Char('h') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_left();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('j') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_down();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('k') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_up();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('l') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_right();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('w') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_word_forward();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('W') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_big_word_forward();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('e') | KeyCode::Char('E') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_word_end();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('b') | KeyCode::Char('B') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_word_backward();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('0') => {
-                        self.text_reader.clear_count();
-                        self.text_reader.normal_mode_line_start();
-                        return None;
-                    }
-                    KeyCode::Char('^') => {
-                        self.text_reader.clear_count();
-                        self.text_reader.normal_mode_first_non_whitespace();
-                        return None;
-                    }
-                    KeyCode::Char('$') => {
-                        self.text_reader.clear_count();
-                        self.text_reader.normal_mode_line_end();
-                        return None;
-                    }
-                    KeyCode::Char('{') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_paragraph_up();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('}') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.normal_mode_paragraph_down();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('g') => {
-                        let seq = self.key_sequence.handle_key('g');
-                        if seq == "gg" {
-                            self.text_reader.clear_count();
-                            self.text_reader.normal_mode_document_top();
-                            self.key_sequence.clear();
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('G') => {
-                        self.text_reader.clear_count();
-                        self.text_reader.normal_mode_document_bottom();
-                        return None;
-                    }
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.text_reader.clear_count();
-                        if let Some(h) = screen_height {
-                            self.text_reader.normal_mode_half_page_down(h);
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.text_reader.clear_count();
-                        if let Some(h) = screen_height {
-                            self.text_reader.normal_mode_half_page_up(h);
-                        }
-                        return None;
-                    }
-                    KeyCode::Char('f') => {
-                        self.text_reader.set_pending_find_forward();
-                        return None;
-                    }
-                    KeyCode::Char('F') => {
-                        self.text_reader.set_pending_find_backward();
-                        return None;
-                    }
-                    KeyCode::Char('t') => {
-                        self.text_reader.set_pending_till_forward();
-                        return None;
-                    }
-                    KeyCode::Char('T') => {
-                        self.text_reader.set_pending_till_backward();
-                        return None;
-                    }
-                    KeyCode::Char(';') => {
-                        let count = self.text_reader.take_count();
-                        for _ in 0..count {
-                            self.text_reader.repeat_last_find();
-                        }
-                        return None;
-                    }
                     _ => {
-                        // Handle digit input in visual mode
-                        if let KeyCode::Char(ch) = key.code {
-                            if ch.is_ascii_digit()
-                                && (ch != '0' || self.text_reader.has_pending_count())
-                            {
-                                self.text_reader.append_count_digit(ch);
-                                return None;
-                            }
+                        if self.handle_common_normal_mode_motions(&key, screen_height) {
+                            return None;
+                        }
+                        if self.handle_normal_mode_count_prefix(&key) {
+                            return None;
                         }
                     }
                 }
@@ -3128,15 +3146,12 @@ impl App {
             }
 
             // Handle digit input for count prefix (1-9, or 0 if count already started)
-            if let KeyCode::Char(ch) = key.code {
-                if ch.is_ascii_digit() {
-                    // '0' is line-start unless we're accumulating a count
-                    if ch != '0' || self.text_reader.has_pending_count() {
-                        if self.text_reader.append_count_digit(ch) {
-                            return None;
-                        }
-                    }
-                }
+            if self.handle_normal_mode_count_prefix(&key) {
+                return None;
+            }
+
+            if self.handle_common_normal_mode_motions(&key, screen_height) {
+                return None;
             }
 
             match key.code {
@@ -3174,144 +3189,6 @@ impl App {
                 KeyCode::Esc => {
                     self.text_reader.clear_count();
                     self.text_reader.toggle_normal_mode();
-                    return None;
-                }
-                KeyCode::Char('h') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_left();
-                    }
-                    return None;
-                }
-                KeyCode::Char('j') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_down();
-                    }
-                    return None;
-                }
-                KeyCode::Char('k') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_up();
-                    }
-                    return None;
-                }
-                KeyCode::Char('l') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_right();
-                    }
-                    return None;
-                }
-                KeyCode::Char('w') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_word_forward();
-                    }
-                    return None;
-                }
-                KeyCode::Char('W') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_big_word_forward();
-                    }
-                    return None;
-                }
-                KeyCode::Char('e') | KeyCode::Char('E') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_word_end();
-                    }
-                    return None;
-                }
-                KeyCode::Char('b') | KeyCode::Char('B') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_word_backward();
-                    }
-                    return None;
-                }
-                KeyCode::Char('0') => {
-                    self.text_reader.clear_count();
-                    self.text_reader.normal_mode_line_start();
-                    return None;
-                }
-                KeyCode::Char('^') => {
-                    self.text_reader.clear_count();
-                    self.text_reader.normal_mode_first_non_whitespace();
-                    return None;
-                }
-                KeyCode::Char('$') => {
-                    self.text_reader.clear_count();
-                    self.text_reader.normal_mode_line_end();
-                    return None;
-                }
-                KeyCode::Char('f') => {
-                    // Count is consumed by find_char execution
-                    self.text_reader.set_pending_find_forward();
-                    return None;
-                }
-                KeyCode::Char('F') => {
-                    self.text_reader.set_pending_find_backward();
-                    return None;
-                }
-                KeyCode::Char('t') => {
-                    self.text_reader.set_pending_till_forward();
-                    return None;
-                }
-                KeyCode::Char('T') => {
-                    self.text_reader.set_pending_till_backward();
-                    return None;
-                }
-                KeyCode::Char(';') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.repeat_last_find();
-                    }
-                    return None;
-                }
-                KeyCode::Char('{') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_paragraph_up();
-                    }
-                    return None;
-                }
-                KeyCode::Char('}') => {
-                    let count = self.text_reader.take_count();
-                    for _ in 0..count {
-                        self.text_reader.normal_mode_paragraph_down();
-                    }
-                    return None;
-                }
-                KeyCode::Char('g') => {
-                    // gg uses count as line number, but we'll just go to top for now
-                    let seq = self.key_sequence.handle_key('g');
-                    if seq == "gg" {
-                        self.text_reader.clear_count();
-                        self.text_reader.normal_mode_document_top();
-                        self.key_sequence.clear();
-                    }
-                    return None;
-                }
-                KeyCode::Char('G') => {
-                    self.text_reader.clear_count();
-                    self.text_reader.normal_mode_document_bottom();
-                    return None;
-                }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.text_reader.clear_count();
-                    if let Some(h) = screen_height {
-                        self.text_reader.normal_mode_half_page_down(h);
-                    }
-                    return None;
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.text_reader.clear_count();
-                    if let Some(h) = screen_height {
-                        self.text_reader.normal_mode_half_page_up(h);
-                    }
                     return None;
                 }
                 _ => {}
@@ -3768,6 +3645,12 @@ impl App {
             let _ = guard.add_comment(comment.clone());
         }
         self.text_reader.rebuild_chapter_comments();
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_last_copied_text(&self) -> Option<String> {
+        self.text_reader.get_last_copied_text()
     }
 }
 

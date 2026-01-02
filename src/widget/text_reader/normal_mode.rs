@@ -1832,6 +1832,62 @@ impl MarkdownTextReader {
         Some(result)
     }
 
+    fn apply_highlight_with_predicate<F>(
+        &self,
+        line_idx: usize,
+        spans: Vec<Span<'static>>,
+        palette: &Base16Palette,
+        is_highlighted: F,
+    ) -> Vec<Span<'static>>
+    where
+        F: Fn(usize, usize) -> bool,
+    {
+        let mut result_spans = Vec::new();
+        let mut current_column = 0;
+
+        let highlight_style = RatatuiStyle::default().bg(palette.base_02);
+
+        for span in spans {
+            let span_text: Vec<char> = span.content.chars().collect();
+            let span_len = span_text.len();
+            let span_end = current_column + span_len;
+
+            let mut segments: Vec<(usize, usize, bool)> = vec![];
+            let mut pos = 0;
+
+            while pos < span_len {
+                let global_col = current_column + pos;
+                let highlighted = is_highlighted(line_idx, global_col);
+
+                let mut end_pos = pos + 1;
+                while end_pos < span_len {
+                    let next_global = current_column + end_pos;
+                    if is_highlighted(line_idx, next_global) != highlighted {
+                        break;
+                    }
+                    end_pos += 1;
+                }
+
+                segments.push((pos, end_pos, highlighted));
+                pos = end_pos;
+            }
+
+            for (start, end, highlighted) in segments {
+                let text: String = span_text[start..end].iter().collect();
+                let style = if highlighted {
+                    highlight_style
+                } else {
+                    span.style
+                };
+                result_spans.push(Span::styled(text, style));
+            }
+
+            current_column = span_end;
+        }
+
+        result_spans
+    }
+
     // Apply yank highlight to rendered spans
     pub fn apply_yank_highlight(
         &self,
@@ -1848,50 +1904,9 @@ impl MarkdownTextReader {
             return spans;
         }
 
-        let mut result_spans = Vec::new();
-        let mut current_column = 0;
-
-        let highlight_style = RatatuiStyle::default().bg(palette.base_02);
-
-        for span in spans {
-            let span_text: Vec<char> = span.content.chars().collect();
-            let span_len = span_text.len();
-            let span_end = current_column + span_len;
-
-            let mut segments: Vec<(usize, usize, bool)> = vec![];
-            let mut pos = 0;
-
-            while pos < span_len {
-                let global_col = current_column + pos;
-                let is_highlighted = highlight.contains(line_idx, global_col);
-
-                let mut end_pos = pos + 1;
-                while end_pos < span_len {
-                    let next_global = current_column + end_pos;
-                    if highlight.contains(line_idx, next_global) != is_highlighted {
-                        break;
-                    }
-                    end_pos += 1;
-                }
-
-                segments.push((pos, end_pos, is_highlighted));
-                pos = end_pos;
-            }
-
-            for (start, end, is_highlighted) in segments {
-                let text: String = span_text[start..end].iter().collect();
-                let style = if is_highlighted {
-                    highlight_style
-                } else {
-                    span.style
-                };
-                result_spans.push(Span::styled(text, style));
-            }
-
-            current_column = span_end;
-        }
-
-        result_spans
+        self.apply_highlight_with_predicate(line_idx, spans, palette, |line, col| {
+            highlight.contains(line, col)
+        })
     }
 
     // ==================== VISUAL MODE ====================
@@ -2015,49 +2030,8 @@ impl MarkdownTextReader {
             return spans;
         }
 
-        let mut result_spans = Vec::new();
-        let mut current_column = 0;
-
-        let highlight_style = RatatuiStyle::default().bg(palette.base_02);
-
-        for span in spans {
-            let span_text: Vec<char> = span.content.chars().collect();
-            let span_len = span_text.len();
-            let span_end = current_column + span_len;
-
-            let mut segments: Vec<(usize, usize, bool)> = vec![];
-            let mut pos = 0;
-
-            while pos < span_len {
-                let global_col = current_column + pos;
-                let is_highlighted = self.is_in_visual_selection(line_idx, global_col);
-
-                let mut end_pos = pos + 1;
-                while end_pos < span_len {
-                    let next_global = current_column + end_pos;
-                    if self.is_in_visual_selection(line_idx, next_global) != is_highlighted {
-                        break;
-                    }
-                    end_pos += 1;
-                }
-
-                segments.push((pos, end_pos, is_highlighted));
-                pos = end_pos;
-            }
-
-            for (start, end, is_highlighted) in segments {
-                let text: String = span_text[start..end].iter().collect();
-                let style = if is_highlighted {
-                    highlight_style
-                } else {
-                    span.style
-                };
-                result_spans.push(Span::styled(text, style));
-            }
-
-            current_column = span_end;
-        }
-
-        result_spans
+        self.apply_highlight_with_predicate(line_idx, spans, palette, |line, col| {
+            self.is_in_visual_selection(line, col)
+        })
     }
 }

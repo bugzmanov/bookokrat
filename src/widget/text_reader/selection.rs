@@ -96,11 +96,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.text_selection.has_selection()
     }
 
-    pub fn copy_selection_to_clipboard(&self) -> Result<(), String> {
+    pub fn copy_selection_to_clipboard(&mut self) -> Result<(), String> {
         if let Some(selected_text) = self
             .text_selection
             .extract_selected_text(&self.raw_text_lines)
         {
+            self.last_copied_text = Some(selected_text.clone());
             use arboard::Clipboard;
             let mut clipboard =
                 Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
@@ -113,7 +114,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
-    pub fn copy_chapter_to_clipboard(&self) -> Result<(), String> {
+    pub fn copy_chapter_to_clipboard(&mut self) -> Result<(), String> {
         use arboard::Clipboard;
         let mut clipboard =
             Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
@@ -125,12 +126,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         } else {
             self.raw_text_lines.join("\n")
         };
+        self.last_copied_text = Some(text.clone());
         clipboard
             .set_text(text)
             .map_err(|e| format!("Failed to copy to clipboard: {e}"))
     }
 
-    pub fn copy_to_clipboard(&self, text: String) -> Result<(), String> {
+    pub fn copy_to_clipboard(&mut self, text: String) -> Result<(), String> {
+        self.last_copied_text = Some(text.clone());
         use arboard::Clipboard;
         let mut clipboard =
             Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
@@ -140,7 +143,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     //for debuggin purposes
-    pub fn copy_raw_text_lines_to_clipboard(&self) -> Result<(), String> {
+    pub fn copy_raw_text_lines_to_clipboard(&mut self) -> Result<(), String> {
         if self.raw_text_lines.is_empty() {
             return Err("No content to copy".to_string());
         }
@@ -155,6 +158,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             debug_output.push_str(&format!("{idx:4}: {line}\n"));
         }
 
+        self.last_copied_text = Some(debug_output.clone());
         use arboard::Clipboard;
         let mut clipboard =
             Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
@@ -163,6 +167,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
 
         Ok(())
+    }
+
+    pub fn get_last_copied_text(&self) -> Option<String> {
+        self.last_copied_text.clone()
     }
 
     /// Convert screen coordinates to logical text coordinates (like TextReader does)

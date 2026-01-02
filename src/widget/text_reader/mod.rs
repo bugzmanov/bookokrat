@@ -59,6 +59,7 @@ pub struct MarkdownTextReader {
     // Text selection
     text_selection: TextSelection,
     raw_text_lines: Vec<String>, // Still needed for clipboard
+    last_copied_text: Option<String>,
     last_content_area: Option<Rect>,
 
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
@@ -219,6 +220,7 @@ impl MarkdownTextReader {
             last_focus_state: false,
             text_selection: TextSelection::new(),
             raw_text_lines: Vec::new(),
+            last_copied_text: None,
             last_content_area: None,
             last_inner_text_area: None,
             auto_scroll_active: false,
