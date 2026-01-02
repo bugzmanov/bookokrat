@@ -1,10 +1,10 @@
 [package]
 name = "bookokrat"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.86"
 authors = ["Rafael Bagmanov <bugzmanov@gmail.com>"]
-license = "MIT"
+license = "AGPL-3.0"
 description = "A terminal-based EPUB Books reader"
 default-run = "bookokrat"
 repository="https://github.com/bugzmanov/bookokrat"
@@ -22,8 +22,8 @@ name = "bookokrat"
 path = "src/main.rs"
 
 [dependencies]
-ratatui = { version = "0.29.0", features = ["underline-color"] }
-crossterm = "0.29.0"
+ratatui = { version = "0.30.0", features = ["underline-color"] }
+crossterm = { version = "0.29.0", features = ["event-stream"] }
 epub = "2.1.5"
 anyhow = "1.0.79"
 simplelog = "0.12.1"
@@ -46,26 +46,32 @@ fast_image_resize = "3.0"
 imagesize = "0.13"
 open = "5.3"
 roxmltree = "0.18"
-once_cell = "1.19"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 # fuzzy-matcher = "0.3"
 serde_yaml = "0.9"
 md5 = "0.7"
 dirs = "5.0"
-tui-textarea = "0.7"
+tui-textarea = { git = "https://github.com/0xferrous/tui-textarea", branch = "update-ratatui" }
 # ansi-to-tui = "7.0.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"
 # Vendored ratatui-image dependencies
 icy_sixel = "0.1.1"
-base64 = "0.21.2"
+base64-simd = "0.8"
 rand = "0.8.5"
 thiserror = "1.0.59"
 flate2 = "1.0"
-# Pin home to 0.5.11 to maintain compatibility with Rust 1.85 (0.5.12+ requires Rust 1.88)
-home = "=0.5.11"
+png = "0.17"
 walkdir = "2.4"
+
+# PDF rendering dependencies (optional, enabled with `pdf` feature)
+mupdf = { version = "0.6.0", default-features = false, features = ["svg", "system-fonts", "img"], optional = true }
+flume = { version = "0.12.0", default-features = false, optional = true }
+wide = { version = "0.7", optional = true }
+lru = { version = "0.12", optional = true }
+rayon = { version = "1.11.0", default-features = false, optional = true }
+base64 = { version = "0.22", optional = true }
 
 [target.'cfg(not(windows))'.dependencies]
 rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }
@@ -87,8 +93,10 @@ tempfile = "3.8"
 serial_test = "3.2"
 
 [features]
+default = []
 test-utils = []
 serde = []
+pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64"]
 
 [profile.release]
 debug = true
