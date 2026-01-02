@@ -1,6 +1,7 @@
 mod comments;
 mod images;
 mod navigation;
+mod normal_mode;
 mod rendering;
 mod search;
 mod selection;
@@ -19,6 +20,7 @@ use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use image::{DynamicImage, GenericImageView};
 use log::{info, warn};
+use normal_mode::NormalModeState;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -109,6 +111,9 @@ pub struct MarkdownTextReader {
 
     /// Content margin level (0-20), each level adds 2 columns on each side
     content_margin: u16,
+
+    /// Vim normal mode state
+    normal_mode: NormalModeState,
 }
 
 impl Default for MarkdownTextReader {
@@ -236,6 +241,7 @@ impl MarkdownTextReader {
             comment_input: CommentInputState::default(),
             chapter_title: None,
             content_margin: 0,
+            normal_mode: NormalModeState::new(),
         }
     }
 
@@ -422,6 +428,10 @@ impl MarkdownTextReader {
                 }
 
                 line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
+
+                if self.normal_mode.is_active() {
+                    line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);
+                }
 
                 visible_lines.push(Line::from(line_spans));
             }

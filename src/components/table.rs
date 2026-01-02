@@ -405,8 +405,9 @@ impl Table {
                 InlineSpan::Text { text, style } => {
                     let mut span_style = self.style_for_inline(base_color, *style);
                     if link_style {
-                        span_style =
-                            span_style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED);
+                        span_style = span_style
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::UNDERLINED);
                     }
                     spans.push(Span::styled(text.clone(), span_style));
                 }
@@ -557,12 +558,7 @@ impl Table {
     }
 
     /// Render a data row with proper cell formatting, wrapping, and colspan support
-    fn render_row(
-        &self,
-        row: &[CellData],
-        widths: &[u16],
-        is_header: bool,
-    ) -> Vec<Line<'static>> {
+    fn render_row(&self, row: &[CellData], widths: &[u16], is_header: bool) -> Vec<Line<'static>> {
         if widths.is_empty() || row.is_empty() {
             return vec![Line::from("")];
         }

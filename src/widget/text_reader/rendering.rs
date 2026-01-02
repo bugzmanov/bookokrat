@@ -384,7 +384,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
                     crate::table::InlineSpan::Link { text, url } => {
                         let link_text = trim_leading_space_inlines(text);
-                        trimmed.push(crate::table::InlineSpan::Link { text: link_text, url });
+                        trimmed.push(crate::table::InlineSpan::Link {
+                            text: link_text,
+                            url,
+                        });
                         applied = true;
                     }
                     other => {
@@ -433,8 +436,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
                     } else {
                         let mut trim = after_hard_break;
-                        let content =
-                            trim_leading_space_once(text_node.content.clone(), &mut trim);
+                        let content = trim_leading_space_once(text_node.content.clone(), &mut trim);
                         after_hard_break = trim;
                         result.push(crate::table::InlineSpan::Text {
                             text: content,
@@ -563,11 +565,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     rows_inline.push(row_cells);
                 }
 
-                let num_cols = rows_inline
-                    .iter()
-                    .map(|row| row.len())
-                    .max()
-                    .unwrap_or(0);
+                let num_cols = rows_inline.iter().map(|row| row.len()).max().unwrap_or(0);
                 if num_cols == 0 {
                     return Vec::new();
                 }
@@ -621,9 +619,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             Block::DefinitionList { items } => {
                 let mut result = Vec::new();
                 for (idx, item) in items.iter().enumerate() {
-                    let term = Self::inline_spans_to_plain_text(&Self::text_to_inline_spans(
-                        &item.term,
-                    ));
+                    let term =
+                        Self::inline_spans_to_plain_text(&Self::text_to_inline_spans(&item.term));
                     let defs: Vec<String> = item
                         .definitions
                         .iter()
@@ -693,9 +690,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         result
     }
 
-    fn apply_header_style(
-        inlines: &[crate::table::InlineSpan],
-    ) -> Vec<crate::table::InlineSpan> {
+    fn apply_header_style(inlines: &[crate::table::InlineSpan]) -> Vec<crate::table::InlineSpan> {
         inlines
             .iter()
             .map(|inline| match inline {
@@ -1711,12 +1706,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let display_width = self.calculate_inline_display_width(&cell.content);
 
                 if span == 1 {
-                    max_content_widths[grid_col] =
-                        max_content_widths[grid_col].max(display_width);
+                    max_content_widths[grid_col] = max_content_widths[grid_col].max(display_width);
                 } else {
-                    let current_sum: usize = max_content_widths[grid_col..grid_col + span]
-                        .iter()
-                        .sum();
+                    let current_sum: usize =
+                        max_content_widths[grid_col..grid_col + span].iter().sum();
                     if current_sum < display_width {
                         let deficit = display_width - current_sum;
                         let per_col = deficit / span;
@@ -1779,10 +1772,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Calculate display width of structured inline spans
-    pub fn calculate_inline_display_width(
-        &self,
-        inlines: &[crate::table::InlineSpan],
-    ) -> usize {
+    pub fn calculate_inline_display_width(&self, inlines: &[crate::table::InlineSpan]) -> usize {
         let mut max_line = 0usize;
         let mut current = 0usize;
 
@@ -2559,8 +2549,7 @@ mod tests {
         let doc = converter.convert(html);
 
         let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
-        let rendered =
-            reader.render_document_to_lines(&doc, 40, theme::current_theme(), true);
+        let rendered = reader.render_document_to_lines(&doc, 40, theme::current_theme(), true);
 
         let rendered_text = rendered
             .lines
@@ -2613,8 +2602,7 @@ mod tests {
         let doc = converter.convert(html);
 
         let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
-        let rendered =
-            reader.render_document_to_lines(&doc, 60, theme::current_theme(), true);
+        let rendered = reader.render_document_to_lines(&doc, 60, theme::current_theme(), true);
 
         let rendered_text = rendered
             .lines
@@ -2656,8 +2644,7 @@ mod tests {
         let doc = converter.convert(html);
 
         let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
-        let rendered =
-            reader.render_document_to_lines(&doc, 80, theme::current_theme(), true);
+        let rendered = reader.render_document_to_lines(&doc, 80, theme::current_theme(), true);
 
         let rendered_text = rendered
             .lines

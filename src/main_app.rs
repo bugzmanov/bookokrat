@@ -2741,6 +2741,132 @@ impl App {
             }
         }
 
+        // Handle vim normal mode keys when active
+        if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
+            // Check for pending f/F motion first
+            if self.text_reader.has_pending_motion() {
+                if let KeyCode::Char(ch) = key.code {
+                    self.text_reader.execute_pending_find(ch);
+                } else {
+                    self.text_reader.clear_pending_motion();
+                }
+                return None;
+            }
+
+            match key.code {
+                KeyCode::Char('n') => {
+                    // If in search navigation mode, 'n' goes to next match
+                    // Otherwise, toggle normal mode off
+                    if self.text_reader.is_searching() {
+                        let search_state = self.text_reader.get_search_state();
+                        if search_state.mode == SearchMode::NavigationMode {
+                            self.text_reader.next_match();
+                            return None;
+                        }
+                    }
+                    self.text_reader.toggle_normal_mode();
+                    return None;
+                }
+                KeyCode::Esc => {
+                    self.text_reader.toggle_normal_mode();
+                    return None;
+                }
+                KeyCode::Char('h') => {
+                    self.text_reader.normal_mode_left();
+                    return None;
+                }
+                KeyCode::Char('j') => {
+                    self.text_reader.normal_mode_down();
+                    return None;
+                }
+                KeyCode::Char('k') => {
+                    self.text_reader.normal_mode_up();
+                    return None;
+                }
+                KeyCode::Char('l') => {
+                    self.text_reader.normal_mode_right();
+                    return None;
+                }
+                KeyCode::Char('w') => {
+                    self.text_reader.normal_mode_word_forward();
+                    return None;
+                }
+                KeyCode::Char('e') | KeyCode::Char('E') => {
+                    self.text_reader.normal_mode_word_end();
+                    return None;
+                }
+                KeyCode::Char('b') | KeyCode::Char('B') => {
+                    self.text_reader.normal_mode_word_backward();
+                    return None;
+                }
+                KeyCode::Char('0') => {
+                    self.text_reader.normal_mode_line_start();
+                    return None;
+                }
+                KeyCode::Char('^') => {
+                    self.text_reader.normal_mode_first_non_whitespace();
+                    return None;
+                }
+                KeyCode::Char('$') => {
+                    self.text_reader.normal_mode_line_end();
+                    return None;
+                }
+                KeyCode::Char('f') => {
+                    self.text_reader.set_pending_find_forward();
+                    return None;
+                }
+                KeyCode::Char('F') => {
+                    self.text_reader.set_pending_find_backward();
+                    return None;
+                }
+                KeyCode::Char('t') => {
+                    self.text_reader.set_pending_till_forward();
+                    return None;
+                }
+                KeyCode::Char('T') => {
+                    self.text_reader.set_pending_till_backward();
+                    return None;
+                }
+                KeyCode::Char(';') => {
+                    self.text_reader.repeat_last_find();
+                    return None;
+                }
+                KeyCode::Char('{') => {
+                    self.text_reader.normal_mode_paragraph_up();
+                    return None;
+                }
+                KeyCode::Char('}') => {
+                    self.text_reader.normal_mode_paragraph_down();
+                    return None;
+                }
+                KeyCode::Char('g') => {
+                    let seq = self.key_sequence.handle_key('g');
+                    if seq == "gg" {
+                        self.text_reader.normal_mode_document_top();
+                        self.key_sequence.clear();
+                    }
+                    return None;
+                }
+                KeyCode::Char('G') => {
+                    self.text_reader.normal_mode_document_bottom();
+                    return None;
+                }
+                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(h) = screen_height {
+                        self.text_reader.normal_mode_half_page_down(h);
+                    }
+                    return None;
+                }
+                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let Some(h) = screen_height {
+                        self.text_reader.normal_mode_half_page_up(h);
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         match key.code {
             KeyCode::Char('/') => {
                 if self.is_main_panel(MainPanel::Content) {
@@ -2775,6 +2901,11 @@ impl App {
                     } else {
                         self.handle_search_input('N');
                     }
+                }
+            }
+            KeyCode::Char('n') if !self.is_in_search_mode() => {
+                if self.is_main_panel(MainPanel::Content) {
+                    self.text_reader.toggle_normal_mode();
                 }
             }
             KeyCode::Char('f') => if self.handle_key_sequence('f') {},

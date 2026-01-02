@@ -46,7 +46,11 @@ impl SearchEngine {
     pub fn process_chapters(&mut self, chapters: Vec<(usize, String, Vec<SearchLine>)>) {
         self.chapters = chapters
             .into_iter()
-            .map(|(index, title, lines)| ProcessedChapter { index, title, lines })
+            .map(|(index, title, lines)| ProcessedChapter {
+                index,
+                title,
+                lines,
+            })
             .collect();
     }
 
@@ -136,8 +140,7 @@ impl SearchEngine {
                     // Truncate very long snippet lines to keep results readable
                     let max_snippet_chars = 300;
                     let snippet = if line.text.chars().count() > max_snippet_chars {
-                        let truncated: String =
-                            line.text.chars().take(max_snippet_chars).collect();
+                        let truncated: String = line.text.chars().take(max_snippet_chars).collect();
                         format!("{truncated}...")
                     } else {
                         line.text.clone()
@@ -208,8 +211,7 @@ impl SearchEngine {
 
                     let max_snippet_chars = 300;
                     let snippet = if line.text.chars().count() > max_snippet_chars {
-                        let truncated: String =
-                            line.text.chars().take(max_snippet_chars).collect();
+                        let truncated: String = line.text.chars().take(max_snippet_chars).collect();
                         format!("{truncated}...")
                     } else {
                         line.text.clone()
@@ -254,8 +256,7 @@ impl SearchEngine {
                 .take(1)
                 .map(|line| {
                     if line.text.chars().count() > max_line_length {
-                        let truncated: String =
-                            line.text.chars().take(max_line_length).collect();
+                        let truncated: String = line.text.chars().take(max_line_length).collect();
                         format!("{truncated}...")
                     } else {
                         line.text.clone()
@@ -276,8 +277,7 @@ impl SearchEngine {
                 .take(1)
                 .map(|line| {
                     if line.text.chars().count() > max_line_length {
-                        let truncated: String =
-                            line.text.chars().take(max_line_length).collect();
+                        let truncated: String = line.text.chars().take(max_line_length).collect();
                         format!("{truncated}...")
                     } else {
                         line.text.clone()
