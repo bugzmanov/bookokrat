@@ -452,9 +452,8 @@ impl MarkdownTextReader {
 
         frame.render_widget(paragraph, area);
 
-        let inner_text_paragraph = Paragraph::new(visible_lines)
-            .block(Block::default().borders(Borders::NONE))
-            .wrap(ratatui::widgets::Wrap { trim: false });
+        let inner_text_paragraph =
+            Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
 
         frame.render_widget(inner_text_paragraph, inner_area);
 

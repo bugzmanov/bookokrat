@@ -1184,30 +1184,37 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
+        let indent_width = indent_str.chars().count();
+        let available_width = width.saturating_sub(indent_width).max(1);
+
+        let split_code_line = |line: &str| -> Vec<String> {
+            if line.is_empty() {
+                return vec![String::new()];
+            }
+
+            let mut segments = Vec::new();
+            let mut current = String::new();
+            let mut count = 0usize;
+
+            for ch in line.chars() {
+                current.push(ch);
+                count += 1;
+                if count >= available_width {
+                    segments.push(current);
+                    current = String::new();
+                    count = 0;
+                }
+            }
+
+            if !current.is_empty() {
+                segments.push(current);
+            }
+
+            segments
+        };
+
         for (line_idx, code_line) in code_lines.iter().enumerate() {
-            let mut spans = Vec::new();
-            let mut display_text = String::new();
-
-            if !indent_str.is_empty() {
-                spans.push(Span::raw(indent_str.clone()));
-                display_text.push_str(&indent_str);
-            }
-
-            let mut style = RatatuiStyle::default().fg(if is_focused {
-                palette.base_0b
-            } else {
-                palette.base_03
-            });
-            style = style.bg(palette.base_00);
-
-            if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
-                style = style.bg(palette.base_01);
-            }
-
-            let styled_span = Span::styled(code_line.to_string(), style);
-
-            display_text.push_str(code_line);
-            spans.push(styled_span);
+            let segments = split_code_line(code_line);
 
             let mut single_line_comments: Vec<Comment> = Vec::new();
             let mut multi_line_comments: Vec<Comment> = Vec::new();
@@ -1227,88 +1234,112 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             }
 
-            let mut inline_fragments = Vec::new();
+            for (segment_idx, segment) in segments.iter().enumerate() {
+                let mut spans = Vec::new();
+                let mut display_text = String::new();
 
-            if !single_line_comments.is_empty() {
-                let comment_style = RatatuiStyle::default().fg(palette.base_0e);
-                let mut appended_chars = display_text.chars().count();
+                if !indent_str.is_empty() {
+                    spans.push(Span::raw(indent_str.clone()));
+                    display_text.push_str(&indent_str);
+                }
 
-                for (idx, comment) in single_line_comments.into_iter().enumerate() {
-                    let prefix = if idx == 0 { "  ⟵ " } else { " | ⟵ " };
-                    let prefix_len = prefix.chars().count();
-                    let available_width = width.saturating_sub(appended_chars);
+                let mut style = RatatuiStyle::default().fg(if is_focused {
+                    palette.base_0b
+                } else {
+                    palette.base_03
+                });
+                style = style.bg(palette.base_00);
 
-                    let mut piece = prefix.to_string();
-                    let fragment_start = appended_chars;
+                if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
+                    style = style.bg(palette.base_01);
+                }
 
-                    let mut comment_line = comment
-                        .content
-                        .lines()
-                        .find(|line| !line.trim().is_empty())
-                        .unwrap_or("(comment)")
-                        .trim()
-                        .to_string();
+                let styled_span = Span::styled(segment.clone(), style);
+                display_text.push_str(segment);
+                spans.push(styled_span);
 
-                    let available_for_text = available_width.saturating_sub(prefix_len);
-                    if available_for_text == 0 {
-                        // Only room for prefix arrow
+                let mut inline_fragments = Vec::new();
+                let is_last_segment = segment_idx + 1 == segments.len();
+                if is_last_segment && !single_line_comments.is_empty() {
+                    let comment_style = RatatuiStyle::default().fg(palette.base_0e);
+                    let mut appended_chars = display_text.chars().count();
+
+                    for (idx, comment) in single_line_comments.iter().enumerate() {
+                        let prefix = if idx == 0 { "  ⟵ " } else { " | ⟵ " };
+                        let prefix_len = prefix.chars().count();
+                        let available_width = width.saturating_sub(appended_chars);
+
+                        let mut piece = prefix.to_string();
+                        let fragment_start = appended_chars;
+
+                        let mut comment_line = comment
+                            .content
+                            .lines()
+                            .find(|line| !line.trim().is_empty())
+                            .unwrap_or("(comment)")
+                            .trim()
+                            .to_string();
+
+                        let available_for_text = available_width.saturating_sub(prefix_len);
+                        if available_for_text == 0 {
+                            // Only room for prefix arrow
+                            appended_chars += piece.chars().count();
+                            display_text.push_str(&piece);
+                            spans.push(Span::styled(piece.clone(), comment_style));
+                            inline_fragments.push(InlineCodeCommentFragment {
+                                chapter_href: comment.chapter_href.clone(),
+                                target: comment.target.clone(),
+                                start_column: fragment_start,
+                                end_column: appended_chars,
+                            });
+                            continue;
+                        }
+
+                        if comment_line.chars().count() > available_for_text {
+                            let allowed = available_for_text.saturating_sub(1);
+                            if allowed == 0 {
+                                comment_line = "…".to_string();
+                            } else {
+                                let truncated: String = comment_line.chars().take(allowed).collect();
+                                comment_line = format!("{truncated}…");
+                            }
+                        }
+
+                        piece.push_str(&comment_line);
                         appended_chars += piece.chars().count();
                         display_text.push_str(&piece);
                         spans.push(Span::styled(piece.clone(), comment_style));
+
                         inline_fragments.push(InlineCodeCommentFragment {
                             chapter_href: comment.chapter_href.clone(),
                             target: comment.target.clone(),
                             start_column: fragment_start,
                             end_column: appended_chars,
                         });
-                        continue;
                     }
-
-                    if comment_line.chars().count() > available_for_text {
-                        let allowed = available_for_text.saturating_sub(1);
-                        if allowed == 0 {
-                            comment_line = "…".to_string();
-                        } else {
-                            let truncated: String = comment_line.chars().take(allowed).collect();
-                            comment_line = format!("{truncated}…");
-                        }
-                    }
-
-                    piece.push_str(&comment_line);
-                    appended_chars += piece.chars().count();
-                    display_text.push_str(&piece);
-                    spans.push(Span::styled(piece.clone(), comment_style));
-
-                    inline_fragments.push(InlineCodeCommentFragment {
-                        chapter_href: comment.chapter_href.clone(),
-                        target: comment.target.clone(),
-                        start_column: fragment_start,
-                        end_column: appended_chars,
-                    });
                 }
+
+                let rendered_line = RenderedLine {
+                    spans,
+                    raw_text: display_text.clone(),
+                    line_type: LineType::CodeBlock {
+                        language: language.map(String::from),
+                    },
+                    link_nodes: vec![],
+                    node_anchor: None,
+                    node_index,
+                    code_line: node_index.map(|idx| CodeLineMetadata {
+                        node_index: idx,
+                        line_index: line_idx,
+                        total_lines: total_code_lines,
+                    }),
+                    inline_code_comments: inline_fragments,
+                };
+
+                lines.push(rendered_line);
+                self.raw_text_lines.push(display_text);
+                *total_height += 1;
             }
-
-            let rendered_line = RenderedLine {
-                spans,
-                raw_text: display_text.clone(),
-                line_type: LineType::CodeBlock {
-                    language: language.map(String::from),
-                },
-                link_nodes: vec![],
-                node_anchor: None,
-                node_index,
-                code_line: node_index.map(|idx| CodeLineMetadata {
-                    node_index: idx,
-                    line_index: line_idx,
-                    total_lines: total_code_lines,
-                }),
-                inline_code_comments: inline_fragments,
-            };
-
-            lines.push(rendered_line);
-
-            self.raw_text_lines.push(display_text);
-            *total_height += 1;
 
             for comment in multi_line_comments {
                 self.render_inline_code_comment(
@@ -2535,6 +2566,32 @@ mod tests {
         panic!("{message}");
     }
 
+    fn split_code_line(line: &str, width: usize) -> Vec<String> {
+        if line.is_empty() {
+            return vec![String::new()];
+        }
+
+        let mut segments = Vec::new();
+        let mut current = String::new();
+        let mut count = 0usize;
+
+        for ch in line.chars() {
+            current.push(ch);
+            count += 1;
+            if count >= width {
+                segments.push(current);
+                current = String::new();
+                count = 0;
+            }
+        }
+
+        if !current.is_empty() {
+            segments.push(current);
+        }
+
+        segments
+    }
+
     #[test]
     fn test_render_simple_table_3x3() {
         let html = r#"
@@ -2664,6 +2721,43 @@ mod tests {
             "test_render_table_with_nested_table",
             &rendered_text,
             expected,
+        );
+    }
+
+    #[test]
+    fn test_render_code_block_wraps_and_preserves_blank_lines() {
+        let html = r#"<pre>alpha
+ 
+beta beta beta beta beta</pre>"#;
+
+        let mut converter = HtmlToMarkdownConverter::new();
+        let doc = converter.convert(html);
+
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let rendered = reader.render_document_to_lines(&doc, 12, theme::current_theme(), true);
+
+        let rendered_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.raw_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let code_lines = vec!["alpha", " ", "beta beta beta beta beta"];
+        let mut expected_lines = Vec::new();
+        for line in code_lines {
+            let segments = split_code_line(line, 12);
+            for segment in segments {
+                expected_lines.push(segment);
+            }
+        }
+        expected_lines.push(String::new());
+
+        let expected = expected_lines.join("\n");
+        assert_eq_multiline(
+            "test_render_code_block_wraps_and_preserves_blank_lines",
+            &rendered_text,
+            &expected,
         );
     }
 }
