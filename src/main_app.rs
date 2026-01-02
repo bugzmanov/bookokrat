@@ -2743,17 +2743,202 @@ impl App {
 
         // Handle vim normal mode keys when active
         if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
+            // Clear expired yank highlight
+            self.text_reader.clear_expired_yank_highlight();
+
             // Check for pending f/F motion first
             if self.text_reader.has_pending_motion() {
                 if let KeyCode::Char(ch) = key.code {
-                    self.text_reader.execute_pending_find(ch);
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.execute_pending_find(ch);
+                    }
                 } else {
                     self.text_reader.clear_pending_motion();
+                    self.text_reader.clear_count();
                 }
                 return None;
             }
 
+            // Check for pending yank
+            if self.text_reader.has_pending_yank() {
+                use crate::markdown_text_reader::{PendingCharMotion, PendingYank};
+                let pending = self.text_reader.get_pending_yank();
+
+                match pending {
+                    PendingYank::WaitingForMotion => {
+                        if let KeyCode::Char(ch) = key.code {
+                            // Check for sub-state transitions first (don't consume count)
+                            match ch {
+                                'g' => {
+                                    self.text_reader.set_pending_yank(PendingYank::WaitingForG);
+                                    return None;
+                                }
+                                'i' => {
+                                    self.text_reader
+                                        .set_pending_yank(PendingYank::WaitingForInnerObject);
+                                    return None;
+                                }
+                                'a' => {
+                                    self.text_reader
+                                        .set_pending_yank(PendingYank::WaitingForAroundObject);
+                                    return None;
+                                }
+                                'f' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::FindForward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                'F' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::FindBackward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                't' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::TillForward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                'T' => {
+                                    self.text_reader.set_pending_yank(
+                                        PendingYank::WaitingForFindChar(
+                                            PendingCharMotion::TillBackward,
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                _ => {}
+                            }
+                            // Now consume count for actual yank operations
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'y' => self.text_reader.yank_line(count),
+                                'w' => self.text_reader.yank_word_forward(count),
+                                'W' => self.text_reader.yank_big_word_forward(count),
+                                'e' => self.text_reader.yank_word_end(count),
+                                'b' => self.text_reader.yank_word_backward(count),
+                                '$' => self.text_reader.yank_to_line_end(),
+                                '0' => self.text_reader.yank_to_line_start(),
+                                '^' => self.text_reader.yank_to_first_non_whitespace(),
+                                '{' => self.text_reader.yank_paragraph_up(count),
+                                '}' => self.text_reader.yank_paragraph_down(count),
+                                'G' => self.text_reader.yank_to_document_bottom(),
+                                _ => {
+                                    self.text_reader.clear_pending_yank();
+                                    self.text_reader.clear_count();
+                                    None
+                                }
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        } else {
+                            self.text_reader.clear_pending_yank();
+                            self.text_reader.clear_count();
+                        }
+                        return None;
+                    }
+                    PendingYank::WaitingForG => {
+                        self.text_reader.clear_count();
+                        if let KeyCode::Char('g') = key.code {
+                            if let Some(text) = self.text_reader.yank_to_document_top() {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForInnerObject => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'w' => self.text_reader.yank_inner_word(),
+                                'W' => self.text_reader.yank_inner_big_word(),
+                                'p' => self.text_reader.yank_inner_paragraph(count),
+                                '"' => self.text_reader.yank_inner_quotes('"'),
+                                '\'' => self.text_reader.yank_inner_quotes('\''),
+                                '`' => self.text_reader.yank_inner_quotes('`'),
+                                '(' | ')' => self.text_reader.yank_inner_brackets('(', ')'),
+                                '[' | ']' => self.text_reader.yank_inner_brackets('[', ']'),
+                                '{' | '}' => self.text_reader.yank_inner_brackets('{', '}'),
+                                '<' | '>' => self.text_reader.yank_inner_brackets('<', '>'),
+                                _ => None,
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForAroundObject => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            let yanked = match ch {
+                                'w' => self.text_reader.yank_a_word(),
+                                'W' => self.text_reader.yank_a_big_word(),
+                                'p' => self.text_reader.yank_a_paragraph(count),
+                                '"' => self.text_reader.yank_around_quotes('"'),
+                                '\'' => self.text_reader.yank_around_quotes('\''),
+                                '`' => self.text_reader.yank_around_quotes('`'),
+                                '(' | ')' => self.text_reader.yank_around_brackets('(', ')'),
+                                '[' | ']' => self.text_reader.yank_around_brackets('[', ']'),
+                                '{' | '}' => self.text_reader.yank_around_brackets('{', '}'),
+                                '<' | '>' => self.text_reader.yank_around_brackets('<', '>'),
+                                _ => None,
+                            };
+                            if let Some(text) = yanked {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::WaitingForFindChar(motion) => {
+                        if let KeyCode::Char(ch) = key.code {
+                            let count = self.text_reader.take_count();
+                            if let Some(text) = self
+                                .text_reader
+                                .yank_find_char_with_count(motion, ch, count)
+                            {
+                                let _ = self.text_reader.copy_to_clipboard(text);
+                            }
+                        } else {
+                            self.text_reader.clear_count();
+                        }
+                        self.text_reader.clear_pending_yank();
+                        return None;
+                    }
+                    PendingYank::None => {}
+                }
+            }
+
+            // Handle digit input for count prefix (1-9, or 0 if count already started)
+            if let KeyCode::Char(ch) = key.code {
+                if ch.is_ascii_digit() {
+                    // '0' is line-start unless we're accumulating a count
+                    if ch != '0' || self.text_reader.has_pending_count() {
+                        if self.text_reader.append_count_digit(ch) {
+                            return None;
+                        }
+                    }
+                }
+            }
+
             match key.code {
+                KeyCode::Char('y') => {
+                    self.text_reader.start_yank();
+                    return None;
+                }
                 KeyCode::Char('n') => {
                     // If in search navigation mode, 'n' goes to next match
                     // Otherwise, toggle normal mode off
@@ -2764,54 +2949,88 @@ impl App {
                             return None;
                         }
                     }
+                    self.text_reader.clear_count();
                     self.text_reader.toggle_normal_mode();
                     return None;
                 }
                 KeyCode::Esc => {
+                    self.text_reader.clear_count();
                     self.text_reader.toggle_normal_mode();
                     return None;
                 }
                 KeyCode::Char('h') => {
-                    self.text_reader.normal_mode_left();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_left();
+                    }
                     return None;
                 }
                 KeyCode::Char('j') => {
-                    self.text_reader.normal_mode_down();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_down();
+                    }
                     return None;
                 }
                 KeyCode::Char('k') => {
-                    self.text_reader.normal_mode_up();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_up();
+                    }
                     return None;
                 }
                 KeyCode::Char('l') => {
-                    self.text_reader.normal_mode_right();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_right();
+                    }
                     return None;
                 }
                 KeyCode::Char('w') => {
-                    self.text_reader.normal_mode_word_forward();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_word_forward();
+                    }
+                    return None;
+                }
+                KeyCode::Char('W') => {
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_big_word_forward();
+                    }
                     return None;
                 }
                 KeyCode::Char('e') | KeyCode::Char('E') => {
-                    self.text_reader.normal_mode_word_end();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_word_end();
+                    }
                     return None;
                 }
                 KeyCode::Char('b') | KeyCode::Char('B') => {
-                    self.text_reader.normal_mode_word_backward();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_word_backward();
+                    }
                     return None;
                 }
                 KeyCode::Char('0') => {
+                    self.text_reader.clear_count();
                     self.text_reader.normal_mode_line_start();
                     return None;
                 }
                 KeyCode::Char('^') => {
+                    self.text_reader.clear_count();
                     self.text_reader.normal_mode_first_non_whitespace();
                     return None;
                 }
                 KeyCode::Char('$') => {
+                    self.text_reader.clear_count();
                     self.text_reader.normal_mode_line_end();
                     return None;
                 }
                 KeyCode::Char('f') => {
+                    // Count is consumed by find_char execution
                     self.text_reader.set_pending_find_forward();
                     return None;
                 }
@@ -2828,36 +3047,50 @@ impl App {
                     return None;
                 }
                 KeyCode::Char(';') => {
-                    self.text_reader.repeat_last_find();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.repeat_last_find();
+                    }
                     return None;
                 }
                 KeyCode::Char('{') => {
-                    self.text_reader.normal_mode_paragraph_up();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_paragraph_up();
+                    }
                     return None;
                 }
                 KeyCode::Char('}') => {
-                    self.text_reader.normal_mode_paragraph_down();
+                    let count = self.text_reader.take_count();
+                    for _ in 0..count {
+                        self.text_reader.normal_mode_paragraph_down();
+                    }
                     return None;
                 }
                 KeyCode::Char('g') => {
+                    // gg uses count as line number, but we'll just go to top for now
                     let seq = self.key_sequence.handle_key('g');
                     if seq == "gg" {
+                        self.text_reader.clear_count();
                         self.text_reader.normal_mode_document_top();
                         self.key_sequence.clear();
                     }
                     return None;
                 }
                 KeyCode::Char('G') => {
+                    self.text_reader.clear_count();
                     self.text_reader.normal_mode_document_bottom();
                     return None;
                 }
                 KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.text_reader.clear_count();
                     if let Some(h) = screen_height {
                         self.text_reader.normal_mode_half_page_down(h);
                     }
                     return None;
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.text_reader.clear_count();
                     if let Some(h) = screen_height {
                         self.text_reader.normal_mode_half_page_up(h);
                     }
