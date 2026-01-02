@@ -2210,10 +2210,25 @@ impl App {
         f.render_widget(right_para, inner_area);
     }
 
+    fn toggle_zen_mode(&mut self) {
+        // Save current content position before toggling zen mode
+        let current_node = self.text_reader.get_current_node_index();
+        self.zen_mode = !self.zen_mode;
+        // Restore position after width change causes re-render
+        self.text_reader.restore_to_node_index(current_node);
+        // When entering zen mode while on NavigationList, switch to Content
+        if self.zen_mode
+            && self.is_main_panel(MainPanel::NavigationList)
+            && self.current_book.is_some()
+        {
+            self.set_main_panel_focus(MainPanel::Content);
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+        use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
             KeyCode::Char('?') => {
@@ -2232,6 +2247,10 @@ impl App {
             KeyCode::Char(c) if self.key_sequence.current_sequence() == " " => {
                 // Handle space + key combinations (global across all panels)
                 self.handle_key_sequence(c)
+            }
+            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_zen_mode();
+                true
             }
             _ => false,
         }
@@ -3313,18 +3332,7 @@ impl App {
                 }
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Save current content position before toggling zen mode
-                let current_node = self.text_reader.get_current_node_index();
-                self.zen_mode = !self.zen_mode;
-                // Restore position after width change causes re-render
-                self.text_reader.restore_to_node_index(current_node);
-                // When entering zen mode while on NavigationList, switch to Content
-                if self.zen_mode
-                    && self.is_main_panel(MainPanel::NavigationList)
-                    && self.current_book.is_some()
-                {
-                    self.set_main_panel_focus(MainPanel::Content);
-                }
+                self.toggle_zen_mode();
             }
 
             KeyCode::Char('G') => {

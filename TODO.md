@@ -54,7 +54,7 @@ ideas to implement:
  - [x] settings window
      - [x] make margins configurable + text color
      - [x] multiple themes
- - [ ] text cursor for reading ala vim normal mode
+ - [x] text cursor for reading ala vim normal mode
  - [x] images in ghosty terminal
      - [x] images of various sized - right now bookokrat support just 2 presets
      - [ ] copy images to clipboard
@@ -69,7 +69,6 @@ ideas to implement:
 bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reload
-[ ] Book search when jumps from the list to the book drops in the wrong location
 [ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
 [ ] Careless people: current chapter highlightning not working
