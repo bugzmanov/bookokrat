@@ -2967,7 +2967,7 @@ impl App {
                         let row_text: Vec<String> = header_row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_text(&cell.content))
+                            .map(|cell| extract_text_from_cell_content(&cell.content, lines))
                             .collect();
                         if !row_text.is_empty() {
                             lines.push(row_text.join(" "));
@@ -2977,7 +2977,7 @@ impl App {
                         let row_text: Vec<String> = row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_text(&cell.content))
+                            .map(|cell| extract_text_from_cell_content(&cell.content, lines))
                             .collect();
                         if !row_text.is_empty() {
                             lines.push(row_text.join(" "));
@@ -3028,6 +3028,84 @@ impl App {
             }
 
             result
+        }
+
+        fn extract_text_from_cell_content(
+            content: &crate::markdown::TableCellContent,
+            lines: &mut Vec<String>,
+        ) -> String {
+            match content {
+                crate::markdown::TableCellContent::Simple(text) => extract_text_from_text(text),
+                crate::markdown::TableCellContent::Rich(nodes) => {
+                    let mut result = String::new();
+                    for node in nodes {
+                        extract_text_from_block(&node.block, lines);
+                        // Also collect text inline
+                        result.push_str(&extract_node_text(node));
+                    }
+                    result
+                }
+            }
+        }
+
+        fn extract_node_text(node: &crate::markdown::Node) -> String {
+            use crate::markdown::Block;
+            match &node.block {
+                Block::Paragraph { content } => extract_text_from_text(content),
+                Block::Heading { content, .. } => extract_text_from_text(content),
+                Block::CodeBlock { content, .. } => content.clone(),
+                Block::Quote { content } => content
+                    .iter()
+                    .map(extract_node_text)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Block::List { items, .. } => items
+                    .iter()
+                    .flat_map(|item| item.content.iter().map(extract_node_text))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                Block::Table { header, rows, .. } => {
+                    let mut text = String::new();
+                    if let Some(h) = header {
+                        text.push_str(
+                            &h.cells
+                                .iter()
+                                .map(|c| match &c.content {
+                                    crate::markdown::TableCellContent::Simple(t) => {
+                                        extract_text_from_text(t)
+                                    }
+                                    crate::markdown::TableCellContent::Rich(n) => n
+                                        .iter()
+                                        .map(extract_node_text)
+                                        .collect::<Vec<_>>()
+                                        .join(" "),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        );
+                    }
+                    for row in rows {
+                        text.push_str(
+                            &row.cells
+                                .iter()
+                                .map(|c| match &c.content {
+                                    crate::markdown::TableCellContent::Simple(t) => {
+                                        extract_text_from_text(t)
+                                    }
+                                    crate::markdown::TableCellContent::Rich(n) => n
+                                        .iter()
+                                        .map(extract_node_text)
+                                        .collect::<Vec<_>>()
+                                        .join(" "),
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                        );
+                    }
+                    text
+                }
+                _ => String::new(),
+            }
         }
 
         let mut search_engine = SearchEngine::new();

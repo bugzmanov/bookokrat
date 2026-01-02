@@ -328,6 +328,466 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         result
     }
 
+    /// Convert MarkdownText to structured inline spans
+    pub fn text_to_inline_spans(text: &MarkdownText) -> Vec<crate::table::InlineSpan> {
+        let mut result = Vec::new();
+        let mut after_hard_break = false;
+
+        fn trim_trailing_space_in_spans(spans: &mut Vec<crate::table::InlineSpan>) {
+            for span in spans.iter_mut().rev() {
+                match span {
+                    crate::table::InlineSpan::Text { text, .. } => {
+                        while text.ends_with(' ') {
+                            text.pop();
+                        }
+                        break;
+                    }
+                    crate::table::InlineSpan::Link { text, .. } => {
+                        trim_trailing_space_in_spans(text);
+                        break;
+                    }
+                    crate::table::InlineSpan::SoftBreak => {
+                        continue;
+                    }
+                    crate::table::InlineSpan::HardBreak => {
+                        break;
+                    }
+                }
+            }
+        }
+
+        fn trim_leading_space_once(value: String, trim: &mut bool) -> String {
+            if *trim && value.starts_with(' ') {
+                *trim = false;
+                value[1..].to_string()
+            } else {
+                *trim = false;
+                value
+            }
+        }
+
+        fn trim_leading_space_inlines(
+            inlines: Vec<crate::table::InlineSpan>,
+        ) -> Vec<crate::table::InlineSpan> {
+            let mut trimmed = Vec::new();
+            let mut applied = false;
+            for inline in inlines {
+                if applied {
+                    trimmed.push(inline);
+                    continue;
+                }
+                match inline {
+                    crate::table::InlineSpan::Text { text, style } => {
+                        let value = text.strip_prefix(' ').unwrap_or(&text).to_string();
+                        trimmed.push(crate::table::InlineSpan::Text { text: value, style });
+                        applied = true;
+                    }
+                    crate::table::InlineSpan::Link { text, url } => {
+                        let link_text = trim_leading_space_inlines(text);
+                        trimmed.push(crate::table::InlineSpan::Link { text: link_text, url });
+                        applied = true;
+                    }
+                    other => {
+                        trimmed.push(other);
+                    }
+                }
+            }
+            trimmed
+        }
+
+        for item in text.iter() {
+            match item {
+                TextOrInline::Text(text_node) => {
+                    let mut style = crate::table::InlineStyle::default();
+                    match &text_node.style {
+                        Some(Style::Strong) => style.bold = true,
+                        Some(Style::Emphasis) => style.italic = true,
+                        Some(Style::Code) => style.code = true,
+                        Some(Style::Strikethrough) => style.strike = true,
+                        None => {}
+                    }
+                    let content = text_node.content.as_str();
+                    if content.contains("<br/>") {
+                        let parts: Vec<&str> = content.split("<br/>").collect();
+                        for (idx, part) in parts.iter().enumerate() {
+                            let mut slice = *part;
+                            if idx + 1 < parts.len() {
+                                slice = slice.trim_end();
+                            }
+                            if idx > 0 {
+                                slice = slice.trim_start();
+                            }
+                            if !slice.is_empty() {
+                                let mut trim = after_hard_break;
+                                result.push(crate::table::InlineSpan::Text {
+                                    text: trim_leading_space_once(slice.to_string(), &mut trim),
+                                    style,
+                                });
+                                after_hard_break = trim;
+                            }
+                            if idx + 1 < parts.len() {
+                                trim_trailing_space_in_spans(&mut result);
+                                result.push(crate::table::InlineSpan::HardBreak);
+                                after_hard_break = true;
+                            }
+                        }
+                    } else {
+                        let mut trim = after_hard_break;
+                        let content =
+                            trim_leading_space_once(text_node.content.clone(), &mut trim);
+                        after_hard_break = trim;
+                        result.push(crate::table::InlineSpan::Text {
+                            text: content,
+                            style,
+                        });
+                    }
+                }
+                TextOrInline::Inline(inline) => match inline {
+                    Inline::Link {
+                        text: link_text,
+                        url,
+                        ..
+                    } => {
+                        let mut link_spans = Self::text_to_inline_spans(link_text);
+                        if after_hard_break {
+                            link_spans = trim_leading_space_inlines(link_spans);
+                            after_hard_break = false;
+                        }
+                        result.push(crate::table::InlineSpan::Link {
+                            text: link_spans,
+                            url: url.clone(),
+                        });
+                    }
+                    Inline::Image { alt_text, .. } => result.push(crate::table::InlineSpan::Text {
+                        text: alt_text.clone(),
+                        style: crate::table::InlineStyle::default(),
+                    }),
+                    Inline::Anchor { .. } => {}
+                    Inline::LineBreak => {
+                        trim_trailing_space_in_spans(&mut result);
+                        result.push(crate::table::InlineSpan::HardBreak);
+                        after_hard_break = true;
+                    }
+                    Inline::SoftBreak => result.push(crate::table::InlineSpan::SoftBreak),
+                },
+            }
+        }
+        result
+    }
+
+    /// Convert table cell content to structured inline spans
+    pub fn cell_content_to_inline(
+        content: &crate::markdown::TableCellContent,
+    ) -> Vec<crate::table::InlineSpan> {
+        match content {
+            crate::markdown::TableCellContent::Simple(text) => Self::text_to_inline_spans(text),
+            crate::markdown::TableCellContent::Rich(nodes) => {
+                let mut result = Vec::new();
+                for (idx, node) in nodes.iter().enumerate() {
+                    if idx > 0 {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                    result.extend(Self::node_to_inline_spans(node));
+                }
+                result
+            }
+        }
+    }
+
+    /// Convert a Node to structured inline spans
+    fn node_to_inline_spans(node: &crate::markdown::Node) -> Vec<crate::table::InlineSpan> {
+        use crate::markdown::Block;
+        match &node.block {
+            Block::Paragraph { content } => Self::text_to_inline_spans(content),
+            Block::Heading { content, .. } => Self::text_to_inline_spans(content),
+            Block::CodeBlock { content, .. } => vec![crate::table::InlineSpan::Text {
+                text: content.clone(),
+                style: crate::table::InlineStyle {
+                    code: true,
+                    ..Default::default()
+                },
+            }],
+            Block::Quote { content } => {
+                let mut result = Vec::new();
+                for (idx, node) in content.iter().enumerate() {
+                    if idx > 0 {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                    result.extend(Self::node_to_inline_spans(node));
+                }
+                result
+            }
+            Block::List { kind, items } => {
+                use crate::markdown::ListKind;
+                let mut result = Vec::new();
+                for (idx, item) in items.iter().enumerate() {
+                    let prefix = match kind {
+                        ListKind::Unordered => "• ".to_string(),
+                        ListKind::Ordered { start } => format!("{}. ", start + idx as u32),
+                    };
+                    result.push(crate::table::InlineSpan::Text {
+                        text: prefix,
+                        style: crate::table::InlineStyle::default(),
+                    });
+
+                    for node in &item.content {
+                        result.extend(Self::node_to_inline_spans(node));
+                    }
+
+                    if idx + 1 < items.len() {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                }
+                result
+            }
+            Block::Table { header, rows, .. } => {
+                let mut rows_inline: Vec<Vec<Vec<crate::table::InlineSpan>>> = Vec::new();
+                let mut has_header = false;
+
+                if let Some(h) = header {
+                    let header_cells = h
+                        .cells
+                        .iter()
+                        .map(|cell| Self::cell_content_to_inline(&cell.content))
+                        .collect::<Vec<_>>();
+                    rows_inline.push(header_cells);
+                    has_header = true;
+                }
+
+                for row in rows {
+                    let row_cells = row
+                        .cells
+                        .iter()
+                        .map(|cell| Self::cell_content_to_inline(&cell.content))
+                        .collect::<Vec<_>>();
+                    rows_inline.push(row_cells);
+                }
+
+                let num_cols = rows_inline
+                    .iter()
+                    .map(|row| row.len())
+                    .max()
+                    .unwrap_or(0);
+                if num_cols == 0 {
+                    return Vec::new();
+                }
+
+                let mut col_widths = vec![0usize; num_cols];
+                for row in &rows_inline {
+                    for (idx, cell) in row.iter().enumerate() {
+                        let width = Self::inline_spans_to_flat_text(cell).chars().count();
+                        col_widths[idx] = col_widths[idx].max(width);
+                    }
+                }
+
+                let mut result = Vec::new();
+                for (row_idx, row) in rows_inline.iter().enumerate() {
+                    let is_header = has_header && row_idx == 0;
+                    for col_idx in 0..num_cols {
+                        let cell = row.get(col_idx).cloned().unwrap_or_default();
+                        let styled_cell = if is_header {
+                            Self::apply_header_style(&cell)
+                        } else {
+                            cell
+                        };
+                        let cell_width = Self::inline_spans_to_flat_text(&styled_cell)
+                            .chars()
+                            .count();
+                        let padding = col_widths[col_idx].saturating_sub(cell_width);
+
+                        result.extend(styled_cell);
+                        if padding > 0 {
+                            result.push(crate::table::InlineSpan::Text {
+                                text: " ".repeat(padding),
+                                style: crate::table::InlineStyle::default(),
+                            });
+                        }
+
+                        if col_idx + 1 < num_cols {
+                            result.push(crate::table::InlineSpan::Text {
+                                text: " | ".to_string(),
+                                style: crate::table::InlineStyle::default(),
+                            });
+                        }
+                    }
+
+                    if row_idx + 1 < rows_inline.len() {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                }
+
+                result
+            }
+            Block::DefinitionList { items } => {
+                let mut result = Vec::new();
+                for (idx, item) in items.iter().enumerate() {
+                    let term = Self::inline_spans_to_plain_text(&Self::text_to_inline_spans(
+                        &item.term,
+                    ));
+                    let defs: Vec<String> = item
+                        .definitions
+                        .iter()
+                        .map(|def| {
+                            def.iter()
+                                .flat_map(Self::node_to_inline_spans)
+                                .collect::<Vec<_>>()
+                        })
+                        .map(|inline| Self::inline_spans_to_plain_text(&inline))
+                        .collect();
+
+                    result.push(crate::table::InlineSpan::Text {
+                        text: format!("{}: {}", term, defs.join("; ")),
+                        style: crate::table::InlineStyle::default(),
+                    });
+                    if idx + 1 < items.len() {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                }
+                result
+            }
+            Block::EpubBlock { content, .. } => {
+                let mut result = Vec::new();
+                for (idx, node) in content.iter().enumerate() {
+                    if idx > 0 {
+                        result.push(crate::table::InlineSpan::HardBreak);
+                    }
+                    result.extend(Self::node_to_inline_spans(node));
+                }
+                result
+            }
+            Block::ThematicBreak => vec![crate::table::InlineSpan::Text {
+                text: "---".to_string(),
+                style: crate::table::InlineStyle::default(),
+            }],
+        }
+    }
+
+    fn inline_spans_to_plain_text(inlines: &[crate::table::InlineSpan]) -> String {
+        let mut result = String::new();
+        for inline in inlines {
+            match inline {
+                crate::table::InlineSpan::Text { text, .. } => result.push_str(text),
+                crate::table::InlineSpan::Link { text, .. } => {
+                    result.push_str(&Self::inline_spans_to_plain_text(text));
+                }
+                crate::table::InlineSpan::SoftBreak => result.push(' '),
+                crate::table::InlineSpan::HardBreak => result.push('\n'),
+            }
+        }
+        result
+    }
+
+    fn inline_spans_to_flat_text(inlines: &[crate::table::InlineSpan]) -> String {
+        let mut result = String::new();
+        for inline in inlines {
+            match inline {
+                crate::table::InlineSpan::Text { text, .. } => result.push_str(text),
+                crate::table::InlineSpan::Link { text, .. } => {
+                    result.push_str(&Self::inline_spans_to_flat_text(text));
+                }
+                crate::table::InlineSpan::SoftBreak | crate::table::InlineSpan::HardBreak => {
+                    result.push(' ');
+                }
+            }
+        }
+        result
+    }
+
+    fn apply_header_style(
+        inlines: &[crate::table::InlineSpan],
+    ) -> Vec<crate::table::InlineSpan> {
+        inlines
+            .iter()
+            .map(|inline| match inline {
+                crate::table::InlineSpan::Text { text, style } => {
+                    let mut styled = *style;
+                    styled.bold = true;
+                    crate::table::InlineSpan::Text {
+                        text: text.clone(),
+                        style: styled,
+                    }
+                }
+                crate::table::InlineSpan::Link { text, url } => crate::table::InlineSpan::Link {
+                    text: Self::apply_header_style(text),
+                    url: url.clone(),
+                },
+                crate::table::InlineSpan::SoftBreak => crate::table::InlineSpan::SoftBreak,
+                crate::table::InlineSpan::HardBreak => crate::table::InlineSpan::HardBreak,
+            })
+            .collect()
+    }
+
+    /// Build a proper table grid for rendering with colspan information.
+    /// Note: rowspan is already handled by the parser (extract_table_row_with_rowspan)
+    /// which inserts empty placeholder cells.
+    /// Returns: (header_cells, row_cells, grid_columns)
+    fn build_table_grid(
+        header: &Option<crate::markdown::TableRow>,
+        rows: &[crate::markdown::TableRow],
+    ) -> (
+        Vec<crate::table::CellData>,
+        Vec<Vec<crate::table::CellData>>,
+        usize,
+    ) {
+        // Collect all source rows (header + data rows)
+        let mut source_rows: Vec<&crate::markdown::TableRow> = Vec::new();
+        if let Some(h) = header {
+            source_rows.push(h);
+        }
+        for row in rows {
+            source_rows.push(row);
+        }
+
+        if source_rows.is_empty() {
+            return (Vec::new(), Vec::new(), 0);
+        }
+
+        // Determine max grid columns (accounting for colspan)
+        let mut max_grid_cols = 0;
+        for row in &source_rows {
+            let mut grid_cols = 0;
+            for cell in &row.cells {
+                grid_cols += cell.colspan.max(1) as usize;
+            }
+            max_grid_cols = max_grid_cols.max(grid_cols);
+        }
+
+        if max_grid_cols == 0 {
+            return (Vec::new(), Vec::new(), 0);
+        }
+
+        // Build grid - extract cell content and colspan info
+        let mut result_rows: Vec<Vec<crate::table::CellData>> = Vec::new();
+
+        for row in &source_rows {
+            let mut grid_row: Vec<crate::table::CellData> = Vec::new();
+            let mut total_grid_cols = 0;
+
+            for cell in &row.cells {
+                let content = Self::cell_content_to_inline(&cell.content);
+                let colspan = cell.colspan.max(1);
+                grid_row.push(crate::table::CellData::with_colspan(content, colspan));
+                total_grid_cols += colspan as usize;
+            }
+
+            // Pad row to max_grid_cols if needed (add empty cells with colspan=1)
+            while total_grid_cols < max_grid_cols {
+                grid_row.push(crate::table::CellData::empty());
+                total_grid_cols += 1;
+            }
+
+            result_rows.push(grid_row);
+        }
+
+        // Convert to output format - separate header from data rows
+        if header.is_some() && !result_rows.is_empty() {
+            let table_headers = result_rows.remove(0);
+            (table_headers, result_rows, max_grid_cols)
+        } else {
+            (Vec::new(), result_rows, max_grid_cols)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_heading(
         &mut self,
@@ -1090,33 +1550,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
     ) {
-        // Convert markdown table to String format for Table widget
-        let mut table_rows = Vec::new();
-        let mut table_headers = Vec::new();
+        // Build a proper grid that accounts for colspan and rowspan
+        let (table_headers, table_rows, grid_columns) = Self::build_table_grid(header, rows);
 
-        // Process header
-        if let Some(header_row) = header {
-            table_headers = header_row
-                .cells
-                .iter()
-                .map(|cell| Self::text_to_string(&cell.content))
-                .collect();
-        }
-
-        // Process data rows
-        for row in rows {
-            let row_data: Vec<String> = row
-                .cells
-                .iter()
-                .map(|cell| Self::text_to_string(&cell.content))
-                .collect();
-            table_rows.push(row_data);
-        }
-
-        // Get dimensions for embedded table tracking
-        let num_cols = table_headers
-            .len()
-            .max(table_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+        // Get dimensions for embedded table tracking (count grid columns including colspan)
+        let num_cols = grid_columns;
 
         if num_cols == 0 {
             return; // Empty table
@@ -1144,13 +1582,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             use_block: false,
         };
 
-        // Create the table widget
-        let mut custom_table = crate::table::Table::new(table_rows.clone())
+        let header_plain = if table_headers.is_empty() {
+            None
+        } else {
+            Some(
+                table_headers
+                    .iter()
+                    .map(|cell| Self::inline_spans_to_plain_text(&cell.content))
+                    .collect::<Vec<String>>(),
+            )
+        };
+        let rows_plain: Vec<Vec<String>> = table_rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| Self::inline_spans_to_plain_text(&cell.content))
+                    .collect()
+            })
+            .collect();
+
+        // Create the table widget with colspan support
+        let mut custom_table = crate::table::Table::new_with_colspans(table_rows)
             .constraints(constraints)
             .config(table_config);
 
         if !table_headers.is_empty() {
-            custom_table = custom_table.header(table_headers.clone());
+            custom_table = custom_table.header_with_colspans(table_headers);
         }
 
         // Set base line for link tracking
@@ -1187,18 +1644,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Store table info for click detection
         let table_height = *total_height - table_start_line;
-        let num_data_rows = table_rows.len();
+        let num_data_rows = rows_plain.len();
         self.embedded_tables.borrow_mut().push(EmbeddedTable {
             lines_before_table: table_start_line,
-            num_rows: num_data_rows + if table_headers.is_empty() { 0 } else { 1 },
+            num_rows: num_data_rows + if header_plain.is_none() { 0 } else { 1 },
             num_cols,
-            has_header: !table_headers.is_empty(),
-            header_row: if table_headers.is_empty() {
-                None
-            } else {
-                Some(table_headers)
-            },
-            data_rows: table_rows,
+            has_header: header_plain.is_some(),
+            header_row: header_plain,
+            data_rows: rows_plain,
             height_cells: table_height,
         });
 
@@ -1220,13 +1673,20 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Calculate balanced column constraints for table rendering
     pub fn calculate_balanced_column_widths(
         &self,
-        headers: &[String],
-        data_rows: &[Vec<String>],
+        headers: &[crate::table::CellData],
+        data_rows: &[Vec<crate::table::CellData>],
         available_width: usize,
     ) -> Vec<Constraint> {
-        let num_cols = headers
-            .len()
-            .max(data_rows.iter().map(|r| r.len()).max().unwrap_or(0));
+        let header_cols: usize = headers
+            .iter()
+            .map(|cell| cell.colspan.max(1) as usize)
+            .sum();
+        let data_cols = data_rows
+            .iter()
+            .map(|row| row.iter().map(|cell| cell.colspan.max(1) as usize).sum())
+            .max()
+            .unwrap_or(0);
+        let num_cols = header_cols.max(data_cols);
 
         if num_cols == 0 {
             return Vec::new();
@@ -1240,22 +1700,46 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Calculate content-based widths by examining all rows
         let mut max_content_widths = vec![0; num_cols];
 
-        // Check header row
-        for (col_idx, cell) in headers.iter().enumerate() {
-            if col_idx < max_content_widths.len() {
-                let display_width = self.calculate_display_width(cell);
-                max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
-            }
-        }
-
-        // Check all data rows
-        for row in data_rows {
-            for (col_idx, cell) in row.iter().enumerate() {
-                if col_idx < max_content_widths.len() {
-                    let display_width = self.calculate_display_width(cell);
-                    max_content_widths[col_idx] = max_content_widths[col_idx].max(display_width);
+        let mut apply_row = |row: &[crate::table::CellData]| {
+            let mut grid_col = 0usize;
+            for cell in row {
+                let span = cell.colspan.max(1) as usize;
+                if grid_col >= num_cols {
+                    break;
                 }
+                let span = span.min(num_cols - grid_col);
+                let display_width = self.calculate_inline_display_width(&cell.content);
+
+                if span == 1 {
+                    max_content_widths[grid_col] =
+                        max_content_widths[grid_col].max(display_width);
+                } else {
+                    let current_sum: usize = max_content_widths[grid_col..grid_col + span]
+                        .iter()
+                        .sum();
+                    if current_sum < display_width {
+                        let deficit = display_width - current_sum;
+                        let per_col = deficit / span;
+                        let mut extra = deficit % span;
+                        for i in 0..span {
+                            max_content_widths[grid_col + i] += per_col;
+                            if extra > 0 {
+                                max_content_widths[grid_col + i] += 1;
+                                extra -= 1;
+                            }
+                        }
+                    }
+                }
+
+                grid_col += span;
             }
+        };
+
+        if !headers.is_empty() {
+            apply_row(headers);
+        }
+        for row in data_rows {
+            apply_row(row);
         }
 
         // Apply minimum width constraint and calculate total desired width
@@ -1294,37 +1778,33 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
-    /// Calculate display width of text, excluding markdown formatting markers
-    pub fn calculate_display_width(&self, text: &str) -> usize {
-        // Strip markdown formatting markers for width calculation
-        let mut display_text = text.to_string();
+    /// Calculate display width of structured inline spans
+    pub fn calculate_inline_display_width(
+        &self,
+        inlines: &[crate::table::InlineSpan],
+    ) -> usize {
+        let mut max_line = 0usize;
+        let mut current = 0usize;
 
-        // Handle <br/> tags - each represents a line break, so find the longest line
-        if display_text.contains("<br/>") {
-            return display_text
-                .replace("<br/> ", "\n")
-                .replace("<br/>", "\n")
-                .lines()
-                .map(|line| {
-                    // Strip markdown from each line and get its width
-                    let stripped = line
-                        .replace("**", "")
-                        .replace("__", "")
-                        .replace("*", "")
-                        .replace("_", "");
-                    stripped.chars().count()
-                })
-                .max()
-                .unwrap_or(0);
+        for inline in inlines {
+            match inline {
+                crate::table::InlineSpan::Text { text, .. } => {
+                    current += text.chars().count();
+                }
+                crate::table::InlineSpan::Link { text, .. } => {
+                    current += self.calculate_inline_display_width(text);
+                }
+                crate::table::InlineSpan::SoftBreak => {
+                    current += 1;
+                }
+                crate::table::InlineSpan::HardBreak => {
+                    max_line = max_line.max(current);
+                    current = 0;
+                }
+            }
         }
 
-        // Strip markdown formatting markers
-        display_text = display_text.replace("**", "");
-        display_text = display_text.replace("__", "");
-        display_text = display_text.replace("*", "");
-        display_text = display_text.replace("_", "");
-
-        display_text.chars().count()
+        max_line.max(current)
     }
 
     /// Convert ratatui Line to plain text string
@@ -2027,5 +2507,176 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+    use crate::theme;
+
+    fn assert_eq_multiline(name: &str, left: &str, right: &str) {
+        if left == right {
+            return;
+        }
+
+        let left_lines: Vec<&str> = left.lines().collect();
+        let right_lines: Vec<&str> = right.lines().collect();
+        let max_lines = left_lines.len().max(right_lines.len());
+
+        let mut message = String::new();
+        message.push_str(&format!("{}\n", name));
+        message.push_str("Lines: left | right\n");
+
+        for i in 0..max_lines {
+            let left_line = left_lines.get(i).copied().unwrap_or("");
+            let right_line = right_lines.get(i).copied().unwrap_or("");
+            let marker = if left_line == right_line { " " } else { "!" };
+            message.push_str(&format!(
+                "{marker} {ln:>3} L: {left_line}\n    {spacer} R: {right_line}\n",
+                marker = marker,
+                ln = i + 1,
+                left_line = left_line,
+                spacer = " ",
+                right_line = right_line
+            ));
+        }
+
+        panic!("{message}");
+    }
+
+    #[test]
+    fn test_render_simple_table_3x3() {
+        let html = r#"
+        <table>
+            <tr><th>H1</th><th>H2</th><th>H3</th></tr>
+            <tr><td>R1C1</td><td>R1C2</td><td>R1C3</td></tr>
+            <tr><td>R2C1</td><td>R2C2</td><td>R2C3</td></tr>
+        </table>
+        "#;
+
+        let mut converter = HtmlToMarkdownConverter::new();
+        let doc = converter.convert(html);
+
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let rendered =
+            reader.render_document_to_lines(&doc, 40, theme::current_theme(), true);
+
+        let rendered_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.raw_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected_lines = vec![
+            "┌────────┬────────┬────────┐",
+            "│H1      │H2      │H3      │",
+            "├────────┼────────┼────────┤",
+            "│R1C1    │R1C2    │R1C3    │",
+            "│R2C1    │R2C2    │R2C3    │",
+            "└────────┴────────┴────────┘",
+            "",
+        ];
+        let expected = expected_lines.join("\n");
+
+        assert_eq!(rendered_text, expected);
+    }
+
+    #[test]
+    fn test_render_table_with_lists() {
+        let html = r#"
+        <table>
+            <tr><th>Type</th><th>Items</th></tr>
+            <tr>
+                <td>Unordered</td>
+                <td>
+                    <ul>
+                        <li>Apple</li>
+                        <li>Banana</li>
+                    </ul>
+                </td>
+            </tr>
+            <tr>
+                <td>Ordered</td>
+                <td>
+                    <ol>
+                        <li>One</li>
+                        <li>Two</li>
+                    </ol>
+                </td>
+            </tr>
+        </table>
+        "#;
+
+        let mut converter = HtmlToMarkdownConverter::new();
+        let doc = converter.convert(html);
+
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let rendered =
+            reader.render_document_to_lines(&doc, 60, theme::current_theme(), true);
+
+        let rendered_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.raw_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = r#"┌─────────┬────────┐
+│Type     │Items   │
+├─────────┼────────┤
+│Unordered│• Apple │
+│         │• Banana│
+│Ordered  │1. One  │
+│         │2. Two  │
+└─────────┴────────┘
+"#;
+        assert_eq_multiline("test_render_table_with_lists", &rendered_text, expected);
+    }
+
+    #[test]
+    fn test_render_table_with_nested_table() {
+        let html = r#"
+        <table>
+            <tr><th>Outer</th><th>Details</th></tr>
+            <tr>
+                <td>Row 1</td>
+                <td>
+                    <table>
+                        <tr><th>H1</th><th>H2</th></tr>
+                        <tr><td>A</td><td>B</td></tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+        "#;
+
+        let mut converter = HtmlToMarkdownConverter::new();
+        let doc = converter.convert(html);
+
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let rendered =
+            reader.render_document_to_lines(&doc, 80, theme::current_theme(), true);
+
+        let rendered_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.raw_text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let expected = r#"┌────────┬────────┐
+│Outer   │Details │
+├────────┼────────┤
+│Row 1   │H1 | H2 │
+│        │A  | B  │
+└────────┴────────┘
+"#;
+        assert_eq_multiline(
+            "test_render_table_with_nested_table",
+            &rendered_text,
+            expected,
+        );
     }
 }

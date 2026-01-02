@@ -651,7 +651,7 @@ impl HtmlToMarkdownConverter {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut max_columns = 0;
-        let mut rowspan_tracker: Vec<u32> = Vec::new();
+        let mut rowspan_tracker: Vec<(u32, Option<crate::markdown::TableCell>)> = Vec::new();
 
         for child in node.children.borrow().iter() {
             if let NodeData::Element { name, .. } = &child.data {
@@ -666,8 +666,12 @@ impl HtmlToMarkdownConverter {
                                         &mut rowspan_tracker,
                                     );
                                     max_columns = max_columns.max(row.cells.len());
-                                    header = Some(row);
-                                    break; // Only take the first header row
+                                    if header.is_none() {
+                                        header = Some(row);
+                                    } else {
+                                        // Additional thead rows go into rows
+                                        rows.push(row);
+                                    }
                                 }
                             }
                         }
@@ -681,7 +685,17 @@ impl HtmlToMarkdownConverter {
                                         &mut rowspan_tracker,
                                     );
                                     max_columns = max_columns.max(row.cells.len());
-                                    rows.push(row);
+
+                                    // If no header yet and this is the first row with header cells,
+                                    // treat it as the header (html5ever auto-generates tbody)
+                                    if header.is_none()
+                                        && rows.is_empty()
+                                        && row.cells.iter().any(|c| c.is_header)
+                                    {
+                                        header = Some(row);
+                                    } else {
+                                        rows.push(row);
+                                    }
                                 }
                             }
                         }
@@ -702,21 +716,40 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+        // Calculate max grid columns (accounting for colspan)
+        let calc_grid_cols = |row: &crate::markdown::TableRow| -> usize {
+            row.cells.iter().map(|c| c.colspan.max(1) as usize).sum()
+        };
+
+        let mut max_grid_cols = 0;
+        if let Some(ref h) = header {
+            max_grid_cols = max_grid_cols.max(calc_grid_cols(h));
+        }
+        for row in &rows {
+            max_grid_cols = max_grid_cols.max(calc_grid_cols(row));
+        }
+
+        let alignment = vec![crate::markdown::TableAlignment::None; max_grid_cols];
+
+        // Pad rows to have matching grid columns (not cell count)
+        let pad_to_grid_cols = |row: &mut crate::markdown::TableRow, target_grid_cols: usize| {
+            let current_grid_cols: usize =
+                row.cells.iter().map(|c| c.colspan.max(1) as usize).sum();
+            if current_grid_cols < target_grid_cols {
+                // Add empty cells for missing grid columns
+                for _ in 0..(target_grid_cols - current_grid_cols) {
+                    row.cells.push(crate::markdown::TableCell::new(
+                        crate::markdown::Text::default(),
+                    ));
+                }
+            }
+        };
 
         if let Some(ref mut header_row) = header {
-            while header_row.cells.len() < max_columns {
-                header_row.cells.push(crate::markdown::TableCell::new(
-                    crate::markdown::Text::default(),
-                ));
-            }
+            pad_to_grid_cols(header_row, max_grid_cols);
         }
         for row in &mut rows {
-            while row.cells.len() < max_columns {
-                row.cells.push(crate::markdown::TableCell::new(
-                    crate::markdown::Text::default(),
-                ));
-            }
+            pad_to_grid_cols(row, max_grid_cols);
         }
 
         if header.is_some() || !rows.is_empty() {
@@ -850,10 +883,14 @@ impl HtmlToMarkdownConverter {
                     if tag_name == "img" {
                         if self.is_spacer_image(attrs) {
                             has_spacer = true;
+                        } else {
+                            // Non-spacer images count as content
+                            has_text = true;
                         }
                     } else if tag_name == "table" {
-                        // Nested tables usually indicate layout
-                        has_spacer = true;
+                        // Nested tables are neutral for layout detection
+                        // They don't count as spacers OR as content
+                        // The actual content will be analyzed when processing those tables
                     } else {
                         let (child_text, child_spacer) = self.analyze_cell_content(child);
                         has_text = has_text || child_text;
@@ -1054,7 +1091,7 @@ impl HtmlToMarkdownConverter {
         let mut header: Option<crate::markdown::TableRow> = None;
         let mut rows: Vec<crate::markdown::TableRow> = Vec::new();
         let mut max_columns = 0;
-        let mut rowspan_tracker: Vec<u32> = Vec::new();
+        let mut rowspan_tracker: Vec<(u32, Option<crate::markdown::TableCell>)> = Vec::new();
 
         for child in node.children.borrow().iter() {
             if let NodeData::Element { name, .. } = &child.data {
@@ -1069,8 +1106,12 @@ impl HtmlToMarkdownConverter {
                                         &mut rowspan_tracker,
                                     );
                                     max_columns = max_columns.max(row.cells.len());
-                                    header = Some(row);
-                                    break; // Only take the first header row
+                                    if header.is_none() {
+                                        header = Some(row);
+                                    } else {
+                                        // Additional thead rows go into rows
+                                        rows.push(row);
+                                    }
                                 }
                             }
                         }
@@ -1084,7 +1125,17 @@ impl HtmlToMarkdownConverter {
                                         &mut rowspan_tracker,
                                     );
                                     max_columns = max_columns.max(row.cells.len());
-                                    rows.push(row);
+
+                                    // If no header yet and this is the first row with header cells,
+                                    // treat it as the header (html5ever auto-generates tbody)
+                                    if header.is_none()
+                                        && rows.is_empty()
+                                        && row.cells.iter().any(|c| c.is_header)
+                                    {
+                                        header = Some(row);
+                                    } else {
+                                        rows.push(row);
+                                    }
                                 }
                             }
                         }
@@ -1104,21 +1155,40 @@ impl HtmlToMarkdownConverter {
             }
         }
 
-        let alignment = vec![crate::markdown::TableAlignment::None; max_columns];
+        // Calculate max grid columns (accounting for colspan)
+        let calc_grid_cols = |row: &crate::markdown::TableRow| -> usize {
+            row.cells.iter().map(|c| c.colspan.max(1) as usize).sum()
+        };
+
+        let mut max_grid_cols = 0;
+        if let Some(ref h) = header {
+            max_grid_cols = max_grid_cols.max(calc_grid_cols(h));
+        }
+        for row in &rows {
+            max_grid_cols = max_grid_cols.max(calc_grid_cols(row));
+        }
+
+        let alignment = vec![crate::markdown::TableAlignment::None; max_grid_cols];
+
+        // Pad rows to have matching grid columns (not cell count)
+        let pad_to_grid_cols = |row: &mut crate::markdown::TableRow, target_grid_cols: usize| {
+            let current_grid_cols: usize =
+                row.cells.iter().map(|c| c.colspan.max(1) as usize).sum();
+            if current_grid_cols < target_grid_cols {
+                // Add empty cells for missing grid columns
+                for _ in 0..(target_grid_cols - current_grid_cols) {
+                    row.cells.push(crate::markdown::TableCell::new(
+                        crate::markdown::Text::default(),
+                    ));
+                }
+            }
+        };
 
         if let Some(ref mut header_row) = header {
-            while header_row.cells.len() < max_columns {
-                header_row.cells.push(crate::markdown::TableCell::new(
-                    crate::markdown::Text::default(),
-                ));
-            }
+            pad_to_grid_cols(header_row, max_grid_cols);
         }
         for row in &mut rows {
-            while row.cells.len() < max_columns {
-                row.cells.push(crate::markdown::TableCell::new(
-                    crate::markdown::Text::default(),
-                ));
-            }
+            pad_to_grid_cols(row, max_grid_cols);
         }
 
         if header.is_some() || !rows.is_empty() {
@@ -1132,37 +1202,52 @@ impl HtmlToMarkdownConverter {
         }
     }
 
+    /// Rowspan tracker entry: (remaining_rows, placeholder_cell)
+    /// When remaining_rows > 0, we insert an empty placeholder cell
     fn extract_table_row_with_rowspan(
         &mut self,
         tr_node: &Rc<markup5ever_rcdom::Node>,
-        rowspan_tracker: &mut Vec<u32>,
+        rowspan_tracker: &mut Vec<(u32, Option<crate::markdown::TableCell>)>,
     ) -> crate::markdown::TableRow {
         let mut cells = Vec::new();
         let mut column_index = 0;
 
+        // Extract cells with their rowspan and colspan info
         let mut actual_cells = Vec::new();
         for child in tr_node.children.borrow().iter() {
             if let NodeData::Element { name, attrs, .. } = &child.data {
                 let tag_name = name.local.as_ref();
                 if tag_name == "th" || tag_name == "td" {
-                    let content = self.extract_formatted_content_with_context(child, true);
                     let rowspan = self
                         .get_attr_value(attrs, "rowspan")
                         .and_then(|s| s.parse::<u32>().ok())
                         .unwrap_or(1);
+                    let colspan = self
+                        .get_attr_value(attrs, "colspan")
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(1);
 
-                    let cell = if tag_name == "th" {
-                        if rowspan > 1 {
-                            crate::markdown::TableCell::new_header_with_rowspan(content, rowspan)
-                        } else {
-                            crate::markdown::TableCell::new_header(content)
-                        }
-                    } else if rowspan > 1 {
-                        crate::markdown::TableCell::new_with_rowspan(content, rowspan)
+                    // Check if cell has complex content (nested tables, images, etc.)
+                    let cell = if self.cell_has_complex_content(child) {
+                        // Extract as rich content (Vec<Node>)
+                        let nodes = self.extract_cell_as_blocks(child);
+                        let mut cell = crate::markdown::TableCell::new_rich_with_spans(
+                            nodes, rowspan, colspan,
+                        );
+                        cell.is_header = tag_name == "th";
+                        cell
                     } else {
-                        crate::markdown::TableCell::new(content)
+                        // Extract as simple text
+                        let content = self.extract_formatted_content_with_context(child, true);
+                        if tag_name == "th" {
+                            crate::markdown::TableCell::new_header_with_spans(
+                                content, rowspan, colspan,
+                            )
+                        } else {
+                            crate::markdown::TableCell::new_with_spans(content, rowspan, colspan)
+                        }
                     };
-                    actual_cells.push((cell, rowspan));
+                    actual_cells.push((cell, rowspan, colspan));
                 }
             }
         }
@@ -1170,34 +1255,179 @@ impl HtmlToMarkdownConverter {
         let mut actual_cell_index = 0;
         while actual_cell_index < actual_cells.len() || column_index < rowspan_tracker.len() {
             while rowspan_tracker.len() <= column_index {
-                rowspan_tracker.push(0);
+                rowspan_tracker.push((0, None));
             }
 
-            if rowspan_tracker[column_index] > 0 {
+            if rowspan_tracker[column_index].0 > 0 {
+                // This column is occupied by a rowspan from a previous row
                 cells.push(crate::markdown::TableCell::new(
                     crate::markdown::Text::default(),
                 ));
-                rowspan_tracker[column_index] -= 1;
+                rowspan_tracker[column_index].0 -= 1;
             } else if actual_cell_index < actual_cells.len() {
-                let (cell, rowspan) = actual_cells[actual_cell_index].clone();
-                cells.push(cell);
+                let (cell, rowspan, colspan) = actual_cells[actual_cell_index].clone();
+                cells.push(cell.clone());
 
+                // Set up rowspan tracking for this column
                 if rowspan > 1 {
-                    rowspan_tracker[column_index] = rowspan - 1;
+                    rowspan_tracker[column_index] = (rowspan - 1, None);
                 } else {
-                    rowspan_tracker[column_index] = 0;
+                    rowspan_tracker[column_index] = (0, None);
+                }
+
+                // Handle colspan - advance column_index and rowspan_tracker for spanned columns
+                // but don't insert empty cells (let the table widget handle the visual spanning)
+                for col_offset in 1..colspan {
+                    let spanned_col = column_index + col_offset as usize;
+                    while rowspan_tracker.len() <= spanned_col {
+                        rowspan_tracker.push((0, None));
+                    }
+                    // If the original cell has rowspan, the spanned columns also span down
+                    // These spanned columns should show empty (part of colspan, not repeated content)
+                    if rowspan > 1 {
+                        rowspan_tracker[spanned_col] = (rowspan - 1, None);
+                    }
+                    column_index += 1;
                 }
 
                 actual_cell_index += 1;
             } else {
-                // No more actual cells, but we still need to decrement remaining rowspans
-                rowspan_tracker[column_index] = 0;
+                // No more actual cells, but we still need to clear remaining rowspans
+                rowspan_tracker[column_index] = (0, None);
             }
 
             column_index += 1;
         }
 
         crate::markdown::TableRow::new(cells)
+    }
+
+    /// Check if a table cell contains complex content that requires rich rendering
+    fn cell_has_complex_content(&self, cell_node: &Rc<markup5ever_rcdom::Node>) -> bool {
+        for child in cell_node.children.borrow().iter() {
+            if self.node_has_complex_content(child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn node_has_complex_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> bool {
+        match &node.data {
+            NodeData::Element { name, attrs, .. } => {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    // These elements indicate complex content
+                    "table" => true,
+                    "img" => {
+                        // Non-spacer images are complex
+                        !self.is_spacer_image(attrs)
+                    }
+                    "ul" | "ol" | "dl" => true,
+                    "pre" => true, // code is inline formatting, not complex
+                    "blockquote" => true,
+                    // Check children for other elements
+                    _ => {
+                        for child in node.children.borrow().iter() {
+                            if self.node_has_complex_content(child) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Extract table cell content as blocks (for rich content)
+    fn extract_cell_as_blocks(&mut self, cell_node: &Rc<markup5ever_rcdom::Node>) -> Vec<Node> {
+        let mut document = Document::new();
+
+        for child in cell_node.children.borrow().iter() {
+            self.process_node_into_document(child, &mut document);
+        }
+
+        document.blocks
+    }
+
+    /// Process a node and add it to a document (helper for cell extraction)
+    fn process_node_into_document(
+        &mut self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        match &node.data {
+            NodeData::Element { name, attrs, .. } => {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "table" => {
+                        self.handle_table(attrs, node, document);
+                    }
+                    "p" => {
+                        let blocks = self.extract_formatted_content_as_blocks(node, false);
+                        for block in blocks {
+                            document.blocks.push(block);
+                        }
+                    }
+                    "img" => {
+                        if !self.is_spacer_image(attrs) {
+                            if let Some(src) = self.get_attr_value(attrs, "src") {
+                                let alt_text =
+                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                let title = self.get_attr_value(attrs, "title");
+
+                                let mut text = Text::default();
+                                text.push_inline(Inline::Image {
+                                    alt_text,
+                                    url: src,
+                                    title,
+                                });
+
+                                let para = Block::Paragraph { content: text };
+                                document.blocks.push(Node::new(para, 0..0));
+                            }
+                        }
+                    }
+                    "ul" | "ol" => {
+                        self.handle_list(tag_name, attrs, node, document);
+                    }
+                    "blockquote" => {
+                        self.handle_blockquote(attrs, node, document);
+                    }
+                    "pre" => {
+                        self.handle_pre(attrs, node, document);
+                    }
+                    "br" => {
+                        // Skip line breaks in cell context
+                    }
+                    _ => {
+                        // For other elements like font, span, div - recurse into children
+                        for child in node.children.borrow().iter() {
+                            self.process_node_into_document(child, document);
+                        }
+                    }
+                }
+            }
+            NodeData::Text { contents } => {
+                let text_content = contents.borrow();
+                let trimmed = text_content.trim();
+                if !trimmed.is_empty() {
+                    let normalized = text_content
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !normalized.is_empty() {
+                        let mut text = Text::default();
+                        text.push_text(TextNode::new(normalized, None));
+                        let para = Block::Paragraph { content: text };
+                        document.blocks.push(Node::new(para, 0..0));
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn handle_list(
@@ -2483,6 +2713,36 @@ mod tests {
         parsing::markdown_renderer::MarkdownRenderer,
     };
 
+    fn assert_eq_multiline(name: &str, left: &str, right: &str) {
+        if left == right {
+            return;
+        }
+
+        let left_lines: Vec<&str> = left.lines().collect();
+        let right_lines: Vec<&str> = right.lines().collect();
+        let max_lines = left_lines.len().max(right_lines.len());
+
+        let mut message = String::new();
+        message.push_str(&format!("{}\n", name));
+        message.push_str("Lines: left | right\n");
+
+        for i in 0..max_lines {
+            let left_line = left_lines.get(i).copied().unwrap_or("");
+            let right_line = right_lines.get(i).copied().unwrap_or("");
+            let marker = if left_line == right_line { " " } else { "!" };
+            message.push_str(&format!(
+                "{marker} {ln:>3} L: {left_line}\n    {spacer} R: {right_line}\n",
+                marker = marker,
+                ln = i + 1,
+                left_line = left_line,
+                spacer = " ",
+                right_line = right_line
+            ));
+        }
+
+        panic!("{message}");
+    }
+
     #[test]
     fn test_nested_formatting_in_paragraph() {
         let mut converter = HtmlToMarkdownConverter::new();
@@ -3094,15 +3354,17 @@ The protocol operates on multiple layers:
             let first_row = &rows[0];
 
             // Get text from first cell
-            let first_cell_text: String = first_row.cells[0]
-                .content
-                .clone()
-                .into_iter()
-                .filter_map(|item| match item {
-                    TextOrInline::Text(node) => Some(node.content),
-                    _ => None,
-                })
-                .collect();
+            let first_cell_text: String = match &first_row.cells[0].content {
+                crate::markdown::TableCellContent::Simple(text) => text
+                    .clone()
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        TextOrInline::Text(node) => Some(node.content),
+                        _ => None,
+                    })
+                    .collect(),
+                crate::markdown::TableCellContent::Rich(_) => String::new(),
+            };
 
             assert_eq!(
                 first_cell_text.trim(),
@@ -3111,15 +3373,17 @@ The protocol operates on multiple layers:
             );
 
             // Get text from second cell
-            let second_cell_text: String = first_row.cells[1]
-                .content
-                .clone()
-                .into_iter()
-                .filter_map(|item| match item {
-                    TextOrInline::Text(node) => Some(node.content),
-                    _ => None,
-                })
-                .collect();
+            let second_cell_text: String = match &first_row.cells[1].content {
+                crate::markdown::TableCellContent::Simple(text) => text
+                    .clone()
+                    .into_iter()
+                    .filter_map(|item| match item {
+                        TextOrInline::Text(node) => Some(node.content),
+                        _ => None,
+                    })
+                    .collect(),
+                crate::markdown::TableCellContent::Rich(_) => String::new(),
+            };
 
             assert_eq!(
                 second_cell_text.trim(),
@@ -3582,7 +3846,11 @@ The protocol operates on multiple layers:
 
 "#;
 
-        assert_eq!(rendered, expected.trim_start());
+        assert_eq_multiline(
+            "test_table_with_mixed_header_cells",
+            &rendered,
+            expected.trim_start(),
+        );
     }
 
     #[test]
@@ -3627,9 +3895,9 @@ The protocol operates on multiple layers:
         let rendered = renderer.render(&doc);
 
         let expected = r#"
-[table width="5" height="4" header="false"]
+[table width="5" height="3" header="true"]
+| Product | Q1  | Q2  | Q3  | Q4  |
 | ------- | --- | --- | --- | --- |
-| **Product** | **Q1** | **Q2** | **Q3** | **Q4** |
 | **Widgets** | 100 | 150 | 200 | 175 |
 | **Gadgets** | 50  | 75  | 90  | 85  |
 | **Total** | 150 | 225 | 290 | 260 |
@@ -3818,7 +4086,11 @@ The protocol operates on multiple layers:
 |                  | 83.7%<br/> 5-shot  | 71.8%<br/> 5-shot | 86.4%<br/> 5-shot (reported)      |                 |                   |                       |                   |                   |         |
 
             "#;
-        assert_eq!(rendered.trim_end(), expected.trim_end());
+        assert_eq_multiline(
+            "test_very_wide_table_with_br",
+            rendered.trim_end(),
+            expected.trim_end(),
+        );
     }
 
     //     #[test]

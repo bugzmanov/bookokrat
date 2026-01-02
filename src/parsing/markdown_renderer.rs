@@ -242,7 +242,7 @@ impl MarkdownRenderer {
         // Consider header cells for width calculation
         if let Some(header_row) = header {
             for (i, cell) in header_row.cells.iter().enumerate() {
-                let width = self.render_text(&cell.content).len();
+                let width = self.render_cell_content(&cell.content).len();
                 if i >= column_widths.len() {
                     column_widths.push(width);
                 } else {
@@ -254,7 +254,7 @@ impl MarkdownRenderer {
         // Consider body cells for width calculation
         for row in rows {
             for (i, cell) in row.cells.iter().enumerate() {
-                let width = self.render_text(&cell.content).len();
+                let width = self.render_cell_content(&cell.content).len();
                 if i >= column_widths.len() {
                     column_widths.push(width);
                 } else {
@@ -272,7 +272,7 @@ impl MarkdownRenderer {
         if let Some(header_row) = header {
             output.push('|');
             for (i, cell) in header_row.cells.iter().enumerate() {
-                let content = self.render_text(&cell.content);
+                let content = self.render_cell_content(&cell.content);
                 let width = if i < column_widths.len() {
                     column_widths[i]
                 } else {
@@ -321,7 +321,7 @@ impl MarkdownRenderer {
         for row in rows {
             output.push('|');
             for (i, cell) in row.cells.iter().enumerate() {
-                let content = self.render_text(&cell.content);
+                let content = self.render_cell_content(&cell.content);
                 let width = if i < column_widths.len() {
                     column_widths[i]
                 } else {
@@ -462,6 +462,24 @@ impl MarkdownRenderer {
         }
 
         output
+    }
+
+    /// Render table cell content to string
+    pub fn render_cell_content(&self, content: &crate::markdown::TableCellContent) -> String {
+        match content {
+            crate::markdown::TableCellContent::Simple(text) => self.render_text(text),
+            crate::markdown::TableCellContent::Rich(nodes) => {
+                let mut output = String::new();
+                for node in nodes {
+                    if !output.is_empty() {
+                        output.push(' ');
+                    }
+                    self.render_node(node, &mut output);
+                }
+                // Clean up excessive whitespace
+                output.split_whitespace().collect::<Vec<_>>().join(" ")
+            }
+        }
     }
 
     fn render_text_node(&self, text_node: &TextNode, output: &mut String) {

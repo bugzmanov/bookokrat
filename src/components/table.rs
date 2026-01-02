@@ -1,12 +1,96 @@
 use ratatui::{
     layout::{Constraint, Rect},
-    style::{Color, Style, Stylize},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, StatefulWidget, Widget},
 };
 use std::cmp::max;
 
 use crate::types::LinkInfo;
+
+/// Inline style information for table cell rendering
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InlineStyle {
+    pub bold: bool,
+    pub italic: bool,
+    pub code: bool,
+    pub strike: bool,
+}
+
+/// Structured inline content for table cells
+#[derive(Debug, Clone)]
+pub enum InlineSpan {
+    Text { text: String, style: InlineStyle },
+    Link { text: Vec<InlineSpan>, url: String },
+    SoftBreak,
+    HardBreak,
+}
+
+impl InlineSpan {
+    pub fn plain<T: Into<String>>(text: T) -> Self {
+        Self::Text {
+            text: text.into(),
+            style: InlineStyle::default(),
+        }
+    }
+}
+
+fn inline_from_plain_text(text: &str) -> Vec<InlineSpan> {
+    let mut inlines = Vec::new();
+    let normalized = text.replace("<br/> ", "\n").replace("<br/>", "\n");
+    let mut parts = normalized.split('\n').peekable();
+
+    while let Some(part) = parts.next() {
+        if !part.is_empty() {
+            inlines.push(InlineSpan::plain(part));
+        }
+        if parts.peek().is_some() {
+            inlines.push(InlineSpan::HardBreak);
+        }
+    }
+
+    if inlines.is_empty() {
+        inlines.push(InlineSpan::plain(""));
+    }
+
+    inlines
+}
+
+/// Cell data with content and colspan information
+#[derive(Debug, Clone)]
+pub struct CellData {
+    pub content: Vec<InlineSpan>,
+    pub colspan: u32,
+}
+
+impl CellData {
+    pub fn new(content: Vec<InlineSpan>) -> Self {
+        Self {
+            content,
+            colspan: 1,
+        }
+    }
+
+    pub fn with_colspan(content: Vec<InlineSpan>, colspan: u32) -> Self {
+        Self { content, colspan }
+    }
+
+    pub fn empty() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
+impl From<String> for CellData {
+    fn from(content: String) -> Self {
+        Self::new(inline_from_plain_text(&content))
+    }
+}
+
+impl From<&str> for CellData {
+    fn from(content: &str) -> Self {
+        Self::new(inline_from_plain_text(content))
+    }
+}
 
 /// Configuration for table appearance
 #[derive(Debug, Clone)]
@@ -31,8 +115,8 @@ impl Default for TableConfig {
 /// A custom table widget that renders with solid Unicode box-drawing characters
 #[derive(Debug, Clone)]
 pub struct Table {
-    rows: Vec<Vec<String>>,
-    header: Option<Vec<String>>,
+    rows: Vec<Vec<CellData>>,
+    header: Option<Vec<CellData>>,
     constraints: Vec<Constraint>,
     config: TableConfig,
     block: Option<Block<'static>>,
@@ -44,6 +128,24 @@ pub struct Table {
 
 impl Table {
     pub fn new(rows: Vec<Vec<String>>) -> Self {
+        let cell_rows: Vec<Vec<CellData>> = rows
+            .into_iter()
+            .map(|row| row.into_iter().map(CellData::from).collect())
+            .collect();
+
+        Self {
+            rows: cell_rows,
+            header: None,
+            constraints: Vec::new(),
+            config: TableConfig::default(),
+            block: None,
+            links: Vec::new(),
+            base_line: 0,
+        }
+    }
+
+    /// Create a table with colspan support
+    pub fn new_with_colspans(rows: Vec<Vec<CellData>>) -> Self {
         Self {
             rows,
             header: None,
@@ -56,7 +158,20 @@ impl Table {
     }
 
     pub fn header(mut self, header: Vec<String>) -> Self {
+        let cells = header.into_iter().map(CellData::from).collect();
+        self.header = Some(cells);
+        self
+    }
+
+    /// Set header with colspan support
+    pub fn header_with_colspans(mut self, header: Vec<CellData>) -> Self {
         self.header = Some(header);
+        self
+    }
+
+    /// Set rows with colspan support (for use with Table::new)
+    pub fn rows_with_colspans(mut self, rows: Vec<Vec<CellData>>) -> Self {
+        self.rows = rows;
         self
     }
 
@@ -133,22 +248,55 @@ impl Table {
     }
 
     /// Render top border with proper Unicode box-drawing characters
-    fn render_top_border(&self, widths: &[u16]) -> Line<'static> {
+    /// If colspans is provided, skip column separators within colspan regions
+    fn render_top_border(&self, widths: &[u16], colspans: Option<&[u32]>) -> Line<'static> {
+        self.render_horizontal_border(widths, colspans, '┌', '┬', '┐')
+    }
+
+    /// Render a horizontal border with colspan support
+    fn render_horizontal_border(
+        &self,
+        widths: &[u16],
+        colspans: Option<&[u32]>,
+        left: char,
+        middle: char,
+        right: char,
+    ) -> Line<'static> {
         if widths.is_empty() {
             return Line::from("");
         }
 
+        // Build a set of grid column indices where we should NOT draw a separator
+        // These are columns that are "inside" a colspan (not the first column of a cell)
+        let mut skip_separator_after: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        if let Some(cs) = colspans {
+            let mut grid_col = 0;
+            for colspan in cs {
+                let span = (*colspan).max(1) as usize;
+                // Skip separators for columns inside this cell (not the last column of this cell)
+                for offset in 0..span.saturating_sub(1) {
+                    skip_separator_after.insert(grid_col + offset);
+                }
+                grid_col += span;
+            }
+        }
+
         let mut line = String::new();
-        line.push('┌'); // Top-left corner
+        line.push(left);
 
         for (i, &width) in widths.iter().enumerate() {
             line.push_str(&"─".repeat(width as usize));
             if i < widths.len() - 1 {
-                line.push('┬'); // Top tee
+                if skip_separator_after.contains(&i) {
+                    line.push('─'); // Continue the horizontal line
+                } else {
+                    line.push(middle);
+                }
             }
         }
 
-        line.push('┐'); // Top-right corner
+        line.push(right);
         Line::from(Span::styled(
             line,
             Style::default().fg(self.config.border_color),
@@ -156,22 +304,62 @@ impl Table {
     }
 
     /// Render middle border (between header and data rows)
-    fn render_middle_border(&self, widths: &[u16]) -> Line<'static> {
+    /// Takes colspans from both the row above and the row below to determine separators
+    fn render_middle_border(
+        &self,
+        widths: &[u16],
+        colspans_above: Option<&[u32]>,
+        colspans_below: Option<&[u32]>,
+    ) -> Line<'static> {
         if widths.is_empty() {
             return Line::from("");
         }
 
+        // Build sets of grid columns where separators should be skipped
+        let mut skip_above: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut skip_below: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+        if let Some(cs) = colspans_above {
+            let mut grid_col = 0;
+            for colspan in cs {
+                let span = (*colspan).max(1) as usize;
+                for offset in 0..span.saturating_sub(1) {
+                    skip_above.insert(grid_col + offset);
+                }
+                grid_col += span;
+            }
+        }
+
+        if let Some(cs) = colspans_below {
+            let mut grid_col = 0;
+            for colspan in cs {
+                let span = (*colspan).max(1) as usize;
+                for offset in 0..span.saturating_sub(1) {
+                    skip_below.insert(grid_col + offset);
+                }
+                grid_col += span;
+            }
+        }
+
         let mut line = String::new();
-        line.push('├'); // Left tee
+        line.push('├');
 
         for (i, &width) in widths.iter().enumerate() {
             line.push_str(&"─".repeat(width as usize));
             if i < widths.len() - 1 {
-                line.push('┼'); // Cross
+                let skip_a = skip_above.contains(&i);
+                let skip_b = skip_below.contains(&i);
+                let ch = match (skip_a, skip_b) {
+                    (true, true) => '─',   // Both rows span over this column
+                    (true, false) => '┬',  // Row above spans, row below has separator
+                    (false, true) => '┴',  // Row below spans, row above has separator
+                    (false, false) => '┼', // Both rows have a separator here
+                };
+                line.push(ch);
             }
         }
 
-        line.push('┤'); // Right tee
+        line.push('┤');
         Line::from(Span::styled(
             line,
             Style::default().fg(self.config.border_color),
@@ -179,26 +367,106 @@ impl Table {
     }
 
     /// Render bottom border
-    fn render_bottom_border(&self, widths: &[u16]) -> Line<'static> {
-        if widths.is_empty() {
-            return Line::from("");
+    fn render_bottom_border(&self, widths: &[u16], colspans: Option<&[u32]>) -> Line<'static> {
+        self.render_horizontal_border(widths, colspans, '└', '┴', '┘')
+    }
+
+    fn style_for_inline(&self, base_color: Color, inline_style: InlineStyle) -> Style {
+        let mut style = Style::default().fg(base_color);
+
+        if inline_style.code {
+            style = Style::default()
+                .fg(Color::Rgb(166, 226, 46))
+                .bg(Color::Rgb(50, 50, 50));
+        }
+        if inline_style.bold {
+            style = style.bold();
+        }
+        if inline_style.italic {
+            style = style.italic();
+        }
+        if inline_style.strike {
+            style = style.add_modifier(Modifier::CROSSED_OUT);
         }
 
-        let mut line = String::new();
-        line.push('└'); // Bottom-left corner
+        style
+    }
 
-        for (i, &width) in widths.iter().enumerate() {
-            line.push_str(&"─".repeat(width as usize));
-            if i < widths.len() - 1 {
-                line.push('┴'); // Bottom tee
+    fn inline_to_spans_flat(
+        &self,
+        inlines: &[InlineSpan],
+        base_color: Color,
+        link_style: bool,
+    ) -> Vec<Span<'static>> {
+        let mut spans = Vec::new();
+
+        for inline in inlines {
+            match inline {
+                InlineSpan::Text { text, style } => {
+                    let mut span_style = self.style_for_inline(base_color, *style);
+                    if link_style {
+                        span_style =
+                            span_style.fg(Color::Cyan).add_modifier(Modifier::UNDERLINED);
+                    }
+                    spans.push(Span::styled(text.clone(), span_style));
+                }
+                InlineSpan::Link { text, .. } => {
+                    spans.extend(self.inline_to_spans_flat(text, base_color, true));
+                }
+                InlineSpan::SoftBreak | InlineSpan::HardBreak => {
+                    spans.push(Span::styled(
+                        " ".to_string(),
+                        Style::default().fg(base_color),
+                    ));
+                }
             }
         }
 
-        line.push('┘'); // Bottom-right corner
-        Line::from(Span::styled(
-            line,
-            Style::default().fg(self.config.border_color),
-        ))
+        spans
+    }
+
+    fn inline_to_lines(
+        &self,
+        inlines: &[InlineSpan],
+        base_color: Color,
+    ) -> Vec<Vec<Span<'static>>> {
+        let mut lines = Vec::new();
+        let mut current_line = Vec::new();
+
+        for inline in inlines {
+            match inline {
+                InlineSpan::HardBreak => {
+                    lines.push(current_line);
+                    current_line = Vec::new();
+                }
+                InlineSpan::SoftBreak => {
+                    current_line.push(Span::styled(
+                        " ".to_string(),
+                        Style::default().fg(base_color),
+                    ));
+                }
+                InlineSpan::Text { .. } | InlineSpan::Link { .. } => {
+                    current_line.extend(self.inline_to_spans_flat(
+                        std::slice::from_ref(inline),
+                        base_color,
+                        false,
+                    ));
+                }
+            }
+        }
+
+        if !current_line.is_empty() {
+            lines.push(current_line);
+        }
+
+        if lines.is_empty() {
+            lines.push(vec![Span::styled(
+                String::new(),
+                Style::default().fg(base_color),
+            )]);
+        }
+
+        lines
     }
 
     /// Wrap spans while preserving formatting
@@ -288,155 +556,13 @@ impl Table {
         result
     }
 
-    /// Parse markdown formatting in text and return styled spans (without link detection)
-    fn parse_markdown_formatting_simple(
+    /// Render a data row with proper cell formatting, wrapping, and colspan support
+    fn render_row(
         &self,
-        text: &str,
-        base_color: Color,
-    ) -> Vec<Span<'static>> {
-        let mut spans = Vec::new();
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-        let mut current_text = String::new();
-
-        while i < chars.len() {
-            // Check for markdown-style links [text](url) - but just render the text
-            if chars[i] == '[' {
-                // Look for the matching ]( pattern
-                let mut link_text = String::new();
-                let mut j = i + 1;
-                while j < chars.len() && chars[j] != ']' {
-                    link_text.push(chars[j]);
-                    j += 1;
-                }
-
-                if j + 1 < chars.len() && chars[j] == ']' && chars[j + 1] == '(' {
-                    // Found link pattern, skip to end of URL
-                    j += 2; // Skip ](
-                    while j < chars.len() && chars[j] != ')' {
-                        j += 1;
-                    }
-
-                    if j < chars.len() && chars[j] == ')' {
-                        // Valid link found - add just the text with link styling
-                        if !current_text.is_empty() {
-                            spans.push(Span::styled(
-                                current_text.clone(),
-                                Style::default().fg(base_color),
-                            ));
-                            current_text.clear();
-                        }
-
-                        let link_color = Color::Cyan;
-                        spans.push(Span::styled(
-                            link_text,
-                            Style::default()
-                                .fg(link_color)
-                                .add_modifier(ratatui::style::Modifier::UNDERLINED),
-                        ));
-
-                        i = j + 1; // Move past the closing )
-                        continue;
-                    }
-                }
-
-                // Not a valid link, treat [ as normal character
-                current_text.push('[');
-                i += 1;
-                continue;
-            }
-            // Check for bold (**text** or __text__)
-            else if i + 1 < chars.len()
-                && ((chars[i] == '*' && chars[i + 1] == '*')
-                    || (chars[i] == '_' && chars[i + 1] == '_'))
-            {
-                // Save any accumulated text
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(base_color),
-                    ));
-                    current_text.clear();
-                }
-
-                let marker = chars[i];
-                i += 2; // Skip opening markers
-
-                // Find closing markers
-                let mut j = i;
-                while j + 1 < chars.len() {
-                    if chars[j] == marker && chars[j + 1] == marker {
-                        // Found closing markers
-                        let bold_text: String = chars[i..j].iter().collect();
-                        spans.push(Span::styled(
-                            bold_text,
-                            Style::default().fg(base_color).bold(),
-                        ));
-                        i = j + 2;
-                        break;
-                    }
-                    j += 1;
-                }
-
-                if j + 1 >= chars.len() {
-                    // No closing markers found, treat as normal text
-                    current_text.push(marker);
-                    current_text.push(marker);
-                }
-            }
-            // Check for italic (*text* or _text_) - but not bold
-            else if (chars[i] == '*' || chars[i] == '_')
-                && (i == 0 || (i > 0 && chars[i - 1] != chars[i]))
-                && (i + 1 < chars.len() && chars[i + 1] != chars[i])
-            {
-                // Save any accumulated text
-                if !current_text.is_empty() {
-                    spans.push(Span::styled(
-                        current_text.clone(),
-                        Style::default().fg(base_color),
-                    ));
-                    current_text.clear();
-                }
-
-                let marker = chars[i];
-                i += 1; // Skip opening marker
-
-                // Find closing marker
-                let mut j = i;
-                while j < chars.len() {
-                    if chars[j] == marker && (j + 1 >= chars.len() || chars[j + 1] != marker) {
-                        // Found closing marker
-                        let italic_text: String = chars[i..j].iter().collect();
-                        spans.push(Span::styled(
-                            italic_text,
-                            Style::default().fg(base_color).italic(),
-                        ));
-                        i = j + 1;
-                        break;
-                    }
-                    j += 1;
-                }
-
-                if j >= chars.len() {
-                    // No closing marker found, treat as normal text
-                    current_text.push(marker);
-                }
-            } else {
-                current_text.push(chars[i]);
-                i += 1;
-            }
-        }
-
-        // Add any remaining text
-        if !current_text.is_empty() {
-            spans.push(Span::styled(current_text, Style::default().fg(base_color)));
-        }
-
-        spans
-    }
-
-    /// Render a data row with proper cell formatting and wrapping
-    fn render_row(&self, row: &[String], widths: &[u16], is_header: bool) -> Vec<Line<'static>> {
+        row: &[CellData],
+        widths: &[u16],
+        is_header: bool,
+    ) -> Vec<Line<'static>> {
         if widths.is_empty() || row.is_empty() {
             return vec![Line::from("")];
         }
@@ -447,43 +573,57 @@ impl Table {
             self.config.text_color
         };
 
+        // Calculate effective width for each cell (accounting for colspan)
+        // Also track which grid columns each cell occupies
+        let mut cell_widths: Vec<usize> = Vec::new();
+        let mut grid_col = 0;
+
+        for cell in row {
+            let colspan = cell.colspan.max(1) as usize;
+
+            // Calculate total width for this cell (sum of spanned columns + separators between them)
+            let mut total_width = 0usize;
+            for offset in 0..colspan {
+                if grid_col + offset < widths.len() {
+                    total_width += widths[grid_col + offset] as usize;
+                    if offset > 0 {
+                        total_width += 1; // Add 1 for the separator we're spanning over
+                    }
+                }
+            }
+
+            cell_widths.push(total_width);
+            grid_col += colspan;
+        }
+
         // Wrap each cell content and find the maximum height
         let mut wrapped_cells: Vec<Vec<Vec<Span<'static>>>> = Vec::new();
         let mut max_height = 1;
 
-        for (i, cell) in row.iter().enumerate() {
-            let width = widths.get(i).copied().unwrap_or(0) as usize;
+        for (cell_idx, cell) in row.iter().enumerate() {
+            let width = cell_widths.get(cell_idx).copied().unwrap_or(0);
             if width == 0 {
                 wrapped_cells.push(vec![vec![]]);
                 continue;
             }
 
-            // First process <br/> tags by replacing them with actual newlines
-            let cell_with_newlines = cell.replace("<br/> ", "\n").replace("<br/>", "\n");
-            let cell_lines_from_br: Vec<&str> = cell_with_newlines.split('\n').collect();
-
-            // Then wrap each line separately and parse markdown
+            let base_lines = self.inline_to_lines(&cell.content, text_color);
             let mut all_wrapped_lines = Vec::new();
-            for br_line in cell_lines_from_br {
-                // For now, parse without link detection - links will be detected separately
-                let spans = self.parse_markdown_formatting_simple(br_line, text_color);
 
-                // Calculate the actual display width of the parsed spans
-                let display_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-
+            for line_spans in base_lines {
+                let display_width: usize =
+                    line_spans.iter().map(|s| s.content.chars().count()).sum();
                 if display_width <= width {
-                    // Fits in one line, use the parsed spans directly
-                    all_wrapped_lines.push(spans);
+                    all_wrapped_lines.push(line_spans);
                 } else {
-                    // Need to wrap - use the new method that preserves formatting
-                    let wrapped_spans = self.wrap_spans_with_formatting(&spans, width, text_color);
-                    for line_spans in wrapped_spans {
-                        all_wrapped_lines.push(line_spans);
+                    let wrapped_spans =
+                        self.wrap_spans_with_formatting(&line_spans, width, text_color);
+                    for wrapped_line in wrapped_spans {
+                        all_wrapped_lines.push(wrapped_line);
                     }
                 }
             }
 
-            // If we had no content, ensure at least one empty line
             if all_wrapped_lines.is_empty() {
                 all_wrapped_lines.push(vec![Span::styled(
                     String::new(),
@@ -506,20 +646,15 @@ impl Table {
                 Style::default().fg(self.config.border_color),
             ));
 
-            for (col_idx, cell_lines) in wrapped_cells.iter().enumerate() {
-                let width = widths[col_idx] as usize;
+            for (cell_idx, cell_lines) in wrapped_cells.iter().enumerate() {
+                let width = cell_widths[cell_idx];
                 let cell_spans = cell_lines.get(line_idx).cloned().unwrap_or_default();
-
-                // Calculate the actual width of the spans
                 let spans_width: usize = cell_spans.iter().map(|s| s.content.chars().count()).sum();
 
                 if spans_width <= width {
-                    // Add the cell spans
                     for span in cell_spans {
                         line_spans.push(span);
                     }
-
-                    // Pad to fill the column width
                     if spans_width < width {
                         line_spans.push(Span::styled(
                             " ".repeat(width - spans_width),
@@ -527,20 +662,16 @@ impl Table {
                         ));
                     }
                 } else {
-                    // Spans exceed width - truncate to fit exactly
                     let mut remaining_width = width;
-
                     for span in cell_spans {
                         if remaining_width == 0 {
                             break;
                         }
-
                         let span_display_width = span.content.chars().count();
                         if span_display_width <= remaining_width {
                             line_spans.push(span);
                             remaining_width -= span_display_width;
                         } else if remaining_width > 0 {
-                            // Truncate this span to fit
                             let truncated_content: String =
                                 span.content.chars().take(remaining_width).collect();
                             let truncated_width = truncated_content.chars().count();
@@ -550,8 +681,8 @@ impl Table {
                     }
                 }
 
-                // Column separator
-                if col_idx < wrapped_cells.len() - 1 {
+                // Column separator - only add if this is not the last cell
+                if cell_idx < wrapped_cells.len() - 1 {
                     line_spans.push(Span::styled(
                         "│".to_string(),
                         Style::default().fg(self.config.border_color),
@@ -602,14 +733,36 @@ impl Table {
         let widths = self.calculate_column_widths(available_width);
         let mut lines = Vec::new();
 
-        // Top border
-        lines.push(self.render_top_border(&widths));
+        // Top border - use header colspans if header exists, otherwise first row
+        let header_colspans = self.header.as_ref().map(|h| {
+            h.iter()
+                .map(|cell| cell.colspan.max(1))
+                .collect::<Vec<u32>>()
+        });
+        let first_row_colspans = self.rows.first().map(|row| {
+            row.iter()
+                .map(|cell| cell.colspan.max(1))
+                .collect::<Vec<u32>>()
+        });
+
+        let top_colspans = if self.header.is_some() {
+            header_colspans.as_deref()
+        } else {
+            first_row_colspans.as_deref()
+        };
+        lines.push(self.render_top_border(&widths, top_colspans));
 
         // Header if present
         if let Some(ref header) = self.header {
             let header_lines = self.render_row(header, &widths, true);
             lines.extend(header_lines);
-            lines.push(self.render_middle_border(&widths));
+
+            // Middle border between header and first data row
+            lines.push(self.render_middle_border(
+                &widths,
+                header_colspans.as_deref(),
+                first_row_colspans.as_deref(),
+            ));
         }
 
         // Data rows
@@ -618,8 +771,13 @@ impl Table {
             lines.extend(row_lines);
         }
 
-        // Bottom border
-        lines.push(self.render_bottom_border(&widths));
+        // Bottom border - use last row's colspans
+        let bottom_colspans = self.rows.last().map(|row| {
+            row.iter()
+                .map(|cell| cell.colspan.max(1))
+                .collect::<Vec<u32>>()
+        });
+        lines.push(self.render_bottom_border(&widths, bottom_colspans.as_deref()));
 
         lines
     }
@@ -676,7 +834,12 @@ mod tests {
         let table = Table::new(rows.clone())
             .constraints(vec![Constraint::Length(10), Constraint::Length(10)]);
 
-        assert_eq!(table.rows, rows);
+        assert_eq!(table.rows.len(), rows.len());
+        assert_eq!(table.rows[0].len(), rows[0].len());
+        match &table.rows[0][0].content[0] {
+            InlineSpan::Text { text, .. } => assert_eq!(text, "Cell 1"),
+            _ => panic!("Expected text span in first cell"),
+        }
         assert_eq!(table.constraints.len(), 2);
         assert!(table.header.is_none());
     }
@@ -690,7 +853,13 @@ mod tests {
             .header(header.clone())
             .constraints(vec![Constraint::Length(10), Constraint::Length(10)]);
 
-        assert_eq!(table.header, Some(header));
+        assert!(table.header.is_some());
+        let header_cells = table.header.as_ref().unwrap();
+        assert_eq!(header_cells.len(), header.len());
+        match &header_cells[0].content[0] {
+            InlineSpan::Text { text, .. } => assert_eq!(text, "Header 1"),
+            _ => panic!("Expected text span in header cell"),
+        }
     }
 
     #[test]
@@ -785,19 +954,55 @@ mod tests {
 
     #[test]
     fn test_table_with_markdown_formatting_and_wrapping() {
+        let bold = InlineStyle {
+            bold: true,
+            ..Default::default()
+        };
+        let italic = InlineStyle {
+            italic: true,
+            ..Default::default()
+        };
+
         let rows = vec![
             vec![
-                "**This is a very long bold text that should wrap across multiple lines**"
-                    .to_string(),
-                "_This is a very long italic text that should also wrap_".to_string(),
+                CellData::new(vec![InlineSpan::Text {
+                    text: "This is a very long bold text that should wrap across multiple lines"
+                        .to_string(),
+                    style: bold,
+                }]),
+                CellData::new(vec![InlineSpan::Text {
+                    text: "This is a very long italic text that should also wrap".to_string(),
+                    style: italic,
+                }]),
             ],
             vec![
-                "Mixed **bold** and _italic_ in a very long line that needs wrapping".to_string(),
-                "Normal text that is also quite long and should wrap properly".to_string(),
+                CellData::new(vec![
+                    InlineSpan::Text {
+                        text: "Mixed ".to_string(),
+                        style: InlineStyle::default(),
+                    },
+                    InlineSpan::Text {
+                        text: "bold".to_string(),
+                        style: bold,
+                    },
+                    InlineSpan::Text {
+                        text: " and ".to_string(),
+                        style: InlineStyle::default(),
+                    },
+                    InlineSpan::Text {
+                        text: "italic".to_string(),
+                        style: italic,
+                    },
+                    InlineSpan::Text {
+                        text: " in a very long line that needs wrapping".to_string(),
+                        style: InlineStyle::default(),
+                    },
+                ]),
+                CellData::from("Normal text that is also quite long and should wrap properly"),
             ],
         ];
 
-        let table = Table::new(rows).constraints(vec![
+        let table = Table::new_with_colspans(rows).constraints(vec![
             Constraint::Length(25), // Force wrapping
             Constraint::Length(20), // Force wrapping
         ]);
@@ -843,17 +1048,61 @@ mod tests {
 
     #[test]
     fn test_table_with_markdown_formatting() {
+        let bold = InlineStyle {
+            bold: true,
+            ..Default::default()
+        };
+        let italic = InlineStyle {
+            italic: true,
+            ..Default::default()
+        };
+
         let rows = vec![
-            vec!["**Bold text**".to_string(), "_Italic text_".to_string()],
-            vec!["*Also italic*".to_string(), "__Also bold__".to_string()],
             vec![
-                "Mixed **bold** and _italic_".to_string(),
-                "Normal text".to_string(),
+                CellData::new(vec![InlineSpan::Text {
+                    text: "Bold text".to_string(),
+                    style: bold,
+                }]),
+                CellData::new(vec![InlineSpan::Text {
+                    text: "Italic text".to_string(),
+                    style: italic,
+                }]),
+            ],
+            vec![
+                CellData::new(vec![InlineSpan::Text {
+                    text: "Also italic".to_string(),
+                    style: italic,
+                }]),
+                CellData::new(vec![InlineSpan::Text {
+                    text: "Also bold".to_string(),
+                    style: bold,
+                }]),
+            ],
+            vec![
+                CellData::new(vec![
+                    InlineSpan::Text {
+                        text: "Mixed ".to_string(),
+                        style: InlineStyle::default(),
+                    },
+                    InlineSpan::Text {
+                        text: "bold".to_string(),
+                        style: bold,
+                    },
+                    InlineSpan::Text {
+                        text: " and ".to_string(),
+                        style: InlineStyle::default(),
+                    },
+                    InlineSpan::Text {
+                        text: "italic".to_string(),
+                        style: italic,
+                    },
+                ]),
+                CellData::from("Normal text"),
             ],
         ];
 
-        let table =
-            Table::new(rows).constraints(vec![Constraint::Length(25), Constraint::Length(15)]);
+        let table = Table::new_with_colspans(rows)
+            .constraints(vec![Constraint::Length(25), Constraint::Length(15)]);
 
         let lines = table.render_to_lines(45);
 
