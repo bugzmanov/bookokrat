@@ -51,12 +51,12 @@ ideas to implement:
      - [ ] Notes should support markdown (maybe)
      - [x] List/summary of comments
         - [x] Search in comments
- - [ ] settings window
-     - [ ] make margins configurable + text color
-     - [ ] multiple themes
+ - [x] settings window
+     - [x] make margins configurable + text color
+     - [x] multiple themes
  - [ ] text cursor for reading ala vim normal mode
  - [x] images in ghosty terminal
-     - [ ] images of various sized - right now bookokrat support just 2 presets
+     - [x] images of various sized - right now bookokrat support just 2 presets
      - [ ] copy images to clipboard
  - [x] Images in iterm and sixt protocol
  - [x] ASCII Logo 

@@ -4,6 +4,49 @@ use ratatui::style::{Color, Style as RatatuiStyle};
 use ratatui::text::Span;
 
 impl crate::markdown_text_reader::MarkdownTextReader {
+    pub fn queue_global_search_activation(&mut self, query: String, node_index: usize) {
+        self.pending_global_search = Some((query, node_index));
+    }
+
+    pub fn activate_local_search_from_global(&mut self, query: String, node_index: usize) {
+        let trimmed = query.trim();
+        let normalized = if trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() > 2
+        {
+            &trimmed[1..trimmed.len() - 1]
+        } else {
+            trimmed
+        };
+
+        if normalized.is_empty() {
+            return;
+        }
+
+        self.search_state.start_search(self.scroll_offset);
+        self.search_state.update_query(normalized.to_string());
+
+        let searchable = self.get_searchable_content();
+        let matches = find_matches_in_text(normalized, &searchable);
+        self.search_state.set_matches(matches);
+        self.search_state.confirm_search();
+
+        if let Some(target_line_idx) = self
+            .rendered_content
+            .lines
+            .iter()
+            .position(|line| line.node_index == Some(node_index))
+        {
+            if let Some(match_idx) = self
+                .search_state
+                .matches
+                .iter()
+                .position(|m| m.index == target_line_idx)
+            {
+                self.search_state.current_match_index = Some(match_idx);
+                self.jump_to_match(target_line_idx);
+            }
+        }
+    }
+
     /// Get searchable content (visible lines as text)
     pub fn get_visible_text(&self) -> Vec<String> {
         self.rendered_content

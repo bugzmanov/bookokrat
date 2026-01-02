@@ -95,6 +95,9 @@ pub struct MarkdownTextReader {
     /// Last active anchor for maintaining continuous highlighting
     last_active_anchor: Option<String>,
 
+    /// Pending local search activation after a global search jump
+    pending_global_search: Option<(String, usize)>,
+
     /// Book comments to display alongside paragraphs
     book_comments: Option<Arc<Mutex<BookComments>>>,
     current_chapter_comments: HashMap<usize, Vec<Comment>>,
@@ -227,6 +230,7 @@ impl MarkdownTextReader {
             search_state: SearchState::new(),
             pending_anchor_scroll: None,
             last_active_anchor: None,
+            pending_global_search: None,
             book_comments: None,
             current_chapter_comments: HashMap::new(),
             comment_input: CommentInputState::default(),
@@ -300,6 +304,10 @@ impl MarkdownTextReader {
                     } else {
                         warn!("Pending anchor '{anchor_id}' not found after re-render");
                     }
+                }
+
+                if let Some((query, node_index)) = self.pending_global_search.take() {
+                    self.activate_local_search_from_global(query, node_index);
                 }
             }
         }

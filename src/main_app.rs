@@ -16,7 +16,7 @@ use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
-use crate::search_engine::SearchEngine;
+use crate::search_engine::{SearchEngine, SearchLine};
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
@@ -2464,14 +2464,18 @@ impl App {
                 match action {
                     BookSearchAction::JumpToChapter {
                         chapter_index,
-                        line_number,
+                        node_index,
+                        line_number: _,
+                        query,
                     } => {
                         self.set_main_panel_focus(MainPanel::Content);
                         if let Err(e) = self.navigate_to_chapter(chapter_index) {
                             error!("Failed to navigate to chapter {chapter_index}: {e}");
                             self.show_error(format!("Failed to navigate to chapter: {e}"));
                         } else {
-                            self.text_reader.scroll_to_line(line_number);
+                            self.text_reader.restore_to_node_index(node_index);
+                            self.text_reader
+                                .queue_global_search_activation(query, node_index);
                         }
                     }
                     BookSearchAction::Close => {
@@ -2928,76 +2932,99 @@ impl App {
 
     //todo this does extra parsing of a book. damn claude is dumb
     fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
-        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> String {
+        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> Vec<SearchLine> {
             let mut lines = Vec::new();
-            for node in &doc.blocks {
-                extract_text_from_block(&node.block, &mut lines);
+            for (node_index, node) in doc.blocks.iter().enumerate() {
+                extract_text_from_block(&node.block, node_index, &mut lines);
             }
-            lines.join("\n")
+            lines
         }
 
-        fn extract_text_from_block(block: &crate::markdown::Block, lines: &mut Vec<String>) {
+        fn extract_text_from_block(
+            block: &crate::markdown::Block,
+            node_index: usize,
+            lines: &mut Vec<SearchLine>,
+        ) {
             use crate::markdown::Block;
 
             match block {
                 Block::Paragraph { content } | Block::Heading { content, .. } => {
                     let plain_text = extract_text_from_text(content);
                     if !plain_text.trim().is_empty() {
-                        lines.push(plain_text);
+                        lines.push(SearchLine {
+                            text: plain_text,
+                            node_index,
+                        });
                     }
                 }
                 Block::List { items, .. } => {
                     for item in items {
                         // ListItem content is Vec<Node>, so process each node
                         for node in &item.content {
-                            extract_text_from_block(&node.block, lines);
+                            extract_text_from_block(&node.block, node_index, lines);
                         }
                     }
                 }
                 Block::Quote { content } => {
                     for node in content {
-                        extract_text_from_block(&node.block, lines);
+                        extract_text_from_block(&node.block, node_index, lines);
                     }
                 }
                 Block::CodeBlock { content, .. } => {
-                    lines.push(content.clone());
+                    lines.push(SearchLine {
+                        text: content.clone(),
+                        node_index,
+                    });
                 }
                 Block::Table { rows, header, .. } => {
                     if let Some(header_row) = header {
                         let row_text: Vec<String> = header_row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_cell_content(&cell.content, lines))
+                            .map(|cell| {
+                                extract_text_from_cell_content(&cell.content, node_index, lines)
+                            })
                             .collect();
                         if !row_text.is_empty() {
-                            lines.push(row_text.join(" "));
+                            lines.push(SearchLine {
+                                text: row_text.join(" "),
+                                node_index,
+                            });
                         }
                     }
                     for row in rows {
                         let row_text: Vec<String> = row
                             .cells
                             .iter()
-                            .map(|cell| extract_text_from_cell_content(&cell.content, lines))
+                            .map(|cell| {
+                                extract_text_from_cell_content(&cell.content, node_index, lines)
+                            })
                             .collect();
                         if !row_text.is_empty() {
-                            lines.push(row_text.join(" "));
+                            lines.push(SearchLine {
+                                text: row_text.join(" "),
+                                node_index,
+                            });
                         }
                     }
                 }
                 Block::DefinitionList { items } => {
                     for item in items {
-                        lines.push(extract_text_from_text(&item.term));
+                        lines.push(SearchLine {
+                            text: extract_text_from_text(&item.term),
+                            node_index,
+                        });
                         // Process each definition (Vec<Vec<Node>>)
                         for definition in &item.definitions {
                             for node in definition {
-                                extract_text_from_block(&node.block, lines);
+                                extract_text_from_block(&node.block, node_index, lines);
                             }
                         }
                     }
                 }
                 Block::EpubBlock { content, .. } => {
                     for node in content {
-                        extract_text_from_block(&node.block, lines);
+                        extract_text_from_block(&node.block, node_index, lines);
                     }
                 }
                 _ => {}
@@ -3032,14 +3059,15 @@ impl App {
 
         fn extract_text_from_cell_content(
             content: &crate::markdown::TableCellContent,
-            lines: &mut Vec<String>,
+            node_index: usize,
+            lines: &mut Vec<SearchLine>,
         ) -> String {
             match content {
                 crate::markdown::TableCellContent::Simple(text) => extract_text_from_text(text),
                 crate::markdown::TableCellContent::Rich(nodes) => {
                     let mut result = String::new();
                     for node in nodes {
-                        extract_text_from_block(&node.block, lines);
+                        extract_text_from_block(&node.block, node_index, lines);
                         // Also collect text inline
                         result.push_str(&extract_node_text(node));
                     }
