@@ -13,6 +13,9 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 - Highlight text, attach comments, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
+- Enter a Vim-style normal mode in the reader for precise motions, visual selection, and yanking to clipboard.
+- Load EPUB bundles (exploded `.epub` directories, including Apple Books exports) without repackaging.
+- Read complex HTML tables and rich cell content with improved rendering and image support.
 
 ## Installation
 
@@ -107,6 +110,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+z` - Copy debug transcript
 - `c` or `Ctrl+C` - Copy selection
 - `p` - Toggle profiler overlay
+- `n` - Toggle normal mode (Vim motions, visual selection, yanking)
+- `v` / `V` (normal mode) - Enter visual character/line selection; `y` to yank, `Esc` to exit
 
 ### Comments & Annotations
 - `a` - Create or edit comment on selection
