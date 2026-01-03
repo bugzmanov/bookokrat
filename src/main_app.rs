@@ -2225,6 +2225,12 @@ impl App {
         }
     }
 
+    pub fn set_zen_mode(&mut self, enabled: bool) {
+        if self.zen_mode != enabled {
+            self.toggle_zen_mode();
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {

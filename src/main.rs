@@ -1,4 +1,4 @@
-use std::{fs::File, io::stdout};
+use std::{fs::File, io::stdout, path::Path};
 
 use anyhow::Result;
 use crossterm::{
@@ -17,9 +17,43 @@ use bookokrat::panic_handler;
 use bookokrat::settings;
 use bookokrat::theme::load_custom_themes;
 
+struct CliArgs {
+    file_path: Option<String>,
+    zen_mode: bool,
+}
+
+fn parse_args() -> Result<CliArgs> {
+    let mut file_path = None;
+    let mut zen_mode = false;
+
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--zen-mode" => zen_mode = true,
+            "--help" | "-h" => {
+                println!("Usage: bookokrat [FILE.epub] [--zen-mode]");
+                std::process::exit(0);
+            }
+            _ if arg.starts_with('-') => {
+                anyhow::bail!("Unknown option: {arg}");
+            }
+            _ => {
+                if file_path.is_some() {
+                    anyhow::bail!("Only one file path can be provided.");
+                }
+                file_path = Some(arg);
+            }
+        }
+    }
+
+    Ok(CliArgs { file_path, zen_mode })
+}
+
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
     panic_handler::initialize_panic_handler();
+
+    let args = parse_args()?;
 
     // Initialize logging with html5ever DEBUG logs filtered out
     WriteLogger::init(
@@ -48,7 +82,26 @@ fn main() -> Result<()> {
     load_custom_themes();
 
     // Create app and run it
-    let mut app = App::new();
+    let book_directory = args
+        .file_path
+        .as_deref()
+        .and_then(|path| Path::new(path).parent())
+        .and_then(|parent| {
+            if parent.as_os_str().is_empty() {
+                None
+            } else {
+                parent.to_str()
+            }
+        });
+    let auto_load_recent = args.file_path.is_none();
+    let mut app = App::new_with_config(book_directory, Some("bookmarks.json"), auto_load_recent, None);
+    app.set_zen_mode(args.zen_mode);
+    if let Some(path) = args.file_path.as_deref() {
+        if let Err(err) = app.open_book_for_reading_by_path(path) {
+            error!("Failed to open requested book: {err}");
+            app.show_error(format!("Failed to open requested book: {err}"));
+        }
+    }
     let mut event_source = KeyboardEventSource;
     let res = run_app_with_event_source(&mut terminal, &mut app, &mut event_source);
 
