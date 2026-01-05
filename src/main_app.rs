@@ -2491,14 +2491,14 @@ impl App {
                 }
                 true
             }
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_down();
                 }
                 true
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_up();
@@ -3279,10 +3279,10 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_down();
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.scroll_up();
             }
             KeyCode::Char('h') => {

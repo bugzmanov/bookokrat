@@ -224,11 +224,11 @@ impl NavigationPanel {
                 self.start_search();
                 None
             }
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.handle_j();
                 None
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.move_selection_up();
                 None
             }
