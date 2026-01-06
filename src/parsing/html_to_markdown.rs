@@ -6,7 +6,23 @@ use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::rc::Rc;
+
+static SELF_CLOSING_NON_VOID_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)<(iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
+});
+
+fn fix_self_closing_tags(html: &str) -> String {
+    SELF_CLOSING_NON_VOID_RE
+        .replace_all(html, |caps: &regex::Captures| {
+            let tag = &caps[1];
+            let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            format!("<{}{}></{}>", tag, attrs, tag)
+        })
+        .into_owned()
+}
 
 /// Strategy for content collection mode
 #[derive(Debug, Clone)]
@@ -283,9 +299,10 @@ impl HtmlToMarkdownConverter {
     }
 
     pub fn convert(&mut self, html: &str) -> Document {
+        let preprocessed = fix_self_closing_tags(html);
         let dom = parse_document(RcDom::default(), Default::default())
             .from_utf8()
-            .read_from(&mut html.as_bytes())
+            .read_from(&mut preprocessed.as_bytes())
             .unwrap();
 
         let mut document = Document::new();
