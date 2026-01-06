@@ -3132,6 +3132,32 @@ impl App {
                         self.text_reader.clear_count();
                         return None;
                     }
+                    KeyCode::Char('a') => {
+                        // Add annotation on visual selection
+                        if self.text_reader.start_comment_input() {
+                            debug!("Started comment input mode from visual selection");
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('d') => {
+                        // Delete annotation on visual selection
+                        match self.text_reader.delete_comment_at_cursor() {
+                            Ok(true) => {
+                                info!("Comment deleted successfully");
+                                self.show_info("Comment deleted");
+                            }
+                            Ok(false) => {
+                                // Selection not on a comment, ignore
+                            }
+                            Err(e) => {
+                                error!("Failed to delete comment: {e}");
+                                self.show_error(format!("Failed to delete comment: {e}"));
+                            }
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
                     KeyCode::Esc => {
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
@@ -3351,7 +3377,8 @@ impl App {
             }
             KeyCode::Char('a') => {
                 if !self.handle_key_sequence('a')
-                    && self.text_reader.has_text_selection()
+                    && (self.text_reader.has_text_selection()
+                        || self.text_reader.is_visual_mode_active())
                     && self.text_reader.start_comment_input()
                 {
                     debug!("Started comment input mode");

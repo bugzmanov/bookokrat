@@ -79,35 +79,66 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn start_comment_input(&mut self) -> bool {
-        if !self.has_text_selection() {
+        // Try mouse selection first
+        if self.has_text_selection() {
+            if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
+                return self.start_editing_comment(chapter_href, target);
+            }
+
+            if let Some((start, end)) = self.text_selection.get_selection_range() {
+                let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+                if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    self.init_comment_textarea(target, norm_end.line);
+                    self.text_selection.clear_selection();
+                    return true;
+                }
+            }
             return false;
         }
 
-        if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
-            return self.start_editing_comment(chapter_href, target);
-        }
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            // Check if selection is on an existing comment first
+            if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
+                self.exit_visual_mode();
+                return self.start_editing_comment(chapter_href, target);
+            }
 
-        if let Some((start, end)) = self.text_selection.get_selection_range() {
-            let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
-            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
-                let mut textarea = TextArea::default();
-                textarea.set_placeholder_text("Type your comment here...");
-
-                self.comment_input.textarea = Some(textarea);
-                self.comment_input.target = Some(target.clone());
-                self.comment_input.target_node_index = Some(target.node_index());
-                self.comment_input
-                    .target_line
-                    .replace(norm_end.line.saturating_add(1));
-                self.comment_input.edit_mode = Some(CommentEditMode::Creating);
-
-                self.text_selection.clear_selection();
-
-                return true;
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+                if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    self.init_comment_textarea(target, norm_end.line);
+                    self.exit_visual_mode();
+                    return true;
+                }
+                self.exit_visual_mode();
             }
         }
 
         false
+    }
+
+    fn init_comment_textarea(&mut self, target: CommentTarget, end_line: usize) {
+        let mut textarea = TextArea::default();
+        textarea.set_placeholder_text("Type your comment here...");
+
+        self.comment_input.textarea = Some(textarea);
+        self.comment_input.target = Some(target.clone());
+        self.comment_input.target_node_index = Some(target.node_index());
+        self.comment_input
+            .target_line
+            .replace(end_line.saturating_add(1));
+        self.comment_input.edit_mode = Some(CommentEditMode::Creating);
     }
 
     fn compute_selection_target(
@@ -247,30 +278,78 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.comment_input.is_active()
     }
 
-    /// Get comment ID from current text selection
+    /// Get comment ID from current text selection, visual mode selection, or normal mode cursor
     /// Returns the comment ID if any line in the selection is a comment line
     pub fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
+        // Try mouse selection first
         if let Some((start, end)) = self.text_selection.get_selection_range() {
-            // Check all lines in the selection range
-            for line_idx in start.line..=end.line {
-                if let Some(line) = self.rendered_content.lines.get(line_idx) {
-                    if let LineType::Comment {
-                        chapter_href,
-                        target,
-                    } = &line.line_type
-                    {
-                        return Some((chapter_href.clone(), target.clone()));
-                    } else if let LineType::CodeBlock { .. } = &line.line_type {
-                        if let Some((chapter, target)) =
-                            self.inline_code_comment_hit(line_idx, &start, &end)
-                        {
-                            return Some((chapter, target));
-                        }
-                    }
+            if let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end) {
+                return Some(result);
+            }
+        }
+
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end)
+                {
+                    return Some(result);
                 }
             }
         }
 
+        // Try normal mode cursor position (single line)
+        if self.is_normal_mode_active() {
+            let cursor_line = self.normal_mode.cursor.line;
+            let cursor_col = self.normal_mode.cursor.column;
+            let point = SelectionPoint {
+                line: cursor_line,
+                column: cursor_col,
+            };
+            if let Some(result) =
+                self.find_comment_in_range(cursor_line, cursor_line, &point, &point)
+            {
+                return Some(result);
+            }
+        }
+
+        None
+    }
+
+    fn find_comment_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Option<CommentSelection> {
+        for line_idx in start_line..=end_line {
+            if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                if let LineType::Comment {
+                    chapter_href,
+                    target,
+                } = &line.line_type
+                {
+                    return Some((chapter_href.clone(), target.clone()));
+                } else if let LineType::CodeBlock { .. } = &line.line_type {
+                    if let Some((chapter, target)) =
+                        self.inline_code_comment_hit(line_idx, start, end)
+                    {
+                        return Some((chapter, target));
+                    }
+                }
+            }
+        }
         None
     }
 
@@ -313,9 +392,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Delete comment at current selection
     /// Returns true if a comment was deleted
     pub fn delete_comment_at_cursor(&mut self) -> anyhow::Result<bool> {
+        let was_visual_mode = self.is_visual_mode_active();
         if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
             self.delete_comment_by_location(&chapter_href, &target);
             self.text_selection.clear_selection();
+            if was_visual_mode {
+                self.exit_visual_mode();
+            }
             return Ok(true);
         }
 

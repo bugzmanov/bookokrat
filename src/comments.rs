@@ -214,16 +214,6 @@ impl BookComments {
     }
 
     pub fn add_comment(&mut self, comment: Comment) -> Result<()> {
-        if matches!(comment.target, CommentTarget::Paragraph { .. }) {
-            if let Some(existing_idx) =
-                self.find_comment_index(&comment.chapter_href, &comment.target)
-            {
-                self.comments[existing_idx] = comment.clone();
-                self.sort_comments();
-                return self.save_to_disk();
-            }
-        }
-
         self.add_to_indices(&comment);
         self.comments.push(comment);
 
@@ -545,5 +535,25 @@ mod tests {
         assert_eq!(all[1].node_index(), 1);
         assert!(all[1].is_paragraph_comment());
         assert!(matches!(all[2].target, CommentTarget::CodeBlock { .. }));
+    }
+
+    #[test]
+    fn test_multiple_paragraph_comments_same_node() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let comment_a = create_paragraph_comment("chapter.xhtml", 1, "First note");
+        let comment_b = create_paragraph_comment("chapter.xhtml", 1, "Second note");
+        let comment_c = create_paragraph_comment("chapter.xhtml", 1, "Third note");
+
+        book_comments.add_comment(comment_a).unwrap();
+        book_comments.add_comment(comment_b).unwrap();
+        book_comments.add_comment(comment_c).unwrap();
+
+        let comments = book_comments.get_node_comments("chapter.xhtml", 1);
+        assert_eq!(comments.len(), 3);
+        assert_eq!(comments[0].content, "First note");
+        assert_eq!(comments[1].content, "Second note");
+        assert_eq!(comments[2].content, "Third note");
     }
 }
