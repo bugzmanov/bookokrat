@@ -1300,7 +1300,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             if allowed == 0 {
                                 comment_line = "…".to_string();
                             } else {
-                                let truncated: String = comment_line.chars().take(allowed).collect();
+                                let truncated: String =
+                                    comment_line.chars().take(allowed).collect();
                                 comment_line = format!("{truncated}…");
                             }
                         }

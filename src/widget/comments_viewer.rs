@@ -1566,11 +1566,11 @@ impl CommentsViewer {
             }
         } else {
             match key.code {
-                KeyCode::Char('j') => {
+                KeyCode::Char('j') | KeyCode::Down => {
                     self.handle_j();
                     None
                 }
-                KeyCode::Char('k') => {
+                KeyCode::Char('k') | KeyCode::Up => {
                     self.handle_k();
                     None
                 }
@@ -1578,11 +1578,11 @@ impl CommentsViewer {
                     self.toggle_focus();
                     None
                 }
-                KeyCode::Char('h') => {
+                KeyCode::Char('h') | KeyCode::Left => {
                     self.handle_h();
                     None
                 }
-                KeyCode::Char('l') => {
+                KeyCode::Char('l') | KeyCode::Right => {
                     self.handle_l();
                     None
                 }

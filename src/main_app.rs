@@ -2490,7 +2490,7 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
-            KeyCode::Char('h') => {
+            KeyCode::Char('h') | KeyCode::Left => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_left();
@@ -2511,7 +2511,7 @@ impl App {
                 }
                 true
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char('l') | KeyCode::Right => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_right();
@@ -3296,7 +3296,10 @@ impl App {
                     let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                 }
             }
-            KeyCode::Char('l') => {
+            KeyCode::Left => {
+                let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
                 let _ = self.navigate_chapter_relative(ChapterDirection::Next);
             }
             KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {

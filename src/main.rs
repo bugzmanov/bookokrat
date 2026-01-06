@@ -46,7 +46,10 @@ fn parse_args() -> Result<CliArgs> {
         }
     }
 
-    Ok(CliArgs { file_path, zen_mode })
+    Ok(CliArgs {
+        file_path,
+        zen_mode,
+    })
 }
 
 fn main() -> Result<()> {
@@ -94,7 +97,12 @@ fn main() -> Result<()> {
             }
         });
     let auto_load_recent = args.file_path.is_none();
-    let mut app = App::new_with_config(book_directory, Some("bookmarks.json"), auto_load_recent, None);
+    let mut app = App::new_with_config(
+        book_directory,
+        Some("bookmarks.json"),
+        auto_load_recent,
+        None,
+    );
     app.set_zen_mode(args.zen_mode);
     if let Some(path) = args.file_path.as_deref() {
         if let Err(err) = app.open_book_for_reading_by_path(path) {
