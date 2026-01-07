@@ -1,5 +1,5 @@
 use super::types::*;
-use crate::comments::{Comment, CommentTarget};
+use crate::comments::Comment;
 use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
@@ -167,6 +167,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    node_index,
                 );
             }
 
@@ -227,6 +228,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    node_index,
                 );
             }
 
@@ -239,6 +241,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
+                    node_index,
                 );
             }
 
@@ -254,6 +257,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    node_index,
                 );
             }
 
@@ -793,6 +797,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        node_index: Option<usize>,
     ) {
         let heading_text = Self::text_to_string(content);
 
@@ -810,19 +815,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             palette.base_03 // Dimmed
         };
 
-        let modifiers = match level {
+        // Check if this heading has annotations
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let has_annotations = !annotation_ranges.is_empty();
+
+        let base_modifiers = match level {
             HeadingLevel::H3 => Modifier::BOLD | Modifier::UNDERLINED,
             HeadingLevel::H4 => Modifier::BOLD | Modifier::UNDERLINED,
             _ => Modifier::BOLD,
         };
 
-        for wrapped_line in wrapped {
-            let styled_spans = vec![Span::styled(
-                wrapped_line.to_string(),
-                RatatuiStyle::default()
-                    .fg(heading_color)
-                    .add_modifier(modifiers),
-            )];
+        // Add purple underline if annotated (for H1, H2, H5, H6 which don't have underline by default)
+        let modifiers = if has_annotations && !matches!(level, HeadingLevel::H3 | HeadingLevel::H4)
+        {
+            base_modifiers | Modifier::UNDERLINED
+        } else {
+            base_modifiers
+        };
+
+        for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
+            let mut style = RatatuiStyle::default()
+                .fg(heading_color)
+                .add_modifier(modifiers);
+
+            // Add purple underline color for annotated headings
+            if has_annotations {
+                style = style.underline_color(palette.base_0e);
+            }
+
+            let styled_spans = vec![Span::styled(wrapped_line.to_string(), style)];
 
             lines.push(RenderedLine {
                 spans: styled_spans,
@@ -833,7 +854,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 },
                 link_nodes: vec![],
                 node_anchor: None,
-                node_index: None,
+                node_index: if line_idx == 0 { node_index } else { None },
                 code_line: None,
                 inline_code_comments: Vec::new(),
             });
@@ -871,7 +892,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             *total_height += 1;
         }
 
-        // Add empty line after heading
+        // Render comments for this heading if any
+        let heading_comments = self.get_node_comments(node_index);
+        if !heading_comments.is_empty() {
+            // Add empty line before comments
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+
+            self.render_node_comments(
+                node_index,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                0,
+            );
+            // Comments already add empty line after, so we're done
+            return;
+        }
+
+        // Add empty line after heading (only if no comments were rendered)
         lines.push(RenderedLine {
             spans: vec![Span::raw("")],
             raw_text: String::new(),
@@ -915,6 +957,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
+        // Collect annotation ranges for this node (for underline styling)
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let underline_color = palette.base_0e; // Purple
+
         let mut current_rich_spans = Vec::new();
         let mut has_content = false;
 
@@ -923,8 +969,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 TextOrInline::Inline(Inline::Image { url, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
+                        let styled_spans = Self::apply_annotation_underlines(
+                            current_rich_spans,
+                            &annotation_ranges,
+                            underline_color,
+                        );
                         self.render_text_spans(
-                            &current_rich_spans,
+                            &styled_spans,
                             None, // no prefix
                             lines,
                             total_height,
@@ -933,7 +984,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             false, // don't add empty line after
                             node_index,
                         );
-                        current_rich_spans.clear();
+                        current_rich_spans = Vec::new();
                     }
 
                     // Render the image as a separate block
@@ -951,8 +1002,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Render any remaining text spans
         if !current_rich_spans.is_empty() {
             let add_empty_line = context == RenderContext::TopLevel;
+            let styled_spans = Self::apply_annotation_underlines(
+                current_rich_spans,
+                &annotation_ranges,
+                underline_color,
+            );
             self.render_text_spans(
-                &current_rich_spans,
+                &styled_spans,
                 None,
                 lines,
                 total_height,
@@ -979,22 +1035,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         let _paragraph_lines_end = lines.len();
 
-        if let Some(node_idx) = node_index {
-            let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
-            if let Some(paragraph_comments) = comments_to_render {
-                for comment in paragraph_comments {
-                    self.render_comment_as_quote(
-                        &comment,
-                        lines,
-                        total_height,
-                        width,
-                        palette,
-                        is_focused,
-                        indent,
-                    );
-                }
-            }
-        }
+        // Render any comments for this paragraph
+        self.render_node_comments(
+            node_index,
+            lines,
+            total_height,
+            width,
+            palette,
+            is_focused,
+            indent,
+        );
     }
 
     pub fn render_text_or_inline(
@@ -1131,6 +1181,130 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         Span::styled(node.content.clone(), styled)
     }
 
+    /// Apply underline styling to spans that overlap with annotation character ranges.
+    /// This provides visual feedback for annotated text passages.
+    /// `char_offset` is added to span positions for cumulative tracking across multiple items.
+    fn apply_annotation_underlines_with_offset(
+        rich_spans: Vec<RichSpan>,
+        annotation_ranges: &[(usize, usize)],
+        underline_color: Color,
+        char_offset: usize,
+    ) -> (Vec<RichSpan>, usize) {
+        let mut result = Vec::with_capacity(rich_spans.len());
+        let mut char_pos = char_offset;
+
+        if annotation_ranges.is_empty() {
+            // Still need to calculate final position
+            for rich_span in &rich_spans {
+                let span_len = match rich_span {
+                    RichSpan::Text(s) => s.content.chars().count(),
+                    RichSpan::Link { span, .. } => span.content.chars().count(),
+                };
+                char_pos += span_len;
+            }
+            return (rich_spans, char_pos);
+        }
+
+        for rich_span in rich_spans {
+            let (span, link_info) = match rich_span {
+                RichSpan::Text(s) => (s, None),
+                RichSpan::Link { span, info } => (span, Some(info)),
+            };
+
+            let span_len = span.content.chars().count();
+            let span_start = char_pos;
+            let span_end = char_pos + span_len;
+
+            // Check if this span overlaps with any annotation range
+            let overlaps = annotation_ranges
+                .iter()
+                .any(|&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start);
+
+            let new_span = if overlaps {
+                // Apply underline styling with purple color
+                let new_style = span
+                    .style
+                    .add_modifier(Modifier::UNDERLINED)
+                    .underline_color(underline_color);
+                Span::styled(span.content, new_style)
+            } else {
+                span
+            };
+
+            let new_rich_span = match link_info {
+                Some(info) => RichSpan::Link {
+                    span: new_span,
+                    info,
+                },
+                None => RichSpan::Text(new_span),
+            };
+
+            result.push(new_rich_span);
+            char_pos = span_end;
+        }
+
+        (result, char_pos)
+    }
+
+    /// Apply underline styling to spans that overlap with annotation character ranges.
+    /// Convenience wrapper that starts at offset 0.
+    fn apply_annotation_underlines(
+        rich_spans: Vec<RichSpan>,
+        annotation_ranges: &[(usize, usize)],
+        underline_color: Color,
+    ) -> Vec<RichSpan> {
+        Self::apply_annotation_underlines_with_offset(
+            rich_spans,
+            annotation_ranges,
+            underline_color,
+            0,
+        )
+        .0
+    }
+
+    /// Apply underline styling to spans in a rendered line.
+    /// Works on already-rendered Span<'static> instead of RichSpan.
+    /// Returns the updated character position after processing.
+    fn apply_underlines_to_line_spans(
+        spans: &mut Vec<Span<'static>>,
+        annotation_ranges: &[(usize, usize)],
+        underline_color: Color,
+        char_offset: usize,
+    ) -> usize {
+        if annotation_ranges.is_empty() {
+            let mut char_pos = char_offset;
+            for span in spans.iter() {
+                char_pos += span.content.chars().count();
+            }
+            return char_pos;
+        }
+
+        let mut char_pos = char_offset;
+        for span in spans.iter_mut() {
+            let span_len = span.content.chars().count();
+            let span_start = char_pos;
+            let span_end = char_pos + span_len;
+
+            // Check if this span overlaps with any annotation range
+            let overlaps = annotation_ranges
+                .iter()
+                .any(|&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start);
+
+            if overlaps {
+                *span = Span::styled(
+                    span.content.clone(),
+                    span.style
+                        .add_modifier(Modifier::UNDERLINED)
+                        .underline_color(underline_color),
+                );
+            }
+
+            char_pos = span_end;
+        }
+
+        char_pos
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_code_block(
         &mut self,
@@ -1166,7 +1340,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if let Some(node_idx) = node_index {
             if let Some(node_comments) = self.current_chapter_comments.get(&node_idx) {
                 for comment in node_comments {
-                    if let CommentTarget::CodeBlock { line_range, .. } = comment.target {
+                    if let Some(line_range) = comment.target.line_range() {
                         if total_code_lines == 0 {
                             continue;
                         }
@@ -1220,7 +1394,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let mut multi_line_comments: Vec<Comment> = Vec::new();
             if let Some(comments) = inline_comments.get(line_idx) {
                 for comment in comments {
-                    if let CommentTarget::CodeBlock { line_range, .. } = comment.target {
+                    if let Some(line_range) = comment.target.line_range() {
                         let single_line_range = line_range.0 == line_range.1;
                         let comment_body = comment.content.trim_end_matches(['\n', '\r']);
                         let multiline_text = comment_body.contains('\n');
@@ -1251,7 +1425,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 style = style.bg(palette.base_00);
 
                 if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
-                    style = style.bg(palette.base_01);
+                    style = style
+                        .underline_color(palette.base_0e)
+                        .add_modifier(Modifier::UNDERLINED);
                 }
 
                 let styled_span = Span::styled(segment.clone(), style);
@@ -1445,6 +1621,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) {
         use crate::markdown::ListKind;
 
+        // Collect comments and annotation ranges for this list node
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let underline_color = palette.base_0e; // Purple
+
+        // Track cumulative character position across all list items for annotation ranges
+        let mut cumulative_char_pos = 0;
+
         for (idx, item) in items.iter().enumerate() {
             // Determine bullet/number for this item
             let prefix = match kind {
@@ -1470,10 +1653,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
 
+                            // Apply annotation underlines with cumulative offset
+                            // Note: cumulative_char_pos tracks raw_text lengths (including prefix)
+                            // to match how compute_paragraph_word_range works.
+                            // We add prefix length because content spans don't include the prefix,
+                            // but annotation positions are calculated from raw_text which does.
+                            let prefix_char_len = prefix.chars().count();
+                            let (styled_spans, _) = Self::apply_annotation_underlines_with_offset(
+                                content_rich_spans,
+                                &annotation_ranges,
+                                underline_color,
+                                cumulative_char_pos + prefix_char_len,
+                            );
+
                             let lines_before = lines.len();
 
                             self.render_text_spans(
-                                &content_rich_spans,
+                                &styled_spans,
                                 Some(&prefix),
                                 lines,
                                 total_height,
@@ -1485,14 +1681,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                             first_block_line_count = lines.len() - lines_before;
 
-                            for (i, line) in lines[lines_before..].iter_mut().enumerate() {
+                            // Assign node_index to ALL list item lines for annotation support
+                            // Also update cumulative_char_pos based on raw_text (which includes prefix)
+                            for line in lines[lines_before..].iter_mut() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
                                     indent,
+                                    item_index: idx,
                                 };
-                                if i == 0 && idx == 0 {
-                                    line.node_index = node_index;
-                                }
+                                line.node_index = node_index;
+                                cumulative_char_pos += line.raw_text.chars().count();
                             }
                         }
                         _ => {
@@ -1534,32 +1732,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
-        // Render comments for the list if it has a node_index
-        if let Some(node_idx) = node_index {
-            let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
-            if let Some(paragraph_comments) = comments_to_render {
-                if !paragraph_comments.is_empty() {
-                    lines.push(RenderedLine::empty());
-                    self.raw_text_lines.push(String::new());
-                    *total_height += 1;
+        // Render comments for the list at the end
+        let list_comments = self.get_node_comments(node_index);
+        if !list_comments.is_empty() {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
 
-                    for comment in paragraph_comments {
-                        self.render_comment_as_quote(
-                            &comment,
-                            lines,
-                            total_height,
-                            width,
-                            palette,
-                            is_focused,
-                            indent,
-                        );
-                    }
-                    return; // render_comment_as_quote already adds empty line after
-                }
-            }
+            self.render_node_comments(
+                node_index,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                indent,
+            );
+            return;
         }
 
-        // Add empty line after list (only if no comments were rendered)
+        // Add empty line after list
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1576,6 +1768,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        node_index: Option<usize>,
     ) {
         // Build a proper grid that accounts for colspan and rowspan
         let (table_headers, table_rows, grid_columns) = Self::build_table_grid(header, rows);
@@ -1655,7 +1848,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_type: LineType::Text, // Table widget handles its own styling
                 link_nodes: vec![],
                 node_anchor: None,
-                node_index: None,
+                node_index,
                 code_line: None,
                 inline_code_comments: Vec::new(),
             };
@@ -1681,6 +1874,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             data_rows: rows_plain,
             height_cells: table_height,
         });
+
+        // Render comments for this table if any
+        let table_comments = self.get_node_comments(node_index);
+        if !table_comments.is_empty() {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+
+            self.render_node_comments(
+                node_index,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                0,
+            );
+            return; // Comments already add empty line after
+        }
 
         // Add empty line after table
         lines.push(RenderedLine {
@@ -1847,13 +2059,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
+        node_index: Option<usize>,
     ) {
+        let lines_before_quote = lines.len();
+
+        // Collect annotation ranges for this quote (for underline styling)
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let underline_color = palette.base_0e; // Purple
+
+        // Track cumulative character position for annotation ranges
+        let mut cumulative_char_pos = 0;
+        // Track paragraph index within the quote
+        let mut quote_para_idx = 0;
+
         // Render quote content with "> " prefix
         for node in content {
             match &node.block {
                 MarkdownBlock::Paragraph {
                     content: para_content,
                 } => {
+                    let lines_before_para = lines.len();
+                    let current_para_idx = quote_para_idx;
+                    quote_para_idx += 1;
+
                     // Render the rich text content with "> " prefix
                     let mut content_rich_spans = Vec::new();
                     for item in para_content.iter() {
@@ -1885,18 +2113,38 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         })
                         .collect();
 
+                    // Apply annotation underlines with offset for "> " prefix
+                    let prefix = "> ";
+                    let prefix_char_len = prefix.chars().count();
+                    let (underlined_spans, _) = Self::apply_annotation_underlines_with_offset(
+                        styled_rich_spans,
+                        &annotation_ranges,
+                        underline_color,
+                        cumulative_char_pos + prefix_char_len,
+                    );
+
                     self.render_text_spans(
-                        &styled_rich_spans,
-                        Some("> "), // quote prefix
+                        &underlined_spans,
+                        Some(prefix),
                         lines,
                         total_height,
                         width,
                         indent,
                         false, // don't add empty line after
-                        None,
+                        node_index,
                     );
+
+                    // Update cumulative position and set line type for rendered lines
+                    for line in lines[lines_before_para..].iter_mut() {
+                        line.node_index = node_index;
+                        line.line_type = LineType::QuoteParagraph {
+                            paragraph_index: current_para_idx,
+                        };
+                        cumulative_char_pos += line.raw_text.chars().count();
+                    }
                 }
                 _ => {
+                    let lines_before_block = lines.len();
                     self.render_node(
                         node,
                         lines,
@@ -1908,8 +2156,42 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         None,
                         RenderContext::InsideContainer,
                     );
+
+                    for line in lines[lines_before_block..].iter_mut() {
+                        line.node_index = node_index;
+                        cumulative_char_pos = Self::apply_underlines_to_line_spans(
+                            &mut line.spans,
+                            &annotation_ranges,
+                            underline_color,
+                            cumulative_char_pos,
+                        );
+                    }
                 }
             }
+        }
+
+        // Assign node_index to all quote lines
+        for line in lines[lines_before_quote..].iter_mut() {
+            line.node_index = node_index;
+        }
+
+        // Render comments for this quote if any
+        let quote_comments = self.get_node_comments(node_index);
+        if !quote_comments.is_empty() {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+
+            self.render_node_comments(
+                node_index,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                indent,
+            );
+            return; // Comments already add empty line after
         }
 
         // Add empty line after quote
@@ -1964,7 +2246,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        node_index: Option<usize>,
     ) {
+        // Collect annotation ranges for this definition list (for underline styling)
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let underline_color = palette.base_0e; // Purple
+
+        // Track cumulative character position for annotation ranges
+        let mut cumulative_char_pos = 0;
+
         // Render each term-definition pair
         for (idx, item) in items.iter().enumerate() {
             // Track lines for this entire definition item
@@ -2000,8 +2290,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 })
                 .collect();
 
+            // Apply annotation underlines to the term
+            let (final_term_spans, _) = Self::apply_annotation_underlines_with_offset(
+                styled_term_rich_spans,
+                &annotation_ranges,
+                underline_color,
+                cumulative_char_pos,
+            );
+
+            let lines_before_term = lines.len();
+
             self.render_text_spans(
-                &styled_term_rich_spans,
+                &final_term_spans,
                 None, // no prefix for terms
                 lines,
                 total_height,
@@ -2011,9 +2311,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 None,
             );
 
+            // Assign node_index, line_type, and update cumulative position for terms
+            for line in lines[lines_before_term..].iter_mut() {
+                line.node_index = node_index;
+                line.line_type = LineType::DefinitionListItem {
+                    item_index: idx,
+                    is_term: true,
+                };
+                cumulative_char_pos += line.raw_text.chars().count();
+            }
+
             // Render each definition (dd) - as blocks with indentation
             for definition_blocks in &item.definitions {
                 for block_node in definition_blocks {
+                    let lines_before_def = lines.len();
+
                     self.render_node(
                         block_node,
                         lines,
@@ -2022,9 +2334,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         2,
-                        None,
+                        None, // Definition blocks get their own node handling
                         RenderContext::InsideContainer,
                     );
+
+                    // Assign node_index, line_type, apply underlines, and update cumulative position
+                    for line in lines[lines_before_def..].iter_mut() {
+                        line.node_index = node_index;
+                        line.line_type = LineType::DefinitionListItem {
+                            item_index: idx,
+                            is_term: false,
+                        };
+                        // Apply annotation underlines to the rendered spans
+                        cumulative_char_pos = Self::apply_underlines_to_line_spans(
+                            &mut line.spans,
+                            &annotation_ranges,
+                            underline_color,
+                            cumulative_char_pos,
+                        );
+                    }
                 }
             }
 
@@ -2039,7 +2367,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
-        // Add empty line after the entire definition list
+        // Render comments for this definition list if any
+        let def_comments = self.get_node_comments(node_index);
+        if !def_comments.is_empty() {
+            self.render_node_comments(
+                node_index,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                0,
+            );
+            return; // Comments already add empty line after
+        }
+
+        // Add empty line after the entire definition list (only if no comments)
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2096,6 +2439,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         width,
                         palette,
                         is_focused,
+                        None, // No annotation support inside containers
                     );
                 }
                 _ => {

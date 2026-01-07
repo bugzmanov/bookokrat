@@ -188,18 +188,67 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         if has_code {
-            return Some(CommentTarget::CodeBlock {
-                paragraph_index: node_idx,
-                line_range: (min_code, max_code),
-            });
+            return Some(CommentTarget::code_block(node_idx, (min_code, max_code)));
         }
 
         let word_range = self.compute_paragraph_word_range(node_idx, start, end);
 
-        Some(CommentTarget::Paragraph {
-            paragraph_index: node_idx,
-            word_range,
-        })
+        // Check if selection is within a list item and extract the item index
+        let list_item_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::ListItem { item_index, .. } = &line.line_type {
+                    Some(*item_index)
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(item_index) = list_item_info {
+            return Some(CommentTarget::list_item(node_idx, item_index, word_range));
+        }
+
+        // Check if selection is within a definition list item and extract the item index
+        let definition_item_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::DefinitionListItem {
+                    item_index,
+                    is_term,
+                } = &line.line_type
+                {
+                    Some((*item_index, *is_term))
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some((item_index, is_term)) = definition_item_info {
+            return Some(CommentTarget::definition_item(
+                node_idx, item_index, is_term, word_range,
+            ));
+        }
+
+        // Check if selection is within a blockquote paragraph and extract the paragraph index
+        let quote_paragraph_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::QuoteParagraph { paragraph_index } = &line.line_type {
+                    Some(*paragraph_index)
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(paragraph_index) = quote_paragraph_info {
+            return Some(CommentTarget::quote_paragraph(
+                node_idx,
+                paragraph_index,
+                word_range,
+            ));
+        }
+
+        Some(CommentTarget::paragraph(node_idx, word_range))
     }
 
     /// Handle input events when in comment mode
@@ -445,6 +494,49 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             &comment.chapter_href == chapter_href && &comment.target == target
         } else {
             false
+        }
+    }
+
+    /// Get all comments for a specific node index
+    pub fn get_node_comments(&self, node_index: Option<usize>) -> Vec<Comment> {
+        node_index
+            .and_then(|idx| self.current_chapter_comments.get(&idx))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Get annotation (word) ranges from comments for a node - used for underline styling
+    pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Render all paragraph comments for a node as quote blocks.
+    /// This is the centralized method for rendering comment blocks after content.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_node_comments(
+        &mut self,
+        node_index: Option<usize>,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+        indent: usize,
+    ) {
+        let comments = self.get_node_comments(node_index);
+        for comment in comments {
+            self.render_comment_as_quote(
+                &comment,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                indent,
+            );
         }
     }
 

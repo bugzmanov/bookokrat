@@ -80,6 +80,18 @@ pub enum LineType {
     ListItem {
         kind: crate::markdown::ListKind,
         indent: usize,
+        /// Index of this item within the list (0-based)
+        item_index: usize,
+    },
+    DefinitionListItem {
+        /// Index of the definition item within the list (0-based)
+        item_index: usize,
+        /// Whether this is a term (dt) or definition body (dd)
+        is_term: bool,
+    },
+    QuoteParagraph {
+        /// Index of the paragraph within the blockquote (0-based)
+        paragraph_index: usize,
     },
     ImagePlaceholder {
         src: String,

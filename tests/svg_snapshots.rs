@@ -136,20 +136,14 @@ fn seed_sample_comments(app: &mut App) {
 
     app.testing_add_comment(Comment {
         chapter_href: chapter_a.clone(),
-        target: CommentTarget::Paragraph {
-            paragraph_index: 0,
-            word_range: None,
-        },
+        target: CommentTarget::paragraph(0, None),
         content: "Launch plan looks solid.".to_string(),
         updated_at: base_time,
     });
 
     app.testing_add_comment(Comment {
         chapter_href: chapter_a.clone(),
-        target: CommentTarget::Paragraph {
-            paragraph_index: 3,
-            word_range: None,
-        },
+        target: CommentTarget::paragraph(3, None),
         content: "Need to revisit risk section.".to_string(),
         updated_at: base_time + chrono::Duration::minutes(5),
     });
@@ -161,10 +155,7 @@ fn seed_sample_comments(app: &mut App) {
         if let Some(chapter_b) = app.testing_current_chapter_file() {
             app.testing_add_comment(Comment {
                 chapter_href: chapter_b.clone(),
-                target: CommentTarget::Paragraph {
-                    paragraph_index: 2,
-                    word_range: None,
-                },
+                target: CommentTarget::paragraph(2, None),
                 content: "Great anecdote here.".to_string(),
                 updated_at: base_time + chrono::Duration::minutes(10),
             });

@@ -79,6 +79,8 @@ impl YankHighlight {
 pub struct NormalModeState {
     pub active: bool,
     pub cursor: CursorPosition,
+    /// Tracks if cursor was ever explicitly set (not just default position)
+    pub cursor_was_set: bool,
     pub scrolloff: usize,
     pub pending_motion: PendingCharMotion,
     pub last_find: Option<(PendingCharMotion, char)>,
@@ -94,6 +96,7 @@ impl Default for NormalModeState {
         Self {
             active: false,
             cursor: CursorPosition::default(),
+            cursor_was_set: false,
             scrolloff: 3,
             pending_motion: PendingCharMotion::None,
             last_find: None,
@@ -114,6 +117,7 @@ impl NormalModeState {
     pub fn activate(&mut self, initial_line: usize, initial_column: usize) {
         self.active = true;
         self.cursor = CursorPosition::new(initial_line, initial_column);
+        self.cursor_was_set = true;
     }
 
     pub fn deactivate(&mut self) {
@@ -140,12 +144,18 @@ impl MarkdownTextReader {
             let cursor_in_viewport =
                 previous_line >= viewport_top && previous_line < viewport_bottom;
 
-            if cursor_in_viewport && !self.should_skip_line(previous_line) {
+            // Only restore previous position if it was explicitly set before
+            // and is still within the current viewport
+            if self.normal_mode.cursor_was_set
+                && cursor_in_viewport
+                && !self.should_skip_line(previous_line)
+            {
                 // Restore previous position, just clamp column
                 self.normal_mode.active = true;
                 self.clamp_column_to_line_length();
             } else {
-                // Position outside viewport or on invalid line - place with scrolloff margin
+                // First activation, position outside viewport, or on invalid line
+                // Place cursor at scrolloff margin from top of viewport
                 let scrolloff = self.normal_mode.scrolloff;
                 let mut initial_line = self.scroll_offset + scrolloff;
                 // Clamp to valid range
