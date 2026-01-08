@@ -923,6 +923,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 TextOrInline::Inline(Inline::Image { url, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
+                        // Apply word-range highlighting for any annotations on this paragraph
+                        if let Some(node_idx) = node_index {
+                            if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
+                                for comment in comments {
+                                    if let Some(word_range) = comment.target.word_range() {
+                                        current_rich_spans = self.apply_word_range_highlighting(
+                                            current_rich_spans,
+                                            word_range,
+                                            palette,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+
                         self.render_text_spans(
                             &current_rich_spans,
                             None, // no prefix
@@ -950,6 +965,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render any remaining text spans
         if !current_rich_spans.is_empty() {
+            // Apply word-range highlighting for any annotations on this paragraph
+            if let Some(node_idx) = node_index {
+                if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
+                    for comment in comments {
+                        if let Some(word_range) = comment.target.word_range() {
+                            current_rich_spans = self.apply_word_range_highlighting(
+                                current_rich_spans,
+                                word_range,
+                                palette,
+                            );
+                        }
+                    }
+                }
+            }
+
             let add_empty_line = context == RenderContext::TopLevel;
             self.render_text_spans(
                 &current_rich_spans,
@@ -1300,7 +1330,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             if allowed == 0 {
                                 comment_line = "…".to_string();
                             } else {
-                                let truncated: String = comment_line.chars().take(allowed).collect();
+                                let truncated: String =
+                                    comment_line.chars().take(allowed).collect();
                                 comment_line = format!("{truncated}…");
                             }
                         }
@@ -2528,6 +2559,144 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
+    }
+
+    /// Apply word-range highlighting to spans for annotated text
+    /// This highlights the text that has been annotated with a background color
+    fn apply_word_range_highlighting(
+        &self,
+        spans: Vec<RichSpan>,
+        word_range: (usize, usize),
+        palette: &Base16Palette,
+    ) -> Vec<RichSpan> {
+        use crate::widget::text_reader::types::RichSpan;
+
+        let (start_word, end_word) = word_range;
+
+        // Convert word indices to character indices by counting words
+        let mut current_char = 0;
+        let mut word_count = 0;
+        let mut start_char = None;
+        let mut end_char = None;
+
+        for rich_span in &spans {
+            let text = match rich_span {
+                RichSpan::Text(span) => span.content.to_string(),
+                RichSpan::Link { span, .. } => span.content.to_string(),
+            };
+            let chars: Vec<char> = text.chars().collect();
+
+            let mut i = 0;
+            while i < chars.len() {
+                if chars[i].is_whitespace() {
+                    current_char += 1;
+                    i += 1;
+                    continue;
+                }
+
+                // Start of a word
+                let word_start = current_char;
+                while i < chars.len() && !chars[i].is_whitespace() {
+                    current_char += 1;
+                    i += 1;
+                }
+
+                // We've completed a word
+                if word_count == start_word && start_char.is_none() {
+                    start_char = Some(word_start);
+                }
+                word_count += 1;
+                if word_count == end_word {
+                    end_char = Some(current_char);
+                    break;
+                }
+            }
+
+            if end_char.is_some() {
+                break;
+            }
+        }
+
+        let Some(highlight_start) = start_char else {
+            return spans;
+        };
+        let highlight_end = end_char.unwrap_or(current_char);
+
+        // Now apply highlighting to the character range
+        let mut result_spans = Vec::new();
+        let mut current_pos = 0;
+
+        for rich_span in spans {
+            let (span, maybe_link) = match rich_span {
+                RichSpan::Text(span) => (span, None),
+                RichSpan::Link { span, info } => (span, Some(info)),
+            };
+
+            let text = span.content.to_string();
+            let char_count = text.chars().count();
+            let span_start = current_pos;
+            let span_end = current_pos + char_count;
+
+            if span_end <= highlight_start || span_start >= highlight_end {
+                // No overlap, keep span as is
+                if let Some(link_info) = maybe_link {
+                    result_spans.push(RichSpan::Link {
+                        span,
+                        info: link_info,
+                    });
+                } else {
+                    result_spans.push(RichSpan::Text(span));
+                }
+            } else {
+                // Span overlaps with highlight range
+                let chars: Vec<char> = text.chars().collect();
+
+                let highlight_in_span_start = highlight_start.saturating_sub(span_start);
+                let highlight_in_span_end = (highlight_end - span_start).min(char_count);
+
+                // Before highlight
+                if highlight_in_span_start > 0 {
+                    let before: String = chars[..highlight_in_span_start].iter().collect();
+                    if let Some(ref link_info) = maybe_link {
+                        result_spans.push(RichSpan::Link {
+                            span: Span::styled(before, span.style),
+                            info: link_info.clone(),
+                        });
+                    } else {
+                        result_spans.push(RichSpan::Text(Span::styled(before, span.style)));
+                    }
+                }
+
+                // Highlighted portion
+                if highlight_in_span_end > highlight_in_span_start {
+                    let highlighted: String = chars[highlight_in_span_start..highlight_in_span_end]
+                        .iter()
+                        .collect();
+                    // Apply cyan background for annotations
+                    result_spans.push(RichSpan::Text(Span::styled(
+                        highlighted,
+                        span.style.bg(palette.base_0c),
+                    )));
+                }
+
+                // After highlight
+                if highlight_in_span_end < char_count {
+                    let after: String = chars[highlight_in_span_end..].iter().collect();
+                    if let Some(link_info) = maybe_link {
+                        result_spans.push(RichSpan::Link {
+                            span: Span::styled(after, span.style),
+                            info: link_info,
+                        });
+                    } else {
+                        result_spans.push(RichSpan::Text(Span::styled(after, span.style)));
+                    }
+                }
+            }
+
+            current_pos = span_end;
+        }
+
+        result_spans
     }
 }
 

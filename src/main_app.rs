@@ -3119,6 +3119,22 @@ impl App {
                 let visual_mode = self.text_reader.get_visual_mode();
 
                 match key.code {
+                    KeyCode::Char('a') => {
+                        let success = self.text_reader.convert_visual_to_text_selection()
+                            && self.text_reader.start_comment_input();
+
+                        if success {
+                            debug!("Started comment input mode from visual selection");
+                        } else {
+                            debug!("Failed to start comment input from visual selection");
+                            self.notifications
+                                .show_warning("Cannot annotate this selection");
+                        }
+
+                        // Always exit visual mode when 'a' is pressed
+                        self.text_reader.exit_visual_mode();
+                        return None;
+                    }
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
                             let _ = self.text_reader.copy_to_clipboard(text);

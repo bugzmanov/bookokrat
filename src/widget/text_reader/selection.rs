@@ -96,6 +96,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.text_selection.has_selection()
     }
 
+    pub fn convert_visual_to_text_selection(&mut self) -> bool {
+        if let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
+        {
+            use crate::widget::text_reader::text_selection::SelectionPoint;
+
+            self.text_selection.start = Some(SelectionPoint {
+                line: start_line,
+                column: start_col,
+            });
+            self.text_selection.end = Some(SelectionPoint {
+                line: end_line,
+                column: end_col.saturating_sub(1),
+            });
+            self.text_selection.is_selecting = false;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn copy_selection_to_clipboard(&mut self) -> Result<(), String> {
         if let Some(selected_text) = self
             .text_selection
