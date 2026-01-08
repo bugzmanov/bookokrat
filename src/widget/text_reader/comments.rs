@@ -513,6 +513,56 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    /// Get annotation ranges for a specific list item
+    pub fn get_annotation_ranges_for_list_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.subtarget.list_item_index() == Some(item_index))
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Get annotation ranges for a specific definition item (term or definition)
+    pub fn get_annotation_ranges_for_definition_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+        is_term: bool,
+    ) -> Vec<(usize, usize)> {
+        use crate::comments::BlockSubtarget;
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.target.subtarget,
+                    BlockSubtarget::DefinitionItem {
+                        item_index: idx,
+                        is_term: term,
+                        ..
+                    } if *idx == item_index && *term == is_term
+                )
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Get annotation ranges for a specific quote paragraph
+    pub fn get_annotation_ranges_for_quote_paragraph(
+        &self,
+        node_index: Option<usize>,
+        paragraph_index: usize,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
     /// Render all paragraph comments for a node as quote blocks.
     /// This is the centralized method for rendering comment blocks after content.
     #[allow(clippy::too_many_arguments)]
