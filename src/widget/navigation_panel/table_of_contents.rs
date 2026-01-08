@@ -424,7 +424,7 @@ impl TableOfContents {
     }
 
     /// Get the selected item (either back button or TOC item)
-    pub fn get_selected_item(&self) -> Option<SelectedTocItem> {
+    pub fn get_selected_item(&self) -> Option<SelectedTocItem<'_>> {
         if let Some(ref current_book_info) = self.current_book_info {
             if self.selected_index == 0 {
                 Some(SelectedTocItem::BackToBooks)

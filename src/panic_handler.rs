@@ -33,7 +33,3 @@ fn restore_terminal() {
     let _ = execute!(io::stderr(), crossterm::cursor::Show);
     let _ = writeln!(io::stderr());
 }
-
-/// Initialize human-panic metadata for release builds
-#[cfg(not(debug_assertions))]
-use human_panic::Metadata;

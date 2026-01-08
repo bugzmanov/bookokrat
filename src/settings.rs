@@ -49,6 +49,9 @@ pub struct Settings {
     #[serde(default)]
     pub margin: u16,
 
+    #[serde(default = "default_annotation_highlight_color")]
+    pub annotation_highlight_color: String,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_themes: Vec<YamlTheme>,
 }
@@ -61,12 +64,17 @@ fn default_theme() -> String {
     "Oceanic Next".to_string()
 }
 
+fn default_annotation_highlight_color() -> String {
+    "7FB4CA".to_string() // Cyan (base0C) from Kanagawa theme
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             version: CURRENT_VERSION,
             theme: default_theme(),
             margin: 0,
+            annotation_highlight_color: default_annotation_highlight_color(),
             custom_themes: Vec::new(),
         }
     }
@@ -160,6 +168,15 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(&format!("version: {}\n", settings.version));
     content.push_str(&format!("theme: \"{}\"\n", settings.theme));
     content.push_str(&format!("margin: {}\n", settings.margin));
+    content.push('\n');
+    content.push_str(
+        "# Annotation highlight color (hex color without #, e.g., \"7FB4CA\" for cyan)\n",
+    );
+    content.push_str("# Set to \"none\" or \"disabled\" to disable highlighting\n");
+    content.push_str(&format!(
+        "annotation_highlight_color: \"{}\"\n",
+        settings.annotation_highlight_color
+    ));
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -256,4 +273,11 @@ pub fn get_custom_themes() -> Vec<YamlTheme> {
         .read()
         .map(|s| s.custom_themes.clone())
         .unwrap_or_default()
+}
+
+pub fn get_annotation_highlight_color() -> String {
+    SETTINGS
+        .read()
+        .map(|s| s.annotation_highlight_color.clone())
+        .unwrap_or_else(|_| default_annotation_highlight_color())
 }

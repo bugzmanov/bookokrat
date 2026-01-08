@@ -2107,7 +2107,8 @@ impl App {
                 }
                 _ => "Search mode active".to_string(),
             }
-        } else if self.text_reader.has_text_selection() {
+        } else if self.text_reader.has_text_selection() || self.text_reader.is_visual_mode_active()
+        {
             "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
         } else {
             let help_text = match self.focused_panel {
@@ -2115,7 +2116,7 @@ impl App {
                     "j/k: Navigate | Enter: Select | h/l: Fold/Unfold | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | v/V: Visual Mode | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
                     "j/k/Scroll: Navigate | Enter/DblClick: Open | ESC: Close"
@@ -3119,6 +3120,22 @@ impl App {
                 let visual_mode = self.text_reader.get_visual_mode();
 
                 match key.code {
+                    KeyCode::Char('a') => {
+                        let success = self.text_reader.convert_visual_to_text_selection()
+                            && self.text_reader.start_comment_input();
+
+                        if success {
+                            debug!("Started comment input mode from visual selection");
+                        } else {
+                            debug!("Failed to start comment input from visual selection");
+                            self.notifications
+                                .show_warning("Cannot annotate this selection");
+                        }
+
+                        // Always exit visual mode when 'a' is pressed
+                        self.text_reader.exit_visual_mode();
+                        return None;
+                    }
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
                             let _ = self.text_reader.copy_to_clipboard(text);
