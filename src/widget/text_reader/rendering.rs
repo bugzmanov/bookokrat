@@ -925,18 +925,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     if !current_rich_spans.is_empty() {
                         // Apply word-range highlighting for any annotations on this paragraph
                         if let Some(node_idx) = node_index {
-                            if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
-                                let word_ranges: Vec<(usize, usize)> = comments
-                                    .iter()
-                                    .filter_map(|c| c.target.word_range())
-                                    .collect();
-                                if !word_ranges.is_empty() {
-                                    current_rich_spans = self.apply_word_ranges_highlighting(
-                                        current_rich_spans,
-                                        &word_ranges,
-                                    );
-                                }
-                            }
+                            current_rich_spans =
+                                self.apply_comment_highlighting(current_rich_spans, node_idx);
                         }
 
                         self.render_text_spans(
@@ -968,16 +958,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if !current_rich_spans.is_empty() {
             // Apply word-range highlighting for any annotations on this paragraph
             if let Some(node_idx) = node_index {
-                if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
-                    let word_ranges: Vec<(usize, usize)> = comments
-                        .iter()
-                        .filter_map(|c| c.target.word_range())
-                        .collect();
-                    if !word_ranges.is_empty() {
-                        current_rich_spans =
-                            self.apply_word_ranges_highlighting(current_rich_spans, &word_ranges);
-                    }
-                }
+                current_rich_spans = self.apply_comment_highlighting(current_rich_spans, node_idx);
             }
 
             let add_empty_line = context == RenderContext::TopLevel;
@@ -1013,15 +994,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
             if let Some(paragraph_comments) = comments_to_render {
                 for comment in paragraph_comments {
-                    self.render_comment_as_quote(
-                        &comment,
-                        lines,
-                        total_height,
-                        width,
-                        palette,
-                        is_focused,
-                        indent,
-                    );
+                    if self.should_render_comment_at_node(&comment, node_idx) {
+                        self.render_comment_as_quote(
+                            &comment,
+                            lines,
+                            total_height,
+                            width,
+                            palette,
+                            is_focused,
+                            indent,
+                        );
+                    }
                 }
             }
         }
@@ -1568,21 +1551,31 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if let Some(node_idx) = node_index {
             let comments_to_render = self.current_chapter_comments.get(&node_idx).cloned();
             if let Some(paragraph_comments) = comments_to_render {
-                if !paragraph_comments.is_empty() {
+                let mut has_comments_to_render = false;
+                for comment in &paragraph_comments {
+                    if self.should_render_comment_at_node(comment, node_idx) {
+                        has_comments_to_render = true;
+                        break;
+                    }
+                }
+
+                if has_comments_to_render {
                     lines.push(RenderedLine::empty());
                     self.raw_text_lines.push(String::new());
                     *total_height += 1;
 
                     for comment in paragraph_comments {
-                        self.render_comment_as_quote(
-                            &comment,
-                            lines,
-                            total_height,
-                            width,
-                            palette,
-                            is_focused,
-                            indent,
-                        );
+                        if self.should_render_comment_at_node(&comment, node_idx) {
+                            self.render_comment_as_quote(
+                                &comment,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                indent,
+                            );
+                        }
                     }
                     return; // render_comment_as_quote already adds empty line after
                 }
@@ -2559,6 +2552,68 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
+    }
+
+    /// Apply comment highlighting to text spans for a given node
+    /// Handles both word-range highlighting and full-paragraph highlighting for multi-paragraph comments
+    fn apply_comment_highlighting(&self, spans: Vec<RichSpan>, node_idx: usize) -> Vec<RichSpan> {
+        if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
+            let has_full_highlight = comments
+                .iter()
+                .any(|c| c.is_paragraph_range_comment() && c.covers_node(node_idx));
+
+            if has_full_highlight {
+                return self.apply_full_paragraph_highlighting(spans);
+            }
+
+            let word_ranges: Vec<(usize, usize)> = comments
+                .iter()
+                .filter_map(|c| c.target.word_range())
+                .collect();
+
+            if !word_ranges.is_empty() {
+                return self.apply_word_ranges_highlighting(spans, &word_ranges);
+            }
+        }
+        spans
+    }
+
+    /// Apply full paragraph highlighting (for multi-paragraph comments)
+    fn apply_full_paragraph_highlighting(&self, spans: Vec<RichSpan>) -> Vec<RichSpan> {
+        use crate::color_mode::smart_color;
+        use crate::settings;
+        use crate::widget::text_reader::types::RichSpan;
+
+        let highlight_color_hex = settings::get_annotation_highlight_color();
+
+        if highlight_color_hex.is_empty()
+            || highlight_color_hex.eq_ignore_ascii_case("none")
+            || highlight_color_hex.eq_ignore_ascii_case("disabled")
+        {
+            return spans;
+        }
+
+        let highlight_color = match u32::from_str_radix(&highlight_color_hex, 16) {
+            Ok(value) => smart_color(value),
+            Err(_) => smart_color(0x7FB4CA),
+        };
+
+        spans
+            .into_iter()
+            .map(|rich_span| match rich_span {
+                RichSpan::Text(span) => {
+                    let new_style = span.style.bg(highlight_color);
+                    RichSpan::Text(span.style(new_style))
+                }
+                RichSpan::Link { span, info } => {
+                    let new_style = span.style.bg(highlight_color);
+                    RichSpan::Link {
+                        span: span.style(new_style),
+                        info,
+                    }
+                }
+            })
+            .collect()
     }
 
     /// Apply multiple word-range highlights to spans for annotated text

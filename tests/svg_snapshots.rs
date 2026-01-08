@@ -141,6 +141,7 @@ fn seed_sample_comments(app: &mut App) {
             word_range: None,
         },
         content: "Launch plan looks solid.".to_string(),
+        selected_text: None,
         updated_at: base_time,
     });
 
@@ -151,6 +152,7 @@ fn seed_sample_comments(app: &mut App) {
             word_range: None,
         },
         content: "Need to revisit risk section.".to_string(),
+        selected_text: None,
         updated_at: base_time + chrono::Duration::minutes(5),
     });
 
@@ -166,6 +168,7 @@ fn seed_sample_comments(app: &mut App) {
                     word_range: None,
                 },
                 content: "Great anecdote here.".to_string(),
+                selected_text: None,
                 updated_at: base_time + chrono::Duration::minutes(10),
             });
         }

@@ -18,6 +18,14 @@ pub enum CommentTarget {
         /// Inclusive line range within the code block.
         line_range: (usize, usize),
     },
+    ParagraphRange {
+        start_paragraph_index: usize,
+        end_paragraph_index: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_word_offset: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_word_offset: Option<usize>,
+    },
 }
 
 impl CommentTarget {
@@ -29,6 +37,10 @@ impl CommentTarget {
             | CommentTarget::CodeBlock {
                 paragraph_index, ..
             } => *paragraph_index,
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                ..
+            } => *start_paragraph_index,
         }
     }
 
@@ -36,6 +48,7 @@ impl CommentTarget {
         match self {
             CommentTarget::Paragraph { word_range, .. } => *word_range,
             CommentTarget::CodeBlock { .. } => None,
+            CommentTarget::ParagraphRange { .. } => None,
         }
     }
 
@@ -43,6 +56,7 @@ impl CommentTarget {
         match self {
             CommentTarget::Paragraph { .. } => None,
             CommentTarget::CodeBlock { line_range, .. } => Some(*line_range),
+            CommentTarget::ParagraphRange { .. } => None,
         }
     }
 
@@ -50,6 +64,7 @@ impl CommentTarget {
         match self {
             CommentTarget::Paragraph { .. } => 0,
             CommentTarget::CodeBlock { .. } => 1,
+            CommentTarget::ParagraphRange { .. } => 2,
         }
     }
 
@@ -59,6 +74,22 @@ impl CommentTarget {
                 .map(|(start, end)| (start, end))
                 .unwrap_or((0, 0)),
             CommentTarget::CodeBlock { line_range, .. } => *line_range,
+            CommentTarget::ParagraphRange {
+                start_word_offset,
+                end_word_offset,
+                ..
+            } => (start_word_offset.unwrap_or(0), end_word_offset.unwrap_or(0)),
+        }
+    }
+
+    pub fn paragraph_range(&self) -> Option<(usize, usize)> {
+        match self {
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                end_paragraph_index,
+                ..
+            } => Some((*start_paragraph_index, *end_paragraph_index)),
+            _ => None,
         }
     }
 }
@@ -172,8 +203,28 @@ impl Comment {
         matches!(self.target, CommentTarget::Paragraph { .. })
     }
 
+    pub fn is_paragraph_range_comment(&self) -> bool {
+        matches!(self.target, CommentTarget::ParagraphRange { .. })
+    }
+
     pub fn matches_location(&self, chapter_href: &str, target: &CommentTarget) -> bool {
         self.chapter_href == chapter_href && self.target == *target
+    }
+
+    pub fn covers_node(&self, node_index: usize) -> bool {
+        match &self.target {
+            CommentTarget::Paragraph {
+                paragraph_index, ..
+            }
+            | CommentTarget::CodeBlock {
+                paragraph_index, ..
+            } => *paragraph_index == node_index,
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                end_paragraph_index,
+                ..
+            } => node_index >= *start_paragraph_index && node_index <= *end_paragraph_index,
+        }
     }
 }
 
@@ -213,16 +264,35 @@ impl BookComments {
             comments_by_location: HashMap::new(),
         };
 
+        let original_count = comments.len();
         for comment in comments {
+            let is_duplicate = book_comments.comments.iter().any(|existing| {
+                existing.chapter_href == comment.chapter_href
+                    && existing.target == comment.target
+                    && existing.content == comment.content
+                    && existing.updated_at == comment.updated_at
+            });
+
+            if is_duplicate {
+                continue;
+            }
+
             book_comments.add_to_indices(&comment);
             book_comments.comments.push(comment);
+        }
+
+        if book_comments.comments.len() < original_count {
+            let _ = book_comments.save_to_disk();
         }
 
         Ok(book_comments)
     }
 
     pub fn add_comment(&mut self, comment: Comment) -> Result<()> {
-        if matches!(comment.target, CommentTarget::Paragraph { .. }) {
+        if matches!(
+            comment.target,
+            CommentTarget::Paragraph { .. } | CommentTarget::ParagraphRange { .. }
+        ) {
             if let Some(existing_idx) =
                 self.find_comment_index(&comment.chapter_href, &comment.target)
             {
@@ -347,23 +417,55 @@ impl BookComments {
 
     fn add_to_indices(&mut self, comment: &Comment) {
         let idx = self.comments.len();
-        self.comments_by_location
+        let chapter_map = self
+            .comments_by_location
             .entry(comment.chapter_href.clone())
-            .or_default()
-            .entry(comment.node_index())
-            .or_default()
-            .push(idx);
+            .or_default();
+
+        match &comment.target {
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                end_paragraph_index,
+                ..
+            } => {
+                for node_idx in *start_paragraph_index..=*end_paragraph_index {
+                    chapter_map.entry(node_idx).or_default().push(idx);
+                }
+            }
+            _ => {
+                chapter_map
+                    .entry(comment.node_index())
+                    .or_default()
+                    .push(idx);
+            }
+        }
     }
 
     fn rebuild_indices(&mut self) {
         self.comments_by_location.clear();
         for (idx, comment) in self.comments.iter().enumerate() {
-            self.comments_by_location
+            let chapter_map = self
+                .comments_by_location
                 .entry(comment.chapter_href.clone())
-                .or_default()
-                .entry(comment.node_index())
-                .or_default()
-                .push(idx);
+                .or_default();
+
+            match &comment.target {
+                CommentTarget::ParagraphRange {
+                    start_paragraph_index,
+                    end_paragraph_index,
+                    ..
+                } => {
+                    for node_idx in *start_paragraph_index..=*end_paragraph_index {
+                        chapter_map.entry(node_idx).or_default().push(idx);
+                    }
+                }
+                _ => {
+                    chapter_map
+                        .entry(comment.node_index())
+                        .or_default()
+                        .push(idx);
+                }
+            }
         }
     }
 

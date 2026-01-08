@@ -694,6 +694,7 @@ impl CommentsViewer {
                 }
             }
             CommentTarget::Paragraph { .. } => format!("Note // {timestamp}"),
+            CommentTarget::ParagraphRange { .. } => format!("Multi-paragraph note // {timestamp}"),
         };
 
         if entry.comment_count() > 1 {

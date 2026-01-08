@@ -24,10 +24,44 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Some(comments_arc) = &self.book_comments {
                 if let Ok(comments) = comments_arc.lock() {
                     for comment in comments.get_chapter_comments(chapter_file) {
-                        self.current_chapter_comments
-                            .entry(comment.node_index())
-                            .or_default()
-                            .push(comment.clone());
+                        match &comment.target {
+                            CommentTarget::ParagraphRange {
+                                start_paragraph_index,
+                                end_paragraph_index,
+                                ..
+                            } => {
+                                for node_idx in *start_paragraph_index..=*end_paragraph_index {
+                                    let list =
+                                        self.current_chapter_comments.entry(node_idx).or_default();
+
+                                    let already_exists = list.iter().any(|c| {
+                                        c.chapter_href == comment.chapter_href
+                                            && c.target == comment.target
+                                            && c.content == comment.content
+                                    });
+
+                                    if !already_exists {
+                                        list.push(comment.clone());
+                                    }
+                                }
+                            }
+                            _ => {
+                                let list = self
+                                    .current_chapter_comments
+                                    .entry(comment.node_index())
+                                    .or_default();
+
+                                let already_exists = list.iter().any(|c| {
+                                    c.chapter_href == comment.chapter_href
+                                        && c.target == comment.target
+                                        && c.content == comment.content
+                                });
+
+                                if !already_exists {
+                                    list.push(comment.clone());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -123,52 +157,68 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        let node_idx = (start.line..=end.line).find_map(|idx| {
+        let start_node_idx = (start.line..=end.line).find_map(|idx| {
             self.rendered_content
                 .lines
                 .get(idx)
                 .and_then(|line| line.node_index)
         })?;
 
+        let mut end_node_idx = start_node_idx;
+        let mut is_single_node = true;
+
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(line_node_idx) = line.node_index {
-                    if line_node_idx != node_idx {
-                        return None;
+                    if line_node_idx != start_node_idx {
+                        is_single_node = false;
+                        end_node_idx = end_node_idx.max(line_node_idx);
                     }
                 }
             }
         }
 
-        let mut has_code = false;
-        let mut min_code = usize::MAX;
-        let mut max_code = 0;
+        if is_single_node {
+            let mut has_code = false;
+            let mut min_code = usize::MAX;
+            let mut max_code = 0;
 
-        for idx in start.line..=end.line {
-            if let Some(line) = self.rendered_content.lines.get(idx) {
-                if let Some(meta) = &line.code_line {
-                    if meta.node_index == node_idx {
-                        has_code = true;
-                        min_code = min_code.min(meta.line_index);
-                        max_code = max_code.max(meta.line_index);
+            for idx in start.line..=end.line {
+                if let Some(line) = self.rendered_content.lines.get(idx) {
+                    if let Some(meta) = &line.code_line {
+                        if meta.node_index == start_node_idx {
+                            has_code = true;
+                            min_code = min_code.min(meta.line_index);
+                            max_code = max_code.max(meta.line_index);
+                        }
                     }
                 }
             }
+
+            if has_code {
+                return Some(CommentTarget::CodeBlock {
+                    paragraph_index: start_node_idx,
+                    line_range: (min_code, max_code),
+                });
+            }
+
+            let word_range = self.compute_paragraph_word_range(start_node_idx, start, end);
+
+            Some(CommentTarget::Paragraph {
+                paragraph_index: start_node_idx,
+                word_range,
+            })
+        } else {
+            let start_word_offset = self.compute_word_offset_in_node(start_node_idx, start);
+            let end_word_offset = self.compute_word_offset_in_node(end_node_idx, end);
+
+            Some(CommentTarget::ParagraphRange {
+                start_paragraph_index: start_node_idx,
+                end_paragraph_index: end_node_idx,
+                start_word_offset,
+                end_word_offset,
+            })
         }
-
-        if has_code {
-            return Some(CommentTarget::CodeBlock {
-                paragraph_index: node_idx,
-                line_range: (min_code, max_code),
-            });
-        }
-
-        let word_range = self.compute_paragraph_word_range(node_idx, start, end);
-
-        Some(CommentTarget::Paragraph {
-            paragraph_index: node_idx,
-            word_range,
-        })
     }
 
     /// Handle input events when in comment mode
@@ -371,6 +421,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    /// Determines if a comment should be rendered at the given node_idx
+    /// For single-paragraph comments, always render
+    /// For multi-paragraph comments, only render at the last paragraph in the range
+    pub fn should_render_comment_at_node(&self, comment: &Comment, node_idx: usize) -> bool {
+        match &comment.target {
+            CommentTarget::Paragraph {
+                paragraph_index, ..
+            } => *paragraph_index == node_idx,
+            CommentTarget::CodeBlock {
+                paragraph_index, ..
+            } => *paragraph_index == node_idx,
+            CommentTarget::ParagraphRange {
+                end_paragraph_index,
+                ..
+            } => *end_paragraph_index == node_idx,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_comment_as_quote(
         &mut self,
@@ -387,7 +455,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return;
         }
 
-        if !comment.is_paragraph_comment() {
+        if !comment.is_paragraph_comment() && !comment.is_paragraph_range_comment() {
             return;
         }
 
@@ -543,5 +611,31 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         Some((start_offset, end_offset.min(total_len)))
+    }
+
+    fn compute_word_offset_in_node(
+        &self,
+        node_idx: usize,
+        point: &SelectionPoint,
+    ) -> Option<usize> {
+        let mut offsets = Vec::new();
+        let mut cumulative = 0;
+
+        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index == Some(node_idx) {
+                let len = line.raw_text.chars().count();
+                offsets.push((idx, cumulative, len));
+                cumulative += len;
+            }
+        }
+
+        if offsets.is_empty() {
+            return None;
+        }
+
+        offsets
+            .iter()
+            .find(|(line_idx, _, _)| *line_idx == point.line)
+            .map(|(_, base, len)| base + point.column.min(*len))
     }
 }
