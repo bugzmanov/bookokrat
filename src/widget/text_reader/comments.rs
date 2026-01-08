@@ -198,6 +198,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             if !comment_text.trim().is_empty() {
                 if let Some(target) = self.comment_input.target.clone() {
+                    // Extract the selected text before clearing the selection
+                    let selected_text = self
+                        .text_selection
+                        .extract_selected_text(&self.raw_text_lines);
+
                     if let Some(comments_arc) = &self.book_comments {
                         if let Ok(mut comments) = comments_arc.lock() {
                             use chrono::Utc;
@@ -219,6 +224,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     chapter_href: chapter_file.clone(),
                                     target,
                                     content: comment_text.clone(),
+                                    selected_text,
                                     updated_at: Utc::now(),
                                 };
 

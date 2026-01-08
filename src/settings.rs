@@ -172,6 +172,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(
         "# Annotation highlight color (hex color without #, e.g., \"7FB4CA\" for cyan)\n",
     );
+    content.push_str("# Set to \"none\" or \"disabled\" to disable highlighting\n");
     content.push_str(&format!(
         "annotation_highlight_color: \"{}\"\n",
         settings.annotation_highlight_color

@@ -404,9 +404,9 @@ impl Base16Palette {
 
     pub fn get_panel_colors(&self, is_focused: bool) -> (Color, Color, Color) {
         if is_focused {
-            (self.base_07, self.base_04, self.base_00)
+            (self.base_05, self.base_04, self.base_00) // Use base_05 (Default text) when focused
         } else {
-            (self.base_03, self.base_03, self.base_00)
+            (self.base_04, self.base_03, self.base_00) // Use base_04 (Dark foreground) when unfocused
         }
     }
 

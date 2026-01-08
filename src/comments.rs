@@ -68,6 +68,7 @@ pub struct Comment {
     pub chapter_href: String,
     pub target: CommentTarget,
     pub content: String,
+    pub selected_text: Option<String>, // The text that was highlighted/selected
     pub updated_at: DateTime<Utc>,
 }
 
@@ -77,6 +78,8 @@ struct CommentModernSerde {
     #[serde(flatten)]
     pub target: CommentTarget,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_text: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -88,6 +91,8 @@ struct CommentLegacySerde {
     #[serde(default)]
     pub word_range: Option<(usize, usize)>,
     pub content: String,
+    #[serde(default)]
+    pub selected_text: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -107,6 +112,7 @@ impl From<CommentLegacySerde> for Comment {
                 word_range: legacy.word_range,
             },
             content: legacy.content,
+            selected_text: legacy.selected_text,
             updated_at: legacy.updated_at,
         }
     }
@@ -118,6 +124,7 @@ impl From<CommentModernSerde> for Comment {
             chapter_href: modern.chapter_href,
             target: modern.target,
             content: modern.content,
+            selected_text: modern.selected_text,
             updated_at: modern.updated_at,
         }
     }
@@ -129,6 +136,7 @@ impl From<&Comment> for CommentModernSerde {
             chapter_href: comment.chapter_href.clone(),
             target: comment.target.clone(),
             content: comment.content.clone(),
+            selected_text: comment.selected_text.clone(),
             updated_at: comment.updated_at,
         }
     }
@@ -401,6 +409,7 @@ mod tests {
                 word_range: None,
             },
             content: content.to_string(),
+            selected_text: None,
             updated_at: Utc::now(),
         }
     }
@@ -418,6 +427,7 @@ mod tests {
                 line_range,
             },
             content: content.to_string(),
+            selected_text: None,
             updated_at: Utc::now(),
         }
     }

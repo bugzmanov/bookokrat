@@ -2578,6 +2578,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Get the configurable highlight color from settings
         let highlight_color_hex = settings::get_annotation_highlight_color();
+
+        // Check if highlighting is disabled
+        if highlight_color_hex.is_empty()
+            || highlight_color_hex.eq_ignore_ascii_case("none")
+            || highlight_color_hex.eq_ignore_ascii_case("disabled")
+        {
+            return spans; // Skip highlighting entirely
+        }
+
         let highlight_color = match u32::from_str_radix(&highlight_color_hex, 16) {
             Ok(value) => smart_color(value),
             Err(_) => smart_color(0x7FB4CA), // Fallback to default cyan
