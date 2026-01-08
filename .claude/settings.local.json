@@ -4,7 +4,10 @@
       "Bash(cargo fmt:*)",
       "Bash(cargo build:*)",
       "Bash(rustup default:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(find:*)",
+      "Bash(xargs cat:*)",
+      "Bash(cargo clippy:*)"
     ]
   }
 }

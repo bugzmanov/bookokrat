@@ -52,6 +52,12 @@ pub struct Settings {
     #[serde(default = "default_annotation_highlight_color")]
     pub annotation_highlight_color: String,
 
+    #[serde(default = "default_export_directory")]
+    pub export_directory: String,
+
+    #[serde(default = "default_frontmatter_template")]
+    pub frontmatter_template: String,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_themes: Vec<YamlTheme>,
 }
@@ -68,6 +74,24 @@ fn default_annotation_highlight_color() -> String {
     "7FB4CA".to_string() // Cyan (base0C) from Kanagawa theme
 }
 
+fn default_export_directory() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(|s| s.to_string()))
+        .unwrap_or_else(|| ".".to_string())
+}
+
+fn default_frontmatter_template() -> String {
+    r#"---
+title: "{{book_title}}"
+export_date: "{{export_date}}"
+annotation_count: {{annotation_count}}
+chapter: "{{chapter_title}}"
+---
+"#
+    .to_string()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -75,6 +99,8 @@ impl Default for Settings {
             theme: default_theme(),
             margin: 0,
             annotation_highlight_color: default_annotation_highlight_color(),
+            export_directory: default_export_directory(),
+            frontmatter_template: default_frontmatter_template(),
             custom_themes: Vec::new(),
         }
     }
@@ -111,12 +137,14 @@ pub fn load_settings() {
                 // Run migrations if needed
                 if settings.version < CURRENT_VERSION {
                     migrate_settings(&mut settings);
-                    save_settings_to_file(&settings, &path);
                 }
 
                 if let Ok(mut global) = SETTINGS.write() {
-                    *global = settings;
+                    *global = settings.clone();
                 }
+
+                // Always save settings to ensure file has all current fields with descriptions
+                save_settings_to_file(&settings, &path);
             }
             Err(e) => {
                 error!("Failed to parse settings file {:?}: {}", path, e);
@@ -173,10 +201,47 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "# Annotation highlight color (hex color without #, e.g., \"7FB4CA\" for cyan)\n",
     );
     content.push_str("# Set to \"none\" or \"disabled\" to disable highlighting\n");
+    content.push_str("# Common color options:\n");
     content.push_str(&format!(
         "annotation_highlight_color: \"{}\"\n",
         settings.annotation_highlight_color
     ));
+    content.push_str("# annotation_highlight_color: \"none\"    # Disable highlighting\n");
+    content.push_str("# annotation_highlight_color: \"076678\"  # Deep Teal\n");
+    content.push_str("# annotation_highlight_color: \"FB4934\"  # Vibrant Red\n");
+    content.push_str("# annotation_highlight_color: \"B8BB26\"  # Mossy Green\n");
+    content.push_str("# annotation_highlight_color: \"FABD2F\"  # Golden Yellow\n");
+    content.push_str("# annotation_highlight_color: \"83A598\"  # Soft Blue\n");
+    content.push_str("# annotation_highlight_color: \"D3869B\"  # Pastel Purple\n");
+    content.push_str("# annotation_highlight_color: \"8EC07C\"  # Aqua Mint\n");
+    content.push_str("# annotation_highlight_color: \"FE8019\"  # Bright Orange\n");
+    content.push_str("# annotation_highlight_color: \"D65D0E\"  # Burnt Sienna\n");
+    content.push_str("# annotation_highlight_color: \"A89984\"  # Warm Gray\n");
+    content.push_str("# annotation_highlight_color: \"B16286\"  # Deep Magenta\n");
+    content.push('\n');
+
+    content.push_str(
+        "# ============================================================================\n",
+    );
+    content.push_str("# Export Settings\n");
+    content.push_str(
+        "# ============================================================================\n",
+    );
+    content.push_str(
+        "# Directory where annotation exports will be saved (default: current directory)\n",
+    );
+    content.push_str(&format!(
+        "export_directory: \"{}\"\n",
+        settings.export_directory
+    ));
+    content.push('\n');
+
+    content.push_str("# Frontmatter template for exported annotations\n");
+    content.push_str("# Available variables: {{book_title}}, {{export_date}}, {{annotation_count}}, {{chapter_title}}\n");
+    content.push_str("frontmatter_template: |\n");
+    for line in settings.frontmatter_template.lines() {
+        content.push_str(&format!("  {}\n", line));
+    }
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -280,4 +345,32 @@ pub fn get_annotation_highlight_color() -> String {
         .read()
         .map(|s| s.annotation_highlight_color.clone())
         .unwrap_or_else(|_| default_annotation_highlight_color())
+}
+
+pub fn get_export_directory() -> String {
+    SETTINGS
+        .read()
+        .map(|s| s.export_directory.clone())
+        .unwrap_or_else(|_| default_export_directory())
+}
+
+pub fn set_export_directory(dir: String) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.export_directory = dir;
+    }
+    save_settings();
+}
+
+pub fn get_frontmatter_template() -> String {
+    SETTINGS
+        .read()
+        .map(|s| s.frontmatter_template.clone())
+        .unwrap_or_else(|_| default_frontmatter_template())
+}
+
+pub fn set_frontmatter_template(template: String) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.frontmatter_template = template;
+    }
+    save_settings();
 }
