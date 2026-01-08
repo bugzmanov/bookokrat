@@ -25,6 +25,9 @@ pub enum CommentsViewerAction {
         target: CommentTarget,
     },
     DeleteSelectedComment,
+    ExportComments {
+        filename: String,
+    },
     Close,
 }
 
@@ -47,6 +50,11 @@ pub struct CommentsViewer {
     global_search_mode: bool,
     saved_chapter_index: usize,
     global_position: Option<(usize, usize)>,
+    // Export mode
+    export_mode: bool,
+    export_filename: String,
+    // Cached document for export
+    doc_cache: HashMap<String, crate::markdown::Document>,
 }
 
 #[derive(Clone)]
@@ -100,7 +108,7 @@ impl CommentsViewer {
         toc_items: &[TocItem],
         current_chapter_href: Option<String>,
     ) -> Self {
-        let all_entries = Self::build_entries(comments.clone(), epub, toc_items);
+        let (all_entries, doc_cache) = Self::build_entries(comments.clone(), epub, toc_items);
         let chapters = Self::build_chapter_index(toc_items, &all_entries);
         let initial_chapter =
             Self::initial_chapter_index(current_chapter_href.as_deref(), &chapters);
@@ -124,6 +132,9 @@ impl CommentsViewer {
             global_search_mode: false,
             saved_chapter_index: initial_chapter,
             global_position: None,
+            export_mode: false,
+            export_filename: String::new(),
+            doc_cache,
         };
 
         viewer.update_visible_entries();
@@ -315,7 +326,10 @@ impl CommentsViewer {
         comments: Arc<Mutex<BookComments>>,
         epub: &mut EpubDoc<BufReader<std::fs::File>>,
         toc_items: &[TocItem],
-    ) -> Vec<CommentEntry> {
+    ) -> (
+        Vec<CommentEntry>,
+        HashMap<String, crate::markdown::Document>,
+    ) {
         use crate::markdown::Document;
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 
@@ -323,7 +337,7 @@ impl CommentsViewer {
         let all_comments = comments_guard.get_all_comments();
 
         if all_comments.is_empty() {
-            return Vec::new();
+            return (Vec::new(), HashMap::new());
         }
 
         // Cache parsed documents by chapter href to avoid re-parsing
@@ -404,7 +418,7 @@ impl CommentsViewer {
             }
         }
 
-        entries
+        (entries, doc_cache)
     }
 
     fn build_chapter_index(toc_items: &[TocItem], entries: &[CommentEntry]) -> Vec<ChapterDisplay> {
@@ -856,22 +870,6 @@ impl CommentsViewer {
             .join(" ")
     }
 
-    fn extract_full_definition_list(items: &[crate::markdown::DefinitionListItem]) -> String {
-        items
-            .iter()
-            .map(Self::extract_definition_item_content)
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    fn extract_full_quote(content: &[crate::markdown::Node]) -> String {
-        content
-            .iter()
-            .map(Self::extract_text_from_node)
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
     fn extract_text_from_node(node: &crate::markdown::Node) -> String {
         use crate::markdown::Block;
 
@@ -1107,7 +1105,23 @@ impl CommentsViewer {
     }
 
     fn build_outer_block(&self, title: String) -> Block<'static> {
-        if self.search_state.active {
+        if self.export_mode {
+            let export_text = format!("Export to: {}_ ", self.export_filename);
+            Block::default()
+                .title(title)
+                .title_bottom(
+                    Line::from(Span::styled(
+                        export_text,
+                        Style::default()
+                            .fg(current_theme().base_0b)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .right_aligned(),
+                )
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(current_theme().base_0d))
+                .style(Style::default().bg(current_theme().base_00))
+        } else if self.search_state.active {
             let search_text = if self.search_state.mode == SearchMode::InputMode {
                 format!("/{}", self.search_state.query)
             } else {
@@ -1132,8 +1146,40 @@ impl CommentsViewer {
                 .border_style(Style::default().fg(current_theme().base_0d))
                 .style(Style::default().bg(current_theme().base_00))
         } else {
+            // Show hint when not in search or export mode (right-aligned)
             Block::default()
                 .title(title)
+                .title_bottom(
+                    Line::from(vec![
+                        Span::styled(
+                            "Space+e ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("export", Style::default().fg(current_theme().base_04)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "/ ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("search", Style::default().fg(current_theme().base_04)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "? ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            "all chapters ",
+                            Style::default().fg(current_theme().base_04),
+                        ),
+                    ])
+                    .right_aligned(),
+                )
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(current_theme().base_0d))
                 .style(Style::default().bg(current_theme().base_00))
@@ -1868,7 +1914,35 @@ impl CommentsViewer {
     ) -> Option<CommentsViewerAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        if self.search_state.active && self.search_state.mode == SearchMode::InputMode {
+        // Handle export mode input
+        if self.export_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    self.export_mode = false;
+                    self.export_filename.clear();
+                    None
+                }
+                KeyCode::Enter => {
+                    if !self.export_filename.is_empty() {
+                        let filename = self.export_filename.clone();
+                        self.export_mode = false;
+                        self.export_filename.clear();
+                        Some(CommentsViewerAction::ExportComments { filename })
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char(c) => {
+                    self.export_filename.push(c);
+                    None
+                }
+                KeyCode::Backspace => {
+                    self.export_filename.pop();
+                    None
+                }
+                _ => None,
+            }
+        } else if self.search_state.active && self.search_state.mode == SearchMode::InputMode {
             match key.code {
                 KeyCode::Esc => {
                     self.cancel_search();
@@ -1952,6 +2026,12 @@ impl CommentsViewer {
                     self.previous_match();
                     None
                 }
+                KeyCode::Char('e') if key_seq.handle_key('e') == " e" => {
+                    key_seq.clear();
+                    self.export_mode = true;
+                    self.export_filename = "comments.md".to_string();
+                    None
+                }
                 KeyCode::Char('d') => {
                     if key_seq.handle_key('d') == "dd" {
                         key_seq.clear();
@@ -1975,8 +2055,201 @@ impl CommentsViewer {
                             target: entry.primary_comment().target.clone(),
                         })
                 }
+                KeyCode::Char(' ') => {
+                    key_seq.handle_key(' ');
+                    None
+                }
                 _ => None,
             }
         }
+    }
+
+    /// Generate markdown export content for all comments
+    pub fn generate_export_markdown(&self) -> String {
+        let mut output = String::new();
+        output.push_str("# Exported Comments\n\n");
+
+        let mut last_chapter: Option<String> = None;
+
+        for entry in &self.all_entries {
+            // Add chapter header if changed
+            if last_chapter.as_ref() != Some(&entry.chapter_href) {
+                if last_chapter.is_some() {
+                    output.push_str("---\n\n");
+                }
+                output.push_str(&format!("## {}\n\n", entry.chapter_title));
+                last_chapter = Some(entry.chapter_href.clone());
+            }
+
+            // Get full context from doc_cache
+            let full_context =
+                self.extract_full_context_for_export(&entry.chapter_href, entry.primary_comment());
+
+            // Check if this is a blockquote comment (need nested quotes for the note)
+            let is_quote_comment = entry
+                .primary_comment()
+                .target
+                .quote_paragraph_index()
+                .is_some();
+
+            // Render the original content
+            output.push_str(&full_context);
+            output.push('\n');
+
+            // Render comments
+            for comment in &entry.comments {
+                let timestamp = comment.updated_at.format("%m-%d-%y %H:%M");
+
+                if let Some(line_range) = comment.target.line_range() {
+                    // Code block comment with line info
+                    if line_range.0 == line_range.1 {
+                        output.push_str(&format!("*Line {} // {}*\n", line_range.0 + 1, timestamp));
+                    } else {
+                        output.push_str(&format!(
+                            "*Lines {}-{} // {}*\n",
+                            line_range.0 + 1,
+                            line_range.1 + 1,
+                            timestamp
+                        ));
+                    }
+                } else {
+                    output.push_str(&format!("*Note // {}*\n", timestamp));
+                }
+
+                // Use nested quote for blockquote comments, regular quote otherwise
+                let quote_prefix = if is_quote_comment { ">> " } else { "> " };
+                for line in comment.content.lines() {
+                    output.push_str(quote_prefix);
+                    output.push_str(line);
+                    output.push('\n');
+                }
+                output.push('\n');
+            }
+        }
+
+        output
+    }
+
+    fn extract_full_context_for_export(&self, chapter_href: &str, comment: &Comment) -> String {
+        use crate::markdown::Block;
+
+        let Some(doc) = self.doc_cache.get(chapter_href) else {
+            return String::new();
+        };
+
+        let Some(node) = doc.blocks.get(comment.node_index()) else {
+            return String::new();
+        };
+
+        match &node.block {
+            Block::Paragraph { content } => Self::extract_text_from_text(content),
+            Block::Heading { content, level } => {
+                let prefix = "#".repeat(*level as usize);
+                format!("{} {}", prefix, Self::extract_text_from_text(content))
+            }
+            Block::List { items, kind } => {
+                let mut result = String::new();
+                for (idx, item) in items.iter().enumerate() {
+                    let prefix = match kind {
+                        crate::markdown::ListKind::Unordered => "- ".to_string(),
+                        crate::markdown::ListKind::Ordered { start } => {
+                            format!("{}. ", start + idx as u32)
+                        }
+                    };
+                    let content = Self::extract_list_item_content(item);
+                    result.push_str(&format!("{}{}\n", prefix, content));
+                }
+                result
+            }
+            Block::Quote { content } => {
+                let mut result = String::new();
+                for node in content {
+                    let text = Self::extract_text_from_node(node);
+                    result.push_str(&format!("> {}\n", text));
+                }
+                result
+            }
+            Block::DefinitionList { items } => {
+                let mut result = String::new();
+                for item in items {
+                    let term = Self::extract_text_from_text(&item.term);
+                    result.push_str(&format!("**{}**\n", term));
+                    for def in &item.definitions {
+                        for node in def {
+                            let text = Self::extract_text_from_node(node);
+                            result.push_str(&format!(": {}\n", text));
+                        }
+                    }
+                }
+                result
+            }
+            Block::CodeBlock {
+                content, language, ..
+            } => {
+                let lang = language.as_deref().unwrap_or("");
+                format!("```{}\n{}\n```\n", lang, content)
+            }
+            Block::Table { header, rows, .. } => self.export_table_as_markdown(header, rows),
+            _ => Self::extract_text_from_node(node),
+        }
+    }
+
+    fn export_table_as_markdown(
+        &self,
+        header: &Option<crate::markdown::TableRow>,
+        rows: &[crate::markdown::TableRow],
+    ) -> String {
+        use crate::markdown::TableCellContent;
+
+        let mut result = String::new();
+
+        if let Some(header_row) = header {
+            result.push('|');
+            for cell in &header_row.cells {
+                let text = match &cell.content {
+                    TableCellContent::Simple(t) => Self::extract_text_from_text(t),
+                    TableCellContent::Rich(nodes) => nodes
+                        .iter()
+                        .map(Self::extract_text_from_node)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                };
+                result.push_str(&format!(" {} |", text));
+            }
+            result.push('\n');
+
+            // Separator row
+            result.push('|');
+            for _ in &header_row.cells {
+                result.push_str(" --- |");
+            }
+            result.push('\n');
+        }
+
+        for row in rows {
+            result.push('|');
+            for cell in &row.cells {
+                let text = match &cell.content {
+                    TableCellContent::Simple(t) => Self::extract_text_from_text(t),
+                    TableCellContent::Rich(nodes) => nodes
+                        .iter()
+                        .map(Self::extract_text_from_node)
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                };
+                result.push_str(&format!(" {} |", text));
+            }
+            result.push('\n');
+        }
+
+        result
+    }
+
+    pub fn is_in_export_mode(&self) -> bool {
+        self.export_mode
+    }
+
+    pub fn export_filename(&self) -> &str {
+        &self.export_filename
     }
 }
