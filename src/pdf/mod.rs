@@ -1,6 +1,7 @@
 //! PDF rendering infrastructure
 
 mod cache;
+pub mod kittyv2;
 mod request;
 mod service;
 mod state;
