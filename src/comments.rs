@@ -5,88 +5,295 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Represents the specific sub-element within a block that a comment targets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "target_kind", rename_all = "snake_case")]
-pub enum CommentTarget {
+#[serde(tag = "subtarget_kind", rename_all = "snake_case")]
+pub enum BlockSubtarget {
+    /// A regular paragraph or heading - targets the whole block or a word range within it.
     Paragraph {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word_range: Option<(usize, usize)>,
+    },
+    /// A specific item within a list block.
+    ListItem {
+        item_index: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        list_path: Vec<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word_range: Option<(usize, usize)>,
+    },
+    /// A specific paragraph within a blockquote.
+    QuoteParagraph {
         paragraph_index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         word_range: Option<(usize, usize)>,
     },
-    CodeBlock {
-        paragraph_index: usize,
-        /// Inclusive line range within the code block.
-        line_range: (usize, usize),
+    /// A specific item within a definition list (term or definition).
+    DefinitionItem {
+        item_index: usize,
+        is_term: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        word_range: Option<(usize, usize)>,
     },
+    /// A range of lines within a code block.
+    CodeLines { line_range: (usize, usize) },
 }
 
-impl CommentTarget {
-    pub fn node_index(&self) -> usize {
-        match self {
-            CommentTarget::Paragraph {
-                paragraph_index, ..
-            }
-            | CommentTarget::CodeBlock {
-                paragraph_index, ..
-            } => *paragraph_index,
-        }
-    }
-
+impl BlockSubtarget {
     pub fn word_range(&self) -> Option<(usize, usize)> {
         match self {
-            CommentTarget::Paragraph { word_range, .. } => *word_range,
-            CommentTarget::CodeBlock { .. } => None,
+            BlockSubtarget::Paragraph { word_range } => *word_range,
+            BlockSubtarget::ListItem { word_range, .. } => *word_range,
+            BlockSubtarget::QuoteParagraph { word_range, .. } => *word_range,
+            BlockSubtarget::DefinitionItem { word_range, .. } => *word_range,
+            BlockSubtarget::CodeLines { .. } => None,
         }
     }
 
     pub fn line_range(&self) -> Option<(usize, usize)> {
         match self {
-            CommentTarget::Paragraph { .. } => None,
-            CommentTarget::CodeBlock { line_range, .. } => Some(*line_range),
+            BlockSubtarget::CodeLines { line_range } => Some(*line_range),
+            _ => None,
         }
+    }
+
+    pub fn list_item_index(&self) -> Option<usize> {
+        match self {
+            BlockSubtarget::ListItem { item_index, .. } => Some(*item_index),
+            _ => None,
+        }
+    }
+
+    pub fn list_path(&self) -> Option<&[usize]> {
+        match self {
+            BlockSubtarget::ListItem { list_path, .. } => Some(list_path.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn definition_item_index(&self) -> Option<usize> {
+        match self {
+            BlockSubtarget::DefinitionItem { item_index, .. } => Some(*item_index),
+            _ => None,
+        }
+    }
+
+    pub fn quote_paragraph_index(&self) -> Option<usize> {
+        match self {
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index, ..
+            } => Some(*paragraph_index),
+            _ => None,
+        }
+    }
+
+    pub fn is_code(&self) -> bool {
+        matches!(self, BlockSubtarget::CodeLines { .. })
     }
 
     pub fn kind_order(&self) -> u8 {
         match self {
-            CommentTarget::Paragraph { .. } => 0,
-            CommentTarget::CodeBlock { .. } => 1,
+            BlockSubtarget::Paragraph { .. } => 0,
+            BlockSubtarget::ListItem { .. } => 1,
+            BlockSubtarget::QuoteParagraph { .. } => 2,
+            BlockSubtarget::DefinitionItem { .. } => 3,
+            BlockSubtarget::CodeLines { .. } => 4,
         }
     }
 
     pub fn secondary_sort_key(&self) -> (usize, usize) {
         match self {
-            CommentTarget::Paragraph { word_range, .. } => word_range
-                .map(|(start, end)| (start, end))
-                .unwrap_or((0, 0)),
-            CommentTarget::CodeBlock { line_range, .. } => *line_range,
+            BlockSubtarget::Paragraph { word_range } => word_range.unwrap_or((0, 0)),
+            BlockSubtarget::ListItem {
+                item_index,
+                list_path: _list_path,
+                word_range,
+            } => (*item_index, word_range.map(|(s, _)| s).unwrap_or(0)),
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index,
+                word_range,
+            } => (*paragraph_index, word_range.map(|(s, _)| s).unwrap_or(0)),
+            BlockSubtarget::DefinitionItem {
+                item_index,
+                word_range,
+                ..
+            } => (*item_index, word_range.map(|(s, _)| s).unwrap_or(0)),
+            BlockSubtarget::CodeLines { line_range } => *line_range,
         }
+    }
+}
+
+/// Identifies the location of a comment within the document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentTarget {
+    pub node_index: usize,
+    pub subtarget: BlockSubtarget,
+}
+
+impl CommentTarget {
+    pub fn paragraph(node_index: usize, word_range: Option<(usize, usize)>) -> Self {
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::Paragraph { word_range },
+        }
+    }
+
+    pub fn list_item(
+        node_index: usize,
+        item_index: usize,
+        word_range: Option<(usize, usize)>,
+    ) -> Self {
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::ListItem {
+                item_index,
+                list_path: Vec::new(),
+                word_range,
+            },
+        }
+    }
+
+    pub fn list_item_with_path(
+        node_index: usize,
+        list_path: Vec<usize>,
+        word_range: Option<(usize, usize)>,
+    ) -> Self {
+        let item_index = list_path.last().copied().unwrap_or(0);
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::ListItem {
+                item_index,
+                list_path,
+                word_range,
+            },
+        }
+    }
+
+    pub fn quote_paragraph(
+        node_index: usize,
+        paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+    ) -> Self {
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::QuoteParagraph {
+                paragraph_index,
+                word_range,
+            },
+        }
+    }
+
+    pub fn definition_item(
+        node_index: usize,
+        item_index: usize,
+        is_term: bool,
+        word_range: Option<(usize, usize)>,
+    ) -> Self {
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::DefinitionItem {
+                item_index,
+                is_term,
+                word_range,
+            },
+        }
+    }
+
+    pub fn code_block(node_index: usize, line_range: (usize, usize)) -> Self {
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::CodeLines { line_range },
+        }
+    }
+
+    pub fn node_index(&self) -> usize {
+        self.node_index
+    }
+
+    pub fn word_range(&self) -> Option<(usize, usize)> {
+        self.subtarget.word_range()
+    }
+
+    pub fn list_item_index(&self) -> Option<usize> {
+        self.subtarget.list_item_index()
+    }
+
+    pub fn definition_item_index(&self) -> Option<usize> {
+        self.subtarget.definition_item_index()
+    }
+
+    pub fn quote_paragraph_index(&self) -> Option<usize> {
+        self.subtarget.quote_paragraph_index()
+    }
+
+    pub fn line_range(&self) -> Option<(usize, usize)> {
+        self.subtarget.line_range()
+    }
+
+    pub fn kind_order(&self) -> u8 {
+        self.subtarget.kind_order()
+    }
+
+    pub fn secondary_sort_key(&self) -> (usize, usize) {
+        self.subtarget.secondary_sort_key()
+    }
+
+    pub fn is_code_block(&self) -> bool {
+        self.subtarget.is_code()
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
+    pub id: String,
     pub chapter_href: String,
     pub target: CommentTarget,
     pub content: String,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Serde representation for CommentTarget (new format with node_index + subtarget)
+#[derive(Serialize, Deserialize)]
+struct CommentTargetSerde {
+    node_index: usize,
+    #[serde(flatten)]
+    subtarget: BlockSubtarget,
 }
 
 #[derive(Serialize, Deserialize)]
 struct CommentModernSerde {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub chapter_href: String,
     #[serde(flatten)]
-    pub target: CommentTarget,
+    pub target: CommentTargetSerde,
     pub content: String,
     pub updated_at: DateTime<Utc>,
 }
 
+/// Legacy format: paragraph comments with optional fields (pre-refactor)
 #[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CommentLegacySerde {
+struct CommentLegacyParagraphSerde {
     pub chapter_href: String,
     pub paragraph_index: usize,
     #[serde(default)]
     pub word_range: Option<(usize, usize)>,
+    #[serde(default)]
+    pub list_item_index: Option<usize>,
+    #[serde(default)]
+    pub definition_item_index: Option<usize>,
+    #[serde(default)]
+    pub quote_paragraph_index: Option<usize>,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Legacy format: code block comments (pre-refactor)
+#[derive(Serialize, Deserialize)]
+struct CommentLegacyCodeBlockSerde {
+    pub chapter_href: String,
+    pub paragraph_index: usize,
+    pub line_range: (usize, usize),
     pub content: String,
     pub updated_at: DateTime<Utc>,
 }
@@ -95,17 +302,54 @@ struct CommentLegacySerde {
 #[serde(untagged)]
 enum CommentSerde {
     Modern(CommentModernSerde),
-    Legacy(CommentLegacySerde),
+    LegacyCodeBlock(CommentLegacyCodeBlockSerde),
+    LegacyParagraph(CommentLegacyParagraphSerde),
 }
 
-impl From<CommentLegacySerde> for Comment {
-    fn from(legacy: CommentLegacySerde) -> Self {
-        Comment {
-            chapter_href: legacy.chapter_href,
-            target: CommentTarget::Paragraph {
-                paragraph_index: legacy.paragraph_index,
+impl From<CommentLegacyParagraphSerde> for Comment {
+    fn from(legacy: CommentLegacyParagraphSerde) -> Self {
+        let subtarget = if let Some(item_index) = legacy.list_item_index {
+            BlockSubtarget::ListItem {
+                item_index,
+                list_path: Vec::new(),
                 word_range: legacy.word_range,
+            }
+        } else if let Some(paragraph_index) = legacy.quote_paragraph_index {
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index,
+                word_range: legacy.word_range,
+            }
+        } else if let Some(item_index) = legacy.definition_item_index {
+            BlockSubtarget::DefinitionItem {
+                item_index,
+                is_term: false, // Legacy doesn't have this field
+                word_range: legacy.word_range,
+            }
+        } else {
+            BlockSubtarget::Paragraph {
+                word_range: legacy.word_range,
+            }
+        };
+
+        Comment {
+            id: generate_comment_id(),
+            chapter_href: legacy.chapter_href,
+            target: CommentTarget {
+                node_index: legacy.paragraph_index,
+                subtarget,
             },
+            content: legacy.content,
+            updated_at: legacy.updated_at,
+        }
+    }
+}
+
+impl From<CommentLegacyCodeBlockSerde> for Comment {
+    fn from(legacy: CommentLegacyCodeBlockSerde) -> Self {
+        Comment {
+            id: generate_comment_id(),
+            chapter_href: legacy.chapter_href,
+            target: CommentTarget::code_block(legacy.paragraph_index, legacy.line_range),
             content: legacy.content,
             updated_at: legacy.updated_at,
         }
@@ -115,8 +359,12 @@ impl From<CommentLegacySerde> for Comment {
 impl From<CommentModernSerde> for Comment {
     fn from(modern: CommentModernSerde) -> Self {
         Comment {
+            id: modern.id.unwrap_or_else(generate_comment_id),
             chapter_href: modern.chapter_href,
-            target: modern.target,
+            target: CommentTarget {
+                node_index: modern.target.node_index,
+                subtarget: modern.target.subtarget,
+            },
             content: modern.content,
             updated_at: modern.updated_at,
         }
@@ -126,8 +374,12 @@ impl From<CommentModernSerde> for Comment {
 impl From<&Comment> for CommentModernSerde {
     fn from(comment: &Comment) -> Self {
         CommentModernSerde {
+            id: Some(comment.id.clone()),
             chapter_href: comment.chapter_href.clone(),
-            target: comment.target.clone(),
+            target: CommentTargetSerde {
+                node_index: comment.target.node_index,
+                subtarget: comment.target.subtarget.clone(),
+            },
             content: comment.content.clone(),
             updated_at: comment.updated_at,
         }
@@ -149,19 +401,36 @@ impl<'de> Deserialize<'de> for Comment {
         D: Deserializer<'de>,
     {
         match CommentSerde::deserialize(deserializer)? {
-            CommentSerde::Legacy(legacy) => Ok(Comment::from(legacy)),
+            CommentSerde::LegacyParagraph(legacy) => Ok(Comment::from(legacy)),
+            CommentSerde::LegacyCodeBlock(legacy) => Ok(Comment::from(legacy)),
             CommentSerde::Modern(modern) => Ok(Comment::from(modern)),
         }
     }
 }
 
 impl Comment {
+    pub fn new(
+        chapter_href: String,
+        target: CommentTarget,
+        content: String,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id: generate_comment_id(),
+            chapter_href,
+            target,
+            content,
+            updated_at,
+        }
+    }
+
     pub fn node_index(&self) -> usize {
         self.target.node_index()
     }
 
+    /// Returns true if this comment is NOT a code block comment (i.e., targets text content)
     pub fn is_paragraph_comment(&self) -> bool {
-        matches!(self.target, CommentTarget::Paragraph { .. })
+        !self.target.is_code_block()
     }
 
     pub fn matches_location(&self, chapter_href: &str, target: &CommentTarget) -> bool {
@@ -169,11 +438,20 @@ impl Comment {
     }
 }
 
+fn generate_comment_id() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub struct BookComments {
     pub file_path: PathBuf,
     comments: Vec<Comment>,
     // chapter_href -> node_index -> comment indices
     comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
+    comments_by_id: HashMap<String, usize>,
 }
 
 impl BookComments {
@@ -203,6 +481,7 @@ impl BookComments {
             file_path,
             comments: Vec::new(),
             comments_by_location: HashMap::new(),
+            comments_by_id: HashMap::new(),
         };
 
         for comment in comments {
@@ -214,14 +493,9 @@ impl BookComments {
     }
 
     pub fn add_comment(&mut self, comment: Comment) -> Result<()> {
-        if matches!(comment.target, CommentTarget::Paragraph { .. }) {
-            if let Some(existing_idx) =
-                self.find_comment_index(&comment.chapter_href, &comment.target)
-            {
-                self.comments[existing_idx] = comment.clone();
-                self.sort_comments();
-                return self.save_to_disk();
-            }
+        let mut comment = comment;
+        if self.comments_by_id.contains_key(&comment.id) {
+            comment.id = generate_comment_id();
         }
 
         self.add_to_indices(&comment);
@@ -247,9 +521,32 @@ impl BookComments {
         self.save_to_disk()
     }
 
+    pub fn update_comment_by_id(&mut self, comment_id: &str, new_content: String) -> Result<()> {
+        let idx = self
+            .find_comment_index_by_id(comment_id)
+            .context("Comment not found")?;
+
+        self.comments[idx].content = new_content;
+        self.comments[idx].updated_at = Utc::now();
+
+        self.save_to_disk()
+    }
+
     pub fn delete_comment(&mut self, chapter_href: &str, target: &CommentTarget) -> Result<()> {
         let idx = self
             .find_comment_index(chapter_href, target)
+            .context("Comment not found")?;
+
+        let _comment = self.comments.remove(idx);
+
+        self.rebuild_indices();
+
+        self.save_to_disk()
+    }
+
+    pub fn delete_comment_by_id(&mut self, comment_id: &str) -> Result<()> {
+        let idx = self
+            .find_comment_index_by_id(comment_id)
             .context("Comment not found")?;
 
         let _comment = self.comments.remove(idx);
@@ -266,6 +563,12 @@ impl BookComments {
             .and_then(|chapter_map| chapter_map.get(&node_index))
             .map(|indices| indices.iter().map(|&i| &self.comments[i]).collect())
             .unwrap_or_default()
+    }
+
+    pub fn get_comment_by_id(&self, comment_id: &str) -> Option<&Comment> {
+        self.comments_by_id
+            .get(comment_id)
+            .and_then(|&idx| self.comments.get(idx))
     }
 
     pub fn get_chapter_comments(&self, chapter_href: &str) -> Vec<&Comment> {
@@ -337,6 +640,10 @@ impl BookComments {
             .position(|c| c.matches_location(chapter_href, target))
     }
 
+    fn find_comment_index_by_id(&self, comment_id: &str) -> Option<usize> {
+        self.comments_by_id.get(comment_id).copied()
+    }
+
     fn add_to_indices(&mut self, comment: &Comment) {
         let idx = self.comments.len();
         self.comments_by_location
@@ -345,10 +652,12 @@ impl BookComments {
             .entry(comment.node_index())
             .or_default()
             .push(idx);
+        self.comments_by_id.insert(comment.id.clone(), idx);
     }
 
     fn rebuild_indices(&mut self) {
         self.comments_by_location.clear();
+        self.comments_by_id.clear();
         for (idx, comment) in self.comments.iter().enumerate() {
             self.comments_by_location
                 .entry(comment.chapter_href.clone())
@@ -356,6 +665,7 @@ impl BookComments {
                 .entry(comment.node_index())
                 .or_default()
                 .push(idx);
+            self.comments_by_id.insert(comment.id.clone(), idx);
         }
     }
 
@@ -394,15 +704,12 @@ mod tests {
     }
 
     fn create_paragraph_comment(chapter: &str, node: usize, content: &str) -> Comment {
-        Comment {
-            chapter_href: chapter.to_string(),
-            target: CommentTarget::Paragraph {
-                paragraph_index: node,
-                word_range: None,
-            },
-            content: content.to_string(),
-            updated_at: Utc::now(),
-        }
+        Comment::new(
+            chapter.to_string(),
+            CommentTarget::paragraph(node, None),
+            content.to_string(),
+            Utc::now(),
+        )
     }
 
     fn create_code_comment(
@@ -411,15 +718,12 @@ mod tests {
         line_range: (usize, usize),
         content: &str,
     ) -> Comment {
-        Comment {
-            chapter_href: chapter.to_string(),
-            target: CommentTarget::CodeBlock {
-                paragraph_index: node,
-                line_range,
-            },
-            content: content.to_string(),
-            updated_at: Utc::now(),
-        }
+        Comment::new(
+            chapter.to_string(),
+            CommentTarget::code_block(node, line_range),
+            content.to_string(),
+            Utc::now(),
+        )
     }
 
     #[test]
@@ -445,7 +749,7 @@ mod tests {
 
         let new_content = "Updated text".to_string();
         book_comments
-            .update_comment("chapter1.xhtml", &comment.target, new_content.clone())
+            .update_comment_by_id(&comment.id, new_content.clone())
             .unwrap();
 
         let comments = book_comments.get_node_comments("chapter1.xhtml", 1);
@@ -460,9 +764,7 @@ mod tests {
         let comment = create_paragraph_comment("chapter1.xhtml", 2, "Delete me");
         book_comments.add_comment(comment.clone()).unwrap();
 
-        book_comments
-            .delete_comment("chapter1.xhtml", &comment.target)
-            .unwrap();
+        book_comments.delete_comment_by_id(&comment.id).unwrap();
 
         let comments = book_comments.get_node_comments("chapter1.xhtml", 2);
         assert!(comments.is_empty());
@@ -505,6 +807,7 @@ mod tests {
 
         let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, comment.id);
         assert_eq!(parsed[0].target, comment.target);
     }
 
@@ -518,12 +821,10 @@ mod tests {
 "#;
         let parsed: Vec<Comment> = serde_yaml::from_str(legacy_yaml).unwrap();
         assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].target.node_index, 5);
         assert!(matches!(
-            parsed[0].target,
-            CommentTarget::Paragraph {
-                paragraph_index: 5,
-                ..
-            }
+            parsed[0].target.subtarget,
+            BlockSubtarget::Paragraph { .. }
         ));
     }
 
@@ -544,6 +845,26 @@ mod tests {
         assert_eq!(all[0].node_index(), 0);
         assert_eq!(all[1].node_index(), 1);
         assert!(all[1].is_paragraph_comment());
-        assert!(matches!(all[2].target, CommentTarget::CodeBlock { .. }));
+        assert!(all[2].target.is_code_block());
+    }
+
+    #[test]
+    fn test_multiple_paragraph_comments_same_node() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let comment_a = create_paragraph_comment("chapter.xhtml", 1, "First note");
+        let comment_b = create_paragraph_comment("chapter.xhtml", 1, "Second note");
+        let comment_c = create_paragraph_comment("chapter.xhtml", 1, "Third note");
+
+        book_comments.add_comment(comment_a).unwrap();
+        book_comments.add_comment(comment_b).unwrap();
+        book_comments.add_comment(comment_c).unwrap();
+
+        let comments = book_comments.get_node_comments("chapter.xhtml", 1);
+        assert_eq!(comments.len(), 3);
+        assert_eq!(comments[0].content, "First note");
+        assert_eq!(comments[1].content, "Second note");
+        assert_eq!(comments[2].content, "Third note");
     }
 }

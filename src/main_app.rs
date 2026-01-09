@@ -1081,7 +1081,7 @@ impl App {
                                         match action {
                                             ThemeSelectorAction::ThemeChanged => {
                                                 self.text_reader.invalidate_render_cache();
-                                                self.show_info(&format!(
+                                                self.show_info(format!(
                                                     "Theme: {}",
                                                     current_theme_name()
                                                 ));
@@ -1779,7 +1779,7 @@ impl App {
                     f.area(),
                     book.current_chapter(),
                     book.total_chapters(),
-                    &current_theme(),
+                    current_theme(),
                     true, // always focused in zen mode
                 );
             } else {
@@ -1802,7 +1802,7 @@ impl App {
                 f,
                 main_chunks[0],
                 self.is_main_panel(MainPanel::NavigationList),
-                &current_theme(),
+                current_theme(),
                 &self.book_manager,
             );
 
@@ -1812,7 +1812,7 @@ impl App {
                     main_chunks[1],
                     book.current_chapter(),
                     book.total_chapters(),
-                    &current_theme(),
+                    current_theme(),
                     self.is_main_panel(MainPanel::Content),
                 );
             } else {
@@ -1863,7 +1863,7 @@ impl App {
             f.render_widget(dim_block, f.area());
 
             if let Some(ref mut book_search) = self.book_search {
-                book_search.render(f, f.area(), &current_theme());
+                book_search.render(f, f.area(), current_theme());
             }
         }
 
@@ -2225,6 +2225,12 @@ impl App {
         }
     }
 
+    pub fn set_zen_mode(&mut self, enabled: bool) {
+        if self.zen_mode != enabled {
+            self.toggle_zen_mode();
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -2466,10 +2472,8 @@ impl App {
         use crossterm::event::KeyCode;
 
         if let KeyCode::Char(ch) = key.code {
-            if ch.is_ascii_digit() {
-                if ch != '0' || self.text_reader.has_pending_count() {
-                    return self.text_reader.append_count_digit(ch);
-                }
+            if ch.is_ascii_digit() && (ch != '0' || self.text_reader.has_pending_count()) {
+                return self.text_reader.append_count_digit(ch);
             }
         }
 
@@ -2484,7 +2488,7 @@ impl App {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
-            KeyCode::Char('h') => {
+            KeyCode::Char('h') | KeyCode::Left => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_left();
@@ -2505,7 +2509,7 @@ impl App {
                 }
                 true
             }
-            KeyCode::Char('l') => {
+            KeyCode::Char('l') | KeyCode::Right => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_right();
@@ -2795,9 +2799,7 @@ impl App {
                             match comments.lock() {
                                 Ok(mut guard) => {
                                     for comment in &entry.comments {
-                                        if let Err(e) = guard
-                                            .delete_comment(&entry.chapter_href, &comment.target)
-                                        {
+                                        if let Err(e) = guard.delete_comment_by_id(&comment.id) {
                                             error!("Failed to delete comment: {e}");
                                             self.show_error(format!(
                                                 "Failed to delete comment: {e}"
@@ -2816,10 +2818,7 @@ impl App {
 
                             if delete_success {
                                 for comment in &entry.comments {
-                                    self.text_reader.delete_comment_by_location(
-                                        &entry.chapter_href,
-                                        &comment.target,
-                                    );
+                                    self.text_reader.delete_comment_by_id(&comment.id);
                                 }
                                 if let Some(ref mut viewer) = self.comments_viewer {
                                     viewer.remove_selected_comment();
@@ -2854,7 +2853,7 @@ impl App {
                     }
                     ThemeSelectorAction::ThemeChanged => {
                         self.text_reader.invalidate_render_cache();
-                        self.show_info(&format!("Theme: {}", current_theme_name()));
+                        self.show_info(format!("Theme: {}", current_theme_name()));
                         self.close_popup_to_previous();
                         self.theme_selector = None;
                     }
@@ -3126,6 +3125,32 @@ impl App {
                         self.text_reader.clear_count();
                         return None;
                     }
+                    KeyCode::Char('a') => {
+                        // Add annotation on visual selection
+                        if self.text_reader.start_comment_input() {
+                            debug!("Started comment input mode from visual selection");
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
+                    KeyCode::Char('d') => {
+                        // Delete annotation on visual selection
+                        match self.text_reader.delete_comment_at_cursor() {
+                            Ok(true) => {
+                                info!("Comment deleted successfully");
+                                self.show_info("Comment deleted");
+                            }
+                            Ok(false) => {
+                                // Selection not on a comment, ignore
+                            }
+                            Err(e) => {
+                                error!("Failed to delete comment: {e}");
+                                self.show_error(format!("Failed to delete comment: {e}"));
+                            }
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
                     KeyCode::Esc => {
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
@@ -3290,7 +3315,10 @@ impl App {
                     let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
                 }
             }
-            KeyCode::Char('l') => {
+            KeyCode::Left => {
+                let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
                 let _ = self.navigate_chapter_relative(ChapterDirection::Next);
             }
             KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -3342,7 +3370,8 @@ impl App {
             }
             KeyCode::Char('a') => {
                 if !self.handle_key_sequence('a')
-                    && self.text_reader.has_text_selection()
+                    && (self.text_reader.has_text_selection()
+                        || self.text_reader.is_visual_mode_active())
                     && self.text_reader.start_comment_input()
                 {
                     debug!("Started comment input mode");
@@ -3647,12 +3676,32 @@ impl App {
 
     #[doc(hidden)]
     #[allow(dead_code)]
+    pub fn testing_rendered_lines(&self) -> &[crate::markdown_text_reader::RenderedLine] {
+        self.text_reader.testing_rendered_lines()
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_comment_target_for_selection(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> Option<crate::comments::CommentTarget> {
+        self.text_reader
+            .testing_comment_target_for_selection(start_line, start_col, end_line, end_col)
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn testing_add_comment(&mut self, comment: crate::comments::Comment) {
         let comments_arc = self.text_reader.get_comments();
         if let Ok(mut guard) = comments_arc.lock() {
             let _ = guard.add_comment(comment.clone());
         }
         self.text_reader.rebuild_chapter_comments();
+        self.text_reader.invalidate_render_cache();
     }
 
     #[doc(hidden)]

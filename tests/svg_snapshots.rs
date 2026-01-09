@@ -48,6 +48,22 @@ fn create_test_fps_counter() -> FPSCounter {
     FPSCounter::new()
 }
 
+fn selection_for_text(
+    lines: &[bookokrat::markdown_text_reader::RenderedLine],
+    needle: &str,
+    selection_len: usize,
+) -> (usize, usize, usize, usize) {
+    for (line_idx, line) in lines.iter().enumerate() {
+        if let Some(byte_idx) = line.raw_text.find(needle) {
+            let start_col = line.raw_text[..byte_idx].chars().count();
+            let end_col = start_col + selection_len.min(needle.chars().count());
+            return (line_idx, start_col, line_idx, end_col);
+        }
+    }
+
+    panic!("could not find selection text: {needle}");
+}
+
 /// Helper trait for simpler key event handling in tests
 trait TestKeyEventHandler {
     fn press_key(&mut self, key: crossterm::event::KeyCode);
@@ -135,21 +151,17 @@ fn seed_sample_comments(app: &mut App) {
         .unwrap_or_else(|| "chapter1.xhtml".to_string());
 
     app.testing_add_comment(Comment {
+        id: "seed-comment-1".to_string(),
         chapter_href: chapter_a.clone(),
-        target: CommentTarget::Paragraph {
-            paragraph_index: 0,
-            word_range: None,
-        },
+        target: CommentTarget::paragraph(0, None),
         content: "Launch plan looks solid.".to_string(),
         updated_at: base_time,
     });
 
     app.testing_add_comment(Comment {
+        id: "seed-comment-2".to_string(),
         chapter_href: chapter_a.clone(),
-        target: CommentTarget::Paragraph {
-            paragraph_index: 3,
-            word_range: None,
-        },
+        target: CommentTarget::paragraph(3, None),
         content: "Need to revisit risk section.".to_string(),
         updated_at: base_time + chrono::Duration::minutes(5),
     });
@@ -160,11 +172,9 @@ fn seed_sample_comments(app: &mut App) {
     {
         if let Some(chapter_b) = app.testing_current_chapter_file() {
             app.testing_add_comment(Comment {
+                id: "seed-comment-3".to_string(),
                 chapter_href: chapter_b.clone(),
-                target: CommentTarget::Paragraph {
-                    paragraph_index: 2,
-                    word_range: None,
-                },
+                target: CommentTarget::paragraph(2, None),
                 content: "Great anecdote here.".to_string(),
                 updated_at: base_time + chrono::Duration::minutes(10),
             });
@@ -300,6 +310,498 @@ fn test_comments_viewer_global_mode_svg() {
         std::path::Path::new("tests/snapshots/comments_viewer_global_mode.svg"),
         "test_comments_viewer_global_mode_svg",
         create_test_failure_handler("test_comments_viewer_global_mode_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_inline_comment_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+
+    let html_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Comment Test</title></head>
+<body>
+    <h1>My Title</h1>
+    <p>First paragraph content here that is long enough to wrap across multiple lines so we can verify that the underline styling works correctly when text spans more than one line in the terminal display.</p>
+    <p>Second paragraph without comment.</p>
+</body>
+</html>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("comment_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "comment_test.html".to_string());
+
+    // Comment on heading (node 0) - underline "My" (chars 0-2)
+    app.testing_add_comment(Comment {
+        id: "inline-comment-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::paragraph(0, Some((0, 2))),
+        content: "Title comment here".to_string(),
+        updated_at: base_time,
+    });
+
+    // Comment on first paragraph (node 1) - underline "First paragraph content here that is long" (chars 0-40)
+    app.testing_add_comment(Comment {
+        id: "inline-comment-2".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::paragraph(1, Some((0, 40))),
+        content: "Paragraph comment here".to_string(),
+        updated_at: base_time,
+    });
+
+    // Switch to content panel to see the rendered text with comments
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_inline_comment_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/inline_comment_rendering.svg"),
+        "test_inline_comment_rendering_svg",
+        create_test_failure_handler("test_inline_comment_rendering_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_list_comment_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 30);
+
+    let html_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>List Comment Test</title></head>
+<body>
+    <ul>
+        <li>First unordered item</li>
+        <li>Second unordered item with comment</li>
+    </ul>
+    <ol>
+        <li>First ordered item</li>
+        <li>Second ordered item with comment</li>
+    </ol>
+    <dl>
+        <dt>Term One</dt>
+        <dd>Definition for term one</dd>
+        <dt>Term Two</dt>
+        <dd>Definition for term two with comment</dd>
+    </dl>
+</body>
+</html>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("list_comment_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "list_comment_test.html".to_string());
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let (ul_start_line, ul_start_col, ul_end_line, ul_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second unordered item with comment", 15)
+    };
+    let (ol_start_line, ol_start_col, ol_end_line, ol_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second ordered item with comment", 12)
+    };
+    let (def_start_line, def_start_col, def_end_line, def_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Definition for term two with comment", 10)
+    };
+
+    // Comment on second item of unordered list (node 0, item_index 1)
+    app.testing_add_comment(Comment {
+        id: "list-comment-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                ul_start_line,
+                ul_start_col,
+                ul_end_line,
+                ul_end_col,
+            )
+            .expect("missing unordered list comment target"),
+        content: "Unordered list comment".to_string(),
+        updated_at: base_time,
+    });
+
+    // Comment on second item of ordered list (node 1, item_index 1)
+    app.testing_add_comment(Comment {
+        id: "list-comment-2".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                ol_start_line,
+                ol_start_col,
+                ol_end_line,
+                ol_end_col,
+            )
+            .expect("missing ordered list comment target"),
+        content: "Ordered list comment".to_string(),
+        updated_at: base_time,
+    });
+
+    // Comment on second definition (node 2, item_index 1, is_term=false)
+    app.testing_add_comment(Comment {
+        id: "list-comment-3".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                def_start_line,
+                def_start_col,
+                def_end_line,
+                def_end_col,
+            )
+            .expect("missing definition list comment target"),
+        content: "Definition list comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_list_comment_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/list_comment_rendering.svg"),
+        "test_list_comment_rendering_svg",
+        create_test_failure_handler("test_list_comment_rendering_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_quote_and_code_comment_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 35);
+
+    let html_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Quote and Code Comment Test</title></head>
+<body>
+    <blockquote>
+        <p>First line of quote</p>
+        <p>Second line of quote with comment</p>
+        <p>Third line of quote</p>
+    </blockquote>
+    <pre><code>fn main() {
+    println!("Hello");
+    let x = 42;
+    let y = x + 1;
+    println!("{}", y);
+}</code></pre>
+</body>
+</html>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("quote_code_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "quote_code_test.html".to_string());
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let (quote_start_line, quote_start_col, quote_end_line, quote_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second line of quote with comment", 10)
+    };
+
+    // Comment on second paragraph of quote block (node 0, paragraph_index 1)
+    app.testing_add_comment(Comment {
+        id: "quote-code-comment-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                quote_start_line,
+                quote_start_col,
+                quote_end_line,
+                quote_end_col,
+            )
+            .expect("missing quote comment target"),
+        content: "Quote comment".to_string(),
+        updated_at: base_time,
+    });
+
+    // Comment on single line in code block (node 1, line 2 only - "let x = 42;")
+    app.testing_add_comment(Comment {
+        id: "quote-code-comment-2".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::code_block(1, (2, 2)),
+        content: "Single line code comment".to_string(),
+        updated_at: base_time,
+    });
+
+    // Comment on multiple lines in code block (node 1, lines 3-4 - "let y" and "println")
+    app.testing_add_comment(Comment {
+        id: "quote-code-comment-3".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::code_block(1, (3, 4)),
+        content: "Multi-line code comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_quote_code_comment_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/quote_code_comment_rendering.svg"),
+        "test_quote_and_code_comment_rendering_svg",
+        create_test_failure_handler("test_quote_and_code_comment_rendering_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_list_comment_rendering_complex_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 36);
+
+    let html_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>List Comment Test</title></head>
+<body>
+    <ul>
+        <li>Top item one</li>
+        <li>Top item two
+            <ul>
+                <li>Nested item A</li>
+                <li>Nested item B with comment</li>
+            </ul>
+        </li>
+        <li>Top item three</li>
+    </ul>
+    <ul>
+        <li>
+            <p>First paragraph in list item</p>
+            <p>Second paragraph with comment</p>
+            <p>Third paragraph plain</p>
+        </li>
+        <li>
+            <p>First paragraph in second item</p>
+            <p>Second paragraph spanning comment</p>
+            <p>Third paragraph spanning comment</p>
+        </li>
+    </ul>
+</body>
+</html>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("list_comment_complex_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "list_comment_complex_test.html".to_string());
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let (nested_start_line, nested_start_col, nested_end_line, nested_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Nested item B with comment", 10)
+    };
+    let (second_start_line, second_start_col, second_end_line, second_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second paragraph with comment", 10)
+    };
+    let (span_start_line, span_start_col, _span_end_line, _span_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second paragraph spanning comment", 10)
+    };
+    let (_span_tail_line, _span_tail_col, span_tail_end_line, span_tail_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Third paragraph spanning comment", 10)
+    };
+
+    app.testing_add_comment(Comment {
+        id: "nested-list-comment-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                nested_start_line,
+                nested_start_col,
+                nested_end_line,
+                nested_end_col,
+            )
+            .expect("missing nested list comment target"),
+        content: "Nested list comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.testing_add_comment(Comment {
+        id: "nested-list-comment-2".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                second_start_line,
+                second_start_col,
+                second_end_line,
+                second_end_col,
+            )
+            .expect("missing multiline list item comment target"),
+        content: "Second paragraph comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.testing_add_comment(Comment {
+        id: "nested-list-comment-3".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                span_start_line,
+                span_start_col,
+                span_tail_end_line,
+                span_tail_end_col,
+            )
+            .expect("missing multiline range comment target"),
+        content: "Second and third paragraph comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_list_comment_rendering_complex.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/list_comment_rendering_complex.svg"),
+        "test_list_comment_rendering_complex_svg",
+        create_test_failure_handler("test_list_comment_rendering_complex_svg"),
     );
 }
 
@@ -3885,7 +4387,7 @@ fn test_normal_mode_counted_motion_svg() {
 
     let mut paragraphs = String::new();
     for idx in 1..=20 {
-        paragraphs.push_str(&format!("    <p>Line {:02}</p>\n", idx));
+        paragraphs.push_str(&format!("    <p>Line {idx:02}</p>\n"));
     }
 
     let content = format!(

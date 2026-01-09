@@ -257,9 +257,7 @@ fn content_root_from_epub(epub_path: &Path) -> Result<Option<PathBuf>> {
             .descendants()
             .find(|n| n.has_tag_name("rootfile"))
             .and_then(|n| n.attribute("full-path"));
-        Ok(rootfile
-            .map(|path| content_root_from_rootfile(Path::new(path)))
-            .flatten())
+        Ok(rootfile.and_then(|path| content_root_from_rootfile(Path::new(path))))
     } else {
         let file = fs::File::open(epub_path)
             .with_context(|| format!("Failed to open EPUB file: {epub_path:?}"))?;

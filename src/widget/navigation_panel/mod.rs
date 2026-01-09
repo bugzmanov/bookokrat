@@ -232,20 +232,28 @@ impl NavigationPanel {
                 self.move_selection_up();
                 None
             }
-            KeyCode::Char('h') => {
-                self.handle_h();
-                None
-            }
-            KeyCode::Char('l') => {
-                self.handle_l();
-                None
-            }
             KeyCode::Char('H') => {
+                self.handle_shift_h();
+                None
+            }
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.handle_shift_h();
                 None
             }
             KeyCode::Char('L') => {
                 self.handle_shift_l();
+                None
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.handle_shift_l();
+                None
+            }
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.handle_h();
+                None
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.handle_l();
                 None
             }
             KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {

@@ -107,9 +107,9 @@ pub fn load_custom_themes() {
     let saved_theme = settings::get_theme_name();
     if let Some(index) = get_theme_index_by_name(&saved_theme) {
         CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
-        debug!("Applied saved theme: {}", saved_theme);
+        debug!("Applied saved theme: {saved_theme}");
     } else {
-        warn!("Saved theme '{}' not found, using default", saved_theme);
+        warn!("Saved theme '{saved_theme}' not found, using default");
     }
 }
 
@@ -142,7 +142,7 @@ fn theme_from_yaml(yaml: &YamlTheme) -> Result<Theme, String> {
 
 fn parse_hex_color(hex: &str) -> Result<Color, String> {
     let hex = hex.trim_start_matches('#');
-    let value = u32::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex color: {}", e))?;
+    let value = u32::from_str_radix(hex, 16).map_err(|e| format!("Invalid hex color: {e}"))?;
     Ok(smart_color(value))
 }
 

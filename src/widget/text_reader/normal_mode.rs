@@ -79,6 +79,8 @@ impl YankHighlight {
 pub struct NormalModeState {
     pub active: bool,
     pub cursor: CursorPosition,
+    /// Tracks if cursor was ever explicitly set (not just default position)
+    pub cursor_was_set: bool,
     pub scrolloff: usize,
     pub pending_motion: PendingCharMotion,
     pub last_find: Option<(PendingCharMotion, char)>,
@@ -94,6 +96,7 @@ impl Default for NormalModeState {
         Self {
             active: false,
             cursor: CursorPosition::default(),
+            cursor_was_set: false,
             scrolloff: 3,
             pending_motion: PendingCharMotion::None,
             last_find: None,
@@ -114,6 +117,7 @@ impl NormalModeState {
     pub fn activate(&mut self, initial_line: usize, initial_column: usize) {
         self.active = true;
         self.cursor = CursorPosition::new(initial_line, initial_column);
+        self.cursor_was_set = true;
     }
 
     pub fn deactivate(&mut self) {
@@ -140,12 +144,18 @@ impl MarkdownTextReader {
             let cursor_in_viewport =
                 previous_line >= viewport_top && previous_line < viewport_bottom;
 
-            if cursor_in_viewport && !self.should_skip_line(previous_line) {
+            // Only restore previous position if it was explicitly set before
+            // and is still within the current viewport
+            if self.normal_mode.cursor_was_set
+                && cursor_in_viewport
+                && !self.should_skip_line(previous_line)
+            {
                 // Restore previous position, just clamp column
                 self.normal_mode.active = true;
                 self.clamp_column_to_line_length();
             } else {
-                // Position outside viewport or on invalid line - place with scrolloff margin
+                // First activation, position outside viewport, or on invalid line
+                // Place cursor at scrolloff margin from top of viewport
                 let scrolloff = self.normal_mode.scrolloff;
                 let mut initial_line = self.scroll_offset + scrolloff;
                 // Clamp to valid range
@@ -576,7 +586,7 @@ impl MarkdownTextReader {
             .unwrap_or(0)
     }
 
-    fn is_image_line(&self, line: usize) -> bool {
+    pub(super) fn is_image_line(&self, line: usize) -> bool {
         self.rendered_content
             .lines
             .get(line)
@@ -616,7 +626,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn clamp_column_to_line_length(&mut self) {
+    pub(super) fn clamp_column_to_line_length(&mut self) {
         let line_len = self.get_line_char_count(self.normal_mode.cursor.line);
         if line_len == 0 {
             self.normal_mode.cursor.column = 0;
@@ -629,7 +639,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn ensure_cursor_visible(&mut self) {
+    pub(super) fn ensure_cursor_visible(&mut self) {
         let scrolloff = self.normal_mode.scrolloff;
         let cursor_line = self.normal_mode.cursor.line;
         let viewport_top = self.scroll_offset;
@@ -1648,8 +1658,8 @@ impl MarkdownTextReader {
 
         // Search forward for closing quote if not found
         if close_pos.is_none() {
-            for i in (open + 1)..chars.len() {
-                if chars[i] == quote {
+            for (i, ch) in chars.iter().enumerate().skip(open + 1) {
+                if *ch == quote {
                     close_pos = Some(i);
                     break;
                 }
@@ -1771,11 +1781,7 @@ impl MarkdownTextReader {
             Some((open_line, open_col, close_line, close_col + 1))
         } else {
             // Inner: skip the brackets
-            if open_line == close_line {
-                Some((open_line, open_col + 1, close_line, close_col))
-            } else {
-                Some((open_line, open_col + 1, close_line, close_col))
-            }
+            Some((open_line, open_col + 1, close_line, close_col))
         }
     }
 

@@ -63,6 +63,7 @@ pub struct CodeLineMetadata {
 pub struct InlineCodeCommentFragment {
     pub chapter_href: String,
     pub target: CommentTarget,
+    pub comment_id: String,
     pub start_column: usize,
     pub end_column: usize,
 }
@@ -80,6 +81,20 @@ pub enum LineType {
     ListItem {
         kind: crate::markdown::ListKind,
         indent: usize,
+        /// Index of this item within the list (0-based)
+        item_index: usize,
+        /// Path of item indices for nested lists (outermost -> current). Empty for top-level.
+        list_path: Vec<usize>,
+    },
+    DefinitionListItem {
+        /// Index of the definition item within the list (0-based)
+        item_index: usize,
+        /// Whether this is a term (dt) or definition body (dd)
+        is_term: bool,
+    },
+    QuoteParagraph {
+        /// Index of the paragraph within the blockquote (0-based)
+        paragraph_index: usize,
     },
     ImagePlaceholder {
         src: String,
@@ -89,6 +104,7 @@ pub enum LineType {
     Comment {
         chapter_href: String,
         target: CommentTarget,
+        comment_id: String,
     },
 }
 
@@ -218,6 +234,7 @@ impl ActiveSection {
 pub enum CommentEditMode {
     Creating,
     Editing {
+        comment_id: String,
         chapter_href: String,
         target: CommentTarget,
     },

@@ -8,7 +8,15 @@ use ratatui::text::Span;
 use std::sync::{Arc, Mutex};
 use tui_textarea::{Input, Key, TextArea};
 
-type CommentSelection = (String, CommentTarget);
+#[derive(Clone)]
+struct CommentSelection {
+    comment_id: String,
+}
+
+#[derive(Clone)]
+struct InlineCodeCommentHit {
+    comment_id: String,
+}
 
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
@@ -35,17 +43,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Start editing an existing comment
-    pub fn start_editing_comment(&mut self, chapter_href: String, target: CommentTarget) -> bool {
+    fn start_editing_comment(&mut self, selection: CommentSelection) -> bool {
         if let Some(comments_arc) = &self.book_comments {
             if let Ok(comments) = comments_arc.lock() {
-                let existing_content = comments
-                    .get_node_comments(&chapter_href, target.node_index())
-                    .iter()
-                    .find(|c| c.target == target)
-                    .map(|c| c.content.clone());
+                let comment = comments.get_comment_by_id(&selection.comment_id).cloned();
 
-                if let Some(content) = existing_content {
-                    let comment_start_line = self.find_comment_visual_line(&chapter_href, &target);
+                if let Some(comment) = comment {
+                    let content = comment.content.clone();
+                    let comment_start_line = self.find_comment_visual_line(&comment.id);
 
                     if let Some(start_line) = comment_start_line {
                         let mut textarea = TextArea::default();
@@ -58,12 +63,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
 
                         self.comment_input.textarea = Some(textarea);
-                        self.comment_input.target_node_index = Some(target.node_index());
+                        self.comment_input
+                            .target_node_index
+                            .replace(comment.target.node_index());
                         self.comment_input.target_line = Some(start_line);
-                        self.comment_input.target = Some(target.clone());
+                        self.comment_input.target = Some(comment.target.clone());
                         self.comment_input.edit_mode = Some(CommentEditMode::Editing {
-                            chapter_href,
-                            target,
+                            comment_id: comment.id.clone(),
+                            chapter_href: comment.chapter_href.clone(),
+                            target: comment.target.clone(),
                         });
 
                         self.cache_generation += 1;
@@ -79,35 +87,66 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn start_comment_input(&mut self) -> bool {
-        if !self.has_text_selection() {
+        // Try mouse selection first
+        if self.has_text_selection() {
+            if let Some(selection) = self.get_comment_at_cursor() {
+                return self.start_editing_comment(selection);
+            }
+
+            if let Some((start, end)) = self.text_selection.get_selection_range() {
+                let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+                if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    self.init_comment_textarea(target, norm_end.line);
+                    self.text_selection.clear_selection();
+                    return true;
+                }
+            }
             return false;
         }
 
-        if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
-            return self.start_editing_comment(chapter_href, target);
-        }
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            // Check if selection is on an existing comment first
+            if let Some(selection) = self.get_comment_at_cursor() {
+                self.exit_visual_mode();
+                return self.start_editing_comment(selection);
+            }
 
-        if let Some((start, end)) = self.text_selection.get_selection_range() {
-            let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
-            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
-                let mut textarea = TextArea::default();
-                textarea.set_placeholder_text("Type your comment here...");
-
-                self.comment_input.textarea = Some(textarea);
-                self.comment_input.target = Some(target.clone());
-                self.comment_input.target_node_index = Some(target.node_index());
-                self.comment_input
-                    .target_line
-                    .replace(norm_end.line.saturating_add(1));
-                self.comment_input.edit_mode = Some(CommentEditMode::Creating);
-
-                self.text_selection.clear_selection();
-
-                return true;
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+                if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    self.init_comment_textarea(target, norm_end.line);
+                    self.exit_visual_mode();
+                    return true;
+                }
+                self.exit_visual_mode();
             }
         }
 
         false
+    }
+
+    fn init_comment_textarea(&mut self, target: CommentTarget, end_line: usize) {
+        let mut textarea = TextArea::default();
+        textarea.set_placeholder_text("Type your comment here...");
+
+        self.comment_input.textarea = Some(textarea);
+        self.comment_input.target = Some(target.clone());
+        self.comment_input.target_node_index = Some(target.node_index());
+        self.comment_input
+            .target_line
+            .replace(end_line.saturating_add(1));
+        self.comment_input.edit_mode = Some(CommentEditMode::Creating);
     }
 
     fn compute_selection_target(
@@ -128,13 +167,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 .lines
                 .get(idx)
                 .and_then(|line| line.node_index)
-        })?;
+        });
 
-        for idx in start.line..=end.line {
-            if let Some(line) = self.rendered_content.lines.get(idx) {
-                if let Some(line_node_idx) = line.node_index {
-                    if line_node_idx != node_idx {
-                        return None;
+        if let Some(found_node_idx) = node_idx {
+            for idx in start.line..=end.line {
+                if let Some(line) = self.rendered_content.lines.get(idx) {
+                    if let Some(line_node_idx) = line.node_index {
+                        if line_node_idx != found_node_idx {
+                            return None;
+                        }
                     }
                 }
             }
@@ -147,7 +188,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(meta) = &line.code_line {
-                    if meta.node_index == node_idx {
+                    if node_idx.is_none_or(|found_node_idx| meta.node_index == found_node_idx) {
                         has_code = true;
                         min_code = min_code.min(meta.line_index);
                         max_code = max_code.max(meta.line_index);
@@ -157,18 +198,114 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         if has_code {
-            return Some(CommentTarget::CodeBlock {
-                paragraph_index: node_idx,
-                line_range: (min_code, max_code),
-            });
+            if let Some(found_node_idx) = node_idx {
+                return Some(CommentTarget::code_block(
+                    found_node_idx,
+                    (min_code, max_code),
+                ));
+            }
+            return None;
         }
 
-        let word_range = self.compute_paragraph_word_range(node_idx, start, end);
+        let word_range = node_idx.and_then(|found_node_idx| {
+            self.compute_paragraph_word_range(found_node_idx, start, end)
+        });
 
-        Some(CommentTarget::Paragraph {
-            paragraph_index: node_idx,
-            word_range,
-        })
+        // Check if selection is within a list item and extract the item index + path
+        let list_item_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::ListItem {
+                    item_index,
+                    list_path,
+                    ..
+                } = &line.line_type
+                {
+                    Some((*item_index, list_path.clone()))
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some((item_index, list_path)) = list_item_info {
+            let node_idx = node_idx.or_else(|| {
+                self.rendered_content.lines.iter().find_map(|line| {
+                    if let LineType::ListItem {
+                        list_path: line_path,
+                        ..
+                    } = &line.line_type
+                    {
+                        if line_path.as_slice() == list_path.as_slice() {
+                            return line.node_index;
+                        }
+                    }
+                    None
+                })
+            })?;
+
+            let list_word_range = if list_path.is_empty() {
+                word_range
+            } else {
+                self.compute_list_item_word_range(node_idx, &list_path, start, end)
+            };
+            if list_path.is_empty() {
+                return Some(CommentTarget::list_item(
+                    node_idx,
+                    item_index,
+                    list_word_range,
+                ));
+            }
+            return Some(CommentTarget::list_item_with_path(
+                node_idx,
+                list_path,
+                list_word_range,
+            ));
+        }
+
+        // Check if selection is within a definition list item and extract the item index
+        let definition_item_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::DefinitionListItem {
+                    item_index,
+                    is_term,
+                } = &line.line_type
+                {
+                    Some((*item_index, *is_term))
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some((item_index, is_term)) = definition_item_info {
+            let node_idx = node_idx?;
+            return Some(CommentTarget::definition_item(
+                node_idx, item_index, is_term, word_range,
+            ));
+        }
+
+        // Check if selection is within a blockquote paragraph and extract the paragraph index
+        let quote_paragraph_info = (start.line..=end.line).find_map(|idx| {
+            self.rendered_content.lines.get(idx).and_then(|line| {
+                if let LineType::QuoteParagraph { paragraph_index } = &line.line_type {
+                    Some(*paragraph_index)
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(paragraph_index) = quote_paragraph_info {
+            let node_idx = node_idx?;
+            return Some(CommentTarget::quote_paragraph(
+                node_idx,
+                paragraph_index,
+                word_range,
+            ));
+        }
+
+        let node_idx = node_idx?;
+        Some(CommentTarget::paragraph(node_idx, word_range))
     }
 
     /// Handle input events when in comment mode
@@ -202,25 +339,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         if let Ok(mut comments) = comments_arc.lock() {
                             use chrono::Utc;
 
-                            if let Some(CommentEditMode::Editing { chapter_href, .. }) =
+                            if let Some(CommentEditMode::Editing { comment_id, .. }) =
                                 &self.comment_input.edit_mode
                             {
-                                if let Err(e) = comments.update_comment(
-                                    chapter_href,
-                                    &target,
-                                    comment_text.clone(),
-                                ) {
+                                if let Err(e) =
+                                    comments.update_comment_by_id(comment_id, comment_text.clone())
+                                {
                                     warn!("Failed to update comment: {e}");
                                 } else {
                                     debug!("Updated comment: {comment_text}");
                                 }
                             } else if let Some(chapter_file) = &self.current_chapter_file {
-                                let comment = Comment {
-                                    chapter_href: chapter_file.clone(),
+                                let comment = Comment::new(
+                                    chapter_file.clone(),
                                     target,
-                                    content: comment_text.clone(),
-                                    updated_at: Utc::now(),
-                                };
+                                    comment_text.clone(),
+                                    Utc::now(),
+                                );
 
                                 if let Err(e) = comments.add_comment(comment) {
                                     warn!("Failed to add comment: {e}");
@@ -247,31 +382,156 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.comment_input.is_active()
     }
 
-    /// Get comment ID from current text selection
+    /// Get comment ID from current text selection, visual mode selection, or normal mode cursor
     /// Returns the comment ID if any line in the selection is a comment line
-    pub fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
+    fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
+        // Try mouse selection first
         if let Some((start, end)) = self.text_selection.get_selection_range() {
-            // Check all lines in the selection range
-            for line_idx in start.line..=end.line {
-                if let Some(line) = self.rendered_content.lines.get(line_idx) {
-                    if let LineType::Comment {
-                        chapter_href,
-                        target,
-                    } = &line.line_type
-                    {
-                        return Some((chapter_href.clone(), target.clone()));
-                    } else if let LineType::CodeBlock { .. } = &line.line_type {
-                        if let Some((chapter, target)) =
-                            self.inline_code_comment_hit(line_idx, &start, &end)
-                        {
-                            return Some((chapter, target));
-                        }
-                    }
+            if let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end) {
+                return Some(result);
+            }
+        }
+
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end)
+                {
+                    return Some(result);
                 }
             }
         }
 
+        // Try normal mode cursor position (single line)
+        if self.is_normal_mode_active() {
+            let cursor_line = self.normal_mode.cursor.line;
+            let cursor_col = self.normal_mode.cursor.column;
+            let point = SelectionPoint {
+                line: cursor_line,
+                column: cursor_col,
+            };
+            if let Some(result) =
+                self.find_comment_in_range(cursor_line, cursor_line, &point, &point)
+            {
+                return Some(result);
+            }
+        }
+
         None
+    }
+
+    /// Get all comments from current text selection, visual mode selection, or normal mode cursor.
+    fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
+        // Try mouse selection first
+        if let Some((start, end)) = self.text_selection.get_selection_range() {
+            return self.find_comments_in_range(start.line, end.line, &start, &end);
+        }
+
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                return self.find_comments_in_range(start_line, end_line, &start, &end);
+            }
+        }
+
+        // Try normal mode cursor position (single line)
+        if self.is_normal_mode_active() {
+            let cursor_line = self.normal_mode.cursor.line;
+            let cursor_col = self.normal_mode.cursor.column;
+            let point = SelectionPoint {
+                line: cursor_line,
+                column: cursor_col,
+            };
+            return self.find_comments_in_range(cursor_line, cursor_line, &point, &point);
+        }
+
+        Vec::new()
+    }
+
+    fn find_comment_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Option<CommentSelection> {
+        for line_idx in start_line..=end_line {
+            if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                if let LineType::Comment { comment_id, .. } = &line.line_type {
+                    return Some(CommentSelection {
+                        comment_id: comment_id.clone(),
+                    });
+                } else if let LineType::CodeBlock { .. } = &line.line_type {
+                    if let Some((_, target)) = self.inline_code_comment_hit(line_idx, start, end) {
+                        return Some(CommentSelection {
+                            comment_id: target.comment_id,
+                        });
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn find_comments_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Vec<CommentSelection> {
+        let mut results = Vec::new();
+
+        for line_idx in start_line..=end_line {
+            if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                match &line.line_type {
+                    LineType::Comment { comment_id, .. } => {
+                        if !results
+                            .iter()
+                            .any(|entry: &CommentSelection| entry.comment_id == *comment_id)
+                        {
+                            results.push(CommentSelection {
+                                comment_id: comment_id.clone(),
+                            });
+                        }
+                    }
+                    LineType::CodeBlock { .. } => {
+                        for (_, target) in self.inline_code_comment_hits(line_idx, start, end) {
+                            if !results.iter().any(|entry: &CommentSelection| {
+                                entry.comment_id == target.comment_id
+                            }) {
+                                results.push(CommentSelection {
+                                    comment_id: target.comment_id,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        results
     }
 
     fn inline_code_comment_hit(
@@ -279,7 +539,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         line_idx: usize,
         selection_start: &SelectionPoint,
         selection_end: &SelectionPoint,
-    ) -> Option<(String, CommentTarget)> {
+    ) -> Option<(String, InlineCodeCommentHit)> {
         let line = self.rendered_content.lines.get(line_idx)?;
         if line.inline_code_comments.is_empty() {
             return None;
@@ -303,23 +563,89 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         for fragment in &line.inline_code_comments {
             if start_col < fragment.end_column && end_col > fragment.start_column {
-                return Some((fragment.chapter_href.clone(), fragment.target.clone()));
+                return Some((
+                    fragment.chapter_href.clone(),
+                    InlineCodeCommentHit {
+                        comment_id: fragment.comment_id.clone(),
+                    },
+                ));
             }
         }
 
         None
     }
 
+    fn inline_code_comment_hits(
+        &self,
+        line_idx: usize,
+        selection_start: &SelectionPoint,
+        selection_end: &SelectionPoint,
+    ) -> Vec<(String, InlineCodeCommentHit)> {
+        let Some(line) = self.rendered_content.lines.get(line_idx) else {
+            return Vec::new();
+        };
+        if line.inline_code_comments.is_empty() {
+            return Vec::new();
+        }
+
+        let line_length = line.raw_text.chars().count();
+        let start_col = if line_idx == selection_start.line {
+            selection_start.column.min(line_length)
+        } else {
+            0
+        };
+        let end_col = if line_idx == selection_end.line {
+            selection_end.column.min(line_length)
+        } else {
+            line_length
+        };
+
+        if start_col >= end_col {
+            return Vec::new();
+        }
+
+        let mut hits = Vec::new();
+        for fragment in &line.inline_code_comments {
+            if start_col < fragment.end_column && end_col > fragment.start_column {
+                hits.push((
+                    fragment.chapter_href.clone(),
+                    InlineCodeCommentHit {
+                        comment_id: fragment.comment_id.clone(),
+                    },
+                ));
+            }
+        }
+
+        hits
+    }
+
     /// Delete comment at current selection
     /// Returns true if a comment was deleted
     pub fn delete_comment_at_cursor(&mut self) -> anyhow::Result<bool> {
-        if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
-            self.delete_comment_by_location(&chapter_href, &target);
-            self.text_selection.clear_selection();
-            return Ok(true);
+        let was_visual_mode = self.is_visual_mode_active();
+        let comment_selections = self.get_comments_at_cursor();
+
+        if comment_selections.is_empty() {
+            return Ok(false);
         }
 
-        Ok(false)
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                for selection in &comment_selections {
+                    let _ = comments.delete_comment_by_id(&selection.comment_id);
+                }
+            }
+        }
+
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+
+        self.text_selection.clear_selection();
+        if was_visual_mode {
+            self.exit_visual_mode();
+        }
+
+        Ok(true)
     }
 
     pub fn delete_comment_by_location(&mut self, chapter_href: &str, target: &CommentTarget) {
@@ -332,19 +658,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.cache_generation += 1;
     }
 
+    pub fn delete_comment_by_id(&mut self, comment_id: &str) {
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                let _ = comments.delete_comment_by_id(comment_id);
+            }
+        }
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+    }
+
     /// Find the visual line where a specific comment starts rendering
-    pub fn find_comment_visual_line(
-        &self,
-        chapter_href: &str,
-        target: &CommentTarget,
-    ) -> Option<usize> {
+    pub fn find_comment_visual_line(&self, comment_id: &str) -> Option<usize> {
         for (idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let LineType::Comment {
-                chapter_href: line_href,
-                target: line_target,
+                comment_id: line_comment_id,
+                ..
             } = &line.line_type
             {
-                if line_href == chapter_href && line_target == target {
+                if line_comment_id == comment_id {
                     return Some(idx);
                 }
             }
@@ -354,14 +686,138 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Check if we're currently editing a specific comment
     pub fn is_editing_this_comment(&self, comment: &Comment) -> bool {
-        if let Some(CommentEditMode::Editing {
-            chapter_href,
-            target,
-        }) = &self.comment_input.edit_mode
-        {
-            &comment.chapter_href == chapter_href && &comment.target == target
+        if let Some(CommentEditMode::Editing { comment_id, .. }) = &self.comment_input.edit_mode {
+            comment.id == *comment_id
         } else {
             false
+        }
+    }
+
+    /// Get all comments for a specific node index
+    pub fn get_node_comments(&self, node_index: Option<usize>) -> Vec<Comment> {
+        node_index
+            .and_then(|idx| self.current_chapter_comments.get(&idx))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Get annotation (word) ranges from comments for a node - used for underline styling
+    pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_annotation_ranges_for_legacy_list(
+        &self,
+        node_index: Option<usize>,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.target.subtarget,
+                    crate::comments::BlockSubtarget::ListItem { list_path, .. }
+                        if list_path.is_empty()
+                )
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Get annotation ranges for a specific list item
+    pub fn get_annotation_ranges_for_list_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.subtarget.list_item_index() == Some(item_index))
+            .filter(|c| {
+                c.target
+                    .subtarget
+                    .list_path()
+                    .is_none_or(|path| path.is_empty())
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_annotation_ranges_for_list_item_path(
+        &self,
+        node_index: Option<usize>,
+        list_path: &[usize],
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.subtarget.list_path() == Some(list_path))
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Get annotation ranges for a specific definition item (term or definition)
+    pub fn get_annotation_ranges_for_definition_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+        is_term: bool,
+    ) -> Vec<(usize, usize)> {
+        use crate::comments::BlockSubtarget;
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.target.subtarget,
+                    BlockSubtarget::DefinitionItem {
+                        item_index: idx,
+                        is_term: term,
+                        ..
+                    } if *idx == item_index && *term == is_term
+                )
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Get annotation ranges for a specific quote paragraph
+    pub fn get_annotation_ranges_for_quote_paragraph(
+        &self,
+        node_index: Option<usize>,
+        paragraph_index: usize,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    /// Render all paragraph comments for a node as quote blocks.
+    /// This is the centralized method for rendering comment blocks after content.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_node_comments(
+        &mut self,
+        node_index: Option<usize>,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+        indent: usize,
+    ) {
+        let comments = self.get_node_comments(node_index);
+        for comment in comments {
+            self.render_comment_as_quote(
+                &comment,
+                lines,
+                total_height,
+                width,
+                palette,
+                is_focused,
+                indent,
+            );
         }
     }
 
@@ -396,6 +852,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             line_type: LineType::Comment {
                 chapter_href: comment.chapter_href.clone(),
                 target: comment.target.clone(),
+                comment_id: comment.id.clone(),
             },
             link_nodes: vec![],
             node_anchor: None,
@@ -422,6 +879,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_type: LineType::Comment {
                     chapter_href: comment.chapter_href.clone(),
                     target: comment.target.clone(),
+                    comment_id: comment.id.clone(),
                 },
                 link_nodes: vec![],
                 node_anchor: None,
@@ -440,6 +898,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             line_type: LineType::Comment {
                 chapter_href: comment.chapter_href.clone(),
                 target: comment.target.clone(),
+                comment_id: comment.id.clone(),
             },
             link_nodes: vec![],
             node_anchor: None,
@@ -537,5 +996,83 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         Some((start_offset, end_offset.min(total_len)))
+    }
+
+    fn compute_list_item_word_range(
+        &self,
+        node_idx: usize,
+        list_path: &[usize],
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Option<(usize, usize)> {
+        let mut offsets = Vec::new();
+        let mut cumulative = 0;
+
+        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index == Some(node_idx) {
+                if let LineType::ListItem {
+                    list_path: line_path,
+                    ..
+                } = &line.line_type
+                {
+                    if line_path.as_slice() == list_path {
+                        let len = line.raw_text.chars().count();
+                        offsets.push((idx, cumulative, len));
+                        cumulative += len;
+                    }
+                }
+            }
+        }
+
+        if offsets.is_empty() {
+            return None;
+        }
+
+        let total_len = cumulative;
+
+        let start_offset = offsets
+            .iter()
+            .find(|(line_idx, _, _)| *line_idx == start.line)
+            .map(|(_, base, len)| base + start.column.min(*len))?;
+
+        let end_offset = offsets
+            .iter()
+            .find(|(line_idx, _, _)| *line_idx == end.line)
+            .map(|(_, base, len)| base + end.column.min(*len))
+            .unwrap_or(total_len);
+
+        if start_offset >= end_offset {
+            return None;
+        }
+
+        if start_offset == 0 && end_offset >= total_len {
+            return None;
+        }
+
+        Some((start_offset, end_offset.min(total_len)))
+    }
+
+    #[doc(hidden)]
+    pub fn testing_comment_target_for_selection(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> Option<CommentTarget> {
+        let start = SelectionPoint {
+            line: start_line,
+            column: start_col,
+        };
+        let end = SelectionPoint {
+            line: end_line,
+            column: end_col,
+        };
+        self.compute_selection_target(&start, &end)
+    }
+
+    #[doc(hidden)]
+    pub fn testing_rendered_lines(&self) -> &[RenderedLine] {
+        self.rendered_content.lines.as_slice()
     }
 }

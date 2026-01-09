@@ -7,7 +7,9 @@ use std::sync::RwLock;
 use once_cell::sync::Lazy;
 
 pub const CURRENT_VERSION: u32 = 1;
-const SETTINGS_FILENAME: &str = ".bookokrat_settings.yaml";
+const SETTINGS_FILENAME: &str = "config.yaml";
+const LEGACY_SETTINGS_FILENAME: &str = ".bookokrat_settings.yaml";
+const APP_NAME: &str = "bookokrat";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct YamlTheme {
@@ -74,36 +76,52 @@ impl Default for Settings {
 
 static SETTINGS: Lazy<RwLock<Settings>> = Lazy::new(|| RwLock::new(Settings::default()));
 
-fn settings_path() -> Option<PathBuf> {
-    home::home_dir().map(|home| home.join(SETTINGS_FILENAME))
+fn preferred_config_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|config| config.join(APP_NAME).join(SETTINGS_FILENAME))
+}
+
+fn legacy_config_path() -> Option<PathBuf> {
+    home::home_dir().map(|home| home.join(LEGACY_SETTINGS_FILENAME))
+}
+
+fn find_existing_config() -> Option<PathBuf> {
+    if let Some(path) = preferred_config_path() {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    if let Some(path) = legacy_config_path() {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 pub fn load_settings() {
-    let Some(path) = settings_path() else {
-        warn!("Could not determine home directory, using default settings");
-        return;
-    };
-
-    if !path.exists() {
-        info!(
-            "Settings file not found at {:?}, creating with defaults",
-            path
-        );
+    if let Some(path) = find_existing_config() {
+        load_settings_from_path(&path);
+    } else {
+        let Some(path) = preferred_config_path() else {
+            warn!("Could not determine config directory, using default settings");
+            return;
+        };
+        info!("Settings file not found, creating with defaults at {path:?}");
         if let Ok(settings) = SETTINGS.read() {
             save_settings_to_file(&settings, &path);
         }
-        return;
     }
+}
 
-    match fs::read_to_string(&path) {
+fn load_settings_from_path(path: &PathBuf) {
+    match fs::read_to_string(path) {
         Ok(content) => match serde_yaml::from_str::<Settings>(&content) {
             Ok(mut settings) => {
-                debug!("Loaded settings from {:?}", path);
+                debug!("Loaded settings from {path:?}");
 
-                // Run migrations if needed
                 if settings.version < CURRENT_VERSION {
                     migrate_settings(&mut settings);
-                    save_settings_to_file(&settings, &path);
+                    save_settings_to_file(&settings, path);
                 }
 
                 if let Ok(mut global) = SETTINGS.write() {
@@ -111,11 +129,11 @@ pub fn load_settings() {
                 }
             }
             Err(e) => {
-                error!("Failed to parse settings file {:?}: {}", path, e);
+                error!("Failed to parse settings file {path:?}: {e}");
             }
         },
         Err(e) => {
-            error!("Failed to read settings file {:?}: {}", path, e);
+            error!("Failed to read settings file {path:?}: {e}");
         }
     }
 }
@@ -135,8 +153,9 @@ fn migrate_settings(settings: &mut Settings) {
 }
 
 pub fn save_settings() {
-    let Some(path) = settings_path() else {
-        warn!("Could not determine home directory, cannot save settings");
+    let path = find_existing_config().or_else(preferred_config_path);
+    let Some(path) = path else {
+        warn!("Could not determine config directory, cannot save settings");
         return;
     };
 
@@ -146,11 +165,20 @@ pub fn save_settings() {
 }
 
 fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            if let Err(e) = fs::create_dir_all(parent) {
+                error!("Failed to create config directory {parent:?}: {e}");
+                return;
+            }
+        }
+    }
+
     let content = generate_settings_yaml(settings);
 
     match fs::write(path, content) {
-        Ok(()) => debug!("Saved settings to {:?}", path),
-        Err(e) => error!("Failed to save settings to {:?}: {}", path, e),
+        Ok(()) => debug!("Saved settings to {path:?}"),
+        Err(e) => error!("Failed to save settings to {path:?}: {e}"),
     }
 }
 
@@ -169,7 +197,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         for theme in &settings.custom_themes {
             content.push_str(&format!("  - scheme: \"{}\"\n", theme.scheme));
             if let Some(author) = &theme.author {
-                content.push_str(&format!("    author: \"{}\"\n", author));
+                content.push_str(&format!("    author: \"{author}\"\n"));
             }
             content.push_str(&format!("    base00: \"{}\"\n", theme.base00));
             content.push_str(&format!("    base01: \"{}\"\n", theme.base01));

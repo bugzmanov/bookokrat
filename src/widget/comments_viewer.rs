@@ -81,10 +81,7 @@ impl CommentEntry {
     }
 
     pub fn is_code_block(&self) -> bool {
-        matches!(
-            self.primary_comment().target,
-            CommentTarget::CodeBlock { .. }
-        )
+        self.primary_comment().target.is_code_block()
     }
 
     pub fn comment_count(&self) -> usize {
@@ -319,12 +316,38 @@ impl CommentsViewer {
         epub: &mut EpubDoc<BufReader<std::fs::File>>,
         toc_items: &[TocItem],
     ) -> Vec<CommentEntry> {
+        use crate::markdown::Document;
+        use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+
         let comments_guard = comments.lock().unwrap();
         let all_comments = comments_guard.get_all_comments();
 
         if all_comments.is_empty() {
             return Vec::new();
         }
+
+        // Cache parsed documents by chapter href to avoid re-parsing
+        let mut doc_cache: HashMap<String, Document> = HashMap::new();
+        let original_chapter = epub.get_current_chapter();
+
+        // Pre-parse all unique chapters
+        let unique_hrefs: HashSet<_> = all_comments
+            .iter()
+            .map(|c| c.chapter_href.clone())
+            .collect();
+        for href in unique_hrefs {
+            let chapter_path = std::path::PathBuf::from(&href);
+            if let Some(chapter_id) = epub.resource_uri_to_chapter(&chapter_path) {
+                if epub.set_current_chapter(chapter_id) {
+                    if let Some((content, _)) = epub.get_current_str() {
+                        let mut converter = HtmlToMarkdownConverter::new();
+                        let doc = converter.convert(&content);
+                        doc_cache.insert(href, doc);
+                    }
+                }
+            }
+        }
+        let _ = epub.set_current_chapter(original_chapter);
 
         let mut entries: Vec<CommentEntry> = Vec::new();
         let mut last_chapter_href: Option<String> = None;
@@ -333,10 +356,17 @@ impl CommentsViewer {
 
         for comment in all_comments {
             let chapter_title = Self::find_chapter_title(&comment.chapter_href, toc_items, epub);
-            let quoted_text =
-                Self::extract_quoted_text(epub, &comment.chapter_href, comment.node_index());
+            let quoted_text = Self::extract_quoted_text_from_cache(
+                &doc_cache,
+                &comment.chapter_href,
+                comment.node_index(),
+                comment.target.word_range(),
+                comment.target.list_item_index(),
+                comment.target.definition_item_index(),
+                comment.target.quote_paragraph_index(),
+            );
 
-            let entry_index = if matches!(comment.target, CommentTarget::CodeBlock { .. }) {
+            let entry_index = if comment.target.is_code_block() {
                 let key = (comment.chapter_href.clone(), comment.node_index());
                 if let Some(&idx) = code_group_map.get(&key) {
                     entries[idx].comments.push(comment.clone());
@@ -558,40 +588,266 @@ impl CommentsViewer {
             .to_string()
     }
 
-    fn extract_quoted_text(
-        epub: &mut EpubDoc<BufReader<std::fs::File>>,
+    fn extract_quoted_text_from_cache(
+        doc_cache: &HashMap<String, crate::markdown::Document>,
         chapter_href: &str,
         paragraph_index: usize,
+        word_range: Option<(usize, usize)>,
+        list_item_index: Option<usize>,
+        definition_item_index: Option<usize>,
+        quote_paragraph_index: Option<usize>,
     ) -> String {
-        use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+        use crate::markdown::Block;
 
-        let original_chapter = epub.get_current_chapter();
+        let Some(doc) = doc_cache.get(chapter_href) else {
+            return "[Unable to retrieve text]".to_string();
+        };
 
-        let chapter_path = std::path::PathBuf::from(chapter_href);
-        if let Some(chapter_id) = epub.resource_uri_to_chapter(&chapter_path) {
-            if epub.set_current_chapter(chapter_id) {
-                if let Some((content, _)) = epub.get_current_str() {
-                    let mut converter = HtmlToMarkdownConverter::new();
-                    let doc = converter.convert(&content);
-                    if let Some(node) = doc.blocks.get(paragraph_index) {
-                        let text = Self::extract_text_from_node(node);
+        let Some(node) = doc.blocks.get(paragraph_index) else {
+            return "[Unable to retrieve text]".to_string();
+        };
 
-                        let _ = epub.set_current_chapter(original_chapter);
+        let text = match &node.block {
+            Block::Paragraph { content } | Block::Heading { content, .. } => {
+                let full_text = Self::extract_text_from_text(content);
+                Self::apply_word_range(full_text, word_range)
+            }
+            Block::List { kind, items } => {
+                let (full_text, ranges) = Self::build_list_text_with_ranges(items);
+                let item_range = list_item_index.and_then(|idx| ranges.get(idx).copied());
+                let adjusted_range =
+                    Self::adjust_word_range_for_list(word_range, kind, list_item_index);
+                Self::apply_word_range_with_item(full_text, adjusted_range, item_range)
+            }
+            Block::DefinitionList { items } => {
+                let (full_text, ranges) = Self::build_definition_list_text_with_ranges(items);
+                let item_range = definition_item_index.and_then(|idx| ranges.get(idx).copied());
+                let adjusted_range =
+                    Self::adjust_word_range_for_definition_list(word_range, definition_item_index);
+                Self::apply_word_range_with_item(full_text, adjusted_range, item_range)
+            }
+            Block::Quote { content } => {
+                let (full_text, ranges) = Self::build_quote_text_with_ranges(content);
+                let item_range = quote_paragraph_index.and_then(|idx| ranges.get(idx).copied());
+                let adjusted_range =
+                    Self::adjust_word_range_for_quote(word_range, quote_paragraph_index);
+                Self::apply_word_range_with_item(full_text, adjusted_range, item_range)
+            }
+            _ => Self::extract_text_from_node(node),
+        };
 
-                        let max_chars = 80;
-                        if text.chars().count() > max_chars {
-                            let truncated: String = text.chars().take(max_chars).collect();
-                            return format!("{truncated}...");
-                        }
-                        return text;
-                    }
+        let max_chars = 80;
+        if text.chars().count() > max_chars {
+            let truncated: String = text.chars().take(max_chars).collect();
+            return format!("{truncated}...");
+        }
+        text
+    }
+
+    fn apply_word_range(text: String, word_range: Option<(usize, usize)>) -> String {
+        if let Some((start, end)) = word_range {
+            let chars: Vec<char> = text.chars().collect();
+            let actual_start = start.min(chars.len());
+            let actual_end = end.min(chars.len());
+            if actual_start < actual_end {
+                return chars[actual_start..actual_end].iter().collect();
+            }
+        }
+        text
+    }
+
+    fn apply_word_range_with_item(
+        text: String,
+        word_range: Option<(usize, usize)>,
+        item_range: Option<(usize, usize)>,
+    ) -> String {
+        let chars: Vec<char> = text.chars().collect();
+        let total_len = chars.len();
+
+        let normalize = |(start, end): (usize, usize)| {
+            let actual_start = start.min(total_len);
+            let actual_end = end.min(total_len);
+            if actual_start < actual_end {
+                Some((actual_start, actual_end))
+            } else {
+                None
+            }
+        };
+
+        let word_range = word_range.and_then(normalize);
+        let item_range = item_range.and_then(normalize);
+
+        if let Some((start, end)) = word_range {
+            if let Some((item_start, item_end)) = item_range {
+                let overlap_start = start.max(item_start);
+                let overlap_end = end.min(item_end);
+                if overlap_start < overlap_end {
+                    return chars[overlap_start..overlap_end].iter().collect();
                 }
+            } else {
+                return chars[start..end].iter().collect();
             }
         }
 
-        let _ = epub.set_current_chapter(original_chapter);
+        if let Some((item_start, item_end)) = item_range {
+            return chars[item_start..item_end].iter().collect();
+        }
 
-        "[Unable to retrieve text]".to_string()
+        text
+    }
+
+    fn adjust_word_range_for_list(
+        word_range: Option<(usize, usize)>,
+        kind: &crate::markdown::ListKind,
+        item_index: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = word_range?;
+        let Some(item_index) = item_index else {
+            return Some((start, end));
+        };
+
+        let mut prefix_total = 0usize;
+        for idx in 0..=item_index {
+            let prefix_len = match kind {
+                crate::markdown::ListKind::Unordered => 2, // "• "
+                crate::markdown::ListKind::Ordered { start } => {
+                    let num = start + idx as u32;
+                    format!("{num}. ").chars().count()
+                }
+            };
+            prefix_total += prefix_len;
+        }
+
+        Some((
+            start.saturating_sub(prefix_total),
+            end.saturating_sub(prefix_total),
+        ))
+    }
+
+    fn adjust_word_range_for_quote(
+        word_range: Option<(usize, usize)>,
+        quote_paragraph_index: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = word_range?;
+        let Some(para_idx) = quote_paragraph_index else {
+            return Some((start, end));
+        };
+        let prefix_total = 2 * (para_idx + 1); // "> " per paragraph up to and including selection
+        Some((
+            start.saturating_sub(prefix_total),
+            end.saturating_sub(prefix_total),
+        ))
+    }
+
+    fn adjust_word_range_for_definition_list(
+        word_range: Option<(usize, usize)>,
+        definition_item_index: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let (start, end) = word_range?;
+        let Some(item_idx) = definition_item_index else {
+            return Some((start, end));
+        };
+        // Definition lists have 4-space indent for definitions ("    ")
+        // Each item has: term (no indent) + definitions (4-space each)
+        // For simplicity, assume ~1 definition line per item before selection
+        let prefix_total = 4 * (item_idx + 1);
+        Some((
+            start.saturating_sub(prefix_total),
+            end.saturating_sub(prefix_total),
+        ))
+    }
+
+    fn build_list_text_with_ranges(
+        items: &[crate::markdown::ListItem],
+    ) -> (String, Vec<(usize, usize)>) {
+        let mut full_text = String::new();
+        let mut ranges = Vec::with_capacity(items.len());
+        let mut current_len = 0;
+
+        for (idx, item) in items.iter().enumerate() {
+            if idx > 0 {
+                full_text.push(' ');
+                current_len += 1;
+            }
+            let item_text = Self::extract_list_item_content(item);
+            let item_len = item_text.chars().count();
+            let start = current_len;
+            let end = start + item_len;
+            ranges.push((start, end));
+            full_text.push_str(&item_text);
+            current_len = end;
+        }
+
+        (full_text, ranges)
+    }
+
+    fn build_definition_list_text_with_ranges(
+        items: &[crate::markdown::DefinitionListItem],
+    ) -> (String, Vec<(usize, usize)>) {
+        let mut full_text = String::new();
+        let mut ranges = Vec::with_capacity(items.len());
+        let mut current_len = 0;
+
+        for (idx, item) in items.iter().enumerate() {
+            if idx > 0 {
+                full_text.push(' ');
+                current_len += 1;
+            }
+            let item_text = Self::extract_definition_item_content(item);
+            let item_len = item_text.chars().count();
+            let start = current_len;
+            let end = start + item_len;
+            ranges.push((start, end));
+            full_text.push_str(&item_text);
+            current_len = end;
+        }
+
+        (full_text, ranges)
+    }
+
+    fn build_quote_text_with_ranges(
+        content: &[crate::markdown::Node],
+    ) -> (String, Vec<(usize, usize)>) {
+        let mut full_text = String::new();
+        let mut ranges = Vec::with_capacity(content.len());
+        let mut current_len = 0;
+
+        for (idx, node) in content.iter().enumerate() {
+            if idx > 0 {
+                full_text.push(' ');
+                current_len += 1;
+            }
+            let node_text = Self::extract_text_from_node(node);
+            let node_len = node_text.chars().count();
+            let start = current_len;
+            let end = start + node_len;
+            ranges.push((start, end));
+            full_text.push_str(&node_text);
+            current_len = end;
+        }
+
+        (full_text, ranges)
+    }
+
+    fn extract_list_item_content(item: &crate::markdown::ListItem) -> String {
+        item.content
+            .iter()
+            .map(Self::extract_text_from_node)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn extract_definition_item_content(item: &crate::markdown::DefinitionListItem) -> String {
+        let term_text = Self::extract_text_from_text(&item.term);
+        let def_texts: Vec<String> = item
+            .definitions
+            .iter()
+            .flat_map(|def| def.iter().map(Self::extract_text_from_node))
+            .collect();
+        std::iter::once(term_text)
+            .chain(def_texts)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     fn extract_text_from_node(node: &crate::markdown::Node) -> String {
@@ -607,6 +863,57 @@ impl CommentsViewer {
                 .map(Self::extract_text_from_node)
                 .collect::<Vec<_>>()
                 .join(" "),
+            Block::List { items, .. } => items
+                .iter()
+                .flat_map(|item| item.content.iter().map(Self::extract_text_from_node))
+                .collect::<Vec<_>>()
+                .join(" "),
+            Block::DefinitionList { items } => items
+                .iter()
+                .flat_map(|item| {
+                    let term_text = Self::extract_text_from_text(&item.term);
+                    let def_texts: Vec<String> = item
+                        .definitions
+                        .iter()
+                        .flat_map(|def| def.iter().map(Self::extract_text_from_node))
+                        .collect();
+                    std::iter::once(term_text).chain(def_texts)
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+            Block::Table { header, rows, .. } => {
+                use crate::markdown::TableCellContent;
+                let mut texts = Vec::new();
+                if let Some(header_row) = header {
+                    for cell in &header_row.cells {
+                        match &cell.content {
+                            TableCellContent::Simple(text) => {
+                                texts.push(Self::extract_text_from_text(text));
+                            }
+                            TableCellContent::Rich(nodes) => {
+                                for node in nodes {
+                                    texts.push(Self::extract_text_from_node(node));
+                                }
+                            }
+                        }
+                    }
+                }
+                for row in rows {
+                    for cell in &row.cells {
+                        match &cell.content {
+                            TableCellContent::Simple(text) => {
+                                texts.push(Self::extract_text_from_text(text));
+                            }
+                            TableCellContent::Rich(nodes) => {
+                                for node in nodes {
+                                    texts.push(Self::extract_text_from_node(node));
+                                }
+                            }
+                        }
+                    }
+                }
+                texts.join(" ")
+            }
             _ => String::new(),
         }
     }
@@ -680,20 +987,19 @@ impl CommentsViewer {
 
     fn comment_header_text(entry: &CommentEntry, idx: usize, comment: &Comment) -> String {
         let timestamp = comment.updated_at.format("%m-%d-%y %H:%M").to_string();
-        let mut header = match comment.target {
-            CommentTarget::CodeBlock { line_range, .. } => {
-                if line_range.0 == line_range.1 {
-                    format!("Line {} // {}", line_range.0 + 1, timestamp)
-                } else {
-                    format!(
-                        "Lines {}-{} // {}",
-                        line_range.0 + 1,
-                        line_range.1 + 1,
-                        timestamp
-                    )
-                }
+        let mut header = if let Some(line_range) = comment.target.line_range() {
+            if line_range.0 == line_range.1 {
+                format!("Line {} // {}", line_range.0 + 1, timestamp)
+            } else {
+                format!(
+                    "Lines {}-{} // {}",
+                    line_range.0 + 1,
+                    line_range.1 + 1,
+                    timestamp
+                )
             }
-            CommentTarget::Paragraph { .. } => format!("Note // {timestamp}"),
+        } else {
+            format!("Note // {timestamp}")
         };
 
         if entry.comment_count() > 1 {
@@ -1566,11 +1872,11 @@ impl CommentsViewer {
             }
         } else {
             match key.code {
-                KeyCode::Char('j') => {
+                KeyCode::Char('j') | KeyCode::Down => {
                     self.handle_j();
                     None
                 }
-                KeyCode::Char('k') => {
+                KeyCode::Char('k') | KeyCode::Up => {
                     self.handle_k();
                     None
                 }
@@ -1578,11 +1884,11 @@ impl CommentsViewer {
                     self.toggle_focus();
                     None
                 }
-                KeyCode::Char('h') => {
+                KeyCode::Char('h') | KeyCode::Left => {
                     self.handle_h();
                     None
                 }
-                KeyCode::Char('l') => {
+                KeyCode::Char('l') | KeyCode::Right => {
                     self.handle_l();
                     None
                 }
