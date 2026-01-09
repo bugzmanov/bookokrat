@@ -33,6 +33,10 @@ pub fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
             }
             if cell.modifier.contains(ratatui::style::Modifier::UNDERLINED) {
                 styled_char.push_str("\u{1b}[4m");
+                // Add underline color if set
+                if cell.underline_color != ratatui::style::Color::Reset {
+                    styled_char.push_str(&format_underline_color(cell.underline_color));
+                }
             }
 
             // Add the character
@@ -53,6 +57,17 @@ pub fn terminal_to_svg(terminal: &Terminal<TestBackend>) -> String {
     // Convert ANSI to SVG
     let term = anstyle_svg::Term::new();
     term.render_svg(&ansi_output)
+}
+
+pub fn format_underline_color(color: ratatui::style::Color) -> String {
+    use ratatui::style::Color;
+
+    match color {
+        Color::Reset => String::new(),
+        Color::Rgb(r, g, b) => format!("\u{1b}[58;2;{r};{g};{b}m"),
+        Color::Indexed(idx) => format!("\u{1b}[58;5;{idx}m"),
+        _ => String::new(), // Basic colors not typically used for underline
+    }
 }
 
 pub fn format_color(color: ratatui::style::Color, is_foreground: bool) -> String {
