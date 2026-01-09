@@ -144,11 +144,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     if let (Some(start), Some(end)) = (temp_selection.start, temp_selection.end) {
                         if !self.is_image_line(start.line) {
                             self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
-                            self.normal_mode.visual_anchor =
-                                Some(super::normal_mode::CursorPosition::new(
-                                    start.line,
-                                    start.column,
-                                ));
+                            self.normal_mode.visual_anchor = Some(
+                                super::normal_mode::CursorPosition::new(start.line, start.column),
+                            );
                             let end_col = end.column.saturating_sub(1);
                             self.set_normal_mode_cursor(end.line, end_col);
                         }

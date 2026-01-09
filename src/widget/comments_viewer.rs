@@ -715,9 +715,7 @@ impl CommentsViewer {
         kind: &crate::markdown::ListKind,
         item_index: Option<usize>,
     ) -> Option<(usize, usize)> {
-        let Some((start, end)) = word_range else {
-            return None;
-        };
+        let (start, end) = word_range?;
         let Some(item_index) = item_index else {
             return Some((start, end));
         };
@@ -744,9 +742,7 @@ impl CommentsViewer {
         word_range: Option<(usize, usize)>,
         quote_paragraph_index: Option<usize>,
     ) -> Option<(usize, usize)> {
-        let Some((start, end)) = word_range else {
-            return None;
-        };
+        let (start, end) = word_range?;
         let Some(para_idx) = quote_paragraph_index else {
             return Some((start, end));
         };
@@ -761,9 +757,7 @@ impl CommentsViewer {
         word_range: Option<(usize, usize)>,
         definition_item_index: Option<usize>,
     ) -> Option<(usize, usize)> {
-        let Some((start, end)) = word_range else {
-            return None;
-        };
+        let (start, end) = word_range?;
         let Some(item_idx) = definition_item_index else {
             return Some((start, end));
         };
@@ -2113,7 +2107,7 @@ impl CommentsViewer {
                         ));
                     }
                 } else {
-                    output.push_str(&format!("*Note // {}*\n", timestamp));
+                    output.push_str(&format!("*Note // {timestamp}*\n"));
                 }
 
                 // Use nested quote for blockquote comments, regular quote otherwise
@@ -2157,7 +2151,7 @@ impl CommentsViewer {
                         }
                     };
                     let content = Self::extract_list_item_content(item);
-                    result.push_str(&format!("{}{}\n", prefix, content));
+                    result.push_str(&format!("{prefix}{content}\n"));
                 }
                 result
             }
@@ -2165,7 +2159,7 @@ impl CommentsViewer {
                 let mut result = String::new();
                 for node in content {
                     let text = Self::extract_text_from_node(node);
-                    result.push_str(&format!("> {}\n", text));
+                    result.push_str(&format!("> {text}\n"));
                 }
                 result
             }
@@ -2173,11 +2167,11 @@ impl CommentsViewer {
                 let mut result = String::new();
                 for item in items {
                     let term = Self::extract_text_from_text(&item.term);
-                    result.push_str(&format!("**{}**\n", term));
+                    result.push_str(&format!("**{term}**\n"));
                     for def in &item.definitions {
                         for node in def {
                             let text = Self::extract_text_from_node(node);
-                            result.push_str(&format!(": {}\n", text));
+                            result.push_str(&format!(": {text}\n"));
                         }
                     }
                 }
@@ -2187,7 +2181,7 @@ impl CommentsViewer {
                 content, language, ..
             } => {
                 let lang = language.as_deref().unwrap_or("");
-                format!("```{}\n{}\n```\n", lang, content)
+                format!("```{lang}\n{content}\n```\n")
             }
             Block::Table { header, rows, .. } => self.export_table_as_markdown(header, rows),
             _ => Self::extract_text_from_node(node),
@@ -2214,7 +2208,7 @@ impl CommentsViewer {
                         .collect::<Vec<_>>()
                         .join(" "),
                 };
-                result.push_str(&format!(" {} |", text));
+                result.push_str(&format!(" {text} |"));
             }
             result.push('\n');
 
@@ -2237,7 +2231,7 @@ impl CommentsViewer {
                         .collect::<Vec<_>>()
                         .join(" "),
                 };
-                result.push_str(&format!(" {} |", text));
+                result.push_str(&format!(" {text} |"));
             }
             result.push('\n');
         }

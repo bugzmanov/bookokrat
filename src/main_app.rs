@@ -1081,7 +1081,7 @@ impl App {
                                         match action {
                                             ThemeSelectorAction::ThemeChanged => {
                                                 self.text_reader.invalidate_render_cache();
-                                                self.show_info(&format!(
+                                                self.show_info(format!(
                                                     "Theme: {}",
                                                     current_theme_name()
                                                 ));
@@ -1779,7 +1779,7 @@ impl App {
                     f.area(),
                     book.current_chapter(),
                     book.total_chapters(),
-                    &current_theme(),
+                    current_theme(),
                     true, // always focused in zen mode
                 );
             } else {
@@ -1802,7 +1802,7 @@ impl App {
                 f,
                 main_chunks[0],
                 self.is_main_panel(MainPanel::NavigationList),
-                &current_theme(),
+                current_theme(),
                 &self.book_manager,
             );
 
@@ -1812,7 +1812,7 @@ impl App {
                     main_chunks[1],
                     book.current_chapter(),
                     book.total_chapters(),
-                    &current_theme(),
+                    current_theme(),
                     self.is_main_panel(MainPanel::Content),
                 );
             } else {
@@ -1863,7 +1863,7 @@ impl App {
             f.render_widget(dim_block, f.area());
 
             if let Some(ref mut book_search) = self.book_search {
-                book_search.render(f, f.area(), &current_theme());
+                book_search.render(f, f.area(), current_theme());
             }
         }
 
@@ -2472,10 +2472,8 @@ impl App {
         use crossterm::event::KeyCode;
 
         if let KeyCode::Char(ch) = key.code {
-            if ch.is_ascii_digit() {
-                if ch != '0' || self.text_reader.has_pending_count() {
-                    return self.text_reader.append_count_digit(ch);
-                }
+            if ch.is_ascii_digit() && (ch != '0' || self.text_reader.has_pending_count()) {
+                return self.text_reader.append_count_digit(ch);
             }
         }
 
@@ -2801,9 +2799,7 @@ impl App {
                             match comments.lock() {
                                 Ok(mut guard) => {
                                     for comment in &entry.comments {
-                                        if let Err(e) =
-                                            guard.delete_comment_by_id(&comment.id)
-                                        {
+                                        if let Err(e) = guard.delete_comment_by_id(&comment.id) {
                                             error!("Failed to delete comment: {e}");
                                             self.show_error(format!(
                                                 "Failed to delete comment: {e}"
@@ -2871,7 +2867,7 @@ impl App {
                     }
                     ThemeSelectorAction::ThemeChanged => {
                         self.text_reader.invalidate_render_cache();
-                        self.show_info(&format!("Theme: {}", current_theme_name()));
+                        self.show_info(format!("Theme: {}", current_theme_name()));
                         self.close_popup_to_previous();
                         self.theme_selector = None;
                     }

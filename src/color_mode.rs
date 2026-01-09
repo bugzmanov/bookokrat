@@ -109,7 +109,7 @@ mod tests {
 
         // Very dark blue-gray (Oceanic Next background) maps to grayscale palette
         let dark_idx = rgb_to_256color(27, 43, 52);
-        assert!(dark_idx >= 232 && dark_idx <= 235); // Very dark grayscale
+        assert!((232..=235).contains(&dark_idx)); // Very dark grayscale
 
         // Pure white maps to RGB cube (231 is white in the cube)
         let white_idx = rgb_to_256color(255, 255, 255);

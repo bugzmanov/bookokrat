@@ -340,7 +340,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut result = Vec::new();
         let mut after_hard_break = false;
 
-        fn trim_trailing_space_in_spans(spans: &mut Vec<crate::table::InlineSpan>) {
+        fn trim_trailing_space_in_spans(spans: &mut [crate::table::InlineSpan]) {
             for span in spans.iter_mut().rev() {
                 match span {
                     crate::table::InlineSpan::Text { text, .. } => {
@@ -588,7 +588,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let mut result = Vec::new();
                 for (row_idx, row) in rows_inline.iter().enumerate() {
                     let is_header = has_header && row_idx == 0;
-                    for col_idx in 0..num_cols {
+                    for (col_idx, col_width) in col_widths.iter().enumerate() {
                         let cell = row.get(col_idx).cloned().unwrap_or_default();
                         let styled_cell = if is_header {
                             Self::apply_header_style(&cell)
@@ -598,7 +598,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         let cell_width = Self::inline_spans_to_flat_text(&styled_cell)
                             .chars()
                             .count();
-                        let padding = col_widths[col_idx].saturating_sub(cell_width);
+                        let padding = col_width.saturating_sub(cell_width);
 
                         result.extend(styled_cell);
                         if padding > 0 {
@@ -1352,8 +1352,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         if end < start {
                             std::mem::swap(&mut start, &mut end);
                         }
-                        for idx in start..=end {
-                            coverage_counts[idx] = coverage_counts[idx].saturating_add(1);
+                        for count in coverage_counts.iter_mut().take(end + 1).skip(start) {
+                            *count = count.saturating_add(1);
                         }
                         inline_comments[end].push(comment.clone());
                     }
@@ -2079,7 +2079,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     break;
                 }
                 let span = span.min(num_cols - grid_col);
-                let display_width = self.calculate_inline_display_width(&cell.content);
+                let display_width = Self::calculate_inline_display_width(&cell.content);
 
                 if span == 1 {
                     max_content_widths[grid_col] = max_content_widths[grid_col].max(display_width);
@@ -2148,7 +2148,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Calculate display width of structured inline spans
-    pub fn calculate_inline_display_width(&self, inlines: &[crate::table::InlineSpan]) -> usize {
+    pub fn calculate_inline_display_width(inlines: &[crate::table::InlineSpan]) -> usize {
         let mut max_line = 0usize;
         let mut current = 0usize;
 
@@ -2158,7 +2158,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     current += text.chars().count();
                 }
                 crate::table::InlineSpan::Link { text, .. } => {
-                    current += self.calculate_inline_display_width(text);
+                    current += Self::calculate_inline_display_width(text);
                 }
                 crate::table::InlineSpan::SoftBreak => {
                     current += 1;
@@ -3027,7 +3027,7 @@ mod tests {
         let max_lines = left_lines.len().max(right_lines.len());
 
         let mut message = String::new();
-        message.push_str(&format!("{}\n", name));
+        message.push_str(&format!("{name}\n"));
         message.push_str("Lines: left | right\n");
 
         for i in 0..max_lines {
@@ -3096,7 +3096,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let expected_lines = vec![
+        let expected_lines = [
             "┌────────┬────────┬────────┐",
             "│H1      │H2      │H3      │",
             "├────────┼────────┼────────┤",

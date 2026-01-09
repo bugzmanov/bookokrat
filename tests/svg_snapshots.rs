@@ -151,6 +151,7 @@ fn seed_sample_comments(app: &mut App) {
         .unwrap_or_else(|| "chapter1.xhtml".to_string());
 
     app.testing_add_comment(Comment {
+        id: "seed-comment-1".to_string(),
         chapter_href: chapter_a.clone(),
         target: CommentTarget::paragraph(0, None),
         content: "Launch plan looks solid.".to_string(),
@@ -158,6 +159,7 @@ fn seed_sample_comments(app: &mut App) {
     });
 
     app.testing_add_comment(Comment {
+        id: "seed-comment-2".to_string(),
         chapter_href: chapter_a.clone(),
         target: CommentTarget::paragraph(3, None),
         content: "Need to revisit risk section.".to_string(),
@@ -170,6 +172,7 @@ fn seed_sample_comments(app: &mut App) {
     {
         if let Some(chapter_b) = app.testing_current_chapter_file() {
             app.testing_add_comment(Comment {
+                id: "seed-comment-3".to_string(),
                 chapter_href: chapter_b.clone(),
                 target: CommentTarget::paragraph(2, None),
                 content: "Great anecdote here.".to_string(),
@@ -350,6 +353,7 @@ fn test_inline_comment_rendering_svg() {
 
     // Comment on heading (node 0) - underline "My" (chars 0-2)
     app.testing_add_comment(Comment {
+        id: "inline-comment-1".to_string(),
         chapter_href: chapter_href.clone(),
         target: CommentTarget::paragraph(0, Some((0, 2))),
         content: "Title comment here".to_string(),
@@ -358,6 +362,7 @@ fn test_inline_comment_rendering_svg() {
 
     // Comment on first paragraph (node 1) - underline "First paragraph content here that is long" (chars 0-40)
     app.testing_add_comment(Comment {
+        id: "inline-comment-2".to_string(),
         chapter_href: chapter_href.clone(),
         target: CommentTarget::paragraph(1, Some((0, 40))),
         content: "Paragraph comment here".to_string(),
@@ -448,11 +453,7 @@ fn test_list_comment_rendering_svg() {
 
     let (ul_start_line, ul_start_col, ul_end_line, ul_end_col) = {
         let rendered_lines = app.testing_rendered_lines();
-        selection_for_text(
-            rendered_lines,
-            "Second unordered item with comment",
-            15,
-        )
+        selection_for_text(rendered_lines, "Second unordered item with comment", 15)
     };
     let (ol_start_line, ol_start_col, ol_end_line, ol_end_col) = {
         let rendered_lines = app.testing_rendered_lines();
@@ -460,15 +461,12 @@ fn test_list_comment_rendering_svg() {
     };
     let (def_start_line, def_start_col, def_end_line, def_end_col) = {
         let rendered_lines = app.testing_rendered_lines();
-        selection_for_text(
-            rendered_lines,
-            "Definition for term two with comment",
-            10,
-        )
+        selection_for_text(rendered_lines, "Definition for term two with comment", 10)
     };
 
     // Comment on second item of unordered list (node 0, item_index 1)
     app.testing_add_comment(Comment {
+        id: "list-comment-1".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -484,6 +482,7 @@ fn test_list_comment_rendering_svg() {
 
     // Comment on second item of ordered list (node 1, item_index 1)
     app.testing_add_comment(Comment {
+        id: "list-comment-2".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -499,6 +498,7 @@ fn test_list_comment_rendering_svg() {
 
     // Comment on second definition (node 2, item_index 1, is_term=false)
     app.testing_add_comment(Comment {
+        id: "list-comment-3".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -597,6 +597,7 @@ fn test_quote_and_code_comment_rendering_svg() {
 
     // Comment on second paragraph of quote block (node 0, paragraph_index 1)
     app.testing_add_comment(Comment {
+        id: "quote-code-comment-1".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -612,6 +613,7 @@ fn test_quote_and_code_comment_rendering_svg() {
 
     // Comment on single line in code block (node 1, line 2 only - "let x = 42;")
     app.testing_add_comment(Comment {
+        id: "quote-code-comment-2".to_string(),
         chapter_href: chapter_href.clone(),
         target: CommentTarget::code_block(1, (2, 2)),
         content: "Single line code comment".to_string(),
@@ -620,6 +622,7 @@ fn test_quote_and_code_comment_rendering_svg() {
 
     // Comment on multiple lines in code block (node 1, lines 3-4 - "let y" and "println")
     app.testing_add_comment(Comment {
+        id: "quote-code-comment-3".to_string(),
         chapter_href: chapter_href.clone(),
         target: CommentTarget::code_block(1, (3, 4)),
         content: "Multi-line code comment".to_string(),
@@ -733,6 +736,7 @@ fn test_list_comment_rendering_complex_svg() {
     };
 
     app.testing_add_comment(Comment {
+        id: "nested-list-comment-1".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -747,6 +751,7 @@ fn test_list_comment_rendering_complex_svg() {
     });
 
     app.testing_add_comment(Comment {
+        id: "nested-list-comment-2".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -761,6 +766,7 @@ fn test_list_comment_rendering_complex_svg() {
     });
 
     app.testing_add_comment(Comment {
+        id: "nested-list-comment-3".to_string(),
         chapter_href: chapter_href.clone(),
         target: app
             .testing_comment_target_for_selection(
@@ -4381,7 +4387,7 @@ fn test_normal_mode_counted_motion_svg() {
 
     let mut paragraphs = String::new();
     for idx in 1..=20 {
-        paragraphs.push_str(&format!("    <p>Line {:02}</p>\n", idx));
+        paragraphs.push_str(&format!("    <p>Line {idx:02}</p>\n"));
     }
 
     let content = format!(

@@ -64,7 +64,7 @@ fn create_test_book_manager() -> BookManager {
 
 // Get default theme palette
 fn get_test_palette() -> &'static Base16Palette {
-    &*bookokrat::theme::OCEANIC_NEXT
+    bookokrat::theme::OCEANIC_NEXT
 }
 
 #[test]

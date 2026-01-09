@@ -19,7 +19,7 @@ fn fix_self_closing_tags(html: &str) -> String {
         .replace_all(html, |caps: &regex::Captures| {
             let tag = &caps[1];
             let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            format!("<{}{}></{}>", tag, attrs, tag)
+            format!("<{tag}{attrs}></{tag}>")
         })
         .into_owned()
 }
@@ -795,31 +795,28 @@ impl HtmlToMarkdownConverter {
         analysis: &mut LayoutTableAnalysis,
     ) {
         for child in node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, attrs, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "tr" => {
-                            let row_content_cells = self.analyze_table_row(child, analysis);
-                            if row_content_cells > analysis.max_content_per_row {
-                                analysis.max_content_per_row = row_content_cells;
-                            }
-                        }
-                        "thead" | "tbody" | "tfoot" => {
-                            self.analyze_table_node(child, analysis);
-                        }
-                        "td" | "th" => {
-                            self.analyze_table_cell(child, attrs, analysis);
-                        }
-                        "table" => {
-                            analysis.nested_table_count += 1;
-                        }
-                        _ => {
-                            self.analyze_table_node(child, analysis);
+            if let NodeData::Element { name, attrs, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "tr" => {
+                        let row_content_cells = self.analyze_table_row(child, analysis);
+                        if row_content_cells > analysis.max_content_per_row {
+                            analysis.max_content_per_row = row_content_cells;
                         }
                     }
+                    "thead" | "tbody" | "tfoot" => {
+                        self.analyze_table_node(child, analysis);
+                    }
+                    "td" | "th" => {
+                        self.analyze_table_cell(child, attrs, analysis);
+                    }
+                    "table" => {
+                        analysis.nested_table_count += 1;
+                    }
+                    _ => {
+                        self.analyze_table_node(child, analysis);
+                    }
                 }
-                _ => {}
             }
         }
     }
@@ -953,44 +950,41 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         for child in node.children.borrow().iter() {
-            match &child.data {
-                NodeData::Element { name, attrs, .. } => {
-                    let tag_name = name.local.as_ref();
-                    match tag_name {
-                        "td" | "th" => {
-                            // Extract content from this cell
-                            self.extract_cell_content_as_blocks(child, document);
-                        }
-                        "img" => {
-                            // Skip spacer images
-                            if !self.is_spacer_image(attrs) {
-                                if let Some(src) = self.get_attr_value(attrs, "src") {
-                                    let alt_text =
-                                        self.get_attr_value(attrs, "alt").unwrap_or_default();
-                                    let title = self.get_attr_value(attrs, "title");
+            if let NodeData::Element { name, attrs, .. } = &child.data {
+                let tag_name = name.local.as_ref();
+                match tag_name {
+                    "td" | "th" => {
+                        // Extract content from this cell
+                        self.extract_cell_content_as_blocks(child, document);
+                    }
+                    "img" => {
+                        // Skip spacer images
+                        if !self.is_spacer_image(attrs) {
+                            if let Some(src) = self.get_attr_value(attrs, "src") {
+                                let alt_text =
+                                    self.get_attr_value(attrs, "alt").unwrap_or_default();
+                                let title = self.get_attr_value(attrs, "title");
 
-                                    let mut text = Text::default();
-                                    text.push_inline(Inline::Image {
-                                        alt_text,
-                                        url: src,
-                                        title,
-                                    });
+                                let mut text = Text::default();
+                                text.push_inline(Inline::Image {
+                                    alt_text,
+                                    url: src,
+                                    title,
+                                });
 
-                                    let para = Block::Paragraph { content: text };
-                                    document.blocks.push(Node::new(para, 0..0));
-                                }
+                                let para = Block::Paragraph { content: text };
+                                document.blocks.push(Node::new(para, 0..0));
                             }
                         }
-                        "table" => {
-                            // Recursively handle nested tables
-                            self.handle_table(attrs, child, document);
-                        }
-                        _ => {
-                            self.extract_layout_content_recursive(child, document);
-                        }
+                    }
+                    "table" => {
+                        // Recursively handle nested tables
+                        self.handle_table(attrs, child, document);
+                    }
+                    _ => {
+                        self.extract_layout_content_recursive(child, document);
                     }
                 }
-                _ => {}
             }
         }
     }
@@ -2740,7 +2734,7 @@ mod tests {
         let max_lines = left_lines.len().max(right_lines.len());
 
         let mut message = String::new();
-        message.push_str(&format!("{}\n", name));
+        message.push_str(&format!("{name}\n"));
         message.push_str("Lines: left | right\n");
 
         for i in 0..max_lines {

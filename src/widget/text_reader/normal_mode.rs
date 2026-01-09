@@ -1658,8 +1658,8 @@ impl MarkdownTextReader {
 
         // Search forward for closing quote if not found
         if close_pos.is_none() {
-            for i in (open + 1)..chars.len() {
-                if chars[i] == quote {
+            for (i, ch) in chars.iter().enumerate().skip(open + 1) {
+                if *ch == quote {
                     close_pos = Some(i);
                     break;
                 }
@@ -1781,11 +1781,7 @@ impl MarkdownTextReader {
             Some((open_line, open_col, close_line, close_col + 1))
         } else {
             // Inner: skip the brackets
-            if open_line == close_line {
-                Some((open_line, open_col + 1, close_line, close_col))
-            } else {
-                Some((open_line, open_col + 1, close_line, close_col))
-            }
+            Some((open_line, open_col + 1, close_line, close_col))
         }
     }
 

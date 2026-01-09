@@ -106,10 +106,7 @@ pub fn load_settings() {
             warn!("Could not determine config directory, using default settings");
             return;
         };
-        info!(
-            "Settings file not found, creating with defaults at {:?}",
-            path
-        );
+        info!("Settings file not found, creating with defaults at {path:?}");
         if let Ok(settings) = SETTINGS.read() {
             save_settings_to_file(&settings, &path);
         }
@@ -120,7 +117,7 @@ fn load_settings_from_path(path: &PathBuf) {
     match fs::read_to_string(path) {
         Ok(content) => match serde_yaml::from_str::<Settings>(&content) {
             Ok(mut settings) => {
-                debug!("Loaded settings from {:?}", path);
+                debug!("Loaded settings from {path:?}");
 
                 if settings.version < CURRENT_VERSION {
                     migrate_settings(&mut settings);
@@ -132,11 +129,11 @@ fn load_settings_from_path(path: &PathBuf) {
                 }
             }
             Err(e) => {
-                error!("Failed to parse settings file {:?}: {}", path, e);
+                error!("Failed to parse settings file {path:?}: {e}");
             }
         },
         Err(e) => {
-            error!("Failed to read settings file {:?}: {}", path, e);
+            error!("Failed to read settings file {path:?}: {e}");
         }
     }
 }
@@ -171,7 +168,7 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
             if let Err(e) = fs::create_dir_all(parent) {
-                error!("Failed to create config directory {:?}: {}", parent, e);
+                error!("Failed to create config directory {parent:?}: {e}");
                 return;
             }
         }
@@ -180,8 +177,8 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
     let content = generate_settings_yaml(settings);
 
     match fs::write(path, content) {
-        Ok(()) => debug!("Saved settings to {:?}", path),
-        Err(e) => error!("Failed to save settings to {:?}: {}", path, e),
+        Ok(()) => debug!("Saved settings to {path:?}"),
+        Err(e) => error!("Failed to save settings to {path:?}: {e}"),
     }
 }
 
@@ -200,7 +197,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         for theme in &settings.custom_themes {
             content.push_str(&format!("  - scheme: \"{}\"\n", theme.scheme));
             if let Some(author) = &theme.author {
-                content.push_str(&format!("    author: \"{}\"\n", author));
+                content.push_str(&format!("    author: \"{author}\"\n"));
             }
             content.push_str(&format!("    base00: \"{}\"\n", theme.base00));
             content.push_str(&format!("    base01: \"{}\"\n", theme.base01));

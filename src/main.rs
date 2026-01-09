@@ -26,8 +26,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut file_path = None;
     let mut zen_mode = false;
 
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
+    for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--zen-mode" => zen_mode = true,
             "--help" | "-h" => {
