@@ -763,4 +763,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         Some((start_offset, end_offset.min(total_len)))
     }
+
+    #[doc(hidden)]
+    pub fn testing_comment_target_for_selection(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> Option<CommentTarget> {
+        let start = SelectionPoint {
+            line: start_line,
+            column: start_col,
+        };
+        let end = SelectionPoint {
+            line: end_line,
+            column: end_col,
+        };
+        self.compute_selection_target(&start, &end)
+    }
+
+    #[doc(hidden)]
+    pub fn testing_rendered_lines(&self) -> &[RenderedLine] {
+        self.rendered_content.lines.as_slice()
+    }
 }

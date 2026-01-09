@@ -3697,12 +3697,32 @@ impl App {
 
     #[doc(hidden)]
     #[allow(dead_code)]
+    pub fn testing_rendered_lines(&self) -> &[crate::markdown_text_reader::RenderedLine] {
+        self.text_reader.testing_rendered_lines()
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_comment_target_for_selection(
+        &self,
+        start_line: usize,
+        start_col: usize,
+        end_line: usize,
+        end_col: usize,
+    ) -> Option<crate::comments::CommentTarget> {
+        self.text_reader
+            .testing_comment_target_for_selection(start_line, start_col, end_line, end_col)
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
     pub fn testing_add_comment(&mut self, comment: crate::comments::Comment) {
         let comments_arc = self.text_reader.get_comments();
         if let Ok(mut guard) = comments_arc.lock() {
             let _ = guard.add_comment(comment.clone());
         }
         self.text_reader.rebuild_chapter_comments();
+        self.text_reader.invalidate_render_cache();
     }
 
     #[doc(hidden)]
