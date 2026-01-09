@@ -71,6 +71,13 @@ cargo install bookokrat
 
 Navigate to a directory with EPUB files and run `bookokrat`. Use `j/k` to navigate, `Enter` to open a book, and `?` for help.
 
+You can also open a specific file or start in zen mode, but this is not the main flow:
+
+```bash
+bookokrat path/to/book.epub
+bookokrat path/to/book.epub --zen-mode
+```
+
 ## Keyboard Reference
 
 Bookokrat follows Vim-style keybindings throughout the interface for consistent, efficient navigation.
