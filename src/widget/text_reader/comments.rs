@@ -428,6 +428,44 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         None
     }
 
+    /// Get all comments from current text selection, visual mode selection, or normal mode cursor.
+    pub fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
+        // Try mouse selection first
+        if let Some((start, end)) = self.text_selection.get_selection_range() {
+            return self.find_comments_in_range(start.line, end.line, &start, &end);
+        }
+
+        // Try visual mode selection
+        if self.is_visual_mode_active() {
+            if let Some((start_line, start_col, end_line, end_col)) =
+                self.get_visual_selection_range()
+            {
+                let start = SelectionPoint {
+                    line: start_line,
+                    column: start_col,
+                };
+                let end = SelectionPoint {
+                    line: end_line,
+                    column: end_col.saturating_sub(1),
+                };
+                return self.find_comments_in_range(start_line, end_line, &start, &end);
+            }
+        }
+
+        // Try normal mode cursor position (single line)
+        if self.is_normal_mode_active() {
+            let cursor_line = self.normal_mode.cursor.line;
+            let cursor_col = self.normal_mode.cursor.column;
+            let point = SelectionPoint {
+                line: cursor_line,
+                column: cursor_col,
+            };
+            return self.find_comments_in_range(cursor_line, cursor_line, &point, &point);
+        }
+
+        Vec::new()
+    }
+
     fn find_comment_in_range(
         &self,
         start_line: usize,
@@ -453,6 +491,49 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
         None
+    }
+
+    fn find_comments_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Vec<CommentSelection> {
+        let mut results = Vec::new();
+
+        for line_idx in start_line..=end_line {
+            if let Some(line) = self.rendered_content.lines.get(line_idx) {
+                match &line.line_type {
+                    LineType::Comment {
+                        chapter_href,
+                        target,
+                    } => {
+                        if !results
+                            .iter()
+                            .any(|(href, existing)| href == chapter_href && existing == target)
+                        {
+                            results.push((chapter_href.clone(), target.clone()));
+                        }
+                    }
+                    LineType::CodeBlock { .. } => {
+                        for (chapter_href, target) in
+                            self.inline_code_comment_hits(line_idx, start, end)
+                        {
+                            if !results
+                                .iter()
+                                .any(|(href, existing)| href == &chapter_href && existing == &target)
+                            {
+                                results.push((chapter_href, target));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        results
     }
 
     fn inline_code_comment_hit(
@@ -491,20 +572,72 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         None
     }
 
+    fn inline_code_comment_hits(
+        &self,
+        line_idx: usize,
+        selection_start: &SelectionPoint,
+        selection_end: &SelectionPoint,
+    ) -> Vec<(String, CommentTarget)> {
+        let Some(line) = self.rendered_content.lines.get(line_idx) else {
+            return Vec::new();
+        };
+        if line.inline_code_comments.is_empty() {
+            return Vec::new();
+        }
+
+        let line_length = line.raw_text.chars().count();
+        let start_col = if line_idx == selection_start.line {
+            selection_start.column.min(line_length)
+        } else {
+            0
+        };
+        let end_col = if line_idx == selection_end.line {
+            selection_end.column.min(line_length)
+        } else {
+            line_length
+        };
+
+        if start_col >= end_col {
+            return Vec::new();
+        }
+
+        let mut hits = Vec::new();
+        for fragment in &line.inline_code_comments {
+            if start_col < fragment.end_column && end_col > fragment.start_column {
+                hits.push((fragment.chapter_href.clone(), fragment.target.clone()));
+            }
+        }
+
+        hits
+    }
+
     /// Delete comment at current selection
     /// Returns true if a comment was deleted
     pub fn delete_comment_at_cursor(&mut self) -> anyhow::Result<bool> {
         let was_visual_mode = self.is_visual_mode_active();
-        if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
-            self.delete_comment_by_location(&chapter_href, &target);
-            self.text_selection.clear_selection();
-            if was_visual_mode {
-                self.exit_visual_mode();
-            }
-            return Ok(true);
+        let comment_selections = self.get_comments_at_cursor();
+
+        if comment_selections.is_empty() {
+            return Ok(false);
         }
 
-        Ok(false)
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                for (chapter_href, target) in &comment_selections {
+                    let _ = comments.delete_comment(chapter_href, target);
+                }
+            }
+        }
+
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+
+        self.text_selection.clear_selection();
+        if was_visual_mode {
+            self.exit_visual_mode();
+        }
+
+        Ok(true)
     }
 
     pub fn delete_comment_by_location(&mut self, chapter_href: &str, target: &CommentTarget) {
