@@ -2801,8 +2801,8 @@ impl App {
                             match comments.lock() {
                                 Ok(mut guard) => {
                                     for comment in &entry.comments {
-                                        if let Err(e) = guard
-                                            .delete_comment(&entry.chapter_href, &comment.target)
+                                        if let Err(e) =
+                                            guard.delete_comment_by_id(&comment.id)
                                         {
                                             error!("Failed to delete comment: {e}");
                                             self.show_error(format!(
@@ -2822,10 +2822,7 @@ impl App {
 
                             if delete_success {
                                 for comment in &entry.comments {
-                                    self.text_reader.delete_comment_by_location(
-                                        &entry.chapter_href,
-                                        &comment.target,
-                                    );
+                                    self.text_reader.delete_comment_by_id(&comment.id);
                                 }
                                 if let Some(ref mut viewer) = self.comments_viewer {
                                     viewer.remove_selected_comment();

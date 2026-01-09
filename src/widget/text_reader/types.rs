@@ -63,6 +63,7 @@ pub struct CodeLineMetadata {
 pub struct InlineCodeCommentFragment {
     pub chapter_href: String,
     pub target: CommentTarget,
+    pub comment_id: String,
     pub start_column: usize,
     pub end_column: usize,
 }
@@ -103,6 +104,7 @@ pub enum LineType {
     Comment {
         chapter_href: String,
         target: CommentTarget,
+        comment_id: String,
     },
 }
 
@@ -232,6 +234,7 @@ impl ActiveSection {
 pub enum CommentEditMode {
     Creating,
     Editing {
+        comment_id: String,
         chapter_href: String,
         target: CommentTarget,
     },

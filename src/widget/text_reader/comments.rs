@@ -8,7 +8,18 @@ use ratatui::text::Span;
 use std::sync::{Arc, Mutex};
 use tui_textarea::{Input, Key, TextArea};
 
-type CommentSelection = (String, CommentTarget);
+#[derive(Clone)]
+struct CommentSelection {
+    comment_id: String,
+    chapter_href: String,
+    target: CommentTarget,
+}
+
+#[derive(Clone)]
+struct InlineCodeCommentHit {
+    comment_id: String,
+    target: CommentTarget,
+}
 
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
@@ -35,17 +46,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Start editing an existing comment
-    pub fn start_editing_comment(&mut self, chapter_href: String, target: CommentTarget) -> bool {
+    pub fn start_editing_comment(&mut self, selection: CommentSelection) -> bool {
         if let Some(comments_arc) = &self.book_comments {
             if let Ok(comments) = comments_arc.lock() {
-                let existing_content = comments
-                    .get_node_comments(&chapter_href, target.node_index())
-                    .iter()
-                    .find(|c| c.target == target)
-                    .map(|c| c.content.clone());
+                let comment = comments.get_comment_by_id(&selection.comment_id).cloned();
 
-                if let Some(content) = existing_content {
-                    let comment_start_line = self.find_comment_visual_line(&chapter_href, &target);
+                if let Some(comment) = comment {
+                    let content = comment.content.clone();
+                    let comment_start_line = self.find_comment_visual_line(&comment.id);
 
                     if let Some(start_line) = comment_start_line {
                         let mut textarea = TextArea::default();
@@ -58,12 +66,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
 
                         self.comment_input.textarea = Some(textarea);
-                        self.comment_input.target_node_index = Some(target.node_index());
+                        self.comment_input
+                            .target_node_index
+                            .replace(comment.target.node_index());
                         self.comment_input.target_line = Some(start_line);
-                        self.comment_input.target = Some(target.clone());
+                        self.comment_input.target = Some(comment.target.clone());
                         self.comment_input.edit_mode = Some(CommentEditMode::Editing {
-                            chapter_href,
-                            target,
+                            comment_id: comment.id.clone(),
+                            chapter_href: comment.chapter_href.clone(),
+                            target: comment.target.clone(),
                         });
 
                         self.cache_generation += 1;
@@ -81,8 +92,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn start_comment_input(&mut self) -> bool {
         // Try mouse selection first
         if self.has_text_selection() {
-            if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
-                return self.start_editing_comment(chapter_href, target);
+            if let Some(selection) = self.get_comment_at_cursor() {
+                return self.start_editing_comment(selection);
             }
 
             if let Some((start, end)) = self.text_selection.get_selection_range() {
@@ -99,9 +110,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Try visual mode selection
         if self.is_visual_mode_active() {
             // Check if selection is on an existing comment first
-            if let Some((chapter_href, target)) = self.get_comment_at_cursor() {
+            if let Some(selection) = self.get_comment_at_cursor() {
                 self.exit_visual_mode();
-                return self.start_editing_comment(chapter_href, target);
+                return self.start_editing_comment(selection);
             }
 
             if let Some((start_line, start_col, end_line, end_col)) =
@@ -154,7 +165,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        let mut node_idx = (start.line..=end.line).find_map(|idx| {
+        let node_idx = (start.line..=end.line).find_map(|idx| {
             self.rendered_content
                 .lines
                 .get(idx)
@@ -335,25 +346,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         if let Ok(mut comments) = comments_arc.lock() {
                             use chrono::Utc;
 
-                            if let Some(CommentEditMode::Editing { chapter_href, .. }) =
+                            if let Some(CommentEditMode::Editing { comment_id, .. }) =
                                 &self.comment_input.edit_mode
                             {
-                                if let Err(e) = comments.update_comment(
-                                    chapter_href,
-                                    &target,
-                                    comment_text.clone(),
-                                ) {
+                                if let Err(e) =
+                                    comments.update_comment_by_id(comment_id, comment_text.clone())
+                                {
                                     warn!("Failed to update comment: {e}");
                                 } else {
                                     debug!("Updated comment: {comment_text}");
                                 }
                             } else if let Some(chapter_file) = &self.current_chapter_file {
-                                let comment = Comment {
-                                    chapter_href: chapter_file.clone(),
+                                let comment = Comment::new(
+                                    chapter_file.clone(),
                                     target,
-                                    content: comment_text.clone(),
-                                    updated_at: Utc::now(),
-                                };
+                                    comment_text.clone(),
+                                    Utc::now(),
+                                );
 
                                 if let Err(e) = comments.add_comment(comment) {
                                     warn!("Failed to add comment: {e}");
@@ -385,9 +394,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn get_comment_at_cursor(&self) -> Option<CommentSelection> {
         // Try mouse selection first
         if let Some((start, end)) = self.text_selection.get_selection_range() {
-            if let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end) {
-                return Some(result);
-            }
+                if let Some(result) = self.find_comment_in_range(start.line, end.line, &start, &end)
+                {
+                    return Some(result);
+                }
         }
 
         // Try visual mode selection
@@ -403,7 +413,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     line: end_line,
                     column: end_col.saturating_sub(1),
                 };
-                if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end)
+                if let Some(result) =
+                    self.find_comment_in_range(start_line, end_line, &start, &end)
                 {
                     return Some(result);
                 }
@@ -478,14 +489,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 if let LineType::Comment {
                     chapter_href,
                     target,
+                    comment_id,
                 } = &line.line_type
                 {
-                    return Some((chapter_href.clone(), target.clone()));
+                    return Some(CommentSelection {
+                        comment_id: comment_id.clone(),
+                        chapter_href: chapter_href.clone(),
+                        target: target.clone(),
+                    });
                 } else if let LineType::CodeBlock { .. } = &line.line_type {
                     if let Some((chapter, target)) =
                         self.inline_code_comment_hit(line_idx, start, end)
                     {
-                        return Some((chapter, target));
+                        return Some(CommentSelection {
+                            comment_id: target.comment_id,
+                            chapter_href: chapter,
+                            target: target.target,
+                        });
                     }
                 }
             }
@@ -508,23 +528,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     LineType::Comment {
                         chapter_href,
                         target,
+                        comment_id,
                     } => {
-                        if !results
-                            .iter()
-                            .any(|(href, existing)| href == chapter_href && existing == target)
+                        if !results.iter().any(|entry: &CommentSelection| {
+                            entry.comment_id == *comment_id
+                        })
                         {
-                            results.push((chapter_href.clone(), target.clone()));
+                            results.push(CommentSelection {
+                                comment_id: comment_id.clone(),
+                                chapter_href: chapter_href.clone(),
+                                target: target.clone(),
+                            });
                         }
                     }
                     LineType::CodeBlock { .. } => {
                         for (chapter_href, target) in
                             self.inline_code_comment_hits(line_idx, start, end)
                         {
-                            if !results
-                                .iter()
-                                .any(|(href, existing)| href == &chapter_href && existing == &target)
+                            if !results.iter().any(|entry: &CommentSelection| {
+                                entry.comment_id == target.comment_id
+                            })
                             {
-                                results.push((chapter_href, target));
+                                results.push(CommentSelection {
+                                    comment_id: target.comment_id,
+                                    chapter_href,
+                                    target: target.target,
+                                });
                             }
                         }
                     }
@@ -541,7 +570,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         line_idx: usize,
         selection_start: &SelectionPoint,
         selection_end: &SelectionPoint,
-    ) -> Option<(String, CommentTarget)> {
+    ) -> Option<(String, InlineCodeCommentHit)> {
         let line = self.rendered_content.lines.get(line_idx)?;
         if line.inline_code_comments.is_empty() {
             return None;
@@ -565,7 +594,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         for fragment in &line.inline_code_comments {
             if start_col < fragment.end_column && end_col > fragment.start_column {
-                return Some((fragment.chapter_href.clone(), fragment.target.clone()));
+                return Some((
+                    fragment.chapter_href.clone(),
+                    InlineCodeCommentHit {
+                        comment_id: fragment.comment_id.clone(),
+                        target: fragment.target.clone(),
+                    },
+                ));
             }
         }
 
@@ -577,7 +612,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         line_idx: usize,
         selection_start: &SelectionPoint,
         selection_end: &SelectionPoint,
-    ) -> Vec<(String, CommentTarget)> {
+    ) -> Vec<(String, InlineCodeCommentHit)> {
         let Some(line) = self.rendered_content.lines.get(line_idx) else {
             return Vec::new();
         };
@@ -604,7 +639,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut hits = Vec::new();
         for fragment in &line.inline_code_comments {
             if start_col < fragment.end_column && end_col > fragment.start_column {
-                hits.push((fragment.chapter_href.clone(), fragment.target.clone()));
+                hits.push((
+                    fragment.chapter_href.clone(),
+                    InlineCodeCommentHit {
+                        comment_id: fragment.comment_id.clone(),
+                        target: fragment.target.clone(),
+                    },
+                ));
             }
         }
 
@@ -623,8 +664,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         if let Some(comments_arc) = &self.book_comments {
             if let Ok(mut comments) = comments_arc.lock() {
-                for (chapter_href, target) in &comment_selections {
-                    let _ = comments.delete_comment(chapter_href, target);
+                for selection in &comment_selections {
+                    let _ = comments.delete_comment_by_id(&selection.comment_id);
                 }
             }
         }
@@ -650,19 +691,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.cache_generation += 1;
     }
 
+    pub fn delete_comment_by_id(&mut self, comment_id: &str) {
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                let _ = comments.delete_comment_by_id(comment_id);
+            }
+        }
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+    }
+
     /// Find the visual line where a specific comment starts rendering
-    pub fn find_comment_visual_line(
-        &self,
-        chapter_href: &str,
-        target: &CommentTarget,
-    ) -> Option<usize> {
+    pub fn find_comment_visual_line(&self, comment_id: &str) -> Option<usize> {
         for (idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let LineType::Comment {
-                chapter_href: line_href,
-                target: line_target,
+                comment_id: line_comment_id,
+                ..
             } = &line.line_type
             {
-                if line_href == chapter_href && line_target == target {
+                if line_comment_id == comment_id {
                     return Some(idx);
                 }
             }
@@ -672,12 +719,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Check if we're currently editing a specific comment
     pub fn is_editing_this_comment(&self, comment: &Comment) -> bool {
-        if let Some(CommentEditMode::Editing {
-            chapter_href,
-            target,
-        }) = &self.comment_input.edit_mode
-        {
-            &comment.chapter_href == chapter_href && &comment.target == target
+        if let Some(CommentEditMode::Editing { comment_id, .. }) = &self.comment_input.edit_mode {
+            comment.id == *comment_id
         } else {
             false
         }
@@ -847,6 +890,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             line_type: LineType::Comment {
                 chapter_href: comment.chapter_href.clone(),
                 target: comment.target.clone(),
+                comment_id: comment.id.clone(),
             },
             link_nodes: vec![],
             node_anchor: None,
@@ -873,6 +917,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_type: LineType::Comment {
                     chapter_href: comment.chapter_href.clone(),
                     target: comment.target.clone(),
+                    comment_id: comment.id.clone(),
                 },
                 link_nodes: vec![],
                 node_anchor: None,
@@ -891,6 +936,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             line_type: LineType::Comment {
                 chapter_href: comment.chapter_href.clone(),
                 target: comment.target.clone(),
+                comment_id: comment.id.clone(),
             },
             link_nodes: vec![],
             node_anchor: None,

@@ -245,6 +245,7 @@ impl CommentTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
+    pub id: String,
     pub chapter_href: String,
     pub target: CommentTarget,
     pub content: String,
@@ -261,6 +262,8 @@ struct CommentTargetSerde {
 
 #[derive(Serialize, Deserialize)]
 struct CommentModernSerde {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub chapter_href: String,
     #[serde(flatten)]
     pub target: CommentTargetSerde,
@@ -329,6 +332,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
         };
 
         Comment {
+            id: generate_comment_id(),
             chapter_href: legacy.chapter_href,
             target: CommentTarget {
                 node_index: legacy.paragraph_index,
@@ -343,6 +347,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
 impl From<CommentLegacyCodeBlockSerde> for Comment {
     fn from(legacy: CommentLegacyCodeBlockSerde) -> Self {
         Comment {
+            id: generate_comment_id(),
             chapter_href: legacy.chapter_href,
             target: CommentTarget::code_block(legacy.paragraph_index, legacy.line_range),
             content: legacy.content,
@@ -354,6 +359,7 @@ impl From<CommentLegacyCodeBlockSerde> for Comment {
 impl From<CommentModernSerde> for Comment {
     fn from(modern: CommentModernSerde) -> Self {
         Comment {
+            id: modern.id.unwrap_or_else(generate_comment_id),
             chapter_href: modern.chapter_href,
             target: CommentTarget {
                 node_index: modern.target.node_index,
@@ -368,6 +374,7 @@ impl From<CommentModernSerde> for Comment {
 impl From<&Comment> for CommentModernSerde {
     fn from(comment: &Comment) -> Self {
         CommentModernSerde {
+            id: Some(comment.id.clone()),
             chapter_href: comment.chapter_href.clone(),
             target: CommentTargetSerde {
                 node_index: comment.target.node_index,
@@ -402,6 +409,21 @@ impl<'de> Deserialize<'de> for Comment {
 }
 
 impl Comment {
+    pub fn new(
+        chapter_href: String,
+        target: CommentTarget,
+        content: String,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id: generate_comment_id(),
+            chapter_href,
+            target,
+            content,
+            updated_at,
+        }
+    }
+
     pub fn node_index(&self) -> usize {
         self.target.node_index()
     }
@@ -416,11 +438,20 @@ impl Comment {
     }
 }
 
+fn generate_comment_id() -> String {
+    use rand::RngCore;
+
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub struct BookComments {
     pub file_path: PathBuf,
     comments: Vec<Comment>,
     // chapter_href -> node_index -> comment indices
     comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
+    comments_by_id: HashMap<String, usize>,
 }
 
 impl BookComments {
@@ -450,6 +481,7 @@ impl BookComments {
             file_path,
             comments: Vec::new(),
             comments_by_location: HashMap::new(),
+            comments_by_id: HashMap::new(),
         };
 
         for comment in comments {
@@ -461,6 +493,11 @@ impl BookComments {
     }
 
     pub fn add_comment(&mut self, comment: Comment) -> Result<()> {
+        let mut comment = comment;
+        if self.comments_by_id.contains_key(&comment.id) {
+            comment.id = generate_comment_id();
+        }
+
         self.add_to_indices(&comment);
         self.comments.push(comment);
 
@@ -484,9 +521,32 @@ impl BookComments {
         self.save_to_disk()
     }
 
+    pub fn update_comment_by_id(&mut self, comment_id: &str, new_content: String) -> Result<()> {
+        let idx = self
+            .find_comment_index_by_id(comment_id)
+            .context("Comment not found")?;
+
+        self.comments[idx].content = new_content;
+        self.comments[idx].updated_at = Utc::now();
+
+        self.save_to_disk()
+    }
+
     pub fn delete_comment(&mut self, chapter_href: &str, target: &CommentTarget) -> Result<()> {
         let idx = self
             .find_comment_index(chapter_href, target)
+            .context("Comment not found")?;
+
+        let _comment = self.comments.remove(idx);
+
+        self.rebuild_indices();
+
+        self.save_to_disk()
+    }
+
+    pub fn delete_comment_by_id(&mut self, comment_id: &str) -> Result<()> {
+        let idx = self
+            .find_comment_index_by_id(comment_id)
             .context("Comment not found")?;
 
         let _comment = self.comments.remove(idx);
@@ -503,6 +563,12 @@ impl BookComments {
             .and_then(|chapter_map| chapter_map.get(&node_index))
             .map(|indices| indices.iter().map(|&i| &self.comments[i]).collect())
             .unwrap_or_default()
+    }
+
+    pub fn get_comment_by_id(&self, comment_id: &str) -> Option<&Comment> {
+        self.comments_by_id
+            .get(comment_id)
+            .and_then(|&idx| self.comments.get(idx))
     }
 
     pub fn get_chapter_comments(&self, chapter_href: &str) -> Vec<&Comment> {
@@ -574,6 +640,10 @@ impl BookComments {
             .position(|c| c.matches_location(chapter_href, target))
     }
 
+    fn find_comment_index_by_id(&self, comment_id: &str) -> Option<usize> {
+        self.comments_by_id.get(comment_id).copied()
+    }
+
     fn add_to_indices(&mut self, comment: &Comment) {
         let idx = self.comments.len();
         self.comments_by_location
@@ -582,10 +652,12 @@ impl BookComments {
             .entry(comment.node_index())
             .or_default()
             .push(idx);
+        self.comments_by_id.insert(comment.id.clone(), idx);
     }
 
     fn rebuild_indices(&mut self) {
         self.comments_by_location.clear();
+        self.comments_by_id.clear();
         for (idx, comment) in self.comments.iter().enumerate() {
             self.comments_by_location
                 .entry(comment.chapter_href.clone())
@@ -593,6 +665,7 @@ impl BookComments {
                 .entry(comment.node_index())
                 .or_default()
                 .push(idx);
+            self.comments_by_id.insert(comment.id.clone(), idx);
         }
     }
 
@@ -631,12 +704,12 @@ mod tests {
     }
 
     fn create_paragraph_comment(chapter: &str, node: usize, content: &str) -> Comment {
-        Comment {
-            chapter_href: chapter.to_string(),
-            target: CommentTarget::paragraph(node, None),
-            content: content.to_string(),
-            updated_at: Utc::now(),
-        }
+        Comment::new(
+            chapter.to_string(),
+            CommentTarget::paragraph(node, None),
+            content.to_string(),
+            Utc::now(),
+        )
     }
 
     fn create_code_comment(
@@ -645,12 +718,12 @@ mod tests {
         line_range: (usize, usize),
         content: &str,
     ) -> Comment {
-        Comment {
-            chapter_href: chapter.to_string(),
-            target: CommentTarget::code_block(node, line_range),
-            content: content.to_string(),
-            updated_at: Utc::now(),
-        }
+        Comment::new(
+            chapter.to_string(),
+            CommentTarget::code_block(node, line_range),
+            content.to_string(),
+            Utc::now(),
+        )
     }
 
     #[test]
@@ -676,7 +749,7 @@ mod tests {
 
         let new_content = "Updated text".to_string();
         book_comments
-            .update_comment("chapter1.xhtml", &comment.target, new_content.clone())
+            .update_comment_by_id(&comment.id, new_content.clone())
             .unwrap();
 
         let comments = book_comments.get_node_comments("chapter1.xhtml", 1);
@@ -691,9 +764,7 @@ mod tests {
         let comment = create_paragraph_comment("chapter1.xhtml", 2, "Delete me");
         book_comments.add_comment(comment.clone()).unwrap();
 
-        book_comments
-            .delete_comment("chapter1.xhtml", &comment.target)
-            .unwrap();
+        book_comments.delete_comment_by_id(&comment.id).unwrap();
 
         let comments = book_comments.get_node_comments("chapter1.xhtml", 2);
         assert!(comments.is_empty());
@@ -736,6 +807,7 @@ mod tests {
 
         let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].id, comment.id);
         assert_eq!(parsed[0].target, comment.target);
     }
 

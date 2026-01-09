@@ -1468,6 +1468,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             inline_fragments.push(InlineCodeCommentFragment {
                                 chapter_href: comment.chapter_href.clone(),
                                 target: comment.target.clone(),
+                                comment_id: comment.id.clone(),
                                 start_column: fragment_start,
                                 end_column: appended_chars,
                             });
@@ -1493,6 +1494,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         inline_fragments.push(InlineCodeCommentFragment {
                             chapter_href: comment.chapter_href.clone(),
                             target: comment.target.clone(),
+                            comment_id: comment.id.clone(),
                             start_column: fragment_start,
                             end_column: appended_chars,
                         });
@@ -1597,6 +1599,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 line_type: LineType::Comment {
                     chapter_href: comment.chapter_href.clone(),
                     target: comment.target.clone(),
+                    comment_id: comment.id.clone(),
                 },
                 link_nodes: vec![],
                 node_anchor: None,
