@@ -3,6 +3,7 @@ pub mod book_manager;
 pub mod bookmarks;
 pub mod color_mode;
 pub mod comments;
+pub mod export;
 pub use inputs::event_source;
 pub mod components;
 pub mod images;

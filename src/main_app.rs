@@ -22,6 +22,7 @@ use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
 use crate::theme::{current_theme, current_theme_name};
 use crate::types::LinkInfo;
+use crate::widget::export_menu::{ExportMenu, ExportMenuAction};
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::theme_selector::{ThemeSelector, ThemeSelectorAction};
 use image::GenericImageView;
@@ -122,6 +123,7 @@ pub struct App {
     help_popup: Option<HelpPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     theme_selector: Option<ThemeSelector>,
+    export_menu: Option<ExportMenu>,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -160,6 +162,7 @@ pub enum PopupWindow {
     Help,
     CommentsViewer,
     ThemeSelector,
+    ExportMenu,
 }
 
 impl Default for App {
@@ -360,6 +363,7 @@ impl App {
             help_popup: None,
             comments_viewer: None,
             theme_selector: None,
+            export_menu: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -1046,6 +1050,63 @@ impl App {
 
                 if matches!(
                     self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ExportMenu)
+                ) {
+                    let click_x = mouse_event.column;
+                    let click_y = mouse_event.row;
+
+                    if let Some(ref mut menu) = self.export_menu {
+                        // Check if click is outside popup area - close it
+                        if menu.is_outside_popup_area(click_x, click_y) {
+                            self.export_menu = None;
+                            self.close_popup_to_previous();
+                            return;
+                        }
+
+                        // Handle single or double click
+                        let click_type = self
+                            .mouse_tracker
+                            .detect_click_type(mouse_event.column, mouse_event.row);
+
+                        match click_type {
+                            ClickType::Single | ClickType::Triple => {
+                                menu.handle_mouse_click(mouse_event.column, mouse_event.row);
+                            }
+                            ClickType::Double => {
+                                if menu.handle_mouse_click(mouse_event.column, mouse_event.row) {
+                                    // Select on double-click
+                                    if let Some(action) = menu.handle_key(
+                                        crossterm::event::KeyEvent::new(
+                                            crossterm::event::KeyCode::Enter,
+                                            crossterm::event::KeyModifiers::NONE,
+                                        ),
+                                        &mut self.key_sequence,
+                                    ) {
+                                        match action {
+                                            ExportMenuAction::Export {
+                                                format,
+                                                content,
+                                                organization,
+                                            } => {
+                                                self.handle_export(format, content, organization);
+                                                self.export_menu = None;
+                                                self.close_popup_to_previous();
+                                            }
+                                            ExportMenuAction::Close => {
+                                                self.export_menu = None;
+                                                self.close_popup_to_previous();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
+                if matches!(
+                    self.focused_panel,
                     FocusedPanel::Popup(PopupWindow::ThemeSelector)
                 ) {
                     let click_x = mouse_event.column;
@@ -1615,6 +1676,90 @@ impl App {
         }
     }
 
+    fn handle_export(
+        &mut self,
+        format: crate::widget::export_menu::ExportFormat,
+        content: crate::widget::export_menu::ExportContent,
+        organization: crate::widget::export_menu::ExportOrganization,
+    ) {
+        use crate::export::AnnotationExporter;
+        use std::path::PathBuf;
+
+        let Some(book) = &mut self.current_book else {
+            self.show_error("No book loaded");
+            return;
+        };
+
+        let book_title = book
+            .file
+            .split('/')
+            .next_back()
+            .unwrap_or("Unknown")
+            .trim_end_matches(".epub");
+
+        let export_dir = PathBuf::from(settings::get_export_directory());
+        let frontmatter_template = settings::get_frontmatter_template();
+
+        // Get book comments
+        let comments_arc = self.text_reader.get_comments();
+        let comments = match comments_arc.lock() {
+            Ok(guard) => guard,
+            Err(e) => {
+                error!("Failed to lock comments: {}", e);
+                self.show_error("Failed to access annotations");
+                return;
+            }
+        };
+
+        match AnnotationExporter::export(
+            &comments,
+            &mut book.epub,
+            book_title,
+            &export_dir,
+            format,
+            content,
+            organization,
+            &frontmatter_template,
+        ) {
+            Ok(files) => {
+                let file_count = files.len();
+                let msg = if file_count == 1 {
+                    format!("Exported annotations to: {}", files[0].display())
+                } else {
+                    format!(
+                        "Exported {} annotation files to: {}",
+                        file_count,
+                        export_dir.display()
+                    )
+                };
+                self.show_info(&msg);
+                info!("Export successful: {} files", file_count);
+            }
+            Err(e) => {
+                if let Some(export_err) = e.downcast_ref::<crate::export::ExportError>() {
+                    use crate::export::ExportError;
+                    match export_err {
+                        ExportError::NoAnnotations => {
+                            self.show_warning("No annotations to export".to_string());
+                        }
+                        ExportError::ExportDirNotFound => {
+                            self.show_error(format!(
+                                "Export directory not found: {}",
+                                export_dir.display()
+                            ));
+                        }
+                        ExportError::WriteError(msg) => {
+                            self.show_error(format!("Export failed: {}", msg));
+                        }
+                    }
+                } else {
+                    error!("Export failed: {}", e);
+                    self.show_error(format!("Export failed: {}", e));
+                }
+            }
+        }
+    }
+
     pub fn get_scroll_offset(&self) -> usize {
         self.text_reader.get_scroll_offset()
     }
@@ -1925,6 +2070,22 @@ impl App {
                 theme_selector.render(f, f.area());
             }
         }
+
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::ExportMenu)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut export_menu) = self.export_menu {
+                export_menu.render(f, f.area());
+            }
+        }
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -2107,7 +2268,8 @@ impl App {
                 }
                 _ => "Search mode active".to_string(),
             }
-        } else if self.text_reader.has_text_selection() {
+        } else if self.text_reader.has_text_selection() || self.text_reader.is_visual_mode_active()
+        {
             "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
         } else {
             let help_text = match self.focused_panel {
@@ -2115,7 +2277,7 @@ impl App {
                     "j/k: Navigate | Enter: Select | h/l: Fold/Unfold | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
+                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | n/N: Cursor Mode | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
                     "j/k/Scroll: Navigate | Enter/DblClick: Open | ESC: Close"
@@ -2135,6 +2297,9 @@ impl App {
                 }
                 FocusedPanel::Popup(PopupWindow::ThemeSelector) => {
                     "j/k: Navigate | Enter: Apply | ESC: Close"
+                }
+                FocusedPanel::Popup(PopupWindow::ExportMenu) => {
+                    "j/k: Navigate | Enter/l: Select | h/ESC: Back | ESC: Close"
                 }
             };
             help_text.to_string()
@@ -2346,6 +2511,20 @@ impl App {
                     } else {
                         debug!("Successfully copied chapter content to clipboard");
                     }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " e" => {
+                // Handle Space->e to open export menu
+                if self.current_book.is_some() {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.export_menu = Some(ExportMenu::new());
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ExportMenu);
+                } else {
+                    self.show_warning("No book loaded".to_string());
                 }
                 self.key_sequence.clear();
                 true
@@ -2863,6 +3042,34 @@ impl App {
             return None;
         }
 
+        // If export menu popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ExportMenu) {
+            let action = if let Some(ref mut menu) = self.export_menu {
+                menu.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(action) = action {
+                match action {
+                    ExportMenuAction::Close => {
+                        self.close_popup_to_previous();
+                        self.export_menu = None;
+                    }
+                    ExportMenuAction::Export {
+                        format,
+                        content,
+                        organization,
+                    } => {
+                        self.handle_export(format, content, organization);
+                        self.export_menu = None;
+                        self.close_popup_to_previous();
+                    }
+                }
+            }
+            return None;
+        }
+
         if self.is_search_input_mode() {
             match key.code {
                 KeyCode::Char(c) => self.handle_search_input(c),
@@ -3119,6 +3326,22 @@ impl App {
                 let visual_mode = self.text_reader.get_visual_mode();
 
                 match key.code {
+                    KeyCode::Char('a') => {
+                        let success = self.text_reader.convert_visual_to_text_selection()
+                            && self.text_reader.start_comment_input();
+
+                        if success {
+                            debug!("Started comment input mode from visual selection");
+                        } else {
+                            debug!("Failed to start comment input from visual selection");
+                            self.notifications
+                                .show_warning("Cannot annotate this selection");
+                        }
+
+                        // Always exit visual mode when 'a' is pressed
+                        self.text_reader.exit_visual_mode();
+                        return None;
+                    }
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
                             let _ = self.text_reader.copy_to_clipboard(text);
@@ -3212,6 +3435,11 @@ impl App {
                 }
                 _ => {}
             }
+        }
+
+        // Check for global hotkeys first (works across all panels)
+        if self.handle_global_hotkeys(key) {
+            return None;
         }
 
         match key.code {
