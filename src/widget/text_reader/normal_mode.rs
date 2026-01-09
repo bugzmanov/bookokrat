@@ -586,7 +586,7 @@ impl MarkdownTextReader {
             .unwrap_or(0)
     }
 
-    fn is_image_line(&self, line: usize) -> bool {
+    pub(super) fn is_image_line(&self, line: usize) -> bool {
         self.rendered_content
             .lines
             .get(line)
@@ -626,7 +626,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn clamp_column_to_line_length(&mut self) {
+    pub(super) fn clamp_column_to_line_length(&mut self) {
         let line_len = self.get_line_char_count(self.normal_mode.cursor.line);
         if line_len == 0 {
             self.normal_mode.cursor.column = 0;
@@ -639,7 +639,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn ensure_cursor_visible(&mut self) {
+    pub(super) fn ensure_cursor_visible(&mut self) {
         let scrolloff = self.normal_mode.scrolloff;
         let cursor_line = self.normal_mode.cursor.line;
         let viewport_top = self.scroll_offset;
