@@ -193,11 +193,11 @@ impl HelpPopup {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_down();
                 None
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.scroll_up();
                 None
             }

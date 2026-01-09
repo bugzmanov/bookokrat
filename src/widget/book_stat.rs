@@ -472,11 +472,11 @@ impl BookStat {
         use crossterm::event::KeyCode;
 
         match key.code {
-            KeyCode::Char('j') => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.handle_j();
                 None
             }
-            KeyCode::Char('k') => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.handle_k();
                 None
             }
