@@ -2832,20 +2832,6 @@ impl App {
                             }
                         }
                     }
-                    CommentsViewerAction::ExportComments { filename } => {
-                        if let Some(ref viewer) = self.comments_viewer {
-                            let content = viewer.generate_export_markdown();
-                            match std::fs::write(&filename, &content) {
-                                Ok(_) => {
-                                    self.show_info(format!("Exported to {filename}"));
-                                }
-                                Err(e) => {
-                                    error!("Failed to export comments to {filename}: {e}");
-                                    self.show_error(format!("Failed to export: {e}"));
-                                }
-                            }
-                        }
-                    }
                 }
             }
             return None;
