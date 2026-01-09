@@ -275,6 +275,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     target,
                                     content: comment_text.clone(),
                                     selected_text,
+                                    highlight_only: false,
                                     updated_at: Utc::now(),
                                 };
 
@@ -296,6 +297,53 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.comment_input.clear();
 
         self.cache_generation += 1;
+    }
+
+    /// Create a highlight-only comment (no note text)
+    pub fn create_highlight_only(&mut self) -> bool {
+        if !self.has_text_selection() {
+            return false;
+        }
+
+        if let Some((start, end)) = self.text_selection.get_selection_range() {
+            let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                let selected_text = self
+                    .text_selection
+                    .extract_selected_text(&self.raw_text_lines);
+
+                if let Some(chapter_file) = &self.current_chapter_file {
+                    if let Some(comments_arc) = &self.book_comments {
+                        if let Ok(mut comments) = comments_arc.lock() {
+                            use chrono::Utc;
+
+                            let comment = Comment {
+                                chapter_href: chapter_file.clone(),
+                                target,
+                                content: String::new(), // No text content for highlight-only
+                                selected_text,
+                                highlight_only: true,
+                                updated_at: Utc::now(),
+                            };
+
+                            if let Err(e) = comments.add_comment(comment) {
+                                warn!("Failed to add highlight: {e}");
+                                return false;
+                            } else {
+                                debug!("Saved highlight-only comment");
+                            }
+                        }
+                    }
+                }
+
+                self.rebuild_chapter_comments();
+                self.text_selection.clear_selection();
+                self.cache_generation += 1;
+                return true;
+            }
+        }
+
+        false
     }
 
     /// Check if we're currently in comment input mode
@@ -450,6 +498,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         _is_focused: bool,
         indent: usize,
     ) {
+        // Skip rendering if this is a highlight-only comment (no text)
+        if comment.highlight_only {
+            return;
+        }
+
         // Skip rendering if we're currently editing this comment
         if self.is_editing_this_comment(comment) {
             return;

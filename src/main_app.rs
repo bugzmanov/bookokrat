@@ -2270,7 +2270,7 @@ impl App {
             }
         } else if self.text_reader.has_text_selection() || self.text_reader.is_visual_mode_active()
         {
-            "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
+            "a: Add comment | h: Highlight only | y/c/Ctrl+C: Copy | ESC: Clear selection".to_string()
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::NavigationList) => {
@@ -3339,6 +3339,23 @@ impl App {
                         }
 
                         // Always exit visual mode when 'a' is pressed
+                        self.text_reader.exit_visual_mode();
+                        return None;
+                    }
+                    KeyCode::Char('h') => {
+                        let success = self.text_reader.convert_visual_to_text_selection()
+                            && self.text_reader.create_highlight_only();
+
+                        if success {
+                            debug!("Created highlight-only annotation from visual selection");
+                            self.notifications.show_info("Highlight added");
+                        } else {
+                            debug!("Failed to create highlight from visual selection");
+                            self.notifications
+                                .show_warning("Cannot highlight this selection");
+                        }
+
+                        // Exit visual mode
                         self.text_reader.exit_visual_mode();
                         return None;
                     }

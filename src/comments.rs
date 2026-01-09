@@ -100,6 +100,7 @@ pub struct Comment {
     pub target: CommentTarget,
     pub content: String,
     pub selected_text: Option<String>, // The text that was highlighted/selected
+    pub highlight_only: bool,          // True if this is just a highlight without a note
     pub updated_at: DateTime<Utc>,
 }
 
@@ -111,6 +112,8 @@ struct CommentModernSerde {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected_text: Option<String>,
+    #[serde(default)]
+    pub highlight_only: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -124,6 +127,8 @@ struct CommentLegacySerde {
     pub content: String,
     #[serde(default)]
     pub selected_text: Option<String>,
+    #[serde(default)]
+    pub highlight_only: bool,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -144,6 +149,7 @@ impl From<CommentLegacySerde> for Comment {
             },
             content: legacy.content,
             selected_text: legacy.selected_text,
+            highlight_only: legacy.highlight_only,
             updated_at: legacy.updated_at,
         }
     }
@@ -156,6 +162,7 @@ impl From<CommentModernSerde> for Comment {
             target: modern.target,
             content: modern.content,
             selected_text: modern.selected_text,
+            highlight_only: modern.highlight_only,
             updated_at: modern.updated_at,
         }
     }
@@ -168,6 +175,7 @@ impl From<&Comment> for CommentModernSerde {
             target: comment.target.clone(),
             content: comment.content.clone(),
             selected_text: comment.selected_text.clone(),
+            highlight_only: comment.highlight_only,
             updated_at: comment.updated_at,
         }
     }
@@ -512,6 +520,7 @@ mod tests {
             },
             content: content.to_string(),
             selected_text: None,
+            highlight_only: false,
             updated_at: Utc::now(),
         }
     }
@@ -530,6 +539,7 @@ mod tests {
             },
             content: content.to_string(),
             selected_text: None,
+            highlight_only: false,
             updated_at: Utc::now(),
         }
     }
