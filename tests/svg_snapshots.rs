@@ -653,13 +653,13 @@ fn test_quote_and_code_comment_rendering_svg() {
 
 #[test]
 #[parallel]
-fn test_nested_list_comment_rendering_svg() {
+fn test_list_comment_rendering_complex_svg() {
     ensure_test_report_initialized();
-    let mut terminal = create_test_terminal(80, 30);
+    let mut terminal = create_test_terminal(80, 36);
 
     let html_content = r#"<!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml">
-<head><title>Nested List Comment Test</title></head>
+<head><title>List Comment Test</title></head>
 <body>
     <ul>
         <li>Top item one</li>
@@ -671,11 +671,23 @@ fn test_nested_list_comment_rendering_svg() {
         </li>
         <li>Top item three</li>
     </ul>
+    <ul>
+        <li>
+            <p>First paragraph in list item</p>
+            <p>Second paragraph with comment</p>
+            <p>Third paragraph plain</p>
+        </li>
+        <li>
+            <p>First paragraph in second item</p>
+            <p>Second paragraph spanning comment</p>
+            <p>Third paragraph spanning comment</p>
+        </li>
+    </ul>
 </body>
 </html>"#;
 
     let temp_dir = tempfile::tempdir().unwrap();
-    let temp_html_path = temp_dir.path().join("nested_list_comment_test.html");
+    let temp_html_path = temp_dir.path().join("list_comment_complex_test.html");
     std::fs::write(&temp_html_path, html_content).unwrap();
 
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
@@ -694,7 +706,7 @@ fn test_nested_list_comment_rendering_svg() {
     let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
     let chapter_href = app
         .testing_current_chapter_file()
-        .unwrap_or_else(|| "nested_list_comment_test.html".to_string());
+        .unwrap_or_else(|| "list_comment_complex_test.html".to_string());
 
     terminal
         .draw(|f| {
@@ -706,6 +718,18 @@ fn test_nested_list_comment_rendering_svg() {
     let (nested_start_line, nested_start_col, nested_end_line, nested_end_col) = {
         let rendered_lines = app.testing_rendered_lines();
         selection_for_text(rendered_lines, "Nested item B with comment", 10)
+    };
+    let (second_start_line, second_start_col, second_end_line, second_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second paragraph with comment", 10)
+    };
+    let (span_start_line, span_start_col, _span_end_line, _span_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Second paragraph spanning comment", 10)
+    };
+    let (_span_tail_line, _span_tail_col, span_tail_end_line, span_tail_end_col) = {
+        let rendered_lines = app.testing_rendered_lines();
+        selection_for_text(rendered_lines, "Third paragraph spanning comment", 10)
     };
 
     app.testing_add_comment(Comment {
@@ -722,6 +746,34 @@ fn test_nested_list_comment_rendering_svg() {
         updated_at: base_time,
     });
 
+    app.testing_add_comment(Comment {
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                second_start_line,
+                second_start_col,
+                second_end_line,
+                second_end_col,
+            )
+            .expect("missing multiline list item comment target"),
+        content: "Second paragraph comment".to_string(),
+        updated_at: base_time,
+    });
+
+    app.testing_add_comment(Comment {
+        chapter_href: chapter_href.clone(),
+        target: app
+            .testing_comment_target_for_selection(
+                span_start_line,
+                span_start_col,
+                span_tail_end_line,
+                span_tail_end_col,
+            )
+            .expect("missing multiline range comment target"),
+        content: "Second and third paragraph comment".to_string(),
+        updated_at: base_time,
+    });
+
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
     terminal
@@ -734,16 +786,16 @@ fn test_nested_list_comment_rendering_svg() {
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
     std::fs::write(
-        "tests/snapshots/debug_nested_list_comment_rendering.svg",
+        "tests/snapshots/debug_list_comment_rendering_complex.svg",
         &svg_output,
     )
     .unwrap();
 
     assert_svg_snapshot(
         svg_output.clone(),
-        std::path::Path::new("tests/snapshots/nested_list_comment_rendering.svg"),
-        "test_nested_list_comment_rendering_svg",
-        create_test_failure_handler("test_nested_list_comment_rendering_svg"),
+        std::path::Path::new("tests/snapshots/list_comment_rendering_complex.svg"),
+        "test_list_comment_rendering_complex_svg",
+        create_test_failure_handler("test_list_comment_rendering_complex_svg"),
     );
 }
 

@@ -201,6 +201,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
 
             List { kind, items } => {
+                let mut list_char_pos = 0;
                 self.render_list(
                     kind,
                     items,
@@ -211,6 +212,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_focused,
                     indent,
                     node_index,
+                    &[],
+                    &mut list_char_pos,
                 );
             }
 
@@ -1618,17 +1621,31 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
         node_index: Option<usize>,
+        list_path: &[usize],
+        global_char_pos: &mut usize,
     ) {
         use crate::markdown::ListKind;
 
         // Collect comments and annotation ranges for this list node
-        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let annotation_ranges = if list_path.is_empty() {
+            self.get_annotation_ranges_for_legacy_list(node_index)
+        } else {
+            Vec::new()
+        };
         let underline_color = palette.base_0e; // Purple
 
-        // Track cumulative character position across all list items for annotation ranges
-        let mut cumulative_char_pos = 0;
-
         for (idx, item) in items.iter().enumerate() {
+            let mut item_path = list_path.to_vec();
+            item_path.push(idx);
+            let item_line_path = if list_path.is_empty() {
+                Vec::new()
+            } else {
+                item_path.clone()
+            };
+            let item_annotation_ranges =
+                self.get_annotation_ranges_for_list_item_path(node_index, &item_path);
+            let mut item_char_pos = 0;
+
             // Determine bullet/number for this item
             let prefix = match kind {
                 ListKind::Unordered => "• ".to_string(),
@@ -1637,6 +1654,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     format!("{num}. ")
                 }
             };
+            let indent_char_len = "  ".repeat(indent).chars().count();
 
             let mut first_block_line_count = 0;
 
@@ -1659,12 +1677,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             // We add prefix length because content spans don't include the prefix,
                             // but annotation positions are calculated from raw_text which does.
                             let prefix_char_len = prefix.chars().count();
-                            let (styled_spans, _) = Self::apply_annotation_underlines_with_offset(
-                                content_rich_spans,
-                                &annotation_ranges,
-                                underline_color,
-                                cumulative_char_pos + prefix_char_len,
-                            );
+                            let (styled_spans, _) = if list_path.is_empty() {
+                                Self::apply_annotation_underlines_with_offset(
+                                    content_rich_spans,
+                                    &annotation_ranges,
+                                    underline_color,
+                                    *global_char_pos + indent_char_len + prefix_char_len,
+                                )
+                            } else {
+                                Self::apply_annotation_underlines_with_offset(
+                                    content_rich_spans,
+                                    &item_annotation_ranges,
+                                    underline_color,
+                                    item_char_pos + indent_char_len + prefix_char_len,
+                                )
+                            };
 
                             let lines_before = lines.len();
 
@@ -1688,10 +1715,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     kind: kind.clone(),
                                     indent,
                                     item_index: idx,
+                                    list_path: item_line_path.clone(),
                                 };
                                 line.node_index = node_index;
-                                cumulative_char_pos += line.raw_text.chars().count();
+                                let line_len = line.raw_text.chars().count();
+                                if !list_path.is_empty() {
+                                    item_char_pos += line_len;
+                                }
+                                *global_char_pos += line_len;
                             }
+                        }
+                        MarkdownBlock::List {
+                            kind: nested_kind,
+                            items: nested_items,
+                        } => {
+                            let lines_before = lines.len();
+                            self.render_list(
+                                nested_kind,
+                                nested_items,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                indent + 1,
+                                node_index,
+                                &item_path,
+                                global_char_pos,
+                            );
+                            first_block_line_count = lines.len() - lines_before;
                         }
                         _ => {
                             let lines_before = lines.len();
@@ -1710,17 +1762,90 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
                     }
                 } else {
-                    self.render_node(
-                        block_node,
-                        lines,
-                        total_height,
-                        width,
-                        palette,
-                        is_focused,
-                        indent + 1,
-                        None,
-                        RenderContext::InsideContainer,
-                    );
+                    match &block_node.block {
+                        MarkdownBlock::Paragraph { content } => {
+                            let mut content_rich_spans = Vec::new();
+                            for item in content.iter() {
+                                content_rich_spans
+                                    .extend(self.render_text_or_inline(item, palette, is_focused));
+                            }
+
+                            let indent_char_len = "  ".repeat(indent + 1).chars().count();
+                            let (styled_spans, _) = if list_path.is_empty() {
+                                Self::apply_annotation_underlines_with_offset(
+                                    content_rich_spans,
+                                    &annotation_ranges,
+                                    underline_color,
+                                    *global_char_pos + indent_char_len,
+                                )
+                            } else {
+                                Self::apply_annotation_underlines_with_offset(
+                                    content_rich_spans,
+                                    &item_annotation_ranges,
+                                    underline_color,
+                                    item_char_pos + indent_char_len,
+                                )
+                            };
+
+                            let lines_before = lines.len();
+                            self.render_text_spans(
+                                &styled_spans,
+                                None,
+                                lines,
+                                total_height,
+                                width,
+                                indent + 1,
+                                false,
+                                None,
+                            );
+
+                            for line in lines[lines_before..].iter_mut() {
+                                line.line_type = LineType::ListItem {
+                                    kind: kind.clone(),
+                                    indent,
+                                    item_index: idx,
+                                    list_path: item_line_path.clone(),
+                                };
+                                line.node_index = node_index;
+                                let line_len = line.raw_text.chars().count();
+                                if !list_path.is_empty() {
+                                    item_char_pos += line_len;
+                                }
+                                *global_char_pos += line_len;
+                            }
+                        }
+                        MarkdownBlock::List {
+                            kind: nested_kind,
+                            items: nested_items,
+                        } => {
+                            self.render_list(
+                                nested_kind,
+                                nested_items,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                indent + 1,
+                                node_index,
+                                &item_path,
+                                global_char_pos,
+                            );
+                        }
+                        _ => {
+                            self.render_node(
+                                block_node,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                indent + 1,
+                                None,
+                                RenderContext::InsideContainer,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -1732,8 +1857,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
-        // Render comments for the list at the end
-        let list_comments = self.get_node_comments(node_index);
+        // Render comments for the list at the end (only at the outermost list level)
+        let list_comments = if list_path.is_empty() {
+            self.get_node_comments(node_index)
+        } else {
+            Vec::new()
+        };
         if !list_comments.is_empty() {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
@@ -2370,6 +2499,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Render comments for this definition list if any
         let def_comments = self.get_node_comments(node_index);
         if !def_comments.is_empty() {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+
             self.render_node_comments(
                 node_index,
                 lines,

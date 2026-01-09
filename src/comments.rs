@@ -17,6 +17,8 @@ pub enum BlockSubtarget {
     /// A specific item within a list block.
     ListItem {
         item_index: usize,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        list_path: Vec<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         word_range: Option<(usize, usize)>,
     },
@@ -62,6 +64,13 @@ impl BlockSubtarget {
         }
     }
 
+    pub fn list_path(&self) -> Option<&[usize]> {
+        match self {
+            BlockSubtarget::ListItem { list_path, .. } => Some(list_path.as_slice()),
+            _ => None,
+        }
+    }
+
     pub fn definition_item_index(&self) -> Option<usize> {
         match self {
             BlockSubtarget::DefinitionItem { item_index, .. } => Some(*item_index),
@@ -97,6 +106,7 @@ impl BlockSubtarget {
             BlockSubtarget::Paragraph { word_range } => word_range.unwrap_or((0, 0)),
             BlockSubtarget::ListItem {
                 item_index,
+                list_path: _list_path,
                 word_range,
             } => (*item_index, word_range.map(|(s, _)| s).unwrap_or(0)),
             BlockSubtarget::QuoteParagraph {
@@ -137,6 +147,23 @@ impl CommentTarget {
             node_index,
             subtarget: BlockSubtarget::ListItem {
                 item_index,
+                list_path: Vec::new(),
+                word_range,
+            },
+        }
+    }
+
+    pub fn list_item_with_path(
+        node_index: usize,
+        list_path: Vec<usize>,
+        word_range: Option<(usize, usize)>,
+    ) -> Self {
+        let item_index = list_path.last().copied().unwrap_or(0);
+        Self {
+            node_index,
+            subtarget: BlockSubtarget::ListItem {
+                item_index,
+                list_path,
                 word_range,
             },
         }
@@ -281,6 +308,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
         let subtarget = if let Some(item_index) = legacy.list_item_index {
             BlockSubtarget::ListItem {
                 item_index,
+                list_path: Vec::new(),
                 word_range: legacy.word_range,
             }
         } else if let Some(paragraph_index) = legacy.quote_paragraph_index {

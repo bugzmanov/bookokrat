@@ -154,18 +154,20 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        let node_idx = (start.line..=end.line).find_map(|idx| {
+        let mut node_idx = (start.line..=end.line).find_map(|idx| {
             self.rendered_content
                 .lines
                 .get(idx)
                 .and_then(|line| line.node_index)
-        })?;
+        });
 
-        for idx in start.line..=end.line {
-            if let Some(line) = self.rendered_content.lines.get(idx) {
-                if let Some(line_node_idx) = line.node_index {
-                    if line_node_idx != node_idx {
-                        return None;
+        if let Some(found_node_idx) = node_idx {
+            for idx in start.line..=end.line {
+                if let Some(line) = self.rendered_content.lines.get(idx) {
+                    if let Some(line_node_idx) = line.node_index {
+                        if line_node_idx != found_node_idx {
+                            return None;
+                        }
                     }
                 }
             }
@@ -178,7 +180,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(meta) = &line.code_line {
-                    if meta.node_index == node_idx {
+                    if node_idx.map_or(true, |found_node_idx| meta.node_index == found_node_idx) {
                         has_code = true;
                         min_code = min_code.min(meta.line_index);
                         max_code = max_code.max(meta.line_index);
@@ -188,24 +190,72 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         if has_code {
-            return Some(CommentTarget::code_block(node_idx, (min_code, max_code)));
+            if let Some(found_node_idx) = node_idx {
+                return Some(CommentTarget::code_block(found_node_idx, (min_code, max_code)));
+            }
+            return None;
         }
 
-        let word_range = self.compute_paragraph_word_range(node_idx, start, end);
+        let word_range = node_idx.and_then(|found_node_idx| {
+            self.compute_paragraph_word_range(found_node_idx, start, end)
+        });
 
-        // Check if selection is within a list item and extract the item index
+        // Check if selection is within a list item and extract the item index + path
         let list_item_info = (start.line..=end.line).find_map(|idx| {
             self.rendered_content.lines.get(idx).and_then(|line| {
-                if let LineType::ListItem { item_index, .. } = &line.line_type {
-                    Some(*item_index)
+                if let LineType::ListItem {
+                    item_index,
+                    list_path,
+                    ..
+                } = &line.line_type
+                {
+                    Some((*item_index, list_path.clone()))
                 } else {
                     None
                 }
             })
         });
 
-        if let Some(item_index) = list_item_info {
-            return Some(CommentTarget::list_item(node_idx, item_index, word_range));
+        if let Some((item_index, list_path)) = list_item_info {
+            let node_idx = if let Some(found_node_idx) = node_idx {
+                found_node_idx
+            } else {
+                let inferred = self.rendered_content.lines.iter().find_map(|line| {
+                    if let LineType::ListItem {
+                        list_path: line_path,
+                        ..
+                    } = &line.line_type
+                    {
+                        if line_path.as_slice() == list_path.as_slice() {
+                            return line.node_index;
+                        }
+                    }
+                    None
+                });
+                if let Some(found) = inferred {
+                    found
+                } else {
+                    return None;
+                }
+            };
+
+            let list_word_range = if list_path.is_empty() {
+                word_range
+            } else {
+                self.compute_list_item_word_range(node_idx, &list_path, start, end)
+            };
+            if list_path.is_empty() {
+                return Some(CommentTarget::list_item(
+                    node_idx,
+                    item_index,
+                    list_word_range,
+                ));
+            }
+            return Some(CommentTarget::list_item_with_path(
+                node_idx,
+                list_path,
+                list_word_range,
+            ));
         }
 
         // Check if selection is within a definition list item and extract the item index
@@ -224,6 +274,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         });
 
         if let Some((item_index, is_term)) = definition_item_info {
+            let node_idx = node_idx?;
             return Some(CommentTarget::definition_item(
                 node_idx, item_index, is_term, word_range,
             ));
@@ -241,6 +292,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         });
 
         if let Some(paragraph_index) = quote_paragraph_info {
+            let node_idx = node_idx?;
             return Some(CommentTarget::quote_paragraph(
                 node_idx,
                 paragraph_index,
@@ -248,6 +300,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             ));
         }
 
+        let node_idx = node_idx?;
         Some(CommentTarget::paragraph(node_idx, word_range))
     }
 
@@ -513,6 +566,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    pub fn get_annotation_ranges_for_legacy_list(
+        &self,
+        node_index: Option<usize>,
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &c.target.subtarget,
+                    crate::comments::BlockSubtarget::ListItem { list_path, .. }
+                        if list_path.is_empty()
+                )
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
     /// Get annotation ranges for a specific list item
     pub fn get_annotation_ranges_for_list_item(
         &self,
@@ -522,6 +592,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.get_node_comments(node_index)
             .iter()
             .filter(|c| c.target.subtarget.list_item_index() == Some(item_index))
+            .filter(|c| {
+                c.target
+                    .subtarget
+                    .list_path()
+                    .map_or(true, |path| path.is_empty())
+            })
+            .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_annotation_ranges_for_list_item_path(
+        &self,
+        node_index: Option<usize>,
+        list_path: &[usize],
+    ) -> Vec<(usize, usize)> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                c.target
+                    .subtarget
+                    .list_path()
+                    .map_or(false, |path| path == list_path)
+            })
             .filter_map(|c| c.target.word_range())
             .collect()
     }
@@ -733,6 +826,60 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let len = line.raw_text.chars().count();
                 offsets.push((idx, cumulative, len));
                 cumulative += len;
+            }
+        }
+
+        if offsets.is_empty() {
+            return None;
+        }
+
+        let total_len = cumulative;
+
+        let start_offset = offsets
+            .iter()
+            .find(|(line_idx, _, _)| *line_idx == start.line)
+            .map(|(_, base, len)| base + start.column.min(*len))?;
+
+        let end_offset = offsets
+            .iter()
+            .find(|(line_idx, _, _)| *line_idx == end.line)
+            .map(|(_, base, len)| base + end.column.min(*len))
+            .unwrap_or(total_len);
+
+        if start_offset >= end_offset {
+            return None;
+        }
+
+        if start_offset == 0 && end_offset >= total_len {
+            return None;
+        }
+
+        Some((start_offset, end_offset.min(total_len)))
+    }
+
+    fn compute_list_item_word_range(
+        &self,
+        node_idx: usize,
+        list_path: &[usize],
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Option<(usize, usize)> {
+        let mut offsets = Vec::new();
+        let mut cumulative = 0;
+
+        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index == Some(node_idx) {
+                if let LineType::ListItem {
+                    list_path: line_path,
+                    ..
+                } = &line.line_type
+                {
+                    if line_path.as_slice() == list_path {
+                        let len = line.raw_text.chars().count();
+                        offsets.push((idx, cumulative, len));
+                        cumulative += len;
+                    }
+                }
             }
         }
 

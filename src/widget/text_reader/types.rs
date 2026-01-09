@@ -82,6 +82,8 @@ pub enum LineType {
         indent: usize,
         /// Index of this item within the list (0-based)
         item_index: usize,
+        /// Path of item indices for nested lists (outermost -> current). Empty for top-level.
+        list_path: Vec<usize>,
     },
     DefinitionListItem {
         /// Index of the definition item within the list (0-based)
