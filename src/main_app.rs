@@ -531,6 +531,8 @@ impl App {
 
         match BookComments::new(&path_buf, self.comments_dir.as_deref()) {
             Ok(comments) => {
+                let comment_count = comments.get_all_comments().len();
+                debug!("Loaded {} comments for book: {:?}", comment_count, path_buf);
                 let comments_arc = Arc::new(Mutex::new(comments));
                 self.text_reader.set_book_comments(comments_arc);
             }
@@ -2270,7 +2272,8 @@ impl App {
             }
         } else if self.text_reader.has_text_selection() || self.text_reader.is_visual_mode_active()
         {
-            "a: Add comment | h: Highlight only | y/c/Ctrl+C: Copy | ESC: Clear selection".to_string()
+            "a: Add comment | h: Highlight only | y/c/Ctrl+C: Copy | ESC: Clear selection"
+                .to_string()
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::NavigationList) => {

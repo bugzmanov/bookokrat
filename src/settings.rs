@@ -75,10 +75,16 @@ fn default_annotation_highlight_color() -> String {
 }
 
 fn default_export_directory() -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| ".".to_string())
+    // Expand ~ to home directory
+    if let Some(home) = home::home_dir() {
+        home.join("bookokrat")
+            .join("notes")
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "~/bookokrat/notes".to_string())
+    } else {
+        "~/bookokrat/notes".to_string()
+    }
 }
 
 fn default_frontmatter_template() -> String {
@@ -135,7 +141,12 @@ pub fn load_settings() {
                 debug!("Loaded settings from {:?}", path);
 
                 // Run migrations if needed
-                if settings.version < CURRENT_VERSION {
+                let needs_migration = settings.version < CURRENT_VERSION;
+                if needs_migration {
+                    info!(
+                        "Migrating settings from v{} to v{}",
+                        settings.version, CURRENT_VERSION
+                    );
                     migrate_settings(&mut settings);
                 }
 
@@ -143,8 +154,12 @@ pub fn load_settings() {
                     *global = settings.clone();
                 }
 
-                // Always save settings to ensure file has all current fields with descriptions
-                save_settings_to_file(&settings, &path);
+                // Only save settings if a migration occurred
+                // This preserves user's custom formatting and comments
+                if needs_migration {
+                    info!("Saving migrated settings to {:?}", path);
+                    save_settings_to_file(&settings, &path);
+                }
             }
             Err(e) => {
                 error!("Failed to parse settings file {:?}: {}", path, e);
@@ -157,11 +172,6 @@ pub fn load_settings() {
 }
 
 fn migrate_settings(settings: &mut Settings) {
-    info!(
-        "Migrating settings from v{} to v{}",
-        settings.version, CURRENT_VERSION
-    );
-
     // Future migrations go here:
     // if settings.version < 2 {
     //     migrate_v1_to_v2(settings);

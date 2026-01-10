@@ -264,6 +264,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn set_current_chapter_file(&mut self, chapter_file: Option<String>) {
+        use log::debug;
+        debug!("Setting current_chapter_file to: {:?}", chapter_file);
         self.current_chapter_file = chapter_file;
         self.rebuild_chapter_comments();
     }

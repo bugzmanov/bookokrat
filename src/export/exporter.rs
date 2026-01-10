@@ -269,8 +269,8 @@ impl AnnotationExporter {
         comment: &Comment,
         epub: &mut EpubDoc<R>,
     ) -> Result<Option<String>> {
-        // If selected_text is available, use it
-        if let Some(ref selected) = comment.selected_text {
+        // If context is available, use it
+        if let Some(ref selected) = comment.context {
             return Ok(Some(selected.clone()));
         }
 

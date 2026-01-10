@@ -200,6 +200,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
 
             List { kind, items } => {
+                use log::debug;
+                if let Some(idx) = node_index {
+                    debug!("Rendering LIST at node {}, {} items", idx, items.len());
+                }
                 self.render_list(
                     kind,
                     items,
@@ -1483,6 +1487,58 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
 
+                            // Apply comment highlighting for this list item
+                            // All items in a list share the same node_index (the List's node)
+                            // Check if this specific bullet should be highlighted
+                            if let Some(list_node_idx) = node_index {
+                                if let Some(comments) =
+                                    self.current_chapter_comments.get(&list_node_idx)
+                                {
+                                    let should_highlight = comments.iter().any(|c| {
+                                        use crate::comments::CommentTarget;
+                                        match &c.target {
+                                            CommentTarget::ParagraphRange {
+                                                start_paragraph_index,
+                                                end_paragraph_index,
+                                                list_item_index,
+                                                ..
+                                            } => {
+                                                // Check if this comment targets this list
+                                                if *start_paragraph_index == list_node_idx {
+                                                    // This list is the start node
+                                                    if *end_paragraph_index == list_node_idx {
+                                                        // Single-node range: check list_item_index
+                                                        list_item_index.map_or(true, |target_idx| {
+                                                            target_idx == idx
+                                                        })
+                                                    } else if let Some(target_idx) = list_item_index
+                                                    {
+                                                        // Multi-paragraph range starting from this list:
+                                                        // only highlight the specific bullet it starts from
+                                                        *target_idx == idx
+                                                    } else {
+                                                        // Multi-paragraph range with no list_item_index:
+                                                        // highlight all bullets
+                                                        true
+                                                    }
+                                                } else {
+                                                    // This list is not the start node, check if covered
+                                                    c.covers_node(list_node_idx)
+                                                }
+                                            }
+                                            _ => {
+                                                // Other comment types - use default logic
+                                                c.node_index() == list_node_idx
+                                            }
+                                        }
+                                    });
+                                    if should_highlight {
+                                        content_rich_spans = self
+                                            .apply_full_paragraph_highlighting(content_rich_spans);
+                                    }
+                                }
+                            }
+
                             let lines_before = lines.len();
 
                             self.render_text_spans(
@@ -1498,14 +1554,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                             first_block_line_count = lines.len() - lines_before;
 
-                            for (i, line) in lines[lines_before..].iter_mut().enumerate() {
+                            for line in lines[lines_before..].iter_mut() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
                                     indent,
                                 };
-                                if i == 0 && idx == 0 {
-                                    line.node_index = node_index;
-                                }
+                                // All list items (and all their wrapped lines) belong to the same List node
+                                line.node_index = node_index;
                             }
                         }
                         _ => {
@@ -2557,23 +2612,71 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Apply comment highlighting to text spans for a given node
     /// Handles both word-range highlighting and full-paragraph highlighting for multi-paragraph comments
     fn apply_comment_highlighting(&self, spans: Vec<RichSpan>, node_idx: usize) -> Vec<RichSpan> {
+        use log::debug;
+
         if let Some(comments) = self.current_chapter_comments.get(&node_idx) {
-            let has_full_highlight = comments
-                .iter()
-                .any(|c| c.is_paragraph_range_comment() && c.covers_node(node_idx));
+            debug!(
+                "=== HIGHLIGHT CHECK Node {}: Found {} comment(s) ===",
+                node_idx,
+                comments.len()
+            );
+
+            for (i, c) in comments.iter().enumerate() {
+                debug!(
+                    "  Comment {}: is_paragraph={}, is_range={}, word_range={:?}",
+                    i,
+                    c.is_paragraph_comment(),
+                    c.is_paragraph_range_comment(),
+                    c.target.word_range()
+                );
+            }
+
+            // Check if any comment requires full paragraph highlighting:
+            // 1. Multi-paragraph range comments covering this node
+            // 2. Single paragraph comments/ranges without specific word offsets
+            let has_full_highlight = comments.iter().any(|c| {
+                // Multi-paragraph range comments covering this node
+                if c.is_paragraph_range_comment() && c.covers_node(node_idx) {
+                    // Check if this is a multi-paragraph range
+                    if let Some((start, end)) = c.target.paragraph_range() {
+                        if start != end {
+                            debug!(
+                                "Node {}: Applying full highlight (multi-paragraph range {}-{})",
+                                node_idx, start, end
+                            );
+                            return true;
+                        }
+                    }
+                }
+                // Single paragraph comments/ranges without word_range get full highlighting
+                // This handles both legacy Paragraph format and normalized ParagraphRange format
+                if c.target.word_range().is_none() && c.node_index() == node_idx {
+                    debug!("Node {}: Applying full highlight (no word range)", node_idx);
+                    return true;
+                }
+                false
+            });
 
             if has_full_highlight {
+                debug!("Node {}: APPLYING FULL PARAGRAPH HIGHLIGHT", node_idx);
                 return self.apply_full_paragraph_highlighting(spans);
             }
 
+            // Otherwise, apply specific word-range highlighting
             let word_ranges: Vec<(usize, usize)> = comments
                 .iter()
                 .filter_map(|c| c.target.word_range())
                 .collect();
 
             if !word_ranges.is_empty() {
+                debug!(
+                    "Node {}: APPLYING WORD-RANGE HIGHLIGHT: {:?}",
+                    node_idx, word_ranges
+                );
                 return self.apply_word_ranges_highlighting(spans, &word_ranges);
             }
+
+            debug!("Node {}: NO HIGHLIGHTING APPLIED (fell through)", node_idx);
         }
         spans
     }

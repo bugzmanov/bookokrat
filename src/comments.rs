@@ -5,19 +5,29 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Unified comment target format - always uses paragraph_range for consistency
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "target_kind", rename_all = "snake_case")]
 pub enum CommentTarget {
+    /// Legacy format for backward compatibility - converted to ParagraphRange on save
+    #[serde(skip_serializing)]
     Paragraph {
         paragraph_index: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         word_range: Option<(usize, usize)>,
     },
+    /// Legacy format for backward compatibility - converted to ParagraphRange on save
+    #[serde(skip_serializing)]
     CodeBlock {
         paragraph_index: usize,
         /// Inclusive line range within the code block.
         line_range: (usize, usize),
     },
+    /// Standard format for all comments
+    /// - Single paragraph: start_paragraph_index == end_paragraph_index
+    /// - Full paragraph(s): word offsets are None
+    /// - Partial selection: word offsets specify the range
+    /// - List items: list_item_index specifies which bullet (0-indexed)
     ParagraphRange {
         start_paragraph_index: usize,
         end_paragraph_index: usize,
@@ -25,6 +35,10 @@ pub enum CommentTarget {
         start_word_offset: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end_word_offset: Option<usize>,
+        /// For list items: which bullet in the list (0-indexed)
+        /// None means all bullets or not a list
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        list_item_index: Option<usize>,
     },
 }
 
@@ -44,11 +58,29 @@ impl CommentTarget {
         }
     }
 
+    /// Returns word range for single-paragraph selections
+    /// For ParagraphRange where start == end, returns the word offsets
     pub fn word_range(&self) -> Option<(usize, usize)> {
         match self {
             CommentTarget::Paragraph { word_range, .. } => *word_range,
             CommentTarget::CodeBlock { .. } => None,
-            CommentTarget::ParagraphRange { .. } => None,
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                end_paragraph_index,
+                start_word_offset,
+                end_word_offset,
+                ..
+            } => {
+                // For single-paragraph ranges, return word offsets if both are present
+                if start_paragraph_index == end_paragraph_index {
+                    match (start_word_offset, end_word_offset) {
+                        (Some(start), Some(end)) => Some((*start, *end)),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -99,9 +131,37 @@ pub struct Comment {
     pub chapter_href: String,
     pub target: CommentTarget,
     pub content: String,
-    pub selected_text: Option<String>, // The text that was highlighted/selected
-    pub highlight_only: bool,          // True if this is just a highlight without a note
+    pub context: Option<String>, // The text that was highlighted/annotated
+    pub highlight_only: bool,    // True if this is just a highlight without a note
     pub updated_at: DateTime<Utc>,
+}
+
+impl Comment {
+    /// Normalize to the standard format (ParagraphRange)
+    pub fn normalize(&mut self) {
+        self.target = match &self.target {
+            CommentTarget::Paragraph {
+                paragraph_index,
+                word_range,
+            } => CommentTarget::ParagraphRange {
+                start_paragraph_index: *paragraph_index,
+                end_paragraph_index: *paragraph_index,
+                start_word_offset: word_range.map(|(start, _)| start),
+                end_word_offset: word_range.map(|(_, end)| end),
+                list_item_index: None,
+            },
+            CommentTarget::CodeBlock {
+                paragraph_index, ..
+            } => CommentTarget::ParagraphRange {
+                start_paragraph_index: *paragraph_index,
+                end_paragraph_index: *paragraph_index,
+                start_word_offset: None,
+                end_word_offset: None,
+                list_item_index: None,
+            },
+            CommentTarget::ParagraphRange { .. } => return, // Already normalized
+        };
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -109,9 +169,9 @@ struct CommentModernSerde {
     pub chapter_href: String,
     #[serde(flatten)]
     pub target: CommentTarget,
-    pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_text: Option<String>,
+    pub context: Option<String>,
+    pub content: String,
     #[serde(default)]
     pub highlight_only: bool,
     pub updated_at: DateTime<Utc>,
@@ -124,9 +184,11 @@ struct CommentLegacySerde {
     pub paragraph_index: usize,
     #[serde(default)]
     pub word_range: Option<(usize, usize)>,
-    pub content: String,
     #[serde(default)]
-    pub selected_text: Option<String>,
+    pub context: Option<String>,
+    #[serde(default)]
+    pub selected_text: Option<String>, // Old field name for backward compat
+    pub content: String,
     #[serde(default)]
     pub highlight_only: bool,
     pub updated_at: DateTime<Utc>,
@@ -148,7 +210,8 @@ impl From<CommentLegacySerde> for Comment {
                 word_range: legacy.word_range,
             },
             content: legacy.content,
-            selected_text: legacy.selected_text,
+            // Support both old and new field names
+            context: legacy.context.or(legacy.selected_text),
             highlight_only: legacy.highlight_only,
             updated_at: legacy.updated_at,
         }
@@ -161,7 +224,7 @@ impl From<CommentModernSerde> for Comment {
             chapter_href: modern.chapter_href,
             target: modern.target,
             content: modern.content,
-            selected_text: modern.selected_text,
+            context: modern.context,
             highlight_only: modern.highlight_only,
             updated_at: modern.updated_at,
         }
@@ -170,13 +233,17 @@ impl From<CommentModernSerde> for Comment {
 
 impl From<&Comment> for CommentModernSerde {
     fn from(comment: &Comment) -> Self {
+        // Normalize the comment to standard format
+        let mut normalized = comment.clone();
+        normalized.normalize();
+
         CommentModernSerde {
-            chapter_href: comment.chapter_href.clone(),
-            target: comment.target.clone(),
-            content: comment.content.clone(),
-            selected_text: comment.selected_text.clone(),
-            highlight_only: comment.highlight_only,
-            updated_at: comment.updated_at,
+            chapter_href: normalized.chapter_href,
+            target: normalized.target,
+            context: normalized.context,
+            content: normalized.content,
+            highlight_only: normalized.highlight_only,
+            updated_at: normalized.updated_at,
         }
     }
 }
@@ -186,6 +253,7 @@ impl Serialize for Comment {
     where
         S: Serializer,
     {
+        // Always normalize to standard format when saving
         CommentModernSerde::from(self).serialize(serializer)
     }
 }
@@ -333,6 +401,23 @@ impl BookComments {
         self.save_to_disk()
     }
 
+    /// Update the context field of a comment (for backfilling)
+    pub fn update_comment_context(
+        &mut self,
+        chapter_href: &str,
+        target: &CommentTarget,
+        new_context: String,
+    ) -> Result<()> {
+        let idx = self
+            .find_comment_index(chapter_href, target)
+            .context("Comment not found")?;
+
+        self.comments[idx].context = Some(new_context);
+        self.comments[idx].updated_at = Utc::now();
+
+        self.save_to_disk()
+    }
+
     pub fn delete_comment(&mut self, chapter_href: &str, target: &CommentTarget) -> Result<()> {
         let idx = self
             .find_comment_index(chapter_href, target)
@@ -412,7 +497,21 @@ impl BookComments {
     fn save_to_disk(&self) -> Result<()> {
         let yaml = serde_yaml::to_string(&self.comments).context("Failed to serialize comments")?;
 
-        fs::write(&self.file_path, yaml).context("Failed to write comments file")?;
+        // Add blank lines between entries for better readability
+        let formatted_yaml = yaml
+            .lines()
+            .fold((String::new(), false), |(mut acc, prev_was_dash), line| {
+                let is_dash = line.starts_with("- ");
+                if is_dash && prev_was_dash {
+                    acc.push('\n');
+                }
+                acc.push_str(line);
+                acc.push('\n');
+                (acc, is_dash)
+            })
+            .0;
+
+        fs::write(&self.file_path, formatted_yaml).context("Failed to write comments file")?;
 
         Ok(())
     }

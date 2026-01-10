@@ -18,12 +18,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Rebuild the comment lookup for the current chapter
     pub fn rebuild_chapter_comments(&mut self) {
+        use log::debug;
+
         self.current_chapter_comments.clear();
 
         if let Some(chapter_file) = &self.current_chapter_file {
             if let Some(comments_arc) = &self.book_comments {
                 if let Ok(comments) = comments_arc.lock() {
-                    for comment in comments.get_chapter_comments(chapter_file) {
+                    let chapter_comments = comments.get_chapter_comments(chapter_file);
+                    debug!(
+                        "Rebuilding comments for chapter {}: found {} comments",
+                        chapter_file,
+                        chapter_comments.len()
+                    );
+                    for comment in chapter_comments {
+                        debug!(
+                            "  Comment at node {}: highlight_only={}, has_word_range={}",
+                            comment.node_index(),
+                            comment.highlight_only,
+                            comment.target.word_range().is_some()
+                        );
                         match &comment.target {
                             CommentTarget::ParagraphRange {
                                 start_paragraph_index,
@@ -64,6 +78,220 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
                     }
                 }
+            }
+        }
+
+        // After rebuilding, extract missing context for old comments
+        self.backfill_missing_context();
+    }
+
+    /// Extract context for comments that don't have it
+    /// This provides backward compatibility for old comments
+    fn backfill_missing_context(&mut self) {
+        use log::{debug, info, warn};
+
+        // Check if we have rendered content to extract from
+        if self.rendered_content.lines.is_empty() {
+            return;
+        }
+
+        let chapter_file = match &self.current_chapter_file {
+            Some(file) => file.clone(),
+            None => return,
+        };
+
+        let comments_arc = match &self.book_comments {
+            Some(arc) => arc.clone(),
+            None => return,
+        };
+
+        let mut comments_to_update = Vec::new();
+
+        // Find comments with missing context
+        if let Ok(comments) = comments_arc.lock() {
+            let chapter_comments = comments.get_chapter_comments(&chapter_file);
+            for comment in chapter_comments {
+                if comment.context.is_none() {
+                    debug!(
+                        "Found comment without context at node {}: extracting...",
+                        comment.node_index()
+                    );
+                    if let Some(extracted) = self.extract_context_for_comment(&comment.target) {
+                        comments_to_update.push((comment.clone(), extracted));
+                    }
+                }
+            }
+        }
+
+        // Update comments with extracted context
+        if !comments_to_update.is_empty() {
+            info!(
+                "Backfilling context for {} comments in chapter {}",
+                comments_to_update.len(),
+                chapter_file
+            );
+
+            if let Ok(mut comments) = comments_arc.lock() {
+                for (comment, extracted_context) in comments_to_update {
+                    if let Err(e) = comments.update_comment_context(
+                        &chapter_file,
+                        &comment.target,
+                        extracted_context,
+                    ) {
+                        warn!("Failed to update comment with context: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Extract the highlighted text for a given comment target
+    fn extract_context_for_comment(&self, target: &CommentTarget) -> Option<String> {
+        use log::debug;
+
+        match target {
+            CommentTarget::ParagraphRange {
+                start_paragraph_index,
+                end_paragraph_index,
+                start_word_offset,
+                end_word_offset,
+                list_item_index,
+            } => {
+                let start_node = *start_paragraph_index;
+                let end_node = *end_paragraph_index;
+
+                // Collect all lines for the node range
+                let mut text_parts = Vec::new();
+
+                for node_idx in start_node..=end_node {
+                    // If list_item_index is set AND this is the start node,
+                    // filter lines to only that specific bullet
+                    let node_lines: Vec<&str> = if let Some(target_bullet_idx) = list_item_index {
+                        if node_idx == start_node {
+                            // For the start node (list), track which bullet each line belongs to
+                            let mut current_bullet_idx = None;
+                            let mut bullet_counter = 0;
+
+                            self.rendered_content
+                                .lines
+                                .iter()
+                                .filter_map(|line| {
+                                    if line.node_index != Some(node_idx) {
+                                        return None;
+                                    }
+
+                                    // Check if this line starts a new bullet
+                                    if matches!(line.line_type, LineType::ListItem { .. }) {
+                                        let text = line.raw_text.trim_start();
+                                        if text.starts_with('•')
+                                            || text.starts_with('-')
+                                            || text.chars().next().map_or(false, |c| c.is_numeric())
+                                        {
+                                            current_bullet_idx = Some(bullet_counter);
+                                            bullet_counter += 1;
+                                        }
+                                    }
+
+                                    // Only include lines that belong to the target bullet
+                                    if current_bullet_idx == Some(*target_bullet_idx) {
+                                        Some(line.raw_text.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect()
+                        } else {
+                            // For subsequent nodes in a multi-paragraph range, get all lines
+                            self.rendered_content
+                                .lines
+                                .iter()
+                                .filter(|line| line.node_index == Some(node_idx))
+                                .map(|line| line.raw_text.as_str())
+                                .collect()
+                        }
+                    } else {
+                        // No list_item_index - get all lines for this node
+                        self.rendered_content
+                            .lines
+                            .iter()
+                            .filter(|line| line.node_index == Some(node_idx))
+                            .map(|line| line.raw_text.as_str())
+                            .collect()
+                    };
+
+                    if node_lines.is_empty() {
+                        continue;
+                    }
+
+                    // Join lines for this node
+                    let node_text = node_lines.join(" ");
+
+                    // For SINGLE-node selections with list_item_index, return just that bullet
+                    if start_node == end_node && list_item_index.is_some() {
+                        return Some(node_text);
+                    }
+
+                    // If this is a single node with word offsets, extract just that range
+                    if start_node == end_node
+                        && start_word_offset.is_some()
+                        && end_word_offset.is_some()
+                    {
+                        let words: Vec<&str> = node_text.split_whitespace().collect();
+                        let start = start_word_offset.unwrap();
+                        let end = end_word_offset.unwrap().min(words.len());
+
+                        if start < words.len() {
+                            let selected_words = &words[start..end];
+                            return Some(selected_words.join(" "));
+                        }
+                    } else {
+                        // Multi-node or full node - add all text
+                        text_parts.push(node_text);
+                    }
+                }
+
+                if text_parts.is_empty() {
+                    debug!(
+                        "Could not extract context for nodes {}-{}",
+                        start_node, end_node
+                    );
+                    None
+                } else {
+                    Some(text_parts.join(" "))
+                }
+            }
+            CommentTarget::Paragraph {
+                paragraph_index,
+                word_range,
+            } => {
+                // Legacy format - extract using paragraph index and word range
+                let node_lines: Vec<&str> = self
+                    .rendered_content
+                    .lines
+                    .iter()
+                    .filter(|line| line.node_index == Some(*paragraph_index))
+                    .map(|line| line.raw_text.as_str())
+                    .collect();
+
+                if node_lines.is_empty() {
+                    return None;
+                }
+
+                let node_text = node_lines.join(" ");
+
+                if let Some((start, end)) = word_range {
+                    let words: Vec<&str> = node_text.split_whitespace().collect();
+                    if *start < words.len() {
+                        let end_idx = (*end).min(words.len());
+                        return Some(words[*start..end_idx].join(" "));
+                    }
+                }
+
+                Some(node_text)
+            }
+            CommentTarget::CodeBlock { .. } => {
+                // For code blocks, we don't extract context since it's code
+                None
             }
         }
     }
@@ -182,6 +410,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let mut has_code = false;
             let mut min_code = usize::MAX;
             let mut max_code = 0;
+            let mut is_list_item = false;
 
             for idx in start.line..=end.line {
                 if let Some(line) = self.rendered_content.lines.get(idx) {
@@ -191,6 +420,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             min_code = min_code.min(meta.line_index);
                             max_code = max_code.max(meta.line_index);
                         }
+                    }
+                    // Check if any line in the selection is a list item
+                    if matches!(line.line_type, LineType::ListItem { .. }) {
+                        is_list_item = true;
                     }
                 }
             }
@@ -202,23 +435,90 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 });
             }
 
-            let word_range = self.compute_paragraph_word_range(start_node_idx, start, end);
+            // For list items, determine which bullet is selected
+            let list_item_index = if is_list_item {
+                self.determine_list_item_index(start_node_idx, start.line)
+            } else {
+                None
+            };
 
-            Some(CommentTarget::Paragraph {
-                paragraph_index: start_node_idx,
-                word_range,
-            })
-        } else {
-            let start_word_offset = self.compute_word_offset_in_node(start_node_idx, start);
-            let end_word_offset = self.compute_word_offset_in_node(end_node_idx, end);
+            // For list items, don't use word ranges - each bullet is atomic
+            let word_range = if is_list_item {
+                None
+            } else {
+                self.compute_paragraph_word_range(start_node_idx, start, end)
+            };
 
             Some(CommentTarget::ParagraphRange {
                 start_paragraph_index: start_node_idx,
+                end_paragraph_index: start_node_idx,
+                start_word_offset: word_range.map(|(start, _)| start),
+                end_word_offset: word_range.map(|(_, end)| end),
+                list_item_index,
+            })
+        } else {
+            // Multi-paragraph range
+            // Check if the start node is a list item
+            let start_is_list_item = self
+                .rendered_content
+                .lines
+                .get(start.line)
+                .map(|line| matches!(line.line_type, LineType::ListItem { .. }))
+                .unwrap_or(false);
+
+            // For multi-paragraph selections starting from a list item,
+            // determine which bullet to indicate where the selection starts
+            let list_item_index = if start_is_list_item {
+                self.determine_list_item_index(start_node_idx, start.line)
+            } else {
+                None
+            };
+
+            // For multi-paragraph ranges, don't use word offsets - they're too complex
+            // Just indicate the full range of nodes involved
+            Some(CommentTarget::ParagraphRange {
+                start_paragraph_index: start_node_idx,
                 end_paragraph_index: end_node_idx,
-                start_word_offset,
-                end_word_offset,
+                start_word_offset: None,
+                end_word_offset: None,
+                list_item_index,
             })
         }
+    }
+
+    /// Determine which bullet item (0-indexed) contains the given line
+    /// Returns None if not in a list or cannot determine
+    fn determine_list_item_index(&self, node_idx: usize, line_num: usize) -> Option<usize> {
+        // Count how many bullet "starts" we've seen before this line
+        // A bullet start is indicated by a line starting with "• " or "1. " etc.
+        let mut bullet_count = 0;
+        let mut current_bullet = None;
+
+        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index != Some(node_idx) {
+                continue;
+            }
+
+            // Check if this line starts a new bullet (has the bullet prefix)
+            // List items have their text with the bullet prefix in raw_text
+            if matches!(line.line_type, LineType::ListItem { .. }) {
+                let text = line.raw_text.trim_start();
+                if text.starts_with('•')
+                    || text.starts_with('-')
+                    || text.chars().next().map_or(false, |c| c.is_numeric())
+                {
+                    // This is a bullet start line
+                    if idx <= line_num {
+                        current_bullet = Some(bullet_count);
+                        bullet_count += 1;
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
+        current_bullet
     }
 
     /// Handle input events when in comment mode
@@ -274,7 +574,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     chapter_href: chapter_file.clone(),
                                     target,
                                     content: comment_text.clone(),
-                                    selected_text,
+                                    context: selected_text,
                                     highlight_only: false,
                                     updated_at: Utc::now(),
                                 };
@@ -321,7 +621,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 chapter_href: chapter_file.clone(),
                                 target,
                                 content: String::new(), // No text content for highlight-only
-                                selected_text,
+                                context: selected_text,
                                 highlight_only: true,
                                 updated_at: Utc::now(),
                             };
@@ -627,43 +927,109 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         start: &SelectionPoint,
         end: &SelectionPoint,
     ) -> Option<(usize, usize)> {
-        let mut offsets = Vec::new();
-        let mut cumulative = 0;
+        let mut line_data = Vec::new();
 
+        // Collect all lines for this node with their word and character positions
         for (idx, line) in self.rendered_content.lines.iter().enumerate() {
             if line.node_index == Some(node_idx) {
-                let len = line.raw_text.chars().count();
-                offsets.push((idx, cumulative, len));
-                cumulative += len;
+                line_data.push((idx, line.raw_text.clone()));
             }
         }
 
-        if offsets.is_empty() {
+        if line_data.is_empty() {
             return None;
         }
 
-        let total_len = cumulative;
+        // Build cumulative word and character positions for each line
+        let mut cumulative_words = 0;
+        let mut cumulative_chars = 0;
+        let mut line_info = Vec::new();
 
-        let start_offset = offsets
+        for (line_idx, text) in &line_data {
+            let char_count = text.chars().count();
+            let word_count = Self::count_words_in_text(text);
+
+            line_info.push((
+                *line_idx,
+                cumulative_words,
+                word_count,
+                cumulative_chars,
+                char_count,
+            ));
+
+            cumulative_words += word_count;
+            cumulative_chars += char_count;
+        }
+
+        let total_words = cumulative_words;
+
+        // Find start word index
+        let start_word = line_info
             .iter()
-            .find(|(line_idx, _, _)| *line_idx == start.line)
-            .map(|(_, base, len)| base + start.column.min(*len))?;
+            .find(|(line_idx, _, _, _, _)| *line_idx == start.line)
+            .and_then(|(_, base_words, _, _base_chars, char_count)| {
+                let line_text = line_data
+                    .iter()
+                    .find(|(idx, _)| *idx == start.line)
+                    .map(|(_, text)| text)?;
+                let char_offset = start.column.min(*char_count);
+                let word_offset = Self::char_offset_to_word_index(line_text, char_offset);
+                Some(base_words + word_offset)
+            })?;
 
-        let end_offset = offsets
+        // Find end word index
+        let end_word = line_info
             .iter()
-            .find(|(line_idx, _, _)| *line_idx == end.line)
-            .map(|(_, base, len)| base + end.column.min(*len))
-            .unwrap_or(total_len);
+            .find(|(line_idx, _, _, _, _)| *line_idx == end.line)
+            .and_then(|(_, base_words, _, _, char_count)| {
+                let line_text = line_data
+                    .iter()
+                    .find(|(idx, _)| *idx == end.line)
+                    .map(|(_, text)| text)?;
+                let char_offset = end.column.min(*char_count);
+                let word_offset = Self::char_offset_to_word_index(line_text, char_offset);
+                Some(base_words + word_offset)
+            })
+            .unwrap_or(total_words);
 
-        if start_offset >= end_offset {
+        if start_word >= end_word {
             return None;
         }
 
-        if start_offset == 0 && end_offset >= total_len {
+        // If we're selecting (nearly) the entire paragraph, don't use word offsets
+        // Check if we're starting at or near the beginning (0 or 1) and ending at or near the end
+        if start_word <= 1 && end_word >= total_words.saturating_sub(1) {
             return None;
         }
 
-        Some((start_offset, end_offset.min(total_len)))
+        Some((start_word, end_word))
+    }
+
+    /// Count the number of words in a text string
+    fn count_words_in_text(text: &str) -> usize {
+        let mut word_count = 0;
+        let mut in_word = false;
+
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                in_word = false;
+            } else if !in_word {
+                word_count += 1;
+                in_word = true;
+            }
+        }
+
+        word_count
+    }
+
+    /// Convert character offset to word index within a line
+    fn char_offset_to_word_index(text: &str, char_offset: usize) -> usize {
+        let chars: Vec<char> = text.chars().collect();
+        let safe_offset = char_offset.min(chars.len());
+
+        // Count completed words before the offset
+        let text_before: String = chars.iter().take(safe_offset).collect();
+        Self::count_words_in_text(&text_before)
     }
 
     fn compute_word_offset_in_node(
