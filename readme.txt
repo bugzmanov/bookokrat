@@ -113,6 +113,7 @@
 │  f/F/t/T ;     Find/till char and repeat                                    │
 │  v / V         Visual selection (char/line)                                 │
 │  y             Yank (copy) with motions/objects or visual selection          │
+│  Enter         Open link under cursor                                       │
 │  Esc           Exit visual mode                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 

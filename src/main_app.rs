@@ -3199,6 +3199,15 @@ impl App {
             }
 
             match key.code {
+                KeyCode::Enter => {
+                    self.text_reader.clear_count();
+                    if let Some(link_info) = self.text_reader.get_link_at_cursor() {
+                        if let Err(e) = self.handle_link_click(&link_info) {
+                            error!("Failed to handle link click: {e}");
+                        }
+                    }
+                    return None;
+                }
                 KeyCode::Char('v') => {
                     use crate::markdown_text_reader::VisualMode;
                     self.text_reader

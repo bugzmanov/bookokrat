@@ -119,6 +119,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `p` - Toggle profiler overlay
 - `n` - Toggle normal mode (Vim motions, visual selection, yanking)
 - `v` / `V` (normal mode) - Enter visual character/line selection; `y` to yank, `Esc` to exit
+- `Enter` (normal mode) - Open link under cursor
 
 ### Comments & Annotations
 - `a` - Create or edit comment on selection

@@ -69,12 +69,12 @@ ideas to implement:
 bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reload
-[ ] comments are works with plain paragraphs and titles. but it's not properly working with all other text elements(like formulas or code blocks)
 [ ] Machine Learning Q and A - links not working.
 [ ] Careless people: current chapter highlightning not working
 [ ] Effective rust - chapter 4 
    [ ] Too much visual noise. (potentially because bg highlights)
 [ ] <i>code</i> will have bg color instead of being cursive
+[ ] AI Engineering - footnotes: clicking doesn't  track in history, i.e. can not jump back by clicking ctrl+o 
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt
