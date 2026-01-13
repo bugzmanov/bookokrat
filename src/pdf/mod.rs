@@ -2,6 +2,7 @@
 
 mod cache;
 pub mod kittyv2;
+mod parsing;
 mod request;
 mod service;
 mod state;
@@ -10,6 +11,8 @@ mod worker;
 mod zoom;
 
 pub use cache::{CacheKey, PageCache};
+pub use parsing::page_numbers::{PageNumberTracker, detect_page_number, sample_targets};
+pub use parsing::toc::{TocEntry, TocTarget};
 pub use request::{
     PageSelectionBounds, RenderParams, RenderRequest, RenderResponse, RequestId, WorkerFault,
 };
@@ -26,6 +29,3 @@ pub const DEFAULT_CACHE_SIZE: usize = 30;
 
 /// Default prefetch radius (pages before/after current)
 pub const DEFAULT_PREFETCH_RADIUS: usize = 10;
-
-/// Maximum width/height for Kitty protocol images
-pub const KITTY_MAX_DIMENSION: f32 = 10_000.0;

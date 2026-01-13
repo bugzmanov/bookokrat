@@ -149,27 +149,3 @@ impl CellSize {
         (self.width, self.height)
     }
 }
-
-/// Target of a TOC entry
-/// TEMPORARY: Moves to parsing/toc.rs in commit 12
-#[derive(Clone, Debug)]
-pub enum TocTarget {
-    /// Internal page (0-indexed)
-    InternalPage(usize),
-    /// External URI
-    External(String),
-    /// Printed page number (for display)
-    PrintedPage(usize),
-}
-
-/// A single entry in the table of contents
-/// TEMPORARY: Moves to parsing/toc.rs in commit 12
-#[derive(Clone, Debug)]
-pub struct TocEntry {
-    /// Display title
-    pub title: String,
-    /// Nesting level (0 = top level)
-    pub level: usize,
-    /// Navigation target
-    pub target: TocTarget,
-}

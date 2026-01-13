@@ -9,6 +9,7 @@ use mupdf::Document;
 
 use super::TocEntry;
 use super::cache::{CacheKey, PageCache};
+use super::parsing::page_numbers;
 use super::request::{PageSelectionBounds, RenderRequest, RenderResponse, RequestId};
 use super::state::{Command, Effect, RenderState};
 use super::types::PageData;
@@ -128,9 +129,8 @@ impl RenderService {
             .ok()
             .filter(|t| !t.is_empty());
 
-        // TEMPORARY: TOC extraction will be added in commit 12 when parsing module exists
-        let toc = Vec::new();
-        let page_number_samples = Vec::new();
+        let toc = super::parsing::toc::extract_toc(&doc, page_count);
+        let page_number_samples = page_numbers::collect_page_number_samples(&doc, page_count);
 
         Some(DocumentInfo {
             page_count,
