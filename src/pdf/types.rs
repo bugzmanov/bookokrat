@@ -121,31 +121,3 @@ impl<T> VecExt<T> for Vec<T> {
     }
 }
 
-// =============================================================================
-// TEMPORARY TYPES - Will be moved to their final locations in later commits
-// =============================================================================
-
-/// Terminal cell dimensions
-/// TEMPORARY: Moves to converter.rs in commit 13
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CellSize {
-    pub width: u16,
-    pub height: u16,
-}
-
-impl CellSize {
-    #[must_use]
-    pub const fn new(width: u16, height: u16) -> Self {
-        Self { width, height }
-    }
-
-    #[must_use]
-    pub fn from_rect(r: ratatui::layout::Rect) -> Self {
-        Self::new(r.width, r.height)
-    }
-
-    #[must_use]
-    pub const fn as_tuple(self) -> (u16, u16) {
-        (self.width, self.height)
-    }
-}
