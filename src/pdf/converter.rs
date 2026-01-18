@@ -26,42 +26,11 @@ use crate::vendored::ratatui_image::{
 };
 
 use super::kittyv2::ImageId;
+use super::normal_mode::{CursorRect, VisualRect};
+use super::selection::SelectionRect;
 use super::types::{PageData, VecExt as _, ViewportUpdate};
 
 type PipelineError = super::request::WorkerFault;
-
-// Temporary stub types - will be replaced by imports from selection.rs and normal_mode.rs
-// in the next commit when those modules exist.
-
-/// Selection rectangle (pixel coordinates)
-#[derive(Clone, Debug)]
-pub struct SelectionRect {
-    pub page: usize,
-    pub topleft_x: u32,
-    pub topleft_y: u32,
-    pub bottomright_x: u32,
-    pub bottomright_y: u32,
-}
-
-/// Cursor rectangle for normal mode
-#[derive(Clone, Debug)]
-pub struct CursorRect {
-    pub page: usize,
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
-
-/// Visual mode selection rectangle
-#[derive(Clone, Debug)]
-pub struct VisualRect {
-    pub page: usize,
-    pub x: u32,
-    pub y: u32,
-    pub width: u32,
-    pub height: u32,
-}
 
 fn pipeline_error(msg: impl Into<String>) -> PipelineError {
     PipelineError::generic(msg)

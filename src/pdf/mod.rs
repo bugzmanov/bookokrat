@@ -1,10 +1,15 @@
 //! PDF rendering infrastructure
+//!
+//! This module provides PDF rendering capabilities using MuPDF,
+//! with worker pools for background rendering and caching.
 
 mod cache;
 mod converter;
 pub mod kittyv2;
+mod normal_mode;
 mod parsing;
 mod request;
+mod selection;
 mod service;
 mod state;
 mod types;
@@ -16,15 +21,22 @@ pub use converter::{
     CellSize, ConversionCommand, ConvertedImage, ImageState, RenderedFrame, TiledProtocol,
     run_conversion_loop,
 };
+pub use normal_mode::{
+    CursorPosition, CursorRect, MoveResult, NormalModeState, PendingMotion, VisualMode, VisualRect,
+    visual_rects_for_range,
+};
 pub use parsing::page_numbers::{PageNumberTracker, detect_page_number, sample_targets};
 pub use parsing::toc::{TocEntry, TocTarget};
 pub use request::{
     PageSelectionBounds, RenderParams, RenderRequest, RenderResponse, RequestId, WorkerFault,
 };
+pub use selection::{ExtractionRequest, SelectionPoint, SelectionRect, TextSelection};
 pub use service::{DocumentInfo, RenderService};
 pub use state::{Command, Effect, RenderState};
-pub use types::*;
-pub use zoom::*;
+pub use types::{
+    CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, VecExt, ViewportUpdate,
+};
+pub use zoom::{ScrollDirection, Zoom};
 
 /// Default number of render workers
 pub const DEFAULT_WORKERS: usize = 2;
