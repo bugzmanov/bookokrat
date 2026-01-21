@@ -38,7 +38,7 @@ better-panic = "0.3"
 human-panic = "2.0"
 libc = "0.2"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
-arboard = "3.4"
+arboard = { version = "3.4", features = ["wayland-data-control"] }
 zip = "0.6"
 tempfile = "3.8"
 image = "0.25"
