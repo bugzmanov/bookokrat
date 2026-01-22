@@ -21,7 +21,7 @@ use crate::pdf::{
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
 
-const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
+use super::rendering::MIN_COMMENT_TEXTAREA_WIDTH;
 use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
