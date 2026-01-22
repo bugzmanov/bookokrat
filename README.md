@@ -25,6 +25,20 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 brew install bookokrat
 ```
 
+### Arch Linux
+
+Install from the [AUR](https://aur.archlinux.org/packages/bookokrat-bin) using your preferred AUR helper:
+
+```bash
+yay -S bookokrat-bin
+```
+
+or
+
+```bash
+paru -S bookokrat-bin
+```
+
 ### Pre-built Binaries (Linux)
 
 Download from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases):
