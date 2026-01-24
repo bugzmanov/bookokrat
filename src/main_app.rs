@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -443,7 +443,22 @@ impl App {
     }
 
     /// Navigate to a specific chapter - ensures all state is properly updated
-    pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
+    /// If `skip_jump_list` is true, don't save to jump list (used during Ctrl+O/I navigation)
+    pub fn navigate_to_chapter_inner(
+        &mut self,
+        chapter_index: usize,
+        skip_jump_list: bool,
+    ) -> Result<()> {
+        // Save current location to jump list if changing chapters (unless skipping)
+        if !skip_jump_list
+            && self
+                .current_book
+                .as_ref()
+                .is_some_and(|b| b.current_chapter() != chapter_index)
+        {
+            self.save_to_jump_list();
+        }
+
         if let Some(doc) = &mut self.current_book {
             if doc.epub.set_current_chapter(chapter_index) {
                 self.text_reader.clear_active_anchor();
@@ -463,8 +478,16 @@ impl App {
         }
     }
 
+    /// Navigate to a specific chapter - convenience wrapper that saves to jump list
+    pub fn navigate_to_chapter(&mut self, chapter_index: usize) -> Result<()> {
+        self.navigate_to_chapter_inner(chapter_index, false)
+    }
+
     /// Navigate to next or previous chapter - maintains all state consistency
     pub fn navigate_chapter_relative(&mut self, direction: ChapterDirection) -> Result<()> {
+        // Save current location to jump list before navigating
+        self.save_to_jump_list();
+
         if let Some(book) = &mut self.current_book {
             if (direction == ChapterDirection::Next && book.epub.go_next())
                 || (direction == ChapterDirection::Previous && book.epub.go_prev())
@@ -517,6 +540,9 @@ impl App {
             doc.get_num_chapters(),
             doc.get_current_chapter()
         );
+
+        // Clear jump list when opening a new book (jump list is per-book)
+        self.jump_list.clear();
 
         let path_buf = std::path::PathBuf::from(path);
         if let Err(e) = self.book_images.load_book(&path_buf) {
@@ -608,6 +634,15 @@ impl App {
             }
         }
         None
+    }
+
+    /// Extract book title from file path (without extension)
+    fn extract_book_title(file_path: &str) -> String {
+        std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("book")
+            .to_string()
     }
 
     /// Find chapter index by href/path
@@ -1145,12 +1180,31 @@ impl App {
 
                     match click_type {
                         ClickType::Single => {
-                            // Check if click is on a link first
+                            // Check if click is on an image
                             if let Some(image_src) = self
                                 .text_reader
                                 .check_image_click(mouse_event.column, mouse_event.row)
                             {
-                                self.handle_image_click(&image_src, self.terminal_size);
+                                let is_ctrl_held =
+                                    mouse_event.modifiers.contains(KeyModifiers::CONTROL);
+
+                                if is_ctrl_held {
+                                    // Ctrl+Click always opens image popup
+                                    self.handle_image_click(&image_src, self.terminal_size);
+                                } else if let Some(link_info) =
+                                    self.text_reader.check_link_at_screen_position(
+                                        mouse_event.column,
+                                        mouse_event.row,
+                                    )
+                                {
+                                    // Click on linked image navigates to link
+                                    if let Err(e) = self.handle_link_click(&link_info) {
+                                        error!("Failed to handle link click: {e}");
+                                    }
+                                } else {
+                                    // Click on non-linked image opens popup
+                                    self.handle_image_click(&image_src, self.terminal_size);
+                                }
                             } else {
                                 self.text_reader
                                     .handle_mouse_down(mouse_event.column, mouse_event.row);
@@ -1208,17 +1262,6 @@ impl App {
     }
 
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
-        if link_info.link_type != crate::markdown::LinkType::External
-            && let Some(book) = &self.current_book
-        {
-            let current_location = JumpLocation {
-                epub_path: book.file.clone(),
-                chapter_index: book.current_chapter(),
-                node_index: self.text_reader.get_current_node_index(),
-            };
-            self.jump_list.push(current_location);
-        }
-
         match &link_info.link_type {
             crate::markdown::LinkType::External => {
                 if let Err(e) = open::that(&link_info.url) {
@@ -1229,6 +1272,8 @@ impl App {
                 }
             }
             crate::markdown::LinkType::InternalAnchor => {
+                // Save to jump list for same-chapter anchor navigation
+                self.save_to_jump_list();
                 if let Some(anchor_id) = &link_info.target_anchor {
                     self.scroll_to_anchor(anchor_id)
                 } else {
@@ -1249,6 +1294,8 @@ impl App {
                             .unwrap_or(chapter_file);
 
                         if current_filename == target_filename {
+                            // Same chapter - save to jump list for anchor navigation
+                            self.save_to_jump_list();
                             if let Some(anchor_id) = &link_info.target_anchor {
                                 self.scroll_to_anchor(anchor_id)
                             } else {
@@ -1309,16 +1356,21 @@ impl App {
     /// todo: this is mislocated and feature envy including find_chapter_recursive
     /// Find chapter index by filename
     fn find_chapter_by_filename(&self, chapter_file: &str) -> Option<usize> {
-        // Get the current book's TOC items
+        // First try TOC lookup
         if let Some(current_book_info) = &self
             .navigation_panel
             .table_of_contents
             .get_current_book_info()
         {
-            self.find_chapter_recursive(&current_book_info.toc_items, chapter_file)
-        } else {
-            None
+            if let Some(index) =
+                self.find_chapter_recursive(&current_book_info.toc_items, chapter_file)
+            {
+                return Some(index);
+            }
         }
+
+        // Fall back to direct spine lookup if not found in TOC
+        self.find_spine_index_by_href(chapter_file)
     }
 
     /// Recursively search for a chapter by filename in TOC items
@@ -1620,12 +1672,14 @@ impl App {
     }
 
     fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
+        // Only allow jumping within the same book
         if self.current_book.as_ref().map(|x| &x.file) != Some(&location.epub_path) {
-            self.load_epub(&location.epub_path, true)?;
+            anyhow::bail!("Cannot jump to location in different book");
         }
 
         if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(location.chapter_index) {
-            self.navigate_to_chapter(location.chapter_index)?;
+            // Use inner function with skip_jump_list=true to avoid corrupting jump history
+            self.navigate_to_chapter_inner(location.chapter_index, true)?;
         }
 
         self.text_reader.restore_to_node_index(location.node_index);
@@ -1635,9 +1689,27 @@ impl App {
         Ok(())
     }
 
+    /// Save current location to jump list before navigating away
+    fn save_to_jump_list(&mut self) {
+        if let Some(book) = &self.current_book {
+            let current_location = JumpLocation {
+                epub_path: book.file.clone(),
+                chapter_index: book.current_chapter(),
+                node_index: self.text_reader.get_current_node_index(),
+            };
+            self.jump_list.push(current_location);
+        }
+    }
+
     /// Handle Ctrl+O - jump back in history
     fn jump_back(&mut self) {
-        if let Some(location) = self.jump_list.jump_back() {
+        let current_location = self.current_book.as_ref().map(|book| JumpLocation {
+            epub_path: book.file.clone(),
+            chapter_index: book.current_chapter(),
+            node_index: self.text_reader.get_current_node_index(),
+        });
+
+        if let Some(location) = self.jump_list.jump_back(current_location) {
             if let Err(e) = self.jump_to_location(location) {
                 error!("Failed to jump back: {e}");
                 self.show_error(format!("Failed to jump back: {e}"));
@@ -1781,6 +1853,7 @@ impl App {
                     book.total_chapters(),
                     current_theme(),
                     true, // always focused in zen mode
+                    true, // zen_mode: show search hints on border
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
@@ -1814,6 +1887,7 @@ impl App {
                     book.total_chapters(),
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
+                    false, // not zen_mode: search hints in help bar
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
@@ -2007,11 +2081,13 @@ impl App {
                     let toc_items = self.navigation_panel.get_toc_items();
                     let current_chapter_href =
                         Self::get_chapter_href(&book.epub, book.current_chapter());
+                    let book_title = Self::extract_book_title(&book.file);
                     let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
                         self.text_reader.get_comments(),
                         &mut book.epub,
                         &toc_items,
                         current_chapter_href,
+                        book_title,
                     );
                     viewer.restore_position();
                     self.comments_viewer = Some(viewer);
@@ -2403,11 +2479,13 @@ impl App {
                         let toc_items = self.navigation_panel.get_toc_items();
                         let current_chapter_href =
                             Self::get_chapter_href(&book.epub, book.current_chapter());
+                        let book_title = Self::extract_book_title(&book.file);
                         let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
                             self.text_reader.get_comments(),
                             &mut book.epub,
                             &toc_items,
                             current_chapter_href,
+                            book_title,
                         );
                         viewer.restore_position();
                         self.comments_viewer = Some(viewer);
@@ -2832,6 +2910,21 @@ impl App {
                             }
                         }
                     }
+                    CommentsViewerAction::ExportComments { filename } => {
+                        if let Some(ref viewer) = self.comments_viewer {
+                            let exporter = viewer.create_exporter();
+                            let content = exporter.generate_markdown();
+                            match std::fs::write(&filename, &content) {
+                                Ok(_) => {
+                                    self.show_info(format!("Exported to {filename}"));
+                                }
+                                Err(e) => {
+                                    error!("Failed to export comments to {filename}: {e}");
+                                    self.show_error(format!("Failed to export: {e}"));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             return None;
@@ -3199,6 +3292,15 @@ impl App {
             }
 
             match key.code {
+                KeyCode::Enter => {
+                    self.text_reader.clear_count();
+                    if let Some(link_info) = self.text_reader.get_link_at_cursor() {
+                        if let Err(e) = self.handle_link_click(&link_info) {
+                            error!("Failed to handle link click: {e}");
+                        }
+                    }
+                    return None;
+                }
                 KeyCode::Char('v') => {
                     use crate::markdown_text_reader::VisualMode;
                     self.text_reader
@@ -3334,7 +3436,7 @@ impl App {
                 self.toggle_profiling();
             }
             KeyCode::Tab => {
-                if !self.has_active_popup() {
+                if !self.has_active_popup() && !self.zen_mode {
                     match self.focused_panel {
                         FocusedPanel::Main(MainPanel::NavigationList) => {
                             self.navigation_panel

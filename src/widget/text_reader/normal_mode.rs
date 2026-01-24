@@ -1,5 +1,6 @@
 use super::{LineType, MarkdownTextReader};
 use crate::theme::Base16Palette;
+use crate::types::LinkInfo;
 use ratatui::{style::Style as RatatuiStyle, text::Span};
 use std::time::Instant;
 
@@ -169,6 +170,16 @@ impl MarkdownTextReader {
 
     pub fn is_normal_mode_active(&self) -> bool {
         self.normal_mode.is_active()
+    }
+
+    pub fn get_link_at_cursor(&self) -> Option<LinkInfo> {
+        if !self.normal_mode.is_active() {
+            return None;
+        }
+
+        let line = self.normal_mode.cursor.line;
+        let column = self.normal_mode.cursor.column;
+        self.get_link_at_position(line, column).cloned()
     }
 
     pub fn update_normal_mode_cursor(&mut self, line: usize, column: usize) {

@@ -33,6 +33,10 @@ fn parse_args() -> Result<CliArgs> {
                 println!("Usage: bookokrat [FILE.epub] [--zen-mode]");
                 std::process::exit(0);
             }
+            "--version" | "-V" => {
+                println!("bookokrat {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             _ if arg.starts_with('-') => {
                 anyhow::bail!("Unknown option: {arg}");
             }

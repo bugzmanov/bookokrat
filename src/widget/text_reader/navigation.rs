@@ -249,6 +249,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     /// Restore scroll position to show a specific node
     pub fn restore_to_node_index(&mut self, node_index: usize) {
+        // Perform immediately for jump list navigation
+        self.perform_node_restore(node_index);
+        // Also set pending in case content hasn't been rendered yet
         self.pending_node_restore = Some(node_index);
     }
 

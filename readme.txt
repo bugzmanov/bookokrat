@@ -4,6 +4,7 @@
 
   [LIBRARY]
     ▸ Automatic EPUB discovery in current directory
+    ▸ Calibre library detection with metadata (titles, authors)
     ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
     ▸ Split-view interface with library browser and reader
     ▸ Hierarchical table of contents with expandable sections
@@ -104,16 +105,17 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ READER PANEL - NORMAL MODE (press n to enter/exit)                           │
+│ READER PANEL - NORMAL MODE (press n to enter/exit)                          │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  h/j/k/l       Move cursor                                                   │
-│  w/W/b/e       Word motions (small/Big)                                      │
-│  0/^/$         Line start / first non-space / end                            │
+│  h/j/k/l       Move cursor                                                  │
+│  w/W/b/e       Word motions (small/Big)                                     │
+│  0/^/$         Line start / first non-space / end                           │
 │  gg / G        Top / bottom of document                                     │
 │  f/F/t/T ;     Find/till char and repeat                                    │
 │  v / V         Visual selection (char/line)                                 │
-│  y             Yank (copy) with motions/objects or visual selection          │
-│  Esc           Exit visual mode                                              │
+│  y             Yank (copy) with motions/objects or visual selection         │
+│  Enter         Open link under cursor                                       │
+│  Esc           Exit visual mode                                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -170,6 +172,7 @@
 │  ?             Toggle global search mode (search all comments)              │
 │  Enter         Jump to comment location in reader                           │
 │  dd            Delete highlighted comment                                   │
+│  Space+e       Export all annotations to Markdown file                      │
 │  Esc           Close viewer                                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 

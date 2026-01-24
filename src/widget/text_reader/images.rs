@@ -70,12 +70,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(String, u16)> {
         text.iter()
             .filter_map(|item| match item {
-                TextOrInline::Inline(Inline::Image { url, .. }) => Some(url),
+                TextOrInline::Inline(Inline::Image { url, .. }) => Some(url.clone()),
+                // Also extract images from inside links
+                TextOrInline::Inline(Inline::Link {
+                    text: link_text, ..
+                }) => {
+                    // Look for an image inside the link
+                    for link_item in link_text.iter() {
+                        if let TextOrInline::Inline(Inline::Image { url, .. }) = link_item {
+                            return Some(url.clone());
+                        }
+                    }
+                    None
+                }
                 _ => None,
             })
             .filter_map(|url| {
                 // Skip already loaded/loading images
-                if let Some(img) = self.embedded_images.borrow().get(url) {
+                if let Some(img) = self.embedded_images.borrow().get(&url) {
                     if matches!(
                         img.state,
                         ImageLoadState::Loaded { .. } | ImageLoadState::Loading
@@ -85,7 +97,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
 
                 let chapter_path = self.current_chapter_file.as_deref();
-                match book_images.get_image_size_with_context(url, chapter_path) {
+                match book_images.get_image_size_with_context(&url, chapter_path) {
                     Some((w, h)) => {
                         let height_cells = EmbeddedImage::height_in_cells(w, h);
                         self.embedded_images.borrow_mut().insert(
@@ -99,13 +111,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 state: ImageLoadState::NotLoaded,
                             },
                         );
-                        Some((url.clone(), height_cells))
+                        Some((url, height_cells))
                     }
                     None => {
                         warn!("Could not get dimensions for: {url}");
                         self.embedded_images.borrow_mut().insert(
                             url.clone(),
-                            EmbeddedImage::failed_img(url, "Could not read image metadata"),
+                            EmbeddedImage::failed_img(&url, "Could not read image metadata"),
                         );
                         None
                     }
@@ -240,6 +252,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 ImageLoadState::Loaded { image, .. } => Some(image.clone()),
                 _ => None,
             })
+    }
+
+    /// Check if a screen click position has a link (for linked images)
+    pub fn check_link_at_screen_position(&self, x: u16, y: u16) -> Option<LinkInfo> {
+        let text_area = self.last_inner_text_area?;
+
+        if x < text_area.x
+            || x >= text_area.x + text_area.width
+            || y < text_area.y
+            || y >= text_area.y + text_area.height
+        {
+            return None;
+        }
+
+        let clicked_line = self.scroll_offset + (y - text_area.y) as usize;
+        let clicked_col = (x - text_area.x) as usize;
+
+        self.get_link_at_position(clicked_line, clicked_col)
+            .cloned()
     }
 
     //todo: there should be a better way

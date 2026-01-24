@@ -16,7 +16,7 @@ use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
-use crate::search::SearchState;
+use crate::search::{SearchMode, SearchState};
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use image::{DynamicImage, GenericImageView};
@@ -275,6 +275,7 @@ impl MarkdownTextReader {
         total_chapters: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        zen_mode: bool,
     ) {
         // Store content area for hit-testing and mouse interactions
         self.last_content_area = Some(area);
@@ -328,10 +329,35 @@ impl MarkdownTextReader {
 
         let progress = self.calculate_progress("", width, self.visible_height);
 
-        let block = Block::default()
+        let mut block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
             .title_bottom(Line::from(format!(" {progress}% ")).right_aligned());
+
+        if zen_mode && self.search_state.active {
+            let search_hint = match self.search_state.mode {
+                SearchMode::InputMode => {
+                    let query = &self.search_state.query;
+                    let match_info = if self.search_state.matches.is_empty() && !query.is_empty() {
+                        " No matches".to_string()
+                    } else if !self.search_state.matches.is_empty() {
+                        format!(" {} matches", self.search_state.matches.len())
+                    } else {
+                        String::new()
+                    };
+                    format!(" / {query}█ {match_info}  ESC: Cancel | Enter: Search ")
+                }
+                SearchMode::NavigationMode => {
+                    let query = &self.search_state.query;
+                    let match_info = self.search_state.get_match_info();
+                    format!(" /{query}  {match_info}  n/N: Navigate | ESC: Exit ")
+                }
+                SearchMode::Inactive => String::new(),
+            };
+            if !search_hint.is_empty() {
+                block = block.title_bottom(Line::from(search_hint).left_aligned());
+            }
+        }
 
         // Remove borders so the text sits inside the frame cleanly
         let mut inner_area = block.inner(area);

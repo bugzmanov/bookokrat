@@ -458,12 +458,18 @@ impl IntoIterator for Text {
 /// Utility function to classify link href and extract target information
 /// This is used by both the HTML parser and table rendering code
 pub fn classify_link_href(href: &str) -> (LinkType, Option<String>, Option<String>) {
-    if href.starts_with("http://") || href.starts_with("https://") {
+    // External links have explicit protocols
+    if href.starts_with("http://")
+        || href.starts_with("https://")
+        || href.starts_with("mailto:")
+        || href.starts_with("tel:")
+    {
         (LinkType::External, None, None)
     } else if let Some(stripped) = href.strip_prefix('#') {
+        // Same-chapter anchor
         (LinkType::InternalAnchor, None, Some(stripped.to_string()))
-    } else if href.contains(".html") {
-        // Extract chapter and anchor for chapter links
+    } else {
+        // All other links are relative paths (internal chapter links in EPUB)
         if let Some(hash_pos) = href.find('#') {
             let chapter = href[..hash_pos].to_string();
             let anchor = href[hash_pos + 1..].to_string();
@@ -471,8 +477,5 @@ pub fn classify_link_href(href: &str) -> (LinkType, Option<String>, Option<Strin
         } else {
             (LinkType::InternalChapter, Some(href.to_string()), None)
         }
-    } else {
-        // Treat unknown links as external for safety
-        (LinkType::External, None, None)
     }
 }

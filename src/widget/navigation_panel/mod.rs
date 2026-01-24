@@ -192,8 +192,14 @@ impl NavigationPanel {
     ) {
         match self.mode {
             NavigationMode::BookSelection => {
-                self.book_list
-                    .render(f, area, is_focused, palette, self.current_book_index);
+                self.book_list.render(
+                    f,
+                    area,
+                    is_focused,
+                    palette,
+                    self.current_book_index,
+                    book_manager.is_calibre_mode(),
+                );
             }
             NavigationMode::TableOfContents => {
                 if let Some(current_idx) = self.current_book_index {
