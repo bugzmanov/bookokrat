@@ -43,14 +43,31 @@ impl JumpList {
         self.current_position = None;
     }
 
-    pub fn jump_back(&mut self) -> Option<JumpLocation> {
+    /// Jump back in history. If `current_location` is provided and we're at the head,
+    /// it will be pushed first so we can Ctrl+I back to it.
+    pub fn jump_back(&mut self, current_location: Option<JumpLocation>) -> Option<JumpLocation> {
+        // If at head and current location provided, save it first
+        if self.current_position.is_none() {
+            if let Some(ref loc) = current_location {
+                // Only push if different from last entry
+                if self.entries.back() != Some(loc) {
+                    self.entries.push_back(loc.clone());
+                    while self.entries.len() > self.max_size {
+                        self.entries.pop_front();
+                    }
+                }
+            }
+        }
+
         match self.current_position {
             None => {
-                if !self.entries.is_empty() {
-                    let new_pos = self.entries.len() - 1;
+                // Jump to second-to-last entry (last entry is current position)
+                if self.entries.len() >= 2 {
+                    let new_pos = self.entries.len() - 2;
                     self.current_position = Some(new_pos);
                     self.entries.get(new_pos).cloned()
                 } else {
+                    // Only one entry or no entries - can't go back
                     None
                 }
             }
@@ -64,15 +81,16 @@ impl JumpList {
 
     pub fn jump_forward(&mut self) -> Option<JumpLocation> {
         match self.current_position {
-            Some(pos) if pos < self.entries.len() - 1 => {
+            Some(pos) if pos < self.entries.len().saturating_sub(1) => {
                 self.current_position = Some(pos + 1);
                 self.entries.get(pos + 1).cloned()
             }
-            Some(pos) if pos == self.entries.len() - 1 => {
+            Some(_) => {
+                // At last entry - reset to "at newest" and return the latest
                 self.current_position = None;
-                None
+                self.entries.back().cloned()
             }
-            _ => None, // Already at the newest
+            _ => None, // Already at the newest (current_position is None)
         }
     }
 
@@ -106,19 +124,33 @@ mod tests {
 
         list.push(loc1.clone());
 
-        assert_eq!(list.jump_back(), Some(loc1.clone()));
-
-        assert_eq!(list.jump_back(), None);
+        // With only one entry and no current location, can't jump back
+        assert_eq!(list.jump_back(None), None);
 
         list.clear();
         list.push(loc1.clone());
         list.push(loc2.clone());
 
-        assert_eq!(list.jump_back(), Some(loc2.clone()));
+        // First jump back (with current location) adds current to list: [loc1, loc2, current]
+        // Then jumps to second-to-last which is loc2
+        let current = JumpLocation {
+            epub_path: "book1.epub".to_string(),
+            chapter_index: 2,
+            node_index: 0,
+        };
+        assert_eq!(list.jump_back(Some(current.clone())), Some(loc2.clone()));
 
-        assert_eq!(list.jump_back(), Some(loc1.clone()));
+        // Second jump back goes to loc1
+        assert_eq!(list.jump_back(None), Some(loc1.clone()));
 
+        // Can't go back further
+        assert_eq!(list.jump_back(None), None);
+
+        // Jump forward should go to loc2
         assert_eq!(list.jump_forward(), Some(loc2.clone()));
+
+        // Jump forward again should go to current
+        assert_eq!(list.jump_forward(), Some(current));
     }
 
     #[test]

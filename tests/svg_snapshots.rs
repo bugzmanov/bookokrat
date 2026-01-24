@@ -4460,3 +4460,82 @@ fn test_normal_mode_counted_motion_svg() {
         create_test_failure_handler("test_normal_mode_counted_motion_svg"),
     );
 }
+
+#[test]
+#[parallel]
+fn test_image_inside_anchor_link_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // Create a simple 10x10 red PNG image
+    let image_path = temp_dir.path().join("test_image.png");
+    let img = image::RgbImage::from_fn(10, 10, |_, _| image::Rgb([255u8, 0u8, 0u8]));
+    img.save(&image_path).unwrap();
+
+    // Create a second chapter file that the link will point to (named to come after main file alphabetically)
+    let chapter2_path = temp_dir.path().join("z_chapter2.html");
+    let chapter2_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 2</title></head>
+<body>
+    <h1>Chapter 2</h1>
+    <p>This is the target chapter.</p>
+</body>
+</html>"#;
+    std::fs::write(&chapter2_path, chapter2_content).unwrap();
+
+    // Create main HTML with image inside anchor tag (similar to the real-world case)
+    // Named to come first alphabetically so it's loaded as the first chapter
+    let temp_html_path = temp_dir.path().join("a_image_link_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Image Link Test</title>
+</head>
+<body>
+    <p>Text before the linked image.</p>
+    <p><a href="z_chapter2.html#section1"><img src="test_image.png" alt="Cover Image" /></a></p>
+    <p>Text after the linked image.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    if let Some(book_info) = app.book_manager.get_book_info(0) {
+        let path = book_info.path.clone();
+        let _ = app.open_book_for_reading_by_path(&path);
+    }
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_image_inside_anchor_link.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/image_inside_anchor_link.svg"),
+        "test_image_inside_anchor_link_svg",
+        create_test_failure_handler("test_image_inside_anchor_link_svg"),
+    );
+}

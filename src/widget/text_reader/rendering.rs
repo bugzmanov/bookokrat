@@ -45,6 +45,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or(false)
     }
 
+    /// Check if a Text contains an image and return its URL if found
+    fn extract_image_from_text(text: &MarkdownText) -> Option<String> {
+        for item in text.iter() {
+            if let TextOrInline::Inline(Inline::Image { url, .. }) = item {
+                return Some(url.clone());
+            }
+        }
+        None
+    }
+
     pub fn render_document_to_lines(
         &mut self,
         doc: &Document,
@@ -992,6 +1002,61 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                     // Render the image as a separate block
                     self.render_image_placeholder(url, lines, total_height, width, palette);
+                    has_content = true;
+                }
+                // Handle links containing images - render as clickable image
+                TextOrInline::Inline(Inline::Link {
+                    text: link_text,
+                    url,
+                    link_type,
+                    target_chapter,
+                    target_anchor,
+                    ..
+                }) if Self::extract_image_from_text(link_text).is_some() => {
+                    // If we have accumulated text before the image link, render it first
+                    if !current_rich_spans.is_empty() {
+                        let styled_spans = Self::apply_annotation_underlines(
+                            current_rich_spans,
+                            &annotation_ranges,
+                            underline_color,
+                        );
+                        self.render_text_spans(
+                            &styled_spans,
+                            None,
+                            lines,
+                            total_height,
+                            width,
+                            indent,
+                            false,
+                            node_index,
+                        );
+                        current_rich_spans = Vec::new();
+                    }
+
+                    // Extract the image URL from the link text
+                    let image_url = Self::extract_image_from_text(link_text).unwrap();
+
+                    // Create link info for the image
+                    let link_info = LinkInfo {
+                        text: String::new(),
+                        url: url.clone(),
+                        line: 0,
+                        start_col: 0,
+                        end_col: 0,
+                        link_type: link_type.clone(),
+                        target_chapter: target_chapter.clone(),
+                        target_anchor: target_anchor.clone(),
+                    };
+
+                    // Render the image with link info attached
+                    self.render_image_placeholder_with_link(
+                        &image_url,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        Some(link_info),
+                    );
                     has_content = true;
                 }
                 _ => {
@@ -2915,6 +2980,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
     ) {
+        self.render_image_placeholder_with_link(url, lines, total_height, width, palette, None);
+    }
+
+    fn render_image_placeholder_with_link(
+        &mut self,
+        url: &str,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        link_info: Option<LinkInfo>,
+    ) {
         // Add empty line before image
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
@@ -2988,13 +3065,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .into_iter()
             .zip(placeholder.styled_lines.into_iter())
         {
+            // Update link coordinates for this specific line
+            let line_link_nodes: Vec<_> = link_info
+                .clone()
+                .map(|mut info| {
+                    info.line = lines.len();
+                    info.start_col = 0;
+                    info.end_col = width.saturating_sub(1);
+                    info
+                })
+                .into_iter()
+                .collect();
+
             lines.push(RenderedLine {
                 spans: styled_line.spans,
                 raw_text: raw_line,
                 line_type: LineType::ImagePlaceholder {
                     src: url.to_string(),
                 },
-                link_nodes: vec![],
+                link_nodes: line_link_nodes,
                 node_anchor: None,
                 node_index: None,
                 code_line: None,
