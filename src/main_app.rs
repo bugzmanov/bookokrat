@@ -610,6 +610,15 @@ impl App {
         None
     }
 
+    /// Extract book title from file path (without extension)
+    fn extract_book_title(file_path: &str) -> String {
+        std::path::Path::new(file_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("book")
+            .to_string()
+    }
+
     /// Find chapter index by href/path
     fn find_chapter_index_by_href(
         doc: &EpubDoc<BufReader<std::fs::File>>,
@@ -2007,11 +2016,13 @@ impl App {
                     let toc_items = self.navigation_panel.get_toc_items();
                     let current_chapter_href =
                         Self::get_chapter_href(&book.epub, book.current_chapter());
+                    let book_title = Self::extract_book_title(&book.file);
                     let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
                         self.text_reader.get_comments(),
                         &mut book.epub,
                         &toc_items,
                         current_chapter_href,
+                        book_title,
                     );
                     viewer.restore_position();
                     self.comments_viewer = Some(viewer);
@@ -2403,11 +2414,13 @@ impl App {
                         let toc_items = self.navigation_panel.get_toc_items();
                         let current_chapter_href =
                             Self::get_chapter_href(&book.epub, book.current_chapter());
+                        let book_title = Self::extract_book_title(&book.file);
                         let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
                             self.text_reader.get_comments(),
                             &mut book.epub,
                             &toc_items,
                             current_chapter_href,
+                            book_title,
                         );
                         viewer.restore_position();
                         self.comments_viewer = Some(viewer);
@@ -2829,6 +2842,21 @@ impl App {
                                     "Comment deleted"
                                 };
                                 self.show_info(msg);
+                            }
+                        }
+                    }
+                    CommentsViewerAction::ExportComments { filename } => {
+                        if let Some(ref viewer) = self.comments_viewer {
+                            let exporter = viewer.create_exporter();
+                            let content = exporter.generate_markdown();
+                            match std::fs::write(&filename, &content) {
+                                Ok(_) => {
+                                    self.show_info(format!("Exported to {filename}"));
+                                }
+                                Err(e) => {
+                                    error!("Failed to export comments to {filename}: {e}");
+                                    self.show_error(format!("Failed to export: {e}"));
+                                }
                             }
                         }
                     }

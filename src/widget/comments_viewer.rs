@@ -1,4 +1,5 @@
 use crate::comments::{BookComments, Comment, CommentTarget};
+use crate::export::CommentsExporter;
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown::Inline;
@@ -25,6 +26,9 @@ pub enum CommentsViewerAction {
         target: CommentTarget,
     },
     DeleteSelectedComment,
+    ExportComments {
+        filename: String,
+    },
     Close,
 }
 
@@ -47,6 +51,12 @@ pub struct CommentsViewer {
     global_search_mode: bool,
     saved_chapter_index: usize,
     global_position: Option<(usize, usize)>,
+    // Export mode
+    export_mode: bool,
+    export_filename: String,
+    book_title: String,
+    // Cached document for export
+    doc_cache: HashMap<String, crate::markdown::Document>,
 }
 
 #[derive(Clone)]
@@ -99,8 +109,9 @@ impl CommentsViewer {
         epub: &mut EpubDoc<BufReader<std::fs::File>>,
         toc_items: &[TocItem],
         current_chapter_href: Option<String>,
+        book_title: String,
     ) -> Self {
-        let all_entries = Self::build_entries(comments.clone(), epub, toc_items);
+        let (all_entries, doc_cache) = Self::build_entries(comments.clone(), epub, toc_items);
         let chapters = Self::build_chapter_index(toc_items, &all_entries);
         let initial_chapter =
             Self::initial_chapter_index(current_chapter_href.as_deref(), &chapters);
@@ -124,6 +135,10 @@ impl CommentsViewer {
             global_search_mode: false,
             saved_chapter_index: initial_chapter,
             global_position: None,
+            export_mode: false,
+            export_filename: String::new(),
+            book_title,
+            doc_cache,
         };
 
         viewer.update_visible_entries();
@@ -315,7 +330,10 @@ impl CommentsViewer {
         comments: Arc<Mutex<BookComments>>,
         epub: &mut EpubDoc<BufReader<std::fs::File>>,
         toc_items: &[TocItem],
-    ) -> Vec<CommentEntry> {
+    ) -> (
+        Vec<CommentEntry>,
+        HashMap<String, crate::markdown::Document>,
+    ) {
         use crate::markdown::Document;
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 
@@ -323,7 +341,7 @@ impl CommentsViewer {
         let all_comments = comments_guard.get_all_comments();
 
         if all_comments.is_empty() {
-            return Vec::new();
+            return (Vec::new(), HashMap::new());
         }
 
         // Cache parsed documents by chapter href to avoid re-parsing
@@ -404,7 +422,7 @@ impl CommentsViewer {
             }
         }
 
-        entries
+        (entries, doc_cache)
     }
 
     fn build_chapter_index(toc_items: &[TocItem], entries: &[CommentEntry]) -> Vec<ChapterDisplay> {
@@ -1085,7 +1103,23 @@ impl CommentsViewer {
     }
 
     fn build_outer_block(&self, title: String) -> Block<'static> {
-        if self.search_state.active {
+        if self.export_mode {
+            let export_text = format!("Export to: {}_ ", self.export_filename);
+            Block::default()
+                .title(title)
+                .title_bottom(
+                    Line::from(Span::styled(
+                        export_text,
+                        Style::default()
+                            .fg(current_theme().base_0b)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .right_aligned(),
+                )
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(current_theme().base_0d))
+                .style(Style::default().bg(current_theme().base_00))
+        } else if self.search_state.active {
             let search_text = if self.search_state.mode == SearchMode::InputMode {
                 format!("/{}", self.search_state.query)
             } else {
@@ -1110,8 +1144,40 @@ impl CommentsViewer {
                 .border_style(Style::default().fg(current_theme().base_0d))
                 .style(Style::default().bg(current_theme().base_00))
         } else {
+            // Show hint when not in search or export mode (right-aligned)
             Block::default()
                 .title(title)
+                .title_bottom(
+                    Line::from(vec![
+                        Span::styled(
+                            "Space+e ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("export", Style::default().fg(current_theme().base_04)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "/ ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("search", Style::default().fg(current_theme().base_04)),
+                        Span::raw("  "),
+                        Span::styled(
+                            "? ",
+                            Style::default()
+                                .fg(current_theme().base_03)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            "all chapters ",
+                            Style::default().fg(current_theme().base_04),
+                        ),
+                    ])
+                    .right_aligned(),
+                )
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(current_theme().base_0d))
                 .style(Style::default().bg(current_theme().base_00))
@@ -1846,7 +1912,35 @@ impl CommentsViewer {
     ) -> Option<CommentsViewerAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
-        if self.search_state.active && self.search_state.mode == SearchMode::InputMode {
+        // Handle export mode input
+        if self.export_mode {
+            match key.code {
+                KeyCode::Esc => {
+                    self.export_mode = false;
+                    self.export_filename.clear();
+                    None
+                }
+                KeyCode::Enter => {
+                    if !self.export_filename.is_empty() {
+                        let filename = self.export_filename.clone();
+                        self.export_mode = false;
+                        self.export_filename.clear();
+                        Some(CommentsViewerAction::ExportComments { filename })
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char(c) => {
+                    self.export_filename.push(c);
+                    None
+                }
+                KeyCode::Backspace => {
+                    self.export_filename.pop();
+                    None
+                }
+                _ => None,
+            }
+        } else if self.search_state.active && self.search_state.mode == SearchMode::InputMode {
             match key.code {
                 KeyCode::Esc => {
                     self.cancel_search();
@@ -1930,6 +2024,12 @@ impl CommentsViewer {
                     self.previous_match();
                     None
                 }
+                KeyCode::Char('e') if key_seq.handle_key('e') == " e" => {
+                    key_seq.clear();
+                    self.export_mode = true;
+                    self.export_filename = CommentsExporter::generate_filename(&self.book_title);
+                    None
+                }
                 KeyCode::Char('d') => {
                     if key_seq.handle_key('d') == "dd" {
                         key_seq.clear();
@@ -1953,8 +2053,29 @@ impl CommentsViewer {
                             target: entry.primary_comment().target.clone(),
                         })
                 }
+                KeyCode::Char(' ') => {
+                    key_seq.handle_key(' ');
+                    None
+                }
                 _ => None,
             }
         }
+    }
+
+    pub fn is_in_export_mode(&self) -> bool {
+        self.export_mode
+    }
+
+    pub fn export_filename(&self) -> &str {
+        &self.export_filename
+    }
+
+    pub fn create_exporter(&self) -> CommentsExporter<'_> {
+        CommentsExporter::new(
+            &self.all_entries,
+            &self.chapters,
+            &self.book_title,
+            &self.doc_cache,
+        )
     }
 }
