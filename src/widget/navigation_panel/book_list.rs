@@ -167,6 +167,7 @@ impl BookList {
         is_focused: bool,
         palette: &Base16Palette,
         current_book_index: Option<usize>,
+        is_calibre_mode: bool,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
@@ -252,11 +253,17 @@ impl BookList {
             Style::default().bg(selection_bg).fg(selection_fg)
         };
 
+        let title = if is_calibre_mode {
+            "Books [Calibre]"
+        } else {
+            "Books"
+        };
+
         let files = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Books")
+                    .title(title)
                     .border_style(Style::default().fg(border_color))
                     .style(Style::default().bg(palette.base_00)),
             )

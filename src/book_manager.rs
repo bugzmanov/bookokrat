@@ -2,10 +2,18 @@ use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::BufReader;
 use std::path::Path;
+use walkdir::WalkDir;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum LibraryMode {
+    Standard,
+    Calibre,
+}
 
 pub struct BookManager {
     pub books: Vec<BookInfo>,
     scan_directory: String,
+    pub library_mode: LibraryMode,
 }
 
 #[derive(Clone)]
@@ -27,12 +35,35 @@ impl BookManager {
 
     pub fn new_with_directory(directory: &str) -> Self {
         let scan_directory = directory.to_string();
-        let mut books = Self::discover_books_in_dir(&scan_directory);
-        books.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+        let library_mode = if Self::is_calibre_library(&scan_directory) {
+            info!("Detected Calibre library at {scan_directory}");
+            LibraryMode::Calibre
+        } else {
+            LibraryMode::Standard
+        };
+
+        let mut books = match library_mode {
+            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&scan_directory),
+            LibraryMode::Standard => Self::discover_books_in_dir(&scan_directory),
+        };
+        books.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
         Self {
             books,
             scan_directory,
+            library_mode,
         }
+    }
+
+    fn is_calibre_library(dir: &str) -> bool {
+        Path::new(dir).join("metadata.db").exists()
+    }
+
+    pub fn is_calibre_mode(&self) -> bool {
+        self.library_mode == LibraryMode::Calibre
     }
 
     fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
@@ -57,6 +88,63 @@ impl BookManager {
                 }
             })
             .collect()
+    }
+
+    fn discover_books_in_calibre_library(dir: &str) -> Vec<BookInfo> {
+        let mut books = Vec::new();
+
+        for entry in WalkDir::new(dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("epub") {
+                let path_str = match path.to_str() {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+
+                let display_name = path
+                    .parent()
+                    .and_then(|parent| Self::parse_calibre_opf(parent))
+                    .unwrap_or_else(|| Self::extract_display_name(&path_str));
+
+                books.push(BookInfo {
+                    path: path_str,
+                    display_name,
+                });
+            }
+        }
+
+        books
+    }
+
+    fn parse_calibre_opf(book_dir: &Path) -> Option<String> {
+        let opf_path = book_dir.join("metadata.opf");
+        let content = std::fs::read_to_string(&opf_path).ok()?;
+        let doc = roxmltree::Document::parse(&content).ok()?;
+
+        let mut title: Option<String> = None;
+        let mut author: Option<String> = None;
+
+        for node in doc.descendants() {
+            if node.tag_name().name() == "title" && title.is_none() {
+                title = node.text().map(|s| s.trim().to_string());
+            }
+            if node.tag_name().name() == "creator" && author.is_none() {
+                author = node.text().map(|s| s.trim().to_string());
+            }
+            if title.is_some() && author.is_some() {
+                break;
+            }
+        }
+
+        let title = title?;
+        Some(match author {
+            Some(a) if !a.is_empty() => format!("{title} - {a}"),
+            _ => title,
+        })
     }
 
     fn extract_display_name(file_path: &str) -> String {
@@ -434,7 +522,15 @@ impl BookManager {
     }
 
     pub fn refresh_books(&mut self) {
-        self.books = Self::discover_books_in_dir(&self.scan_directory);
+        self.books = match self.library_mode {
+            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&self.scan_directory),
+            LibraryMode::Standard => Self::discover_books_in_dir(&self.scan_directory),
+        };
+        self.books.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
     }
 
     pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
