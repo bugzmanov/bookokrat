@@ -1853,6 +1853,7 @@ impl App {
                     book.total_chapters(),
                     current_theme(),
                     true, // always focused in zen mode
+                    true, // zen_mode: show search hints on border
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
@@ -1886,6 +1887,7 @@ impl App {
                     book.total_chapters(),
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
+                    false, // not zen_mode: search hints in help bar
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
@@ -3434,7 +3436,7 @@ impl App {
                 self.toggle_profiling();
             }
             KeyCode::Tab => {
-                if !self.has_active_popup() {
+                if !self.has_active_popup() && !self.zen_mode {
                     match self.focused_panel {
                         FocusedPanel::Main(MainPanel::NavigationList) => {
                             self.navigation_panel
