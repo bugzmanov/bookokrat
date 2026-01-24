@@ -8,9 +8,10 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 
 
 ## What You Can Do
-- Browse every EPUB in the current directory, drill into the table of contents, and resume exactly where you left off.
+- Browse every EPUB in the current directory or automatically detect and read from your Calibre library with proper metadata.
+- Drill into the table of contents, and resume exactly where you left off.
 - Search inside the current chapter or across the whole book, jump through a per-book history, and inspect reading statistics.
-- Highlight text, attach comments, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
+- Highlight text, attach comments, export annotations to Markdown, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
 - Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
 - Enter a Vim-style normal mode in the reader for precise motions, visual selection, and yanking to clipboard.
@@ -124,6 +125,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 ### Comments & Annotations
 - `a` - Create or edit comment on selection
 - `d` - Delete comment under cursor
+- `Space+e` - Export all annotations to Markdown (in comments viewer)
 
 ### Popups & External Actions
 - `Space+h` - Toggle reading history popup
