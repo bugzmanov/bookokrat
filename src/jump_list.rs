@@ -1,10 +1,45 @@
 use std::collections::VecDeque;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct JumpLocation {
-    pub epub_path: String,
-    pub chapter_index: usize,
-    pub node_index: usize,
+pub enum JumpLocation {
+    Epub {
+        path: String,
+        chapter: usize,
+        node: usize,
+    },
+    #[cfg(feature = "pdf")]
+    Pdf {
+        path: String,
+        page: usize,
+        scroll_offset: u32,
+    },
+}
+
+impl JumpLocation {
+    pub fn epub(path: String, chapter: usize, node: usize) -> Self {
+        Self::Epub {
+            path,
+            chapter,
+            node,
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn pdf(path: String, page: usize, scroll_offset: u32) -> Self {
+        Self::Pdf {
+            path,
+            page,
+            scroll_offset,
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Epub { path, .. } => path,
+            #[cfg(feature = "pdf")]
+            Self::Pdf { path, .. } => path,
+        }
+    }
 }
 
 /// Jump list for navigation history (like vim's jump list)
@@ -110,17 +145,8 @@ mod tests {
     fn test_jump_list_basic() {
         let mut list = JumpList::new(5);
 
-        let loc1 = JumpLocation {
-            epub_path: "book1.epub".to_string(),
-            chapter_index: 0,
-            node_index: 0,
-        };
-
-        let loc2 = JumpLocation {
-            epub_path: "book1.epub".to_string(),
-            chapter_index: 1,
-            node_index: 0,
-        };
+        let loc1 = JumpLocation::epub("book1.epub".to_string(), 0, 0);
+        let loc2 = JumpLocation::epub("book1.epub".to_string(), 1, 0);
 
         list.push(loc1.clone());
 
@@ -133,11 +159,7 @@ mod tests {
 
         // First jump back (with current location) adds current to list: [loc1, loc2, current]
         // Then jumps to second-to-last which is loc2
-        let current = JumpLocation {
-            epub_path: "book1.epub".to_string(),
-            chapter_index: 2,
-            node_index: 0,
-        };
+        let current = JumpLocation::epub("book1.epub".to_string(), 2, 0);
         assert_eq!(list.jump_back(Some(current.clone())), Some(loc2.clone()));
 
         // Second jump back goes to loc1
@@ -158,11 +180,7 @@ mod tests {
         let mut list = JumpList::new(3);
 
         for i in 0..5 {
-            list.push(JumpLocation {
-                epub_path: format!("book{i}.epub"),
-                chapter_index: i,
-                node_index: 0,
-            });
+            list.push(JumpLocation::epub(format!("book{i}.epub"), i, 0));
         }
 
         // Should only have 3 entries (2, 3, 4)
