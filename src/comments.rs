@@ -5,6 +5,16 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// PDF selection rectangle (pixel coordinates relative to page)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PdfSelectionRect {
+    pub page: usize,
+    pub topleft_x: u32,
+    pub topleft_y: u32,
+    pub bottomright_x: u32,
+    pub bottomright_y: u32,
+}
+
 /// Represents the specific sub-element within a block that a comment targets.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "subtarget_kind", rename_all = "snake_case")]
@@ -124,26 +134,37 @@ impl BlockSubtarget {
 }
 
 /// Identifies the location of a comment within the document.
+/// Supports both EPUB text-based targeting and PDF pixel-based targeting.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommentTarget {
-    pub node_index: usize,
-    pub subtarget: BlockSubtarget,
+pub enum CommentTarget {
+    /// EPUB text-based targeting (original format)
+    Text {
+        node_index: usize,
+        subtarget: BlockSubtarget,
+    },
+    /// PDF pixel-based targeting
+    Pdf {
+        page: usize,
+        rects: Vec<PdfSelectionRect>,
+    },
 }
 
 impl CommentTarget {
+    /// Create a Text target for EPUB paragraph
     pub fn paragraph(node_index: usize, word_range: Option<(usize, usize)>) -> Self {
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::Paragraph { word_range },
         }
     }
 
+    /// Create a Text target for EPUB list item
     pub fn list_item(
         node_index: usize,
         item_index: usize,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::ListItem {
                 item_index,
@@ -153,13 +174,14 @@ impl CommentTarget {
         }
     }
 
+    /// Create a Text target for EPUB list item with path
     pub fn list_item_with_path(
         node_index: usize,
         list_path: Vec<usize>,
         word_range: Option<(usize, usize)>,
     ) -> Self {
         let item_index = list_path.last().copied().unwrap_or(0);
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::ListItem {
                 item_index,
@@ -169,12 +191,13 @@ impl CommentTarget {
         }
     }
 
+    /// Create a Text target for EPUB quote paragraph
     pub fn quote_paragraph(
         node_index: usize,
         paragraph_index: usize,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::QuoteParagraph {
                 paragraph_index,
@@ -183,13 +206,14 @@ impl CommentTarget {
         }
     }
 
+    /// Create a Text target for EPUB definition item
     pub fn definition_item(
         node_index: usize,
         item_index: usize,
         is_term: bool,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::DefinitionItem {
                 item_index,
@@ -199,47 +223,118 @@ impl CommentTarget {
         }
     }
 
+    /// Create a Text target for EPUB code block
     pub fn code_block(node_index: usize, line_range: (usize, usize)) -> Self {
-        Self {
+        Self::Text {
             node_index,
             subtarget: BlockSubtarget::CodeLines { line_range },
         }
     }
 
-    pub fn node_index(&self) -> usize {
-        self.node_index
+    /// Create a Pdf target for PDF selection
+    pub fn pdf(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
+        Self::Pdf { page, rects }
+    }
+
+    /// Returns the node index for Text targets, or None for Pdf targets
+    pub fn node_index(&self) -> Option<usize> {
+        match self {
+            Self::Text { node_index, .. } => Some(*node_index),
+            Self::Pdf { .. } => None,
+        }
+    }
+
+    /// Returns the page for Pdf targets, or None for Text targets
+    pub fn page(&self) -> Option<usize> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Pdf { page, .. } => Some(*page),
+        }
+    }
+
+    /// Returns true if this is a Text (EPUB) target
+    pub fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+
+    /// Returns true if this is a Pdf target
+    pub fn is_pdf(&self) -> bool {
+        matches!(self, Self::Pdf { .. })
     }
 
     pub fn word_range(&self) -> Option<(usize, usize)> {
-        self.subtarget.word_range()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.word_range(),
+            Self::Pdf { .. } => None,
+        }
     }
 
     pub fn list_item_index(&self) -> Option<usize> {
-        self.subtarget.list_item_index()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.list_item_index(),
+            Self::Pdf { .. } => None,
+        }
     }
 
     pub fn definition_item_index(&self) -> Option<usize> {
-        self.subtarget.definition_item_index()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.definition_item_index(),
+            Self::Pdf { .. } => None,
+        }
     }
 
     pub fn quote_paragraph_index(&self) -> Option<usize> {
-        self.subtarget.quote_paragraph_index()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.quote_paragraph_index(),
+            Self::Pdf { .. } => None,
+        }
     }
 
     pub fn line_range(&self) -> Option<(usize, usize)> {
-        self.subtarget.line_range()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.line_range(),
+            Self::Pdf { .. } => None,
+        }
     }
 
     pub fn kind_order(&self) -> u8 {
-        self.subtarget.kind_order()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.kind_order(),
+            Self::Pdf { .. } => 10, // PDF comments sort after text comments
+        }
     }
 
     pub fn secondary_sort_key(&self) -> (usize, usize) {
-        self.subtarget.secondary_sort_key()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.secondary_sort_key(),
+            Self::Pdf { page, rects } => {
+                let y = rects.first().map(|r| r.topleft_y as usize).unwrap_or(0);
+                (*page, y)
+            }
+        }
     }
 
     pub fn is_code_block(&self) -> bool {
-        self.subtarget.is_code()
+        match self {
+            Self::Text { subtarget, .. } => subtarget.is_code(),
+            Self::Pdf { .. } => false,
+        }
+    }
+
+    /// Returns the subtarget for Text targets, or None for Pdf targets
+    pub fn subtarget(&self) -> Option<&BlockSubtarget> {
+        match self {
+            Self::Text { subtarget, .. } => Some(subtarget),
+            Self::Pdf { .. } => None,
+        }
+    }
+
+    /// Returns the list path for Text list item targets, or None otherwise
+    pub fn list_path(&self) -> Option<&[usize]> {
+        match self {
+            Self::Text { subtarget, .. } => subtarget.list_path(),
+            Self::Pdf { .. } => None,
+        }
     }
 }
 
@@ -250,23 +345,56 @@ pub struct Comment {
     pub target: CommentTarget,
     pub content: String,
     pub updated_at: DateTime<Utc>,
+    /// The quoted/selected text that this comment refers to (primarily for PDF)
+    pub quoted_text: Option<String>,
 }
 
-/// Serde representation for CommentTarget (new format with node_index + subtarget)
+/// Serde representation for Text CommentTarget (EPUB format with node_index + subtarget)
 #[derive(Serialize, Deserialize)]
-struct CommentTargetSerde {
+struct CommentTextTargetSerde {
     node_index: usize,
     #[serde(flatten)]
     subtarget: BlockSubtarget,
 }
 
+/// Modern format for EPUB text comments
 #[derive(Serialize, Deserialize)]
-struct CommentModernSerde {
+struct CommentTextSerde {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub chapter_href: String,
+    pub target_type: String, // "text"
+    #[serde(flatten)]
+    pub target: CommentTextTargetSerde,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_text: Option<String>,
+}
+
+/// Modern format for PDF comments
+#[derive(Serialize, Deserialize)]
+struct CommentPdfSerde {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub chapter_href: String,
+    pub target_type: String, // "pdf"
+    pub page: usize,
+    pub rects: Vec<PdfSelectionRect>,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_text: Option<String>,
+}
+
+/// Legacy modern format (has node_index but no target_type, assumed to be Text)
+#[derive(Serialize, Deserialize)]
+struct CommentModernLegacySerde {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub chapter_href: String,
     #[serde(flatten)]
-    pub target: CommentTargetSerde,
+    pub target: CommentTextTargetSerde,
     pub content: String,
     pub updated_at: DateTime<Utc>,
 }
@@ -301,7 +429,9 @@ struct CommentLegacyCodeBlockSerde {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum CommentSerde {
-    Modern(CommentModernSerde),
+    Text(CommentTextSerde),
+    Pdf(CommentPdfSerde),
+    ModernLegacy(CommentModernLegacySerde),
     LegacyCodeBlock(CommentLegacyCodeBlockSerde),
     LegacyParagraph(CommentLegacyParagraphSerde),
 }
@@ -334,12 +464,13 @@ impl From<CommentLegacyParagraphSerde> for Comment {
         Comment {
             id: generate_comment_id(),
             chapter_href: legacy.chapter_href,
-            target: CommentTarget {
+            target: CommentTarget::Text {
                 node_index: legacy.paragraph_index,
                 subtarget,
             },
             content: legacy.content,
             updated_at: legacy.updated_at,
+            quoted_text: None,
         }
     }
 }
@@ -352,36 +483,55 @@ impl From<CommentLegacyCodeBlockSerde> for Comment {
             target: CommentTarget::code_block(legacy.paragraph_index, legacy.line_range),
             content: legacy.content,
             updated_at: legacy.updated_at,
+            quoted_text: None,
         }
     }
 }
 
-impl From<CommentModernSerde> for Comment {
-    fn from(modern: CommentModernSerde) -> Self {
+impl From<CommentModernLegacySerde> for Comment {
+    fn from(modern: CommentModernLegacySerde) -> Self {
         Comment {
             id: modern.id.unwrap_or_else(generate_comment_id),
             chapter_href: modern.chapter_href,
-            target: CommentTarget {
+            target: CommentTarget::Text {
                 node_index: modern.target.node_index,
                 subtarget: modern.target.subtarget,
             },
             content: modern.content,
             updated_at: modern.updated_at,
+            quoted_text: None,
         }
     }
 }
 
-impl From<&Comment> for CommentModernSerde {
-    fn from(comment: &Comment) -> Self {
-        CommentModernSerde {
-            id: Some(comment.id.clone()),
-            chapter_href: comment.chapter_href.clone(),
-            target: CommentTargetSerde {
-                node_index: comment.target.node_index,
-                subtarget: comment.target.subtarget.clone(),
+impl From<CommentTextSerde> for Comment {
+    fn from(text: CommentTextSerde) -> Self {
+        Comment {
+            id: text.id.unwrap_or_else(generate_comment_id),
+            chapter_href: text.chapter_href,
+            target: CommentTarget::Text {
+                node_index: text.target.node_index,
+                subtarget: text.target.subtarget,
             },
-            content: comment.content.clone(),
-            updated_at: comment.updated_at,
+            content: text.content,
+            updated_at: text.updated_at,
+            quoted_text: text.quoted_text,
+        }
+    }
+}
+
+impl From<CommentPdfSerde> for Comment {
+    fn from(pdf: CommentPdfSerde) -> Self {
+        Comment {
+            id: pdf.id.unwrap_or_else(generate_comment_id),
+            chapter_href: pdf.chapter_href,
+            target: CommentTarget::Pdf {
+                page: pdf.page,
+                rects: pdf.rects,
+            },
+            content: pdf.content,
+            updated_at: pdf.updated_at,
+            quoted_text: pdf.quoted_text,
         }
     }
 }
@@ -391,7 +541,39 @@ impl Serialize for Comment {
     where
         S: Serializer,
     {
-        CommentModernSerde::from(self).serialize(serializer)
+        match &self.target {
+            CommentTarget::Text {
+                node_index,
+                subtarget,
+            } => {
+                let serde = CommentTextSerde {
+                    id: Some(self.id.clone()),
+                    chapter_href: self.chapter_href.clone(),
+                    target_type: "text".to_string(),
+                    target: CommentTextTargetSerde {
+                        node_index: *node_index,
+                        subtarget: subtarget.clone(),
+                    },
+                    content: self.content.clone(),
+                    updated_at: self.updated_at,
+                    quoted_text: self.quoted_text.clone(),
+                };
+                serde.serialize(serializer)
+            }
+            CommentTarget::Pdf { page, rects } => {
+                let serde = CommentPdfSerde {
+                    id: Some(self.id.clone()),
+                    chapter_href: self.chapter_href.clone(),
+                    target_type: "pdf".to_string(),
+                    page: *page,
+                    rects: rects.clone(),
+                    content: self.content.clone(),
+                    updated_at: self.updated_at,
+                    quoted_text: self.quoted_text.clone(),
+                };
+                serde.serialize(serializer)
+            }
+        }
     }
 }
 
@@ -401,9 +583,11 @@ impl<'de> Deserialize<'de> for Comment {
         D: Deserializer<'de>,
     {
         match CommentSerde::deserialize(deserializer)? {
+            CommentSerde::Text(text) => Ok(Comment::from(text)),
+            CommentSerde::Pdf(pdf) => Ok(Comment::from(pdf)),
+            CommentSerde::ModernLegacy(modern) => Ok(Comment::from(modern)),
             CommentSerde::LegacyParagraph(legacy) => Ok(Comment::from(legacy)),
             CommentSerde::LegacyCodeBlock(legacy) => Ok(Comment::from(legacy)),
-            CommentSerde::Modern(modern) => Ok(Comment::from(modern)),
         }
     }
 }
@@ -421,11 +605,53 @@ impl Comment {
             target,
             content,
             updated_at,
+            quoted_text: None,
         }
     }
 
-    pub fn node_index(&self) -> usize {
+    pub fn with_quoted_text(
+        chapter_href: String,
+        target: CommentTarget,
+        content: String,
+        updated_at: DateTime<Utc>,
+        quoted_text: Option<String>,
+    ) -> Self {
+        Self {
+            id: generate_comment_id(),
+            chapter_href,
+            target,
+            content,
+            updated_at,
+            quoted_text,
+        }
+    }
+
+    /// Returns the node index for Text targets, or None for Pdf targets
+    pub fn node_index(&self) -> Option<usize> {
         self.target.node_index()
+    }
+
+    /// Returns the page for Pdf targets, or None for Text targets
+    pub fn page(&self) -> Option<usize> {
+        self.target.page()
+    }
+
+    /// Returns the index key used for storage lookup (node_index for Text, page for Pdf)
+    pub fn index_key(&self) -> usize {
+        match &self.target {
+            CommentTarget::Text { node_index, .. } => *node_index,
+            CommentTarget::Pdf { page, .. } => *page,
+        }
+    }
+
+    /// Returns true if this is a Text (EPUB) comment
+    pub fn is_text(&self) -> bool {
+        self.target.is_text()
+    }
+
+    /// Returns true if this is a Pdf comment
+    pub fn is_pdf(&self) -> bool {
+        self.target.is_pdf()
     }
 
     /// Returns true if this comment is NOT a code block comment (i.e., targets text content)
@@ -468,6 +694,17 @@ impl BookComments {
         };
         let file_path = resolved_dir.join(format!("book_{book_hash}.yaml"));
         Self::new_with_path(file_path)
+    }
+
+    /// Create an empty BookComments that doesn't load from or save to disk.
+    /// Used in test mode for reproducible testing.
+    pub fn new_empty() -> Self {
+        Self {
+            file_path: PathBuf::new(),
+            comments: Vec::new(),
+            comments_by_location: HashMap::new(),
+            comments_by_id: HashMap::new(),
+        }
     }
 
     fn new_with_path(file_path: PathBuf) -> Result<Self> {
@@ -556,12 +793,55 @@ impl BookComments {
         self.save_to_disk()
     }
 
-    /// Efficiently get comments for a specific AST node in a chapter
+    /// Efficiently get comments for a specific AST node in a chapter (EPUB Text comments)
     pub fn get_node_comments(&self, chapter_href: &str, node_index: usize) -> Vec<&Comment> {
         self.comments_by_location
             .get(chapter_href)
             .and_then(|chapter_map| chapter_map.get(&node_index))
-            .map(|indices| indices.iter().map(|&i| &self.comments[i]).collect())
+            .map(|indices| {
+                indices
+                    .iter()
+                    .filter_map(|&i| {
+                        let c = self.comments.get(i)?;
+                        if c.is_text() { Some(c) } else { None }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get comments for a specific page in a PDF document
+    pub fn get_page_comments(&self, doc_id: &str, page: usize) -> Vec<&Comment> {
+        self.comments_by_location
+            .get(doc_id)
+            .and_then(|doc_map| doc_map.get(&page))
+            .map(|indices| {
+                indices
+                    .iter()
+                    .filter_map(|&i| {
+                        let c = self.comments.get(i)?;
+                        if c.is_pdf() { Some(c) } else { None }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get all PDF comments for a document
+    pub fn get_doc_comments(&self, doc_id: &str) -> Vec<&Comment> {
+        self.comments_by_location
+            .get(doc_id)
+            .map(|doc_map| {
+                doc_map
+                    .values()
+                    .flat_map(|indices| {
+                        indices.iter().filter_map(|&i| {
+                            let c = self.comments.get(i)?;
+                            if c.is_pdf() { Some(c) } else { None }
+                        })
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -627,6 +907,11 @@ impl BookComments {
     }
 
     fn save_to_disk(&self) -> Result<()> {
+        // Skip saving if file_path is empty (test mode)
+        if self.file_path.as_os_str().is_empty() {
+            return Ok(());
+        }
+
         let yaml = serde_yaml::to_string(&self.comments).context("Failed to serialize comments")?;
 
         fs::write(&self.file_path, yaml).context("Failed to write comments file")?;
@@ -649,7 +934,7 @@ impl BookComments {
         self.comments_by_location
             .entry(comment.chapter_href.clone())
             .or_default()
-            .entry(comment.node_index())
+            .entry(comment.index_key())
             .or_default()
             .push(idx);
         self.comments_by_id.insert(comment.id.clone(), idx);
@@ -662,7 +947,7 @@ impl BookComments {
             self.comments_by_location
                 .entry(comment.chapter_href.clone())
                 .or_default()
-                .entry(comment.node_index())
+                .entry(comment.index_key())
                 .or_default()
                 .push(idx);
             self.comments_by_id.insert(comment.id.clone(), idx);
@@ -673,7 +958,7 @@ impl BookComments {
         self.comments.sort_by(|a, b| {
             a.chapter_href
                 .cmp(&b.chapter_href)
-                .then(a.node_index().cmp(&b.node_index()))
+                .then(a.index_key().cmp(&b.index_key()))
                 .then(a.target.kind_order().cmp(&b.target.kind_order()))
                 .then(
                     a.target
@@ -821,10 +1106,13 @@ mod tests {
 "#;
         let parsed: Vec<Comment> = serde_yaml::from_str(legacy_yaml).unwrap();
         assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].target.node_index, 5);
+        assert_eq!(parsed[0].target.node_index(), Some(5));
         assert!(matches!(
-            parsed[0].target.subtarget,
-            BlockSubtarget::Paragraph { .. }
+            &parsed[0].target,
+            CommentTarget::Text {
+                subtarget: BlockSubtarget::Paragraph { .. },
+                ..
+            }
         ));
     }
 
@@ -842,8 +1130,8 @@ mod tests {
         book_comments.add_comment(comment_c).unwrap();
 
         let all = book_comments.get_all_comments();
-        assert_eq!(all[0].node_index(), 0);
-        assert_eq!(all[1].node_index(), 1);
+        assert_eq!(all[0].node_index(), Some(0));
+        assert_eq!(all[1].node_index(), Some(1));
         assert!(all[1].is_paragraph_comment());
         assert!(all[2].target.is_code_block());
     }

@@ -20,6 +20,9 @@ use std::io::BufReader;
 use std::sync::{Arc, Mutex};
 use textwrap::wrap;
 
+#[cfg(feature = "pdf")]
+use crate::pdf::{TocEntry, TocTarget};
+
 pub enum CommentsViewerAction {
     JumpToComment {
         chapter_href: String,
@@ -139,6 +142,49 @@ impl CommentsViewer {
             export_filename: String::new(),
             book_title,
             doc_cache,
+        };
+
+        viewer.update_visible_entries();
+        viewer.restore_position();
+        viewer
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn new_for_pdf(
+        comments: Arc<Mutex<BookComments>>,
+        doc_id: &str,
+        toc_entries: &[TocEntry],
+        page_count: usize,
+        current_page: usize,
+        book_title: String,
+    ) -> Self {
+        let all_entries = Self::build_entries_for_pdf(comments.clone(), doc_id, toc_entries);
+        let chapters = Self::build_chapter_index_for_pdf(toc_entries, page_count, &all_entries);
+        let initial_chapter = Self::initial_page_index(current_page, toc_entries, &chapters);
+
+        let mut viewer = CommentsViewer {
+            all_entries: all_entries.clone(),
+            rendered_entries: Vec::new(),
+            scroll_offset: 0,
+            selected_index: 0,
+            search_state: SearchState::new(),
+            last_popup_area: None,
+            last_position: Some((0, 0)),
+            total_rendered_lines: 0,
+            chapters,
+            chapter_scroll_offset: 0,
+            selected_chapter_index: initial_chapter,
+            focus: ViewerFocus::Comments,
+            chapter_positions: HashMap::new(),
+            last_chapter_area: None,
+            last_comments_area: None,
+            global_search_mode: false,
+            saved_chapter_index: initial_chapter,
+            global_position: None,
+            export_mode: false,
+            export_filename: String::new(),
+            book_title,
+            doc_cache: HashMap::new(),
         };
 
         viewer.update_visible_entries();
@@ -373,11 +419,16 @@ impl CommentsViewer {
         let mut code_group_map: HashMap<(String, usize), usize> = HashMap::new();
 
         for comment in all_comments {
+            // Comments viewer only handles EPUB text comments, which always have node_index
+            let Some(node_index) = comment.node_index() else {
+                continue;
+            };
+
             let chapter_title = Self::find_chapter_title(&comment.chapter_href, toc_items, epub);
             let quoted_text = Self::extract_quoted_text_from_cache(
                 &doc_cache,
                 &comment.chapter_href,
-                comment.node_index(),
+                node_index,
                 comment.target.word_range(),
                 comment.target.list_item_index(),
                 comment.target.definition_item_index(),
@@ -385,7 +436,7 @@ impl CommentsViewer {
             );
 
             let entry_index = if comment.target.is_code_block() {
-                let key = (comment.chapter_href.clone(), comment.node_index());
+                let key = (comment.chapter_href.clone(), node_index);
                 if let Some(&idx) = code_group_map.get(&key) {
                     entries[idx].comments.push(comment.clone());
                     continue;
@@ -423,6 +474,186 @@ impl CommentsViewer {
         }
 
         (entries, doc_cache)
+    }
+
+    #[cfg(feature = "pdf")]
+    fn build_entries_for_pdf(
+        comments: Arc<Mutex<BookComments>>,
+        _doc_id: &str,
+        toc_entries: &[TocEntry],
+    ) -> Vec<CommentEntry> {
+        let comments_guard = comments.lock().unwrap();
+        let all_comments = comments_guard.get_all_comments();
+
+        // Build sorted list of (toc_page, toc_title, toc_href) for section lookup
+        let mut toc_pages: Vec<(usize, String, String)> = toc_entries
+            .iter()
+            .filter_map(|entry| {
+                let page = match &entry.target {
+                    TocTarget::InternalPage(p) => *p,
+                    TocTarget::PrintedPage(p) => *p,
+                    TocTarget::External(_) => return None,
+                };
+                let href = format!("toc:{page}");
+                Some((page, entry.title.clone(), href))
+            })
+            .collect();
+        toc_pages.sort_by_key(|(page, _, _)| *page);
+
+        // Helper to find TOC section for a given page
+        let find_section = |page: usize| -> (String, String) {
+            if toc_pages.is_empty() {
+                return (format!("Page {}", page + 1), format!("page:{page}"));
+            }
+            // Find the last TOC entry whose page <= comment page
+            let section = toc_pages
+                .iter()
+                .rev()
+                .find(|(toc_page, _, _)| *toc_page <= page);
+            match section {
+                Some((_, title, href)) => (title.clone(), href.clone()),
+                None => {
+                    // Comment is before first TOC entry
+                    let (_, title, href) = &toc_pages[0];
+                    (title.clone(), href.clone())
+                }
+            }
+        };
+
+        let mut entries: Vec<CommentEntry> = Vec::new();
+        let mut current_line = 0;
+        let mut last_href: Option<String> = None;
+
+        for comment in all_comments {
+            if !comment.is_pdf() {
+                continue;
+            }
+            let Some(page) = comment.page() else {
+                continue;
+            };
+
+            let (chapter_title, chapter_href) = find_section(page);
+            let quoted_text = comment
+                .quoted_text
+                .clone()
+                .unwrap_or_else(|| format!("Page {}", page + 1));
+
+            let show_chapter_header = last_href.as_ref() != Some(&chapter_href);
+            let render_start_line = current_line;
+            let estimated_height =
+                Self::estimate_entry_height(show_chapter_header, 1, &comment.content);
+            let render_end_line = current_line + estimated_height;
+
+            entries.push(CommentEntry {
+                chapter_title,
+                chapter_href: chapter_href.clone(),
+                quoted_text,
+                comments: vec![comment.clone()],
+                render_start_line,
+                render_end_line,
+            });
+
+            current_line = render_end_line;
+            last_href = Some(chapter_href);
+        }
+
+        entries
+    }
+
+    #[cfg(feature = "pdf")]
+    fn build_chapter_index_for_pdf(
+        toc_entries: &[TocEntry],
+        _page_count: usize,
+        entries: &[CommentEntry],
+    ) -> Vec<ChapterDisplay> {
+        let mut chapters = Vec::new();
+        let mut href_to_index: HashMap<String, usize> = HashMap::new();
+
+        if !toc_entries.is_empty() {
+            for entry in toc_entries {
+                let page = match &entry.target {
+                    TocTarget::InternalPage(p) => *p,
+                    TocTarget::PrintedPage(p) => *p,
+                    TocTarget::External(_) => continue,
+                };
+                let href = format!("toc:{page}");
+                href_to_index.insert(href.clone(), chapters.len());
+                chapters.push(ChapterDisplay {
+                    title: entry.title.clone(),
+                    href: Some(href),
+                    depth: entry.level,
+                    comment_count: 0,
+                });
+            }
+        }
+
+        // Count comments per chapter
+        for entry in entries {
+            if let Some(&idx) = href_to_index.get(&entry.chapter_href) {
+                if let Some(chapter) = chapters.get_mut(idx) {
+                    chapter.comment_count += entry.comments.len();
+                }
+            } else if chapters.is_empty() {
+                // No TOC - create page-based entries
+                chapters.push(ChapterDisplay {
+                    title: entry.chapter_title.clone(),
+                    href: Some(entry.chapter_href.clone()),
+                    depth: 0,
+                    comment_count: entry.comments.len(),
+                });
+                href_to_index.insert(entry.chapter_href.clone(), chapters.len() - 1);
+            }
+        }
+
+        if chapters.is_empty() {
+            chapters.push(ChapterDisplay {
+                title: "No comments".to_string(),
+                href: None,
+                depth: 0,
+                comment_count: 0,
+            });
+        }
+
+        chapters
+    }
+
+    #[cfg(feature = "pdf")]
+    fn initial_page_index(
+        current_page: usize,
+        toc_entries: &[TocEntry],
+        chapters: &[ChapterDisplay],
+    ) -> usize {
+        // Build sorted list of (toc_page, chapter_index)
+        let mut toc_pages: Vec<(usize, usize)> = toc_entries
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, entry)| {
+                let page = match &entry.target {
+                    TocTarget::InternalPage(p) => *p,
+                    TocTarget::PrintedPage(p) => *p,
+                    TocTarget::External(_) => return None,
+                };
+                Some((page, idx))
+            })
+            .collect();
+        toc_pages.sort_by_key(|(page, _)| *page);
+
+        // Find the TOC entry that contains current_page
+        if !toc_pages.is_empty() {
+            let section = toc_pages
+                .iter()
+                .rev()
+                .find(|(toc_page, _)| *toc_page <= current_page);
+            if let Some((_, idx)) = section {
+                return *idx;
+            }
+        }
+
+        // Fallback: find first chapter with comments
+        chapters
+            .iter()
+            .position(|ch| ch.comment_count > 0)
+            .unwrap_or(0)
     }
 
     fn build_chapter_index(toc_items: &[TocItem], entries: &[CommentEntry]) -> Vec<ChapterDisplay> {
@@ -2047,11 +2278,20 @@ impl CommentsViewer {
                     }
                 }
                 KeyCode::Enter => {
-                    self.selected_comment()
-                        .map(|entry| CommentsViewerAction::JumpToComment {
+                    if let Some(entry) = self.selected_comment() {
+                        let target = entry.primary_comment().target.clone();
+                        log::info!(
+                            "CommentsViewer: Enter pressed, target={:?}, page={:?}",
+                            target,
+                            target.page()
+                        );
+                        Some(CommentsViewerAction::JumpToComment {
                             chapter_href: entry.chapter_href.clone(),
-                            target: entry.primary_comment().target.clone(),
+                            target,
                         })
+                    } else {
+                        None
+                    }
                 }
                 KeyCode::Char(' ') => {
                     key_seq.handle_key(' ');

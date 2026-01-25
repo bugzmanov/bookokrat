@@ -32,10 +32,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Some(comments_arc) = &self.book_comments {
                 if let Ok(comments) = comments_arc.lock() {
                     for comment in comments.get_chapter_comments(chapter_file) {
-                        self.current_chapter_comments
-                            .entry(comment.node_index())
-                            .or_default()
-                            .push(comment.clone());
+                        // Text reader only handles EPUB Text comments
+                        if let Some(node_index) = comment.node_index() {
+                            self.current_chapter_comments
+                                .entry(node_index)
+                                .or_default()
+                                .push(comment.clone());
+                        }
                     }
                 }
             }
@@ -63,9 +66,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         }
 
                         self.comment_input.textarea = Some(textarea);
-                        self.comment_input
-                            .target_node_index
-                            .replace(comment.target.node_index());
+                        if let Some(node_index) = comment.target.node_index() {
+                            self.comment_input.target_node_index.replace(node_index);
+                        }
                         self.comment_input.target_line = Some(start_line);
                         self.comment_input.target = Some(comment.target.clone());
                         self.comment_input.edit_mode = Some(CommentEditMode::Editing {
@@ -142,7 +145,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         self.comment_input.textarea = Some(textarea);
         self.comment_input.target = Some(target.clone());
-        self.comment_input.target_node_index = Some(target.node_index());
+        self.comment_input.target_node_index = target.node_index();
         self.comment_input
             .target_line
             .replace(end_line.saturating_add(1));
@@ -716,11 +719,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.get_node_comments(node_index)
             .iter()
             .filter(|c| {
-                matches!(
-                    &c.target.subtarget,
-                    crate::comments::BlockSubtarget::ListItem { list_path, .. }
-                        if list_path.is_empty()
-                )
+                c.target.subtarget().is_some_and(|s| {
+                    matches!(
+                        s,
+                        crate::comments::BlockSubtarget::ListItem { list_path, .. }
+                            if list_path.is_empty()
+                    )
+                })
             })
             .filter_map(|c| c.target.word_range())
             .collect()
@@ -734,13 +739,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
-            .filter(|c| c.target.subtarget.list_item_index() == Some(item_index))
-            .filter(|c| {
-                c.target
-                    .subtarget
-                    .list_path()
-                    .is_none_or(|path| path.is_empty())
-            })
+            .filter(|c| c.target.list_item_index() == Some(item_index))
+            .filter(|c| c.target.list_path().is_none_or(|path| path.is_empty()))
             .filter_map(|c| c.target.word_range())
             .collect()
     }
@@ -752,7 +752,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
-            .filter(|c| c.target.subtarget.list_path() == Some(list_path))
+            .filter(|c| c.target.list_path() == Some(list_path))
             .filter_map(|c| c.target.word_range())
             .collect()
     }
@@ -768,14 +768,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.get_node_comments(node_index)
             .iter()
             .filter(|c| {
-                matches!(
-                    &c.target.subtarget,
-                    BlockSubtarget::DefinitionItem {
-                        item_index: idx,
-                        is_term: term,
-                        ..
-                    } if *idx == item_index && *term == is_term
-                )
+                c.target.subtarget().is_some_and(|s| {
+                    matches!(
+                        s,
+                        BlockSubtarget::DefinitionItem {
+                            item_index: idx,
+                            is_term: term,
+                            ..
+                        } if *idx == item_index && *term == is_term
+                    )
+                })
             })
             .filter_map(|c| c.target.word_range())
             .collect()
