@@ -2,6 +2,7 @@ pub mod book_search;
 pub mod book_stat;
 pub mod comments_viewer;
 pub mod help_popup;
+pub mod hud_message;
 pub mod navigation_panel;
 #[cfg(feature = "pdf")]
 pub mod pdf_reader;
