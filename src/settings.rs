@@ -2,11 +2,9 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::RwLock;
+use std::sync::{LazyLock, RwLock};
 
-use once_cell::sync::Lazy;
-
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 const SETTINGS_FILENAME: &str = "config.yaml";
 const LEGACY_SETTINGS_FILENAME: &str = ".bookokrat_settings.yaml";
 const APP_NAME: &str = "bookokrat";
@@ -40,6 +38,26 @@ pub struct YamlTheme {
     pub base0f: String,
 }
 
+/// PDF render mode for Kitty terminals
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfRenderMode {
+    /// Page-at-a-time mode (lower memory usage)
+    #[default]
+    Page,
+    /// Continuous scroll mode (500MB-1GB memory usage)
+    Scroll,
+}
+
+impl PdfRenderMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PdfRenderMode::Page => "Page",
+            PdfRenderMode::Scroll => "Scroll",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -51,8 +69,32 @@ pub struct Settings {
     #[serde(default)]
     pub margin: u16,
 
+    #[serde(default = "default_pdf_scale")]
+    pub pdf_scale: f32,
+
+    #[serde(default)]
+    pub pdf_pan_shift: u16,
+
+    #[serde(default)]
+    pub pdf_render_mode: PdfRenderMode,
+
+    #[serde(default = "default_true")]
+    pub pdf_enabled: bool,
+
+    /// True if user has seen/configured PDF settings (used for migration prompt)
+    #[serde(default)]
+    pub pdf_settings_configured: bool,
+
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_themes: Vec<YamlTheme>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_pdf_scale() -> f32 {
+    1.0
 }
 
 fn default_version() -> u32 {
@@ -69,19 +111,24 @@ impl Default for Settings {
             version: CURRENT_VERSION,
             theme: default_theme(),
             margin: 0,
+            pdf_scale: default_pdf_scale(),
+            pdf_pan_shift: 0,
+            pdf_render_mode: PdfRenderMode::default(),
+            pdf_enabled: true,
+            pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
         }
     }
 }
 
-static SETTINGS: Lazy<RwLock<Settings>> = Lazy::new(|| RwLock::new(Settings::default()));
+static SETTINGS: LazyLock<RwLock<Settings>> = LazyLock::new(|| RwLock::new(Settings::default()));
 
 fn preferred_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|config| config.join(APP_NAME).join(SETTINGS_FILENAME))
 }
 
 fn legacy_config_path() -> Option<PathBuf> {
-    home::home_dir().map(|home| home.join(LEGACY_SETTINGS_FILENAME))
+    std::env::home_dir().map(|home| home.join(LEGACY_SETTINGS_FILENAME))
 }
 
 fn find_existing_config() -> Option<PathBuf> {
@@ -188,6 +235,18 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(&format!("version: {}\n", settings.version));
     content.push_str(&format!("theme: \"{}\"\n", settings.theme));
     content.push_str(&format!("margin: {}\n", settings.margin));
+    content.push_str(&format!("pdf_scale: {}\n", settings.pdf_scale));
+    content.push_str(&format!("pdf_pan_shift: {}\n", settings.pdf_pan_shift));
+    let mode_str = match settings.pdf_render_mode {
+        PdfRenderMode::Page => "page",
+        PdfRenderMode::Scroll => "scroll",
+    };
+    content.push_str(&format!("pdf_render_mode: {}\n", mode_str));
+    content.push_str(&format!("pdf_enabled: {}\n", settings.pdf_enabled));
+    content.push_str(&format!(
+        "pdf_settings_configured: {}\n",
+        settings.pdf_settings_configured
+    ));
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -284,4 +343,83 @@ pub fn get_custom_themes() -> Vec<YamlTheme> {
         .read()
         .map(|s| s.custom_themes.clone())
         .unwrap_or_default()
+}
+
+pub fn get_pdf_scale() -> f32 {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_scale)
+        .unwrap_or_else(|_| default_pdf_scale())
+}
+
+pub fn set_pdf_scale(scale: f32) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_scale = scale;
+    }
+    save_settings();
+}
+
+pub fn get_pdf_pan_shift() -> u16 {
+    SETTINGS.read().map(|s| s.pdf_pan_shift).unwrap_or(0)
+}
+
+pub fn set_pdf_pan_shift(pan_shift: u16) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_pan_shift = pan_shift;
+    }
+    save_settings();
+}
+
+pub fn get_pdf_render_mode() -> PdfRenderMode {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_render_mode)
+        .unwrap_or_default()
+}
+
+pub fn set_pdf_render_mode(mode: PdfRenderMode) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_render_mode = mode;
+    }
+    save_settings();
+}
+
+pub fn is_pdf_enabled() -> bool {
+    SETTINGS.read().map(|s| s.pdf_enabled).unwrap_or(true)
+}
+
+pub fn set_pdf_enabled(enabled: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_enabled = enabled;
+    }
+    save_settings();
+}
+
+pub fn is_pdf_settings_configured() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_settings_configured)
+        .unwrap_or(true)
+}
+
+pub fn set_pdf_settings_configured(configured: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_settings_configured = configured;
+    }
+    save_settings();
+}
+
+/// Called on app startup to fix incompatible settings when switching terminals
+/// (e.g., from Kitty to WezTerm with Scroll mode selected)
+pub fn fix_incompatible_pdf_settings() {
+    let caps = crate::terminal::detect_terminal();
+    let current_mode = get_pdf_render_mode();
+
+    // If user switched from Kitty to non-Kitty terminal with Scroll mode, silently fix it
+    if !caps.pdf.supports_scroll_mode && current_mode == PdfRenderMode::Scroll {
+        if let Ok(mut settings) = SETTINGS.write() {
+            settings.pdf_render_mode = PdfRenderMode::Page;
+        }
+        save_settings();
+    }
 }
