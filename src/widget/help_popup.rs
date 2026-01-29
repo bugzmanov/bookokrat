@@ -1,7 +1,6 @@
 use crate::inputs::KeySeq;
 use crate::theme::current_theme;
 use codepage_437::{BorrowFromCp437, CP437_CONTROL};
-use once_cell::sync::Lazy;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,6 +11,7 @@ use ratatui::{
     },
 };
 use regex::Regex;
+use std::sync::LazyLock;
 
 pub enum HelpPopupAction {
     Close,
@@ -276,7 +276,8 @@ fn strip_sauce_metadata(bytes: &[u8]) -> &[u8] {
 /// Handles ESC[1;R;G;Bt and ESC[0;R;G;Bt sequences
 fn preprocess_custom_ansi(input: &str) -> String {
     // Match ESC[1;R;G;Bt or ESC[0;R;G;Bt sequences
-    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\x1b\[([01]);(\d+);(\d+);(\d+)t").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\x1b\[([01]);(\d+);(\d+);(\d+)t").unwrap());
 
     RE.replace_all(input, |caps: &regex::Captures| {
         let bold_flag = &caps[1];

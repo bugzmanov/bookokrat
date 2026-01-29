@@ -19,13 +19,15 @@ use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picke
 use crate::search::{SearchMode, SearchState};
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
+use crate::widget::hud_message::{HudMessage, HudMode};
 use image::{DynamicImage, GenericImageView};
 use log::{info, warn};
 use normal_mode::NormalModeState;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style as RatatuiStyle,
+    style::{Modifier, Style as RatatuiStyle},
+    symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -33,6 +35,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
+const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
@@ -116,6 +121,9 @@ pub struct MarkdownTextReader {
 
     /// Vim normal mode state
     normal_mode: NormalModeState,
+
+    /// Transient HUD message for the bottom title area
+    hud_message: Option<HudMessage>,
 }
 
 impl Default for MarkdownTextReader {
@@ -245,6 +253,7 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             normal_mode: NormalModeState::new(),
+            hud_message: None,
         }
     }
 
@@ -264,9 +273,51 @@ impl MarkdownTextReader {
             ))
         })
     }
+
+    pub fn set_hud_message(
+        &mut self,
+        message: impl Into<String>,
+        mode: HudMode,
+        duration: Duration,
+    ) {
+        self.hud_message = Some(HudMessage::new(message, duration, mode));
+    }
+
+    pub fn set_normal_hud(&mut self, message: impl Into<String>) {
+        self.set_hud_message(message, HudMode::Normal, HUD_NORMAL_DURATION);
+    }
+
+    pub fn set_error_hud(&mut self, message: impl Into<String>) {
+        self.set_hud_message(message, HudMode::Error, HUD_ERROR_DURATION);
+    }
+
+    pub fn update_hud_message(&mut self) -> bool {
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn dismiss_error_hud(&mut self) -> bool {
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.mode == HudMode::Error)
+        {
+            self.hud_message = None;
+            return true;
+        }
+        false
+    }
 }
 
 impl MarkdownTextReader {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         frame: &mut Frame,
@@ -329,10 +380,70 @@ impl MarkdownTextReader {
 
         let progress = self.calculate_progress("", width, self.visible_height);
 
+        let (_text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
+        let mode_title = if self.comment_input.is_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0a)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" Comment ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.is_visual_mode_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0e)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" VISUAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.normal_mode.is_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" NORMAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else {
+            None
+        };
+        let progress_title = Line::from(format!(" {progress}% ")).right_aligned();
+
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+        }
+
         let mut block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
-            .title_bottom(Line::from(format!(" {progress}% ")).right_aligned());
+            .title_bottom(progress_title)
+            .border_style(RatatuiStyle::default().fg(border_color));
+        if let Some(mode_title) = mode_title {
+            block = block.title_bottom(mode_title);
+        }
+        if let Some(hud) = self.hud_message.as_ref() {
+            block = block.title_bottom(hud.styled_line(palette));
+        }
 
         if zen_mode && self.search_state.active {
             let search_hint = match self.search_state.mode {
@@ -680,10 +791,21 @@ impl MarkdownTextReader {
             format!("Chapter {current_chapter}/{total_chapters} [RAW HTML]")
         };
 
-        let block = ratatui::widgets::Block::default()
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+        }
+
+        let mut block = ratatui::widgets::Block::default()
             .borders(ratatui::widgets::Borders::ALL)
             .title(title_text)
             .style(RatatuiStyle::default().fg(palette.base_09)); // Red border for raw mode
+        if let Some(hud) = self.hud_message.as_ref() {
+            block = block.title_bottom(hud.styled_line(palette));
+        }
 
         let raw_content = if let Some(html) = &self.raw_html_content {
             html.clone()

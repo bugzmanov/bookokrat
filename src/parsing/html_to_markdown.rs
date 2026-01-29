@@ -6,12 +6,15 @@ use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::rc::Rc;
+use std::sync::LazyLock;
 
-static SELF_CLOSING_NON_VOID_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)<(iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
+static SELF_CLOSING_NON_VOID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // In XHTML, tags like <title/> and <p/> are valid self-closing tags.
+    // But html5ever parses as HTML5 where these are NOT void elements.
+    // We must convert them to <title></title> and <p></p> before parsing.
+    Regex::new(r"(?i)<(title|p|div|span|a|li|ul|ol|table|tr|td|th|tbody|thead|h1|h2|h3|h4|h5|h6|iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
 });
 
 fn fix_self_closing_tags(html: &str) -> String {
@@ -4648,5 +4651,43 @@ The protocol operates on multiple layers:
         } else {
             panic!("oops 2");
         }
+    }
+
+    #[test]
+    fn test_xhtml_self_closing_tags() {
+        // XHTML uses self-closing tags like <title/> and <p/> which are NOT valid in HTML5.
+        // html5ever parses as HTML5, so we must convert them before parsing.
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Self-closing <title/> would consume everything after it as title content
+        let html_title = r#"<html><head><title/></head><body><p>Content</p></body></html>"#;
+        let doc1 = converter.convert(html_title);
+        assert_eq!(
+            doc1.blocks.len(),
+            1,
+            "Self-closing title should not break parsing"
+        );
+
+        // Self-closing <p/> should be converted to empty paragraph
+        let html_empty_p = r#"<body><p class="empty-line"/><p>Content</p></body>"#;
+        let doc2 = converter.convert(html_empty_p);
+        assert_eq!(
+            doc2.blocks.len(),
+            1,
+            "Empty self-closing p should not break parsing"
+        );
+
+        // Full XHTML structure (as found in Russian EPUBs)
+        let html_full = r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title/><link rel="stylesheet" href="style.css"/></head>
+<body><p>Русский текст</p><p class="empty-line"/><p>Ещё текст</p></body>
+</html>"#;
+        let doc3 = converter.convert(html_full);
+        assert_eq!(
+            doc3.blocks.len(),
+            2,
+            "Full XHTML with Russian text should parse correctly"
+        );
     }
 }

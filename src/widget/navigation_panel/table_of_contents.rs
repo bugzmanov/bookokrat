@@ -1049,18 +1049,26 @@ impl TableOfContents {
             .unwrap_or(&empty_vec);
 
         let mut spans = Vec::new();
-        let mut last_end = 0;
+
+        // Build char-to-byte mapping for proper Unicode handling
+        // highlight_ranges contains character indices, not byte indices
+        let char_to_byte: Vec<usize> = text.char_indices().map(|(byte_idx, _)| byte_idx).collect();
+        let text_byte_len = text.len();
+
+        let mut last_end_char = 0;
 
         let is_current_match = self.search_state.is_current_match(index);
 
-        for (start, end) in highlight_ranges {
-            // The highlight ranges are already calculated for the full text including indent
-            // No need to adjust them
-
+        for (start_char, end_char) in highlight_ranges {
             // Add non-highlighted text before this match
-            if *start > last_end {
+            if *start_char > last_end_char {
+                let start_byte = char_to_byte.get(last_end_char).copied().unwrap_or(0);
+                let end_byte = char_to_byte
+                    .get(*start_char)
+                    .copied()
+                    .unwrap_or(text_byte_len);
                 spans.push(Span::styled(
-                    text[last_end..*start].to_string(),
+                    text[start_byte..end_byte].to_string(),
                     Style::default().fg(base_color),
                 ));
             }
@@ -1074,18 +1082,28 @@ impl TableOfContents {
                 Style::default().bg(Color::Rgb(100, 100, 0)).fg(base_color)
             };
 
+            let start_byte = char_to_byte.get(*start_char).copied().unwrap_or(0);
+            let end_byte = char_to_byte
+                .get(*end_char)
+                .copied()
+                .unwrap_or(text_byte_len);
             spans.push(Span::styled(
-                text[*start..*end].to_string(),
+                text[start_byte..end_byte].to_string(),
                 highlight_style,
             ));
 
-            last_end = *end;
+            last_end_char = *end_char;
         }
 
         // Add remaining non-highlighted text
-        if last_end < text.len() {
+        let char_count = char_to_byte.len();
+        if last_end_char < char_count {
+            let start_byte = char_to_byte
+                .get(last_end_char)
+                .copied()
+                .unwrap_or(text_byte_len);
             spans.push(Span::styled(
-                text[last_end..].to_string(),
+                text[start_byte..].to_string(),
                 Style::default().fg(base_color),
             ));
         }

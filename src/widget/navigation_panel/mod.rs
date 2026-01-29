@@ -14,7 +14,7 @@ use ratatui::{Frame, layout::Rect};
 
 pub enum NavigationPanelAction {
     SelectBook {
-        book_index: usize,
+        book_path: String,
     },
     NavigateToChapter {
         href: String,
@@ -23,13 +23,6 @@ pub enum NavigationPanelAction {
     ToggleSection,
     SwitchToBookList,
     Bypass, // when the component assumes the upper layer should handle the action
-}
-
-pub enum SelectedActionOwned {
-    None,
-    BookIndex(usize),
-    BackToBooks,
-    TocItem(TocItem),
 }
 
 #[derive(Clone)]
@@ -51,7 +44,7 @@ pub struct NavigationPanel {
     pub mode: NavigationMode,
     pub book_list: BookList,
     pub table_of_contents: TableOfContents,
-    pub current_book_index: Option<usize>,
+    pub current_book_path: Option<String>,
 }
 
 impl NavigationPanel {
@@ -60,7 +53,7 @@ impl NavigationPanel {
             mode: NavigationMode::BookSelection,
             book_list: BookList::new(book_manager),
             table_of_contents: TableOfContents::new(),
-            current_book_index: None,
+            current_book_path: None,
         }
     }
 
@@ -124,7 +117,7 @@ impl NavigationPanel {
 
     pub fn switch_to_book_mode(&mut self) {
         self.mode = NavigationMode::BookSelection;
-        // Keep current_book_index so we can highlight the open book
+        // Keep current_book_path so we can highlight the open book
     }
 
     pub fn is_in_book_mode(&self) -> bool {
@@ -160,25 +153,39 @@ impl NavigationPanel {
         }
     }
 
-    /// Get the currently selected index based on the mode
-    pub fn get_selected_action(&self) -> SelectedActionOwned {
+    /// Get the action for "Enter" key based on current mode and selection
+    pub fn get_enter_action(&self) -> Option<NavigationPanelAction> {
         match self.mode {
             NavigationMode::BookSelection => {
-                SelectedActionOwned::BookIndex(self.book_list.selected)
+                self.book_list
+                    .get_selected_book()
+                    .map(|book| NavigationPanelAction::SelectBook {
+                        book_path: book.path.clone(),
+                    })
             }
-            NavigationMode::TableOfContents => {
-                if let Some(item) = self.table_of_contents.get_selected_item() {
-                    match item {
-                        SelectedTocItem::BackToBooks => SelectedActionOwned::BackToBooks,
-                        SelectedTocItem::TocItem(toc_item) => {
-                            // Clone the TocItem to avoid lifetime issues
-                            SelectedActionOwned::TocItem(toc_item.clone())
+            NavigationMode::TableOfContents => match self.table_of_contents.get_selected_item() {
+                Some(SelectedTocItem::BackToBooks) => Some(NavigationPanelAction::SwitchToBookList),
+                Some(SelectedTocItem::TocItem(toc_item)) => match toc_item {
+                    TocItem::Chapter { href, anchor, .. } => {
+                        Some(NavigationPanelAction::NavigateToChapter {
+                            href: href.clone(),
+                            anchor: anchor.clone(),
+                        })
+                    }
+                    TocItem::Section { href, anchor, .. } => {
+                        if let Some(href_str) = href {
+                            Some(NavigationPanelAction::NavigateToChapter {
+                                href: href_str.clone(),
+                                anchor: anchor.clone(),
+                            })
+                        } else {
+                            // No href - just toggle expansion
+                            Some(NavigationPanelAction::ToggleSection)
                         }
                     }
-                } else {
-                    SelectedActionOwned::None
-                }
-            }
+                },
+                None => None,
+            },
         }
     }
 
@@ -197,13 +204,13 @@ impl NavigationPanel {
                     area,
                     is_focused,
                     palette,
-                    self.current_book_index,
+                    self.current_book_path.as_deref(),
                     book_manager.is_calibre_mode(),
                 );
             }
             NavigationMode::TableOfContents => {
-                if let Some(current_idx) = self.current_book_index {
-                    if let Some(book) = book_manager.get_book_info(current_idx) {
+                if let Some(ref current_path) = self.current_book_path {
+                    if let Some(book) = book_manager.get_book_by_path(current_path) {
                         self.table_of_contents.render(
                             f,
                             area,
@@ -292,39 +299,7 @@ impl NavigationPanel {
                 }
                 None
             }
-            KeyCode::Enter => {
-                // Handle Enter key based on current mode
-                match self.mode {
-                    NavigationMode::BookSelection => {
-                        let book_index = self.get_selected_book_index();
-                        Some(NavigationPanelAction::SelectBook { book_index })
-                    }
-                    NavigationMode::TableOfContents => {
-                        match self.table_of_contents.get_selected_item() {
-                            Some(SelectedTocItem::BackToBooks) => {
-                                Some(NavigationPanelAction::SwitchToBookList)
-                            }
-                            Some(SelectedTocItem::TocItem(toc_item)) => match toc_item {
-                                TocItem::Chapter { href, anchor, .. } => {
-                                    Some(NavigationPanelAction::NavigateToChapter {
-                                        href: href.clone(),
-                                        anchor: anchor.clone(),
-                                    })
-                                }
-                                TocItem::Section { href, anchor, .. } => {
-                                    href.as_ref().map(|href_str| {
-                                        NavigationPanelAction::NavigateToChapter {
-                                            href: href_str.clone(),
-                                            anchor: anchor.clone(),
-                                        }
-                                    })
-                                }
-                            },
-                            None => None,
-                        }
-                    }
-                }
-            }
+            KeyCode::Enter => self.get_enter_action(),
             _ => None,
         }
     }

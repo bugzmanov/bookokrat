@@ -50,7 +50,10 @@ impl ReadingHistory {
             let local_time = Local.from_utc_datetime(&bookmark_entry.last_read.naive_utc());
 
             // Get chapter info from bookmark
-            let chapter = bookmark_entry.chapter_index.unwrap_or(0);
+            let chapter = bookmark_entry
+                .pdf_page
+                .or(bookmark_entry.chapter_index)
+                .unwrap_or(0);
             let total_chapters = bookmark_entry.total_chapters.unwrap_or(0);
 
             latest_access

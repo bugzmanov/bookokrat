@@ -12,8 +12,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     self.set_normal_mode_cursor(line, column);
                 }
             }
-
-            self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
             return;
         }
 

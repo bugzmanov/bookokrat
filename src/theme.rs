@@ -1,10 +1,9 @@
 use crate::color_mode::smart_color;
 use crate::settings::{self, YamlTheme};
 use log::{debug, warn};
-use once_cell::sync::Lazy;
 use ratatui::style::Color;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{LazyLock, RwLock};
 
 // Color palette structure
 #[allow(dead_code)]
@@ -75,7 +74,7 @@ impl BuiltinTheme {
 }
 
 // Global theme storage
-static CUSTOM_THEMES: Lazy<RwLock<Vec<Theme>>> = Lazy::new(|| RwLock::new(Vec::new()));
+static CUSTOM_THEMES: LazyLock<RwLock<Vec<Theme>>> = LazyLock::new(|| RwLock::new(Vec::new()));
 static CURRENT_THEME_INDEX: AtomicUsize = AtomicUsize::new(0);
 
 /// Load custom themes from settings and apply saved theme selection
@@ -251,8 +250,8 @@ pub fn current_theme() -> &'static Base16Palette {
         // For custom themes, we need to return a static reference
         // Since custom themes are loaded once and stored in CUSTOM_THEMES,
         // we leak the palette to get a static reference (it lives for program duration anyway)
-        static CUSTOM_PALETTE_CACHE: Lazy<RwLock<Vec<&'static Base16Palette>>> =
-            Lazy::new(|| RwLock::new(Vec::new()));
+        static CUSTOM_PALETTE_CACHE: LazyLock<RwLock<Vec<&'static Base16Palette>>> =
+            LazyLock::new(|| RwLock::new(Vec::new()));
 
         let custom_index = index - builtin_count;
 
@@ -291,7 +290,7 @@ pub fn current_theme() -> &'static Base16Palette {
 // ============================================================================
 
 // Oceanic Next theme
-static OCEANIC_NEXT_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+static OCEANIC_NEXT_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x1B2B34),
     base_01: smart_color(0x343D46),
     base_02: smart_color(0x4F5B66),
@@ -311,7 +310,7 @@ static OCEANIC_NEXT_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
 });
 
 // Catppuccin Mocha theme
-static CATPPUCCIN_MOCHA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+static CATPPUCCIN_MOCHA_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x1E1E2E),
     base_01: smart_color(0x313244),
     base_02: smart_color(0x45475A),
@@ -331,7 +330,7 @@ static CATPPUCCIN_MOCHA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palett
 });
 
 // Kanagawa theme - Japanese-inspired warm tones
-static KANAGAWA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+static KANAGAWA_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x1F1F28),
     base_01: smart_color(0x2A2A37),
     base_02: smart_color(0x223249),
@@ -351,7 +350,7 @@ static KANAGAWA_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
 });
 
 // Kanagawa Dragon theme - darker variant with cooler tones
-static KANAGAWA_DRAGON_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette {
+static KANAGAWA_DRAGON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x181616),
     base_01: smart_color(0x0d0c0c),
     base_02: smart_color(0x2d4f67),
@@ -372,7 +371,7 @@ static KANAGAWA_DRAGON_PALETTE: Lazy<Base16Palette> = Lazy::new(|| Base16Palette
 
 // Backward compatibility alias
 #[allow(dead_code)]
-pub static OCEANIC_NEXT: &Lazy<Base16Palette> = &OCEANIC_NEXT_PALETTE;
+pub static OCEANIC_NEXT: &LazyLock<Base16Palette> = &OCEANIC_NEXT_PALETTE;
 
 // ============================================================================
 // Color utilities for focus states

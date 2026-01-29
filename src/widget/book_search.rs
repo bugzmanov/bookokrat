@@ -1,5 +1,5 @@
 use crate::main_app::VimNavMotions;
-use crate::search_engine::{BookSearchResult, SearchEngine};
+use crate::search_engine::{BookSearchResult, SearchEngine, SearchResultTarget};
 use crate::theme::Base16Palette;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use log::debug;
@@ -13,10 +13,18 @@ use ratatui::{
 use std::time::{Duration, Instant};
 
 pub enum BookSearchAction {
+    /// Jump to EPUB chapter result
     JumpToChapter {
         chapter_index: usize,
         node_index: usize,
         line_number: usize,
+        query: String,
+    },
+    /// Jump to PDF page result with selection bounds
+    JumpToPdfPage {
+        page_index: usize,
+        line_index: usize,
+        line_y_bounds: (f32, f32),
         query: String,
     },
     Close,
@@ -75,10 +83,17 @@ impl BookSearch {
             self.selected_result = 0;
             self.scroll_offset = 0;
             self.last_search_query.clear();
+            self.focus_mode = FocusMode::Input;
         } else if let Some(cached) = &self.cached_results {
             self.results = cached.clone();
+            if !self.results.is_empty() {
+                self.focus_mode = FocusMode::Results;
+            } else {
+                self.focus_mode = FocusMode::Input;
+            }
+        } else {
+            self.focus_mode = FocusMode::Input;
         }
-        self.focus_mode = FocusMode::Input;
     }
 
     pub fn close(&mut self) {
@@ -188,16 +203,34 @@ impl BookSearch {
                 if !self.results.is_empty() {
                     let result = &self.results[self.selected_result];
                     self.active = false;
-                    return Some(BookSearchAction::JumpToChapter {
-                        chapter_index: result.chapter_index,
-                        node_index: result.node_index,
-                        line_number: result.line_number,
-                        query: self.search_input.clone(),
+                    return Some(match &result.target {
+                        SearchResultTarget::Epub {
+                            chapter_index,
+                            node_index,
+                        } => BookSearchAction::JumpToChapter {
+                            chapter_index: *chapter_index,
+                            node_index: *node_index,
+                            line_number: result.line_number,
+                            query: self.search_input.clone(),
+                        },
+                        SearchResultTarget::Pdf {
+                            page_index,
+                            line_index,
+                            line_y_bounds,
+                        } => BookSearchAction::JumpToPdfPage {
+                            page_index: *page_index,
+                            line_index: *line_index,
+                            line_y_bounds: *line_y_bounds,
+                            query: self.search_input.clone(),
+                        },
                     });
                 }
             }
             KeyCode::Char(' ') if key.modifiers.is_empty() => {
                 // Space+f behavior - go back to input mode
+                self.focus_mode = FocusMode::Input;
+            }
+            KeyCode::Char('/') if key.modifiers.is_empty() => {
                 self.focus_mode = FocusMode::Input;
             }
             KeyCode::Char('j') | KeyCode::Down => {
@@ -486,7 +519,7 @@ impl BookSearch {
                     Style::default().fg(palette.base_0d),
                 ),
                 Span::styled(
-                    format!("{} ", result.chapter_title),
+                    format!("{} ", result.section_title),
                     Style::default()
                         .fg(palette.base_0d)
                         .add_modifier(Modifier::BOLD),
