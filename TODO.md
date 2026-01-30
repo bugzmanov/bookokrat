@@ -1,3 +1,20 @@
+PDF issue:
+ [ ] Book stats for PDF: count screens per chapter
+ [ ] BUG:PDF empty comments dismissal requires 2 ESC clicks
+ [ ] BUG: EPUB https://registerspill.thorstenball.com/p/joy-and-curiosity-71 <-- some links are rendered next to text, without a space in between
+ [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.
+ [ ] pdf: zoom with pinching 
+
+ Hard UX:
+ [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
+ [ ] Comments editing in pdf annotations is very non-ergonomic. Potentially need normal mode.
+ --
+ [ ] update & analyze tapes & tests
+ [ ] Analyze the PDF impact: size wise, heap wise and make it sure that it wouldn't affect epub only readers
+ [ ] update docs
+ [ ] update help (new stuff & inspiration links)
+ [ ] new pictures for the site and potentially new video for the app. 
+
 ideas to implement:
  - [ ] Dimming should probably just use math instead of sticking to fixed palette
  - [x] status bar to show errors and warnings
@@ -75,6 +92,11 @@ bugs:
    [ ] Too much visual noise. (potentially because bg highlights)
 [ ] <i>code</i> will have bg color instead of being cursive
 [ ] AI Engineering - footnotes: clicking doesn't  track in history, i.e. can not jump back by clicking ctrl+o 
+[ ]   <p><a href="https://blogger.googleusercontent.com/img/a/AVvXsEilDu-zLXa0pnKA2qPARRIFidh0VlVtkprQtQCy_gTBL8Jit3jlNZ8kehDJFVg4Evqf05f--ZMAr1_7dDkL63VPKv1YHfo2BTAP51RGsjHbLIc93vU
+  KPZpS1mVbJ6ySUFn6dE2OyM2LQiQnER-UNcT_6S_FOzFEV92s_4WETVIYFrNohgyfBlYxY9aUr8w"><img alt="" data-original-height="607" data-original-width="381" height="400"
+  src="remote-image-0.png" width="252" /></a></p>
+
+  Would not show image
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

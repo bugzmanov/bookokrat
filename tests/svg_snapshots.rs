@@ -156,6 +156,7 @@ fn seed_sample_comments(app: &mut App) {
         target: CommentTarget::paragraph(0, None),
         content: "Launch plan looks solid.".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.testing_add_comment(Comment {
@@ -164,6 +165,7 @@ fn seed_sample_comments(app: &mut App) {
         target: CommentTarget::paragraph(3, None),
         content: "Need to revisit risk section.".to_string(),
         updated_at: base_time + chrono::Duration::minutes(5),
+        quoted_text: None,
     });
 
     if app
@@ -177,6 +179,7 @@ fn seed_sample_comments(app: &mut App) {
                 target: CommentTarget::paragraph(2, None),
                 content: "Great anecdote here.".to_string(),
                 updated_at: base_time + chrono::Duration::minutes(10),
+                quoted_text: None,
             });
         }
         let _ = app.navigate_chapter_relative(ChapterDirection::Previous);
@@ -358,6 +361,7 @@ fn test_inline_comment_rendering_svg() {
         target: CommentTarget::paragraph(0, Some((0, 2))),
         content: "Title comment here".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Comment on first paragraph (node 1) - underline "First paragraph content here that is long" (chars 0-40)
@@ -367,6 +371,7 @@ fn test_inline_comment_rendering_svg() {
         target: CommentTarget::paragraph(1, Some((0, 40))),
         content: "Paragraph comment here".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Switch to content panel to see the rendered text with comments
@@ -478,6 +483,7 @@ fn test_list_comment_rendering_svg() {
             .expect("missing unordered list comment target"),
         content: "Unordered list comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Comment on second item of ordered list (node 1, item_index 1)
@@ -494,6 +500,7 @@ fn test_list_comment_rendering_svg() {
             .expect("missing ordered list comment target"),
         content: "Ordered list comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Comment on second definition (node 2, item_index 1, is_term=false)
@@ -510,6 +517,7 @@ fn test_list_comment_rendering_svg() {
             .expect("missing definition list comment target"),
         content: "Definition list comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -609,6 +617,7 @@ fn test_quote_and_code_comment_rendering_svg() {
             .expect("missing quote comment target"),
         content: "Quote comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Comment on single line in code block (node 1, line 2 only - "let x = 42;")
@@ -618,6 +627,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         target: CommentTarget::code_block(1, (2, 2)),
         content: "Single line code comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     // Comment on multiple lines in code block (node 1, lines 3-4 - "let y" and "println")
@@ -627,6 +637,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         target: CommentTarget::code_block(1, (3, 4)),
         content: "Multi-line code comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -748,6 +759,7 @@ fn test_list_comment_rendering_complex_svg() {
             .expect("missing nested list comment target"),
         content: "Nested list comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.testing_add_comment(Comment {
@@ -763,6 +775,7 @@ fn test_list_comment_rendering_complex_svg() {
             .expect("missing multiline list item comment target"),
         content: "Second paragraph comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.testing_add_comment(Comment {
@@ -778,6 +791,7 @@ fn test_list_comment_rendering_complex_svg() {
             .expect("missing multiline range comment target"),
         content: "Second and third paragraph comment".to_string(),
         updated_at: base_time,
+        quoted_text: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -2774,6 +2788,8 @@ fn test_book_reading_history_with_many_entries_svg() {
             last_read: now - Duration::hours(i as i64),
             chapter_index: Some(i * 2),
             total_chapters: Some(10 + (i % 20)),
+            pdf_page: None,
+            pdf_zoom: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2787,6 +2803,8 @@ fn test_book_reading_history_with_many_entries_svg() {
             last_read: now - Duration::days(1) - Duration::hours((i - 10) as i64),
             chapter_index: Some((i - 10) * 3),
             total_chapters: Some(10 + (i % 20)),
+            pdf_page: None,
+            pdf_zoom: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2803,6 +2821,8 @@ fn test_book_reading_history_with_many_entries_svg() {
             bookmark.node_index,
             bookmark.chapter_index,
             bookmark.total_chapters,
+            bookmark.pdf_page,
+            None,
         );
     }
 
