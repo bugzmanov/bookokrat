@@ -3021,27 +3021,30 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            "ss" => {
+                // Raw HTML source toggle (for EPUB/HTML)
+                if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
+                    if let Some(ref mut book) = self.current_book {
+                        if let Some((raw_html, _)) = book.epub.get_current_str() {
+                            self.text_reader.set_raw_html(raw_html);
+                            self.text_reader.toggle_raw_html();
+                        }
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             " s" => {
                 #[cfg(feature = "pdf")]
                 {
-                    // Settings popup (always available with PDF feature)
+                    // Settings popup (only with PDF feature)
                     self.open_settings_popup();
                     self.key_sequence.clear();
                     true
                 }
                 #[cfg(not(feature = "pdf"))]
                 {
-                    // Raw HTML source toggle (only when PDF feature is disabled)
-                    if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
-                        if let Some(ref mut book) = self.current_book {
-                            if let Some((raw_html, _)) = book.epub.get_current_str() {
-                                self.text_reader.set_raw_html(raw_html);
-                                self.text_reader.toggle_raw_html();
-                            }
-                        }
-                    }
-                    self.key_sequence.clear();
-                    true
+                    false
                 }
             }
             " f" => {
@@ -4049,6 +4052,11 @@ impl App {
                         return None;
                     }
                     KeyCode::Esc => {
+                        // Clear search first if active (pressing Esc again will exit visual mode)
+                        if self.text_reader.is_searching() {
+                            self.cancel_current_search();
+                            return None;
+                        }
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
@@ -4137,6 +4145,11 @@ impl App {
                     return None;
                 }
                 KeyCode::Esc => {
+                    // Clear search first if active (pressing Esc again will exit normal mode)
+                    if self.text_reader.is_searching() {
+                        self.cancel_current_search();
+                        return None;
+                    }
                     self.text_reader.clear_count();
                     self.text_reader.toggle_normal_mode();
                     return None;

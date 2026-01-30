@@ -120,4 +120,3 @@ impl<T> VecExt<T> for Vec<T> {
         self.resize_with(len, T::default);
     }
 }
-

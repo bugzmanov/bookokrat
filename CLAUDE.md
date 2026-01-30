@@ -13,12 +13,53 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 7. **Comments/Annotations**: NEVER modify the comment storage format or location (`.bookokrat_comments/`) without explicit user request. The YAML-based persistence is critical.
 8. **ANSI Art**: The `readme.ans` file contains binary CP437-encoded art. NEVER modify this file.
 9. **Vendored Code**: The `src/vendored/` directory contains vendored ratatui-image code. This is NOT a crates.io dependency - it's vendored for customization.
+10. **Kitty Graphics Protocol**: For Kitty terminals, ALWAYS use SHM (shared memory) transmission for images. NEVER use base64/direct transmission - it's too slow for 60fps PDF rendering.
+11. **Backward Compatibility for Persistent Data**: When modifying any persistent data structures (bookmarks, settings, comments, or any files stored on the user's machine), ALWAYS ensure backward compatibility:
+    - New fields in serialized structs MUST be `Option<T>` with `#[serde(skip_serializing_if = "Option::is_none")]` or have `#[serde(default)]`
+    - Old app versions must be able to read new data files (serde ignores unknown fields by default - do NOT add `deny_unknown_fields`)
+    - New app versions must be able to read old data files (missing fields default to `None` or sensible defaults)
+    - If a breaking change is unavoidable, ASK the user how to design a migration path before implementing
+    - Test both directions: old data → new app, and consider new data → old app
+12. **VHS Test Tapes and Keyboard Shortcuts**: When changing keyboard shortcut mappings, ALWAYS check and update all VHS test tapes in `vhs_tests/tapes/` to use the new keybindings. Test tapes simulate user input, so outdated keybindings will cause test failures.
+13. **Keyboard Mapping Collisions**: When adding a new keyboard shortcut, ALWAYS check for collisions with existing mappings. Search the codebase for existing uses of the proposed key/key combination. If a collision is found, notify the user about the conflict and ask for a decision on how to proceed (use a different key, override existing mapping, or make it context-dependent).
+
+## Core Principles
+
+**This is NOT a toy project.** Bookokrat aims to replace GUI PDF/EPUB readers with a terminal-based alternative that is equally usable or better.
+
+### Two Main Pillars
+
+1. **User Experience**
+   - Every user interaction must feel polished and intentional
+   - No hacks, workarounds, or shortcuts for UX issues
+   - If something doesn't work correctly, fix it properly - don't paper over it
+   - The application should "just work" - users should never need to perform extra actions to trigger proper rendering or behavior
+   - Visual feedback must be immediate and accurate
+
+2. **Performance**
+   - 60fps rendering is the target, not a nice-to-have
+   - Background operations must never block the UI
+   - Memory and CPU usage should be minimal
+   - Startup time should be fast
+   - Page navigation and scrolling must be instant
+
+### Quality Standards
+
+- **UX bugs are critical bugs** - treat them with the same urgency as crashes
+- **Never accept "good enough"** - if a GUI app does something better, match or exceed it
+- **Test on real hardware** - VHS visual tests exist to catch rendering issues across terminals
+- **Responsiveness matters** - perceived performance is as important as actual performance
 
 ## Project Overview
 
-Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 33,000 lines of code). It provides a comprehensive reading experience with features including:
+Bookokrat is a terminal user interface (TUI) document reader written in Rust (version 0.3.0). It supports **EPUB** and **PDF** formats with comprehensive reading features including:
 
-- **Inline Comments/Annotations**: Add, edit, and delete comments on selected text passages with persistent YAML storage
+**Document Format Support:**
+- **EPUB Reader**: Full EPUB2/EPUB3 support with Markdown AST-based rendering
+- **PDF Reader** (optional `pdf` feature): High-performance PDF rendering using MuPDF with Kitty graphics protocol
+
+**Core Features:**
+- **Inline Comments/Annotations**: Add, edit, and delete comments on selected text passages with persistent YAML storage (supports both EPUB and PDF)
 - **Help System**: Beautiful ANSI art help popup with full keyboard reference using CP437 encoding
 - **Hierarchical Navigation**: Table of contents with expandable sections and vim-style keybindings
 - **Text Selection**: Mouse support (single, double, and triple-click) with clipboard integration
@@ -27,24 +68,36 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
 - **Search Functionality**: Book-wide text search with result navigation and highlighting
 - **Jump List Navigation**: Vim-style forward/backward navigation (Ctrl+o/Ctrl+i)
 - **Bookmarks**: Automatic bookmark persistence and reading progress tracking
-- **External Integration**: Open books in system EPUB readers
+- **External Integration**: Open books in system readers
 - **Image Support**: Embedded images with dynamic sizing, placeholders, and full-screen popup viewer
-- **MathML Rendering**: Mathematical expressions converted to ASCII art with Unicode support
-- **Syntax Highlighting**: Colored code blocks with language detection
+- **MathML Rendering**: Mathematical expressions converted to ASCII art with Unicode support (EPUB)
+- **Syntax Highlighting**: Colored code blocks with language detection (EPUB)
 - **Link Handling**: Display and follow hyperlinks
 - **Color Adaptation**: True color (24-bit) detection with smart fallback to 256-color palette
+- **Theme System**: Multiple Base16 color themes with custom theme support
 - **Notification System**: Timed toast notifications with severity levels
 - **Performance Tools**: Profiling support with pprof and FPS monitoring
-- **Markdown AST Pipeline**: Modern HTML5ever-based text processing with preserved formatting
+- **Markdown AST Pipeline**: Modern HTML5ever-based text processing with preserved formatting (EPUB)
 - **Cross-platform**: macOS, Windows, and Linux support
+
+**PDF-Specific Features** (requires `pdf` feature):
+- **High-performance rendering**: Background worker pool with page caching
+- **Kitty Graphics Protocol**: SHM-based image transfer for 60fps rendering
+- **Zoom levels**: Multiple zoom levels with smooth navigation
+- **PDF text selection**: Pixel-based selection with text extraction
+- **PDF comments**: Annotations on PDF pages with pixel coordinates
 
 ## Key Commands
 
 ### Development
-- Build: `cargo build --release`
+- Build (EPUB only): `cargo build --release`
+- Build (with PDF support): `cargo build --release --features pdf`
 - Run: `cargo run`
+- Run (with PDF): `cargo run --features pdf`
 - Check code: `cargo check`
+- Check (with PDF): `cargo check --features pdf`
 - Run linter: `cargo clippy`
+- Lint (with PDF): `cargo clippy --features pdf`
 - Run tests: `cargo test`
 - Format code: `cargo fmt`
 
@@ -57,6 +110,10 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
 - **EPUB Inspector**: `cargo run --example epub_inspector <file.epub>` - Extracts and displays raw HTML content from EPUB chapters for debugging text processing issues
 - **MathML Test**: `cargo run --example test_mathml_rust` - Tests MathML parsing and ASCII rendering functionality
 - **Debug Bug Dump**: `cargo run --example dump_bug` - Debugging tool for lists and AST structures
+
+### Feature Flags
+- `pdf` - Enables PDF support (requires MuPDF, adds tokio async runtime)
+- `test-utils` - Enables test utilities for creating fake books
 
 ## Architecture
 
@@ -94,10 +151,11 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
    - Tracks last read timestamp using chrono
 
 4. **book_manager.rs** - Book discovery and management (src/book_manager.rs)
-   - `BookManager` struct: Manages EPUB file discovery
+   - `BookManager` struct: Manages book file discovery
    - `BookInfo` struct: Stores book path and display name
-   - Automatic scanning of current directory for EPUB files
-   - EPUB document loading and validation
+   - `BookFormat` enum: Epub, Html, Pdf - detects format from extension
+   - Automatic scanning of current directory for EPUB and PDF files
+   - Document loading and validation for all supported formats
 
 5. **book_list.rs** - File browser UI component (src/book_list.rs)
    - `BookList` struct: Manages book selection UI
@@ -119,19 +177,20 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
    - Current chapter highlighting
    - Mouse and keyboard navigation support
 
-8. **widget/text_reader/** - Main reading view component (MODULARIZED into src/widget/text_reader/)
+8. **widget/text_reader/** - Main EPUB reading view component (MODULARIZED into src/widget/text_reader/)
    - `MarkdownTextReader` struct: Manages text display and scrolling using Markdown AST
    - Implements `TextReaderTrait` for abstraction
-   - **Now split across multiple files** (see components #44-51 for details):
-     - `mod.rs` - Main struct and coordination
-     - `rendering.rs` - Content rendering to spans
-     - `navigation.rs` - Scrolling and movement
-     - `selection.rs` - Mouse selection handling
-     - `text_selection.rs` - Selection state
-     - `images.rs` - Image loading and display
-     - `search.rs` - Search highlighting
-     - `comments.rs` - Comment rendering and editing
-     - `types.rs` - Type definitions
+   - **Split across multiple files** (see components #44-51 for details):
+     - `mod.rs` - Main struct and coordination (30KB)
+     - `rendering.rs` - Content rendering to spans (122KB - largest file)
+     - `normal_mode.rs` - Text navigation and vim motions (68KB)
+     - `navigation.rs` - Scrolling and movement (11KB)
+     - `selection.rs` - Mouse selection handling (12KB)
+     - `text_selection.rs` - Selection state (14KB)
+     - `images.rs` - Image loading and display (10KB)
+     - `search.rs` - Search highlighting (11KB)
+     - `comments.rs` - Comment rendering and editing (37KB)
+     - `types.rs` - Type definitions (7KB)
    - Reading time calculation (250 WPM default)
    - Chapter progress percentage tracking
    - Smooth scrolling with acceleration
@@ -219,11 +278,15 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
 
 18. **comments.rs** - Comment persistence and management (src/comments.rs)
     - `BookComments` struct: Manages all comments for a single book
-    - `Comment` struct: Individual comment with text, timestamp, and position
-    - `CommentPosition` struct: Tracks chapter, paragraph index, and word range
+    - `Comment` struct: Individual comment with text, timestamp, and target
+    - `CommentTarget` enum: Unified targeting for both EPUB and PDF
+      - `Text { node_index, subtarget }` - EPUB text-based targeting
+      - `Pdf { page, rects }` - PDF pixel-based targeting
+    - `BlockSubtarget` enum: Fine-grained EPUB targeting (word ranges, etc.)
+    - `PdfSelectionRect` struct: PDF pixel coordinates for selection
     - YAML-based persistence to `.bookokrat_comments/book_<md5hash>.yaml`
     - MD5 hashing of book filenames for unique identification
-    - Efficient indexing: `chapter_href -> paragraph_index -> comment_indices`
+    - Efficient indexing by chapter/page
     - Auto-saving on modifications
     - Chronological sorting and duplicate prevention
     - Thread-safe access via Arc<Mutex<>>
@@ -272,91 +335,125 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
     - Distance-based color matching algorithm
     - Affects image protocol selection (Kitty/Sixel/Halfblocks)
 
+23. **terminal.rs** - Terminal capability detection and protocol selection (src/terminal.rs)
+    - `TerminalCapabilities`: Unified terminal kind/protocol/capability model
+    - `detect_terminal()` / `detect_terminal_with_picker()`: Centralized detection and protocol overrides
+    - `PdfCapabilities`: Derived PDF feature gating (scroll mode, comments, normal mode, iTerm version blocks)
+    - Kitty SHM and delete-range probes for PDF rendering
+
 ### Type Definitions and Utilities
 
-23. **types.rs** - Common type definitions (src/types.rs)
+24. **types.rs** - Common type definitions (src/types.rs)
     - `LinkInfo` struct: Link information with URL and type
     - Link classification helpers
     - Shared type definitions across modules
 
 ### Input Handling Components (src/inputs/)
 
-24. **inputs/event_source.rs** - Event abstraction (src/inputs/event_source.rs) - MOVED
+25. **inputs/event_source.rs** - Event abstraction (src/inputs/event_source.rs)
     - `EventSource` trait: Abstraction for event polling/reading
     - `KeyboardEventSource`: Real crossterm-based implementation
     - `SimulatedEventSource`: Mock for testing
     - Helper methods for creating test events
 
-25. **inputs/key_seq.rs** - Multi-key sequence tracking (src/inputs/key_seq.rs)
+26. **inputs/terminal_input.rs** - PDF Kitty event handling (src/inputs/terminal_input.rs) - PDF FEATURE
+    - `UnifiedEventSource` struct: Combines keyboard and Kitty protocol events
+    - `KittyResponse` enum: Parses Kitty graphics protocol responses
+    - Handles asynchronous image placement confirmations
+    - Required for SHM-based image transfer coordination
+    - Uses tokio for async event handling
+
+27. **inputs/key_seq.rs** - Multi-key sequence tracking (src/inputs/key_seq.rs)
     - `KeySeqTracker` struct: Manages vim-style multi-key sequences
     - 1-second timeout for sequence completion
     - Tracks sequences like "gg" for vim motions
     - Automatic timeout and reset handling
 
-26. **inputs/mouse_tracker.rs** - Enhanced mouse handling (src/inputs/mouse_tracker.rs)
+27. **inputs/mouse_tracker.rs** - Enhanced mouse handling (src/inputs/mouse_tracker.rs)
     - `MouseTracker` struct: Tracks mouse events for multi-click detection
     - `ClickType` enum: Single, Double, Triple click detection
     - Distance threshold (3 cells) for multi-click validation
     - Time-based click grouping
     - Position tracking for drag operations
 
-27. **inputs/text_area_utils.rs** - Textarea input mapping (src/inputs/text_area_utils.rs)
+28. **inputs/text_area_utils.rs** - Textarea input mapping (src/inputs/text_area_utils.rs)
     - Crossterm to tui-textarea input conversion
     - Keyboard event mapping for textarea widget
     - Handles special keys and modifiers
 
+### Settings and Configuration
+
+29. **settings.rs** - Settings persistence (src/settings.rs)
+    - `Settings` struct: Application settings with persistence
+    - Theme selection and custom theme support
+    - Margin configuration
+    - YAML-based persistence to config directory
+    - Auto-loading on startup
+
 ### Search and Navigation Components
 
-28. **search.rs** - General search state and functionality (src/search.rs)
+30. **search.rs** - General search state and functionality (src/search.rs)
     - `SearchState` struct: Manages search state across the application
     - Tracks current search query and mode
     - Integrates with main app for search coordination
 
-29. **search_engine.rs** - Search engine implementation (src/search_engine.rs)
+31. **search_engine.rs** - Search engine implementation (src/search_engine.rs)
     - `SearchEngine` struct: Core search functionality
     - Case-insensitive search with result ranking
     - Search result scoring
     - Multi-chapter search support
     - Note: fuzzy-matcher dependency currently commented out
 
-30. **widget/book_search.rs** - Book-wide search UI (src/widget/book_search.rs)
+32. **widget/book_search.rs** - Book-wide search UI (src/widget/book_search.rs)
     - `BookSearch` struct: Full-text search across entire book
     - Search result navigation with chapter context
     - Visual search result highlighting
     - Implements `VimNavMotions` for consistent navigation
     - Search result list with context preview
 
-31. **jump_list.rs** - Vim-like jump list navigation (src/jump_list.rs)
+33. **jump_list.rs** - Vim-like jump list navigation (src/jump_list.rs)
     - `JumpList` struct: Maintains navigation history
     - Forward/backward navigation (Ctrl+o/Ctrl+i)
     - Chapter and position tracking
     - Circular buffer implementation
     - Integrates with main navigation flow
 
-32. **widget/book_stat.rs** - Book statistics popup (src/widget/book_stat.rs)
+34. **widget/book_stat.rs** - Book statistics popup (src/widget/book_stat.rs)
     - `BookStat` struct: Displays book statistics
     - Chapter count and screen count per chapter
     - Total screens calculation
     - Centered popup display
     - Quick overview of book structure
 
+35. **widget/comments_viewer.rs** - Comments browser UI (src/widget/comments_viewer.rs)
+    - `CommentsViewer` struct: Browse and manage all comments
+    - Lists comments across chapters/pages
+    - Navigation to comment locations
+    - Comment editing and deletion
+    - Supports both EPUB and PDF comments
+
+36. **widget/theme_selector.rs** - Theme picker UI (src/widget/theme_selector.rs)
+    - `ThemeSelector` struct: Interactive theme selection
+    - Preview of available Base16 themes
+    - Custom theme support
+    - Live preview of theme changes
+
 ### UI Component Modules (src/components/)
 
-33. **components/table.rs** - Custom table widget (src/components/table.rs) - MOVED
+37. **components/table.rs** - Custom table widget (src/components/table.rs)
     - `Table` struct: Enhanced table rendering
     - Column alignment support
     - Header and content separation
     - Responsive width calculation
     - Used by book statistics and search results
 
-34. **components/mathml_renderer.rs** - MathML rendering (src/components/mathml_renderer.rs) - MOVED
-    - Previously at root level, now organized under components/
+38. **components/mathml_renderer.rs** - MathML rendering (src/components/mathml_renderer.rs)
     - MathML to ASCII conversion functionality
     - See component #16 for detailed description
 
 ### Parsing Components (src/parsing/)
 
-35. **parsing/html_to_markdown.rs** - HTML to Markdown AST conversion (src/parsing/html_to_markdown.rs)
+39. **parsing/html_to_markdown.rs** - HTML to Markdown AST conversion (src/parsing/html_to_markdown.rs)
     - `HtmlToMarkdownConverter` struct: Converts HTML content to clean Markdown AST
     - Uses html5ever for robust DOM parsing and traversal
     - Handles various HTML elements (headings, paragraphs, images, MathML)
@@ -364,7 +461,7 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
     - Preserves text formatting and inline elements during conversion
     - Entity decoding for proper text representation
 
-36. **parsing/markdown_renderer.rs** - Markdown AST to string rendering (src/parsing/markdown_renderer.rs)
+40. **parsing/markdown_renderer.rs** - Markdown AST to string rendering (src/parsing/markdown_renderer.rs)
     - `MarkdownRenderer` struct: Converts Markdown AST to formatted text output
     - Simple AST traversal and string conversion without cleanup logic
     - Applies Markdown formatting syntax (headers, bold, italic, code)
@@ -372,13 +469,13 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
     - H1 uppercase transformation for consistency
     - Proper spacing and formatting for terminal display
 
-37. **parsing/text_generator.rs** - Legacy regex-based HTML processing (src/parsing/text_generator.rs)
+41. **parsing/text_generator.rs** - Legacy regex-based HTML processing (src/parsing/text_generator.rs)
     - Original regex-based implementation maintained for compatibility
     - Direct HTML tag processing and text extraction
     - Comprehensive entity decoding and content cleaning
     - Used as fallback for certain parsing scenarios
 
-38. **parsing/toc_parser.rs** - TOC parsing implementation (src/parsing/toc_parser.rs)
+42. **parsing/toc_parser.rs** - TOC parsing implementation (src/parsing/toc_parser.rs)
     - Parses NCX (EPUB2) and Nav (EPUB3) documents
     - Hierarchical structure extraction
     - Resource discovery and format detection
@@ -386,34 +483,34 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
 
 ### Image Components (src/images/)
 
-39. **images/image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
+43. **images/image_storage.rs** - Image extraction and caching (src/images/image_storage.rs)
     - `ImageStorage` struct: Manages extracted EPUB images
     - Automatic image extraction from EPUB files
     - Directory-based caching in `.bookokrat_temp_images/` or `temp_images/`
     - Thread-safe storage with Arc<Mutex>
     - Deduplication of already extracted images
 
-40. **images/book_images.rs** - Book-specific image management (src/images/book_images.rs)
+44. **images/book_images.rs** - Book-specific image management (src/images/book_images.rs)
     - `BookImages` struct: Manages images for current book
     - Image path resolution from EPUB resources
     - Integration with ImageStorage for caching
     - Support for various image formats (PNG, JPEG, etc.)
 
-41. **images/image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
+45. **images/image_placeholder.rs** - Image loading placeholders (src/images/image_placeholder.rs)
     - `ImagePlaceholder` struct: Displays loading/error states
     - `LoadingStatus` enum: NotStarted, Loading, Loaded, Failed
     - Visual feedback during image loading
     - Error message display for failed loads
     - Configurable styling and dimensions
 
-42. **images/image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
+46. **images/image_popup.rs** - Full-screen image viewer (src/images/image_popup.rs)
     - `ImagePopup` struct: Modal image display
     - Full-screen overlay with centered image
     - Keyboard controls (Esc to close, navigation)
     - Mouse interaction support
     - Image scaling and aspect ratio preservation
 
-43. **images/background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
+47. **images/background_image_loader.rs** - Async image loading (src/images/background_image_loader.rs)
     - `BackgroundImageLoader` struct: Non-blocking image loads
     - Thread-based background loading
     - Prevents UI freezing during image loading
@@ -421,15 +518,15 @@ Bookokrat is a terminal user interface (TUI) EPUB reader written in Rust (over 3
 
 ### Widget Components (src/widget/)
 
-The text reader has been modularized into multiple files under `src/widget/text_reader/`:
+The EPUB text reader has been modularized into multiple files under `src/widget/text_reader/`:
 
-44. **widget/text_reader/mod.rs** - Main text reader module
+48. **widget/text_reader/mod.rs** - Main EPUB text reader module
     - `MarkdownTextReader` struct: Main reading view using Markdown AST
     - Implements `TextReaderTrait` for abstraction
     - Coordinates all text reader submodules
     - See component #8 for high-level features
 
-45. **widget/text_reader/rendering.rs** - Content rendering logic
+49. **widget/text_reader/rendering.rs** - Content rendering logic (122KB)
     - Rich text span generation from Markdown AST
     - Syntax highlighting for code blocks
     - Table rendering
@@ -437,51 +534,218 @@ The text reader has been modularized into multiple files under `src/widget/text_
     - Link visualization
     - Search highlight integration
 
-46. **widget/text_reader/navigation.rs** - Scrolling and navigation
+50. **widget/text_reader/normal_mode.rs** - Text navigation and vim motions (68KB)
+    - Vim-style cursor movement
+    - Visual mode selection
+    - Word/paragraph navigation
+    - Search result navigation
+
+51. **widget/text_reader/navigation.rs** - Scrolling and navigation
     - Smooth scrolling with acceleration
     - Half-screen scrolling with visual highlights
     - Jump to top/bottom
     - Chapter navigation
     - Implements `VimNavMotions` trait
 
-47. **widget/text_reader/selection.rs** - Mouse selection handling
+52. **widget/text_reader/selection.rs** - Mouse selection handling
     - Click-to-position cursor
     - Drag selection
     - Double-click word selection
     - Triple-click paragraph selection
     - Auto-scroll during selection
 
-48. **widget/text_reader/text_selection.rs** - Text selection state
+53. **widget/text_reader/text_selection.rs** - Text selection state
     - Selection range tracking
     - Multi-line selection support
     - Visual highlighting
     - Clipboard integration
     - Coordinate validation
 
-49. **widget/text_reader/images.rs** - Image loading and display
+54. **widget/text_reader/images.rs** - Image loading and display
     - Background image loading coordination
     - Image placeholder management
     - Image popup triggering
     - Dynamic image sizing
     - Loading status tracking
 
-50. **widget/text_reader/search.rs** - Search functionality
+55. **widget/text_reader/search.rs** - Search functionality
     - Search highlighting in rendered content
     - Match position tracking
     - Next/previous match navigation
     - Search state integration
 
-51. **widget/text_reader/types.rs** - Type definitions
+56. **widget/text_reader/comments.rs** - Comment rendering and editing (37KB)
+    - Comment rendering as styled blocks
+    - Timestamp display
+    - Textarea overlay for editing
+    - Integration with text selection
+
+57. **widget/text_reader/types.rs** - Type definitions
     - `RenderedLine` struct: Line data with metadata
     - `LineType` enum: Content, Image, Link, etc.
     - `NodeReference`: AST node tracking
     - Internal type definitions for text reader
 
+### PDF Reader Widget (src/widget/pdf_reader/) - PDF FEATURE
+
+The PDF reader widget provides a complete PDF viewing experience:
+
+58. **widget/pdf_reader/mod.rs** - PDF reader module exports
+    - Exports all PDF reader components
+    - Feature-gated behind `pdf` feature
+
+59. **widget/pdf_reader/state.rs** - PDF reader state management
+    - `PdfReaderState` struct: Complete reader state
+    - Current page and zoom level tracking
+    - Selection and navigation state
+    - Display plan coordination
+
+60. **widget/pdf_reader/rendering.rs** - PDF rendering
+    - Display plan execution
+    - Viewport updates
+    - Image tiling and positioning
+
+61. **widget/pdf_reader/navigation.rs** - PDF navigation
+    - Page navigation (next/previous/goto)
+    - Zoom level changes
+    - Scroll position management
+
+62. **widget/pdf_reader/comments.rs** - PDF comment handling
+    - Comment rendering on PDF pages
+    - Pixel-based comment positioning
+
+63. **widget/pdf_reader/region.rs** - Content regions
+    - `ImageRegion` struct: Image areas on page
+    - `TextRegion` struct: Text areas with bounds
+
+64. **widget/pdf_reader/types.rs** - PDF type definitions
+    - `PdfDisplayRequest` struct: Rendering request
+    - `PdfDisplayPlan` struct: Layout plan
+    - `ChangeAmount` enum: Navigation amounts
+
+### PDF Infrastructure (src/pdf/) - PDF FEATURE
+
+The PDF module provides high-performance PDF rendering infrastructure:
+
+65. **pdf/mod.rs** - PDF module exports and constants
+    - Worker count, cache size, prefetch radius configuration
+    - Module coordination
+
+66. **pdf/service.rs** - Render service coordination
+    - `RenderService` struct: Manages worker pool
+    - Request/response handling
+    - Page caching coordination
+
+67. **pdf/worker.rs** - Background rendering workers
+    - Worker pool for parallel rendering
+    - MuPDF integration for page rendering
+    - Async task coordination
+
+68. **pdf/request.rs** - Render request types
+    - `RenderRequest` struct: Page render request
+    - `RenderResponse` struct: Rendered page data
+    - `WorkerFault` enum: Worker error types
+
+69. **pdf/state.rs** - Render state machine
+    - `RenderState` enum: Rendering lifecycle states
+    - State transitions and error handling
+
+70. **pdf/types.rs** - Core PDF data structures
+    - `CharInfo` struct: Character positioning
+    - `LineBounds` struct: Line boundaries
+    - `PageData` struct: Page content and text
+    - `LinkRect` struct: Clickable link areas
+
+71. **pdf/cache.rs** - Page caching system
+    - `PageCache` struct: LRU page cache
+    - Memory management (5-15MB per page)
+    - Prefetching support
+
+72. **pdf/converter.rs** - Image protocol conversion (200KB)
+    - `ConvertedImage` struct: Protocol-ready image
+    - `RenderedFrame` struct: Tiled image frames
+    - Kitty/Sixel format conversion
+
+73. **pdf/selection.rs** - PDF text selection
+    - `SelectionRect` struct: Selection coordinates
+    - `TextSelection` struct: Selected text extraction
+    - Pixel-to-text coordinate mapping
+
+74. **pdf/normal_mode.rs** - PDF navigation modes
+    - `CursorPosition` struct: Cursor tracking
+    - `VisualMode` enum: Selection modes
+
+75. **pdf/toc.rs** - PDF table of contents
+    - `TocEntry` struct: TOC item
+    - PDF outline parsing
+
+76. **pdf/zoom.rs** - Zoom level management
+    - Zoom levels and calculations
+    - Page dimension adjustments
+
+77. **pdf/page_numbers.rs** - Page number detection
+    - Page numbering extraction from content
+
+### Kitty Graphics Protocol (src/pdf/kitty/) - PDF FEATURE
+
+Low-level Kitty terminal graphics protocol implementation for high-performance image display:
+
+78. **pdf/kitty/mod.rs** - Kitty protocol module
+    - Capability negotiation
+    - Image state management
+    - Protocol initialization
+
+79. **pdf/kitty/protocol.rs** - Protocol implementation (13KB)
+    - Kitty graphics command encoding
+    - Response parsing
+    - Image placement commands
+
+80. **pdf/kitty/shm.rs** - Shared memory support (7.7KB)
+    - SHM-based image transfer (critical for 60fps)
+    - Memory-mapped file handling
+    - POSIX shared memory integration
+
+81. **pdf/kitty/shm_pool.rs** - SHM pool management (5.5KB)
+    - SHM region lifecycle
+    - Pool allocation and cleanup
+
+82. **pdf/kitty/image.rs** - Image handling
+    - Image data formatting
+    - Pixel format conversion
+
+83. **pdf/kitty/medium.rs** - Image media types (6KB)
+    - Image format handling
+    - Transfer medium selection
+
+84. **pdf/kitty/action.rs** - Kitty actions (9.4KB)
+    - Image placement actions
+    - Delete and clear commands
+
+85. **pdf/kitty/async_io.rs** - Async I/O handling
+    - Non-blocking response reading
+    - Tokio integration
+
+86. **pdf/kitty/display.rs** - Display configuration
+    - Cell dimension calculations
+    - Viewport sizing
+
+87. **pdf/kitty/error.rs** - Error types
+    - Protocol error definitions
+    - Error handling
+
+88. **pdf/kitty/delete.rs** - Image deletion
+    - Image cleanup commands
+    - Resource management
+
+89. **pdf/kitty/types.rs** - Protocol types
+    - Command structures
+    - Response types
+
 ### Vendored Dependencies (src/vendored/)
 
 The application vendors the ratatui-image library for customization:
 
-52. **vendored/ratatui_image/** - Terminal image rendering (VENDORED, not crates.io)
+90. **vendored/ratatui_image/** - Terminal image rendering (VENDORED, not crates.io)
     - Complete ratatui-image implementation vendored for customization
     - Protocol implementations: Kitty, Sixel, iTerm2, Halfblocks
     - Image resizing and protocol selection
@@ -492,27 +756,41 @@ The application vendors the ratatui-image library for customization:
 
 ### Test Utilities (src/test_utils/)
 
-53. **test_utils/simple_fake_books.rs** - Test book creation (src/test_utils/simple_fake_books.rs)
+91. **test_utils/simple_fake_books.rs** - Test book creation (src/test_utils/simple_fake_books.rs)
     - Helper functions for creating test EPUB files
     - Generates sample books with various content types
     - Used in unit and integration tests
 
-54. **test_utils/mod.rs** - Test helper module
+92. **test_utils/mod.rs** - Test helper module
     - Common test utilities and fixtures
     - Mock data generation
     - Test environment setup
 
 ### Key Dependencies (Cargo.toml)
 
+**Version:** 0.3.0
 **Edition:** Rust 2024
+**Rust Version:** 1.86
 
 **Core UI & Terminal:**
-- `ratatui` (0.29.0): Terminal UI framework
-- `crossterm` (0.29.0): Cross-platform terminal manipulation (updated from 0.27.0)
+- `ratatui` (0.30.0): Terminal UI framework (with underline-color feature)
+- `crossterm` (0.29.0): Cross-platform terminal manipulation (with event-stream)
 
 **EPUB Handling:**
-- `epub` (2.1.4): EPUB file parsing
+- `epub` (2.1.5): EPUB file parsing
 - `zip` (0.6): EPUB file handling
+- `walkdir` (2.4): Directory traversal for book discovery
+
+**PDF Rendering (optional, `pdf` feature):**
+- `mupdf`: PDF parsing and rendering (git custom build with svg, system-fonts, img)
+- `tokio` (1.37.0): Async runtime (rt, macros features)
+- `futures-util` (0.3.30): Async utilities
+- `flume` (0.11.0): Async channels for worker communication
+- `wide` (0.7): SIMD operations
+- `lru` (0.12): LRU cache for page caching
+- `rayon` (1): Parallel processing
+- `memmap2` (0): Memory-mapped file access
+- `base64` (0.22): Base64 encoding for Kitty protocol
 
 **Parsing & Text Processing:**
 - `regex` (1.10.3): HTML tag processing
@@ -524,12 +802,14 @@ The application vendors the ratatui-image library for customization:
 **Serialization & Persistence:**
 - `serde` (1.0): Serialization framework with derive support
 - `serde_json` (1.0): JSON serialization for bookmarks
-- `serde_yaml` (0.9): YAML serialization for comments
+- `serde_yaml` (0.9): YAML serialization for comments and settings
 - `md5` (0.7): Book hashing for comment file identification
 
 **Date/Time & Utilities:**
 - `chrono` (0.4): Timestamp handling with serde support
 - `once_cell` (1.19): Lazy static initialization
+- `dirs` (5.0): Configuration directory paths
+- `home` (0.5.11): Home directory (pinned for Rust 1.86)
 
 **Error Handling & Logging:**
 - `anyhow` (1.0.79): Error handling
@@ -551,15 +831,16 @@ The application vendors the ratatui-image library for customization:
 - `image` (0.25): Image processing and manipulation
 - `fast_image_resize` (3.0): Fast image resizing
 - `imagesize` (0.13): Image dimension detection
+- `png` (0.17): PNG encoding
 
 **Image Protocols (Vendored Dependencies):**
 - `icy_sixel` (0.1.1): Sixel protocol support
-- `base64` (0.21.2): Base64 encoding for image data
+- `base64-simd` (0.8): Fast base64 encoding
 - `rand` (0.8.5): Random utilities
 - `flate2` (1.0): Compression for Sixel
 
 **UI Widgets:**
-- `tui-textarea` (0.7): Textarea widget for comment editing
+- `tui-textarea`: Textarea widget for comment editing (git: tinted-theming fork)
 
 **ANSI Processing:**
 - `vt100` (0.15): ANSI parsing for help popup
@@ -572,37 +853,68 @@ The application vendors the ratatui-image library for customization:
 - `rustix` (0.38.4): Unix-like systems (stdio, termios, fs) - non-Windows only
 - `windows` (0.58.0): Windows API (console, filesystem, security) - Windows only
 
-**Commented Out (Not Currently Used):**
-- ~~`html2text` (0.2.1)~~ - HTML to plain text conversion
-- ~~`fuzzy-matcher` (0.3)~~ - Fuzzy string matching (was for search)
-- ~~`dirs` (5.0)~~ - Directory utilities
+**Dev Dependencies:**
+- `snapbox` (0.6): SVG snapshot testing
+- `anstyle` (1.0): ANSI styling for snapshots
+- `anstyle-svg` (0.1.5): SVG output
+- `tempfile` (3.8): Test temp files
+- `serial_test` (3.2): Test synchronization
 
 **Note:** The ratatui-image library is VENDORED in `src/vendored/`, not a crates.io dependency.
 
 ### State Management
 The application maintains state through the `App` struct in `main_app.rs` which includes:
-- Current EPUB document and chapter information
+
+**Document State:**
+- Current document (EPUB or PDF) and chapter/page information
+- `BookFormat` enum tracking current document type
 - Navigation panel with mode switching (book list vs TOC vs search)
-- Text reader (MarkdownTextReader) with scroll position and content state
+
+**Reader State:**
+- Text reader (MarkdownTextReader) for EPUB with scroll position and content state
+- **PDF reader state** (PdfReaderState) for PDF documents (PDF feature)
 - Text selection state and clipboard integration
+
+**Comments & Annotations:**
 - **Comments system** with Arc<Mutex<BookComments>> for shared state
-- Popup management (reading history, book stats, image viewer, help popup)
+- Supports both EPUB text-based and PDF pixel-based targeting
+
+**UI Components:**
+- Popup management (reading history, book stats, image viewer, help popup, theme selector, comments viewer)
 - **Notification manager** for toast notifications
+- **Theme selector** for Base16 theme switching
+- **Comments viewer** for browsing all comments
+
+**Navigation & Search:**
 - Search state and search mode tracking
 - Jump list for navigation history
 - Bookmark management with throttled saves
-- Book manager for file discovery
+- Book manager for file discovery (EPUB and PDF)
 - Focus tracking between panels
+
+**Input Handling:**
 - **Multi-key sequence tracker** for vim motions (gg, etc.)
 - **Mouse tracker** for double/triple-click detection
 - Mouse event batching for smooth scrolling
+
+**Image & Media:**
 - Image storage and caching system
 - Book-specific image management
 - Image popup display state
 - Background image loading coordination
+
+**PDF-Specific State** (PDF feature):
+- `RenderService` for background PDF rendering
+- Page cache with LRU eviction
+- Kitty graphics protocol state
+- Conversion channels (flume) for async image processing
+- SHM pool management for image transfer
+
+**Performance & System:**
 - Performance profiler state
 - FPS counter for performance monitoring
 - **Color mode detection** for terminal capabilities
+- **Settings persistence** for themes and preferences
 
 ### Content Processing Pipeline
 
@@ -839,6 +1151,172 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Each test can be updated individually or all at once
 - Snapshot files are stored in `tests/snapshots/`
 
+## VHS Terminal Screenshot Testing (PDF Rendering)
+
+**WARNING: This is a heavyweight testing approach.** It launches actual terminal emulators, runs the application, and captures real screenshots. Use this **primarily for PDF rendering validation** where the Kitty graphics protocol and image rendering cannot be tested with SVG snapshots.
+
+**IMPORTANT FOR AI ASSISTANTS:** Do NOT run VHS tests unless explicitly requested by the user. These tests are slow, require a display, and should only be used when specifically testing PDF rendering changes.
+
+**CRITICAL: NEVER update VHS golden snapshots (`--update` flag).** Golden snapshots are the source of truth for visual regression testing. Only a human can decide when to update them. If VHS tests fail:
+1. Read the generated HTML report to understand the differences
+2. Analyze whether the differences are actual bugs or minor rendering variations
+3. Report findings to the user - describe what changed and whether it appears to be a real issue
+4. Let the user decide whether to update the golden snapshots
+5. NEVER run `./vhs_tests/run.sh --update` - this decision belongs to the user
+
+For most UI testing, use the SVG-based snapshot tests described above.
+
+### When to Use VHS Tests
+
+- **PDF rendering validation** - Testing that PDF pages render correctly via Kitty graphics protocol
+- **Terminal-specific rendering** - Verifying rendering differences between terminals (Kitty, Ghostty)
+- **Full integration testing** - End-to-end tests requiring actual terminal graphics
+
+### When NOT to Use VHS Tests
+
+- Text-based UI components (use SVG snapshots instead)
+- EPUB rendering (use SVG snapshots instead)
+- Unit tests or component tests
+- Any test that doesn't require actual terminal graphics
+
+### Running VHS Tests
+
+```bash
+# Run ALL tapes (full test suite)
+./vhs_tests/run.sh --terminal kitty
+
+# Run specific tape only
+./vhs_tests/run.sh --terminal kitty --tape pdf_smoke
+
+# Run with verbose output (shows all commands being executed)
+./vhs_tests/run.sh --terminal kitty --verbose
+
+# Update golden snapshots (HUMANS ONLY - AI must never run this)
+./vhs_tests/run.sh --terminal kitty --update
+```
+
+**Running the full suite** executes all `.tape` files in `vhs_tests/tapes/` sequentially. Each tape runs in its own Kitty window, and the harness automatically manages window creation/cleanup between tapes. The test harness launches a self-managed Kitty instance with remote control enabled, so no manual terminal setup is required.
+
+### Directory Structure
+
+```
+vhs_tests/
+├── tapes/                    # Test tape files (.tape)
+├── golden/                   # Golden screenshots (by terminal)
+│   └── kitty/
+│       └── pdf_smoke/
+│           ├── initial.png
+│           ├── page_2.png
+│           └── ...
+├── output/
+│   ├── screenshots/          # Actual screenshots from test runs
+│   └── reports/              # HTML comparison reports
+└── lib/                      # Test harness scripts
+    ├── tape_runner.sh        # Tape parser and executor
+    └── kitty_manager.sh      # Kitty terminal management
+```
+
+### Tape File Format
+
+Tape files (`.tape`) define test sequences with simple commands:
+
+```tape
+# pdf_smoke.tape - Example tape file
+
+# Specify PDF to test (relative to project root)
+pdf tests/testdata/vhs_test.pdf
+
+# Wait for app to load
+wait 500
+
+# Capture screenshot
+screenshot initial
+
+# Navigate (l = next page, h = previous)
+key l
+wait 300
+screenshot page_2
+
+# Zen mode toggle
+ctrl z
+wait 300
+screenshot zen_mode
+
+# Help popup
+key ?
+wait 500
+screenshot help_popup
+
+# Close popup
+escape
+
+# Quit
+key q
+```
+
+### Tape Commands
+
+| Command | Arguments | Description |
+|---------|-----------|-------------|
+| `pdf` | `<path>` | PDF file to test (relative to project root) |
+| `screenshot` | `<name>` | Capture screenshot with given name |
+| `key` | `<char>` | Send single key press |
+| `ctrl` | `<char>` | Send Ctrl+key combination |
+| `escape` | - | Send Escape key |
+| `return` | - | Send Return/Enter key |
+| `wait` | `<ms>` | Wait specified milliseconds (default: 500) |
+
+**IMPORTANT: Wait Times** - Kitty terminal is very fast. Never use wait times longer than 500ms in tape files. Most operations complete in 200-300ms. Only use 500ms for initial app load or page navigation that requires rendering.
+
+### PDF Navigation Keys
+
+For PDF documents:
+- `l` / `h` - Next/previous page
+- `j` / `k` - Scroll within page
+- `Ctrl+z` - Toggle zen mode (hide sidebar)
+- `?` - Help popup
+- `q` - Quit
+
+### Test Reports
+
+When tests fail, an HTML report is generated showing:
+- Side-by-side comparison of expected vs actual screenshots
+- Pass/fail status for each screenshot
+- Missing golden snapshots
+
+Reports are saved to: `vhs_tests/output/reports/<terminal>_<tape>_report.html`
+
+### Adding New VHS Tests
+
+1. Create a new tape file in `vhs_tests/tapes/`:
+   ```bash
+   # vhs_tests/tapes/my_test.tape
+   pdf tests/testdata/my_test.pdf
+   wait 500
+   screenshot initial
+   # ... add test steps
+   key q
+   ```
+
+2. Run the test (will fail initially - no golden snapshots):
+   ```bash
+   ./vhs_tests/run.sh --terminal kitty --tape my_test --verbose
+   ```
+
+3. Review generated screenshots in `vhs_tests/output/screenshots/kitty/my_test/`
+
+4. If screenshots look correct, create golden snapshots:
+   ```bash
+   ./vhs_tests/run.sh --terminal kitty --tape my_test --update
+   ```
+
+### Terminal Support
+
+Currently supported:
+- **Kitty** - Self-managed instance with remote control (recommended for CI)
+
+The test harness automatically launches and manages its own Kitty instance with the required settings (`allow_remote_control`, `listen_on`). No manual terminal configuration is needed.
+
 ## Architecture Patterns
 
 ### Design Principles
@@ -858,9 +1336,10 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 ## Important Notes
 
 **File Management & Persistence:**
-- The application scans the current directory for EPUB files on startup
-- Bookmarks are automatically saved to `bookmarks.json` when navigating between chapters or files
-- **Comments are persisted to `.bookokrat_comments/book_<md5hash>.yaml` per book**
+- The application scans the current directory for EPUB and PDF files on startup
+- Bookmarks are automatically saved to `bookmarks.json` when navigating between chapters/pages or files
+- **Comments are persisted to `.bookokrat_comments/book_<md5hash>.yaml` per book** (supports both EPUB and PDF)
+- **Settings are persisted to config directory** via `settings.rs` (themes, margins, etc.)
 - Images are extracted to `.bookokrat_temp_images/` or `temp_images/` and cached for performance
 - The most recently read book is auto-loaded on startup
 - Logging is written to `bookokrat.log` for debugging
@@ -873,15 +1352,17 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - **Mouse tracker detects double/triple-clicks with 3-cell distance threshold**
 - Text selection automatically scrolls the view when dragging near edges
 - **Notification system shows toast messages for 5 seconds in bottom-right corner**
+- **Theme selector** allows switching between Base16 color themes
 
 **Reading Features:**
-- Reading speed is set to 250 words per minute for time calculations
+- Reading speed is set to 250 words per minute for time calculations (EPUB)
 - Scroll acceleration increases speed when holding down scroll keys
-- **Inline comments/annotations can be added, edited, and deleted on selected text**
+- **Inline comments/annotations can be added, edited, and deleted on selected text** (EPUB and PDF)
 - Jump list maintains a navigation history for easy backward/forward navigation (Ctrl+o/Ctrl+i)
 - Book statistics provide a quick overview of book structure and size
+- **Comments viewer** allows browsing all comments across the document
 
-**Content Processing:**
+**EPUB Content Processing:**
 - The application supports both EPUB2 (NCX) and EPUB3 (Nav) table of contents formats
 - The text processing pipeline uses a Markdown AST-based approach with html5ever parser
 - The main text reader is MarkdownTextReader, which uses the Markdown AST pipeline
@@ -890,16 +1371,28 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Code blocks support syntax highlighting integrated into the rendering pipeline
 - Tables are parsed and formatted for terminal display
 
+**PDF Rendering** (PDF feature):
+- **High-performance rendering** using MuPDF library with background worker pool
+- **Page caching** with LRU eviction (5-15MB per page, configurable cache size)
+- **Prefetching** of adjacent pages for smooth navigation
+- **Kitty graphics protocol** with SHM-based image transfer (critical for 60fps)
+- **Text extraction** for selection and search
+- **PDF table of contents** parsing from document outline
+- **Zoom levels** with smooth viewport updates
+- **Terminal capability gates** are centralized in `src/terminal.rs` (protocol selection, comments/scroll/normal mode, iTerm version checks)
+
 **Images & Media:**
 - Image loading happens asynchronously to prevent UI blocking
 - **Color mode detection adapts between true color (24-bit) and 256-color palettes**
 - **The application VENDORS ratatui-image in `src/vendored/` - it's not a crates.io dependency**
 - Image protocols (Kitty/Sixel/iTerm2/Halfblocks) are selected based on terminal capabilities
+- **PDF uses Kitty SHM for optimal performance** - never use base64 for PDF images
 
 **Performance & Integration:**
 - Performance profiling can be enabled with pprof integration (`p` key)
 - FPS monitoring helps track UI performance in real-time
-- External EPUB readers are detected based on the platform (macOS, Windows, Linux)
+- External readers are detected based on the platform (macOS, Windows, Linux)
+- **PDF rendering uses worker pool** with configurable worker count
 
 **Search:**
 - Search functionality supports case-insensitive matching
@@ -907,9 +1400,13 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 
 **Code Organization:**
 - **MarkdownTextReader is modularized across multiple files in `src/widget/text_reader/`**
+- **PDF reader is modularized in `src/widget/pdf_reader/`** (PDF feature)
+- **PDF infrastructure is in `src/pdf/`** with Kitty protocol in `src/pdf/kitty/` (PDF feature)
 - **Input handling is organized in `src/inputs/` module**
 - **UI components are in `src/components/` and `src/widget/`**
-- **Rust edition 2024 is used**
+- **Parsing logic is in `src/parsing/`**
+- **Image handling is in `src/images/`**
+- **Rust edition 2024, version 1.86 is used**
 
 ## Performance Considerations
 - **CRITICAL**: Performance is one of the most important aspects of this project
@@ -919,6 +1416,9 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Images are cached after extraction to avoid repeated disk I/O
 - Text content is cached to avoid expensive re-parsing
 - Mouse events are batched to prevent performance degradation
+- **PDF pages are cached** with LRU eviction and prefetching
+- **PDF rendering uses background workers** to avoid blocking the UI
+- **Kitty SHM is required** for PDF images - never use base64 transmission
 
 ## Error Handling Guidelines
 - When logging errors, the received error object should always be logged (when possible)
@@ -927,6 +1427,38 @@ This approach ensures that snapshot tests accurately capture the intended UI beh
 - Preserve error chains for proper error tracing
 - When introducing new regexes they should always be cached to avoid recompilation cycles
 - Rendering of items in markdown_text_reader.rs should always use Base16Palette and should avoid relying on default ratatui style
+
+## User Feedback for Unavailable Features (PDF Reader)
+
+When a user attempts to use a feature that is not available in their current context (e.g., terminal limitations, mode restrictions), use the **error HUD** pattern instead of toast notifications.
+
+### Error HUD Pattern
+Use `self.set_error_hud(message)` followed by `return Some(InputAction::Redraw)` to display inline error messages. This provides immediate, contextual feedback that appears in the PDF viewer area.
+
+**When to use error HUD:**
+- User tries to activate a feature that's not supported in their terminal (e.g., normal mode in iTerm)
+- User tries to use a feature outside its required mode (e.g., comments outside zen mode)
+- Any direct user interaction that cannot be fulfilled due to context restrictions
+
+**Examples:**
+```rust
+// Comments only available in zen mode
+if !self.comments_enabled {
+    self.set_error_hud("Comments are only available in zen mode for PDFs".to_string());
+    return Some(InputAction::Redraw);
+}
+
+// PDF normal mode not supported in iTerm
+if self.is_iterm {
+    self.set_error_hud("PDF normal mode is not supported in iTerm".to_string());
+    return Some(InputAction::Redraw);
+}
+```
+
+**When to use toast notifications instead:**
+- Background operation results (e.g., "Saved comment", "Copied 123 chars")
+- Non-blocking informational messages
+- Success/failure of async operations
 
 ## Rich Text Rendering Architecture (MarkdownTextReader)
 
@@ -1001,8 +1533,13 @@ This architecture ensures that bold text, italic text, links, and other formatti
 # important-instruction-reminders
 - Don't use eprintln if you need logging. This is TUI application. eprintln breaks UI. Use log crate to do proper logging
 - Always log actual error that happened when creating "failed" branch logging
+- **Git Operations**: Be very careful when modifying git state. Any operation that mutates git history (commit, reset, rebase, amend, push, etc.) must be explicitly requested by the user. If not sure, ask for confirmation before executing.
 
-- the text we are working on is in unicode. we should never try byte manipulations to get chunks of it
+- **UTF-8 Text Handling**: All document content (EPUB, HTML, PDF) is UTF-8 encoded and may contain multi-byte characters (e.g., `–`, `é`, `中`). NEVER use byte-based string operations (`.len()`, `[start..end]` on `&str`) for text manipulation. Always use character-based operations:
+  - Use `.chars().count()` instead of `.len()` for character count
+  - Use `.chars().collect::<Vec<char>>()` then slice the Vec for substring extraction
+  - Use `.char_indices()` when you need both character and byte positions
+  - This applies to: search highlighting, text selection, cursor positioning, text wrapping
 
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

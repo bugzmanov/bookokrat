@@ -126,7 +126,7 @@
 │  Space+z       Copy debug transcript                                        │
 │  a             Add/edit comment on selection                                │
 │  d             Delete comment under cursor                                  │
-│  Space+s       Toggle raw HTML view                                         │
+│  ss            Toggle raw HTML view (EPUB/HTML only)                        │
 │  Enter         Open image popup (when cursor on image)                      │
 │  p             Toggle performance profiler overlay                          │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -268,7 +268,7 @@ Comments are saved per-book and persist across sessions.
   ▸ Quick book switching: Press Space+h for recent books
   ▸ Search workflow: Use / for chapter searches, Space+F for book-wide
   ▸ Reading statistics: Press Space+d to see chapter counts and progress
-  ▸ Debug view: Press Space+s to toggle raw HTML for rendering issues
+  ▸ Debug view: Press ss to toggle raw HTML for rendering issues (EPUB)
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
   ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
