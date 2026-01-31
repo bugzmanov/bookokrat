@@ -12,6 +12,25 @@ homepage="https://bugzmanov.github.io/bookokrat/"
 readme = "README.md"
 keywords = ["tui", "ratatui", "epub", "reader"]
 categories = ["command-line-interface"]
+exclude = [
+  "vhs_tests/**",
+  "vhs_test.pdf",
+  "target/**",
+  "tmp/**",
+  "tmp-release/**",
+  "reports/**",
+  "experiments/**",
+  "temp_images/**",
+  "logo.inspirations/**",
+  "tools/**",
+  "*.epub",
+  "*.pdf",
+  "*.log",
+  "flamegraph.svg",
+  "bookmarks.json",
+  "readme.txt",
+  "readme.ans",
+]
 
 [lib]
 name = "bookokrat"
@@ -99,4 +118,12 @@ serde = []
 pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64"]
 
 [profile.release]
+debug = false
+strip = true
+lto = "thin"
+codegen-units = 1
+
+[profile.release-debug]
+inherits = "release"
 debug = true
+strip = false

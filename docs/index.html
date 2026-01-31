@@ -3,30 +3,30 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Bookokrat - Terminal EPUB Reader with Full HTML Rendering</title>
+        <title>Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering</title>
 
         <!-- SEO Meta Tags -->
-        <meta name="description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal." />
-        <meta name="keywords" content="epub reader, terminal epub reader, tui epub, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application" />
+        <meta name="description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal." />
+        <meta name="keywords" content="epub reader, pdf reader, terminal epub reader, terminal pdf reader, tui epub, tui pdf, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application" />
         <meta name="author" content="Rafael Bagmanov" />
         <meta name="robots" content="index, follow" />
         <link rel="canonical" href="https://github.com/bugzmanov/bookokrat" />
 
         <!-- Open Graph Meta Tags (Facebook, LinkedIn) -->
         <meta property="og:type" content="website" />
-        <meta property="og:title" content="Bookokrat - Terminal EPUB Reader with Full HTML Rendering" />
-        <meta property="og:description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal." />
+        <meta property="og:title" content="Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering" />
+        <meta property="og:description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal." />
         <meta property="og:url" content="https://github.com/bugzmanov/bookokrat" />
         <meta property="og:image" content="https://bugzmanov.github.io/bookokrat/3.png" />
-        <meta property="og:image:alt" content="Bookokrat terminal EPUB reader demo showing book reading interface" />
+        <meta property="og:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing book reading interface" />
         <meta property="og:site_name" content="Bookokrat" />
 
         <!-- Twitter Card Meta Tags -->
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Bookokrat - Terminal EPUB Reader with Full HTML Rendering" />
-        <meta name="twitter:description" content="Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support." />
+        <meta name="twitter:title" content="Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering" />
+        <meta name="twitter:description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support." />
         <meta name="twitter:image" content="https://bugzmanov.github.io/bookokrat/3.png" />
-        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB reader demo" />
+        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB/PDF reader demo" />
 
         <!-- Additional SEO -->
         <meta name="theme-color" content="#00ff88" />
@@ -43,10 +43,10 @@
           "name": "Bookokrat",
           "applicationCategory": "DeveloperApplication",
           "operatingSystem": "Linux, macOS, Windows",
-          "description": "Full-featured terminal EPUB reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
+          "description": "Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
           "url": "https://github.com/bugzmanov/bookokrat",
           "downloadUrl": "https://crates.io/crates/bookokrat",
-          "softwareVersion": "0.2.1",
+          "softwareVersion": "0.2.2",
           "author": {
             "@type": "Person",
             "name": "Rafael Bagmanov"
@@ -62,7 +62,7 @@
             "name": "Rust"
           },
           "codeRepository": "https://github.com/bugzmanov/bookokrat",
-          "keywords": "epub reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
+          "keywords": "epub reader, pdf reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
           "screenshot": "https://bugzmanov.github.io/bookokrat/3.png",
           "featureList": [
             "Complete EPUB/HTML rendering with html5ever parser",
@@ -70,6 +70,8 @@
             "MathML rendering to ASCII art",
             "Syntax-highlighted code blocks",
             "Table rendering",
+            "PDF reader with page/scroll render modes",
+            "PDF table of contents and annotations",
             "Vim keybindings (j/k, gg/G, /, Ctrl+o/i)",
             "Comprehensive mouse support",
             "Inline annotations with Markdown export",
@@ -938,11 +940,11 @@
                     <div class="hero-text">
                         <div class="hero-tag">for terminal workflows</div>
                         <h1>
-                            TERMINAL<br /><span class="highlight">EPUB</span
+                            TERMINAL<br /><span class="highlight">EPUB/PDF</span
                             ><br />READER
                         </h1>
                         <p class="hero-subtitle">
-                            // FULL-FEATURED EPUB RENDERING • IMAGES • TABLES &
+                            // FULL-FEATURED EPUB + PDF RENDERING • IMAGES • TABLES &
                             CODE BLOCKS • VIM KEYBINDINGS • MOUSE SUPPORT<br />INLINE
                             ANNOTATIONS • LOCAL & GLOBAL SEARCH <br /><br />READ
                             TECHNICAL BOOKS WITHOUT LEAVING YOUR TERMINAL
@@ -1025,13 +1027,13 @@
                 <div class="features">
                     <div class="feature">
                         <h3 class="feature-title">
-                            Complete EPUB/HTML rendering
+                            EPUB + PDF rendering
                         </h3>
                         <p class="feature-description">
                             Proper table layouts, syntax-highlighted code
                             blocks, bold/italic text, blockquotes, lists, and
-                            MathML equations. Uses html5ever parser—reads like
-                            the author intended.
+                            MathML equations for EPUBs plus a dedicated PDF
+                            renderer with page/scroll modes and TOC support.
                         </p>
                     </div>
 
@@ -1039,9 +1041,10 @@
                         <h3 class="feature-title">Annotate & research</h3>
                         <p class="feature-description">
                             Press 'a' on any selection to attach timestamped
-                            notes. Export all annotations to Markdown. Full-text
-                            search across books. Copy chapters or selections.
-                            Your reading workspace in the terminal.
+                            notes in EPUBs or PDFs. Export all annotations to
+                            Markdown. Full-text search across books. Copy
+                            chapters or selections. Your reading workspace in
+                            the terminal.
                         </p>
                     </div>
 
@@ -1061,7 +1064,8 @@
                         <p class="feature-description">
                             Automatic bookmarks per book. Reading history popup
                             (Space+h). Chapter statistics and progress tracking.
-                            Jump list remembers your navigation path.
+                            Jump list remembers your navigation path in EPUBs
+                            and PDFs.
                         </p>
                     </div>
 
@@ -1071,7 +1075,8 @@
                             Auto-detects true color (24-bit) or falls back to
                             256-color palette. Images render via Kitty, Sixel,
                             iTerm2, or Unicode halfblocks—whatever your terminal
-                            supports.
+                            supports. PDF viewing needs a graphics-capable
+                            terminal.
                         </p>
                     </div>
 
@@ -1104,8 +1109,8 @@
                         Download from <a href="https://github.com/bugzmanov/bookokrat/releases">GitHub Releases</a>. Static musl binary works on all distributions.
                     </p>
                     <div class="install-box" style="margin-bottom: 2rem;">
-                        <code class="install-command" style="font-size: 0.85rem;">curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz</code>
-                        <button class="copy-btn" onclick="copyText('curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz && tar -xzf bookokrat-v0.2.1-x86_64-unknown-linux-musl.tar.gz && sudo mv bookokrat /usr/local/bin/', this)">
+                        <code class="install-command" style="font-size: 0.85rem;">curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz</code>
+                        <button class="copy-btn" onclick="copyText('curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz && tar -xzf bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz && sudo mv bookokrat /usr/local/bin/', this)">
                             copy
                         </button>
                     </div>
@@ -1128,6 +1133,12 @@
                             <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
                                 <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Linux (Ubuntu/Debian)</div>
                                 <code style="color: #fff; font-size: 0.9rem;">sudo apt update && sudo apt install build-essential</code>
+                                <div style="color: #bdbdbd; font-size: 0.85rem; margin-top: 0.5rem; line-height: 1.6;">
+                                    For <code style="color: #00ff88;">--features pdf</code>, also install <code style="color: #00ff88;">pkg-config libfontconfig1-dev</code>.
+                                </div>
+                                <div style="color: #bdbdbd; font-size: 0.85rem; margin-top: 0.35rem; line-height: 1.6;">
+                                    For <code style="color: #00ff88;">--features pdf</code>, also install <code style="color: #00ff88;">clang libclang-dev</code> (bindgen).
+                                </div>
                             </div>
 
                             <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
@@ -1163,7 +1174,7 @@
                             // Quick Start
                         </div>
                         <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
-                            1. Navigate to a directory with EPUB files<br/>
+                            1. Navigate to a directory with EPUB or PDF files<br/>
                             2. Run <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">bookokrat</code><br/>
                             3. Use <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">j/k</code> to navigate, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">Enter</code> to open a book, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">?</code> for help
                         </div>
@@ -1176,6 +1187,12 @@
                         <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
                             <strong style="color: #ff6666;">Error: "linker 'cc' not found"</strong><br/>
                             Install a C compiler: <code style="color: #00ff88;">xcode-select --install</code> (macOS), <code style="color: #00ff88;">sudo apt install build-essential</code> (Debian/Ubuntu), or <code style="color: #00ff88;">sudo dnf install gcc make</code> (Fedora).
+                            <br/><br/>
+                            <strong style="color: #ff6666;">Error: "The system library `fontconfig` required by crate `yeslogic-fontconfig-sys` was not found"</strong><br/>
+                            On Ubuntu/Debian, install: <code style="color: #00ff88;">sudo apt install pkg-config libfontconfig1-dev</code>
+                            <br/><br/>
+                            <strong style="color: #ff6666;">Error: "Unable to find libclang"</strong><br/>
+                            On Ubuntu/Debian, install: <code style="color: #00ff88;">sudo apt install clang libclang-dev</code>
                         </div>
                     </div>
                 </div>
@@ -1199,7 +1216,7 @@
                     >
                         <img
                             src="https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8"
-                            alt="Bookokrat demo showing EPUB reading in terminal"
+                            alt="Bookokrat demo showing EPUB/PDF reading in terminal"
                             style="
                                 width: 100%;
                                 display: block;
@@ -1214,7 +1231,7 @@
                 <div class="section-label">comparison</div>
                 <h2 class="section-title">How does it compare?</h2>
                 <p class="section-description">
-                    Terminal EPUB readers compared side-by-side
+                    Terminal EPUB/PDF readers compared side-by-side
                 </p>
 
                 <div
@@ -1900,10 +1917,10 @@
                                     style="
                                         text-align: center;
                                         border-top: 1px solid #1a1a1a;
-                                        color: #666;
+                                        color: #00ff88;
                                     "
                                 >
-                                    ✗
+                                    ✓
                                 </td>
                                 <td
                                     style="

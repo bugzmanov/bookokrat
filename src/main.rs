@@ -94,7 +94,6 @@ fn main() -> Result<()> {
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
     }
-    #[cfg(feature = "pdf")]
     // Terminal initialization
     enable_raw_mode()?;
     let mut stdout = stdout();

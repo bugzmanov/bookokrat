@@ -4,14 +4,14 @@ PDF issue:
  [ ] BUG: EPUB https://registerspill.thorstenball.com/p/joy-and-curiosity-71 <-- some links are rendered next to text, without a space in between
  [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.
  [ ] pdf: zoom with pinching 
+ [ ] Modal windows have different border colors. Search window hints are not on the bottom border.
 
- Hard UX:
+Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
  [ ] Comments editing in pdf annotations is very non-ergonomic. Potentially need normal mode.
  --
  [ ] update & analyze tapes & tests
  [ ] Analyze the PDF impact: size wise, heap wise and make it sure that it wouldn't affect epub only readers
- [ ] update docs
  [ ] update help (new stuff & inspiration links)
  [ ] new pictures for the site and potentially new video for the app. 
 
@@ -21,9 +21,9 @@ ideas to implement:
  - HTML Support & markdown
      [x] show raw html
          [ ] Format html into readable
-         [ ] Search
+         [x] Search
          [ ] Navigate to the position where rendering mode was showing
-         [ ] Alow mouse selection & copy-paste
+         [x] Alow mouse selection & copy-paste
      [x] Math Formulas
         [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
