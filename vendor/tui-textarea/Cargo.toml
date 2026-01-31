@@ -1,0 +1,119 @@
+[package]
+name = "tui-textarea"
+version = "0.7.0"
+edition = "2021"
+rust-version = "1.56.1" # for `tui` crate support
+authors = ["rhysd <lin90162@yahoo.co.jp>"]
+description = """
+tui-textarea is a simple yet powerful text editor widget for ratatui and tui-rs. Multi-line
+text editor can be easily put as part of your TUI application.
+"""
+license = "MIT"
+homepage = "https://github.com/rhysd/tui-textarea#readme"
+repository = "https://github.com/rhysd/tui-textarea"
+readme = "README.md"
+categories = ["text-editors", "text-processing"]
+keywords = ["tui", "textarea", "editor", "input", "ratatui"]
+include = ["/src", "/examples", "/tests", "/README.md", "/LICENSE.txt"]
+
+[features]
+default = ["crossterm"]
+# Features to use ratatui
+ratatui = ["dep:ratatui-core", "dep:ratatui-widgets"]
+crossterm = ["ratatui", "dep:crossterm"]
+crossterm_0_28 = ["ratatui", "dep:crossterm-028"]
+termion = ["ratatui", "dep:termion"]
+termwiz = ["ratatui", "dep:termwiz"]
+no-backend = ["ratatui"]
+# Features to use tui-rs
+tuirs = ["dep:tui"]
+tuirs-crossterm = ["tuirs", "dep:crossterm-025", "tui/crossterm"]
+tuirs-termion = ["tuirs", "dep:termion-15", "tui/termion"]
+tuirs-no-backend = ["tuirs"]
+# Other optional features
+search = ["dep:regex"]
+serde = ["dep:serde"]
+arbitrary = ["dep:arbitrary"]
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"], optional = true }
+crossterm = { package = "crossterm", version = "0.29", optional = true }
+crossterm-028 = { package = "crossterm", version = "0.28", optional = true }
+crossterm-025 = { package = "crossterm", version = "0.25", optional = true }
+ratatui-core = { version = "0.1.0", default-features = false, optional = true }
+ratatui-widgets = { version = "0.3.0", default-features = false, optional = true }
+regex = { version = "1", optional = true }
+termion = { version = "4.0", optional = true }
+termion-15 = { package = "termion", version = "1.5", optional = true }
+termwiz = { version = "0.23.0", optional = true }
+tui = { version = "0.19", default-features = false, optional = true }
+unicode-width = "0.2.0"
+serde = { version = "1", optional = true , features = ["derive"] }
+
+[[example]]
+name = "minimal"
+required-features = ["crossterm"]
+
+[[example]]
+name = "editor"
+required-features = ["crossterm", "search"]
+
+[[example]]
+name = "split"
+required-features = ["crossterm"]
+
+[[example]]
+name = "single_line"
+required-features = ["crossterm"]
+
+[[example]]
+name = "variable"
+required-features = ["crossterm"]
+
+[[example]]
+name = "vim"
+required-features = ["crossterm"]
+
+[[example]]
+name = "password"
+required-features = ["crossterm"]
+
+[[example]]
+name = "popup_placeholder"
+required-features = ["crossterm"]
+
+[[example]]
+name = "termwiz"
+required-features = ["termwiz"]
+
+[[example]]
+name = "termion"
+required-features = ["termion"]
+
+[[example]]
+name = "tuirs_minimal"
+required-features = ["tuirs-crossterm"]
+
+[[example]]
+name = "tuirs_editor"
+required-features = ["tuirs-crossterm", "search"]
+
+[[example]]
+name = "tuirs_termion"
+required-features = ["tuirs-termion"]
+
+[workspace]
+members = ["bench"]
+
+[profile.bench]
+lto = "thin"
+
+[dev-dependencies]
+serde_json = "1.0.120"
+# Ratatui with all backends enabled for tests and examples
+ratatui = {version = "0.30.0", features=["crossterm", "termion", "termwiz"]} # Used by examples
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+features = ["search", "crossterm", "termwiz", "termion", "serde"]
+rustdoc-args = ["--cfg", "docsrs"]

@@ -96,6 +96,13 @@ If you need symbols for profiling or debugging, build with the debug release pro
 cargo build --profile release-debug
 ```
 
+## Vendored Dependency Notice
+
+**Important:** `tui-textarea` is vendored in `vendor/tui-textarea` because the upstream
+repository (https://github.com/rhysd/tui-textarea) is currently unmaintained and out of
+step with the latest `ratatui`. Our vendored copy is based on PR #118:
+https://github.com/rhysd/tui-textarea/pull/118/changes
+
 ### Getting Started
 
 Navigate to a directory with EPUB files and run `bookokrat`. Use `j/k` to navigate, `Enter` to open a book, and `?` for help.

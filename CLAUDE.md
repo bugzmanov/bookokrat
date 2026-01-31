@@ -840,7 +840,7 @@ The application vendors the ratatui-image library for customization:
 - `flate2` (1.0): Compression for Sixel
 
 **UI Widgets:**
-- `tui-textarea`: Textarea widget for comment editing (git: tinted-theming fork)
+- `tui-textarea`: Textarea widget for comment editing (VENDORED in `vendor/tui-textarea`; do not modify unless explicitly asked)
 
 **ANSI Processing:**
 - `vt100` (0.15): ANSI parsing for help popup
@@ -861,6 +861,7 @@ The application vendors the ratatui-image library for customization:
 - `serial_test` (3.2): Test synchronization
 
 **Note:** The ratatui-image library is VENDORED in `src/vendored/`, not a crates.io dependency.
+**Note:** `tui-textarea` is VENDORED in `vendor/tui-textarea` and should not be modified unless explicitly requested.
 
 ### State Management
 The application maintains state through the `App` struct in `main_app.rs` which includes:

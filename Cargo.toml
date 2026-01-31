@@ -71,7 +71,7 @@ markup5ever_rcdom = "0.3"
 serde_yaml = "0.9"
 md5 = "0.7"
 dirs = "5.0"
-tui-textarea = { git = "https://github.com/0xferrous/tui-textarea", branch = "update-ratatui" }
+tui-textarea = { path = "vendor/tui-textarea" }
 # ansi-to-tui = "7.0.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"
