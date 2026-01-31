@@ -298,19 +298,15 @@ impl OverlaySet {
 }
 
 struct CachedPage {
-    pixels: Vec<u8>,
-    pixel_width: u32,
-    pixel_height: u32,
-    cell_size: CellSize,
+    data: Arc<PageData>,
     decoded: Option<DynamicImage>,
     tile_cache: HashMap<u32, Arc<Protocol>>,
-    scale_factor: f32,
 }
 
 pub enum ConversionCommand {
     SetPageCount(usize),
     NavigateTo(usize),
-    EnqueuePage(PageData),
+    EnqueuePage(Arc<PageData>),
     UpdateViewport(ViewportUpdate),
     UpdateSelection(Vec<SelectionRect>),
     UpdateComments(Vec<SelectionRect>),
@@ -329,7 +325,7 @@ struct ConverterEngine {
     kitty_shm_support: bool,
     pid: u32,
     page: usize,
-    images: Vec<Option<PageData>>,
+    images: Vec<Option<Arc<PageData>>>,
     page_cache: Vec<Option<CachedPage>>,
     selection_rects: Vec<SelectionRect>,
     comment_rects: Vec<SelectionRect>,
@@ -427,7 +423,7 @@ impl ConverterEngine {
         &mut self,
         focus_page: usize,
         range: std::ops::Range<usize>,
-    ) -> Option<(PageData, usize, usize)> {
+    ) -> Option<(Arc<PageData>, usize, usize)> {
         FocusPlusMinusOneIterator::new(focus_page, range)
             .enumerate()
             .take(self.prerender)
@@ -465,7 +461,7 @@ impl ConverterEngine {
         }
     }
 
-    fn update_cache_for_page(&mut self, page_num: usize, page_info: &PageData) {
+    fn update_cache_for_page(&mut self, page_num: usize, page_info: &Arc<PageData>) {
         if page_num >= self.page_cache.len() {
             return;
         }
@@ -474,25 +470,17 @@ impl ConverterEngine {
         let existing_tile_cache = self.page_cache[page_num]
             .as_ref()
             .filter(|cached| {
-                cached.cell_size.width == page_info.img_data.width_cell
-                    && cached.cell_size.height == page_info.img_data.height_cell
-                    && (cached.scale_factor - page_info.scale_factor).abs() < 0.001
+                cached.data.img_data.width_cell == page_info.img_data.width_cell
+                    && cached.data.img_data.height_cell == page_info.img_data.height_cell
+                    && (cached.data.scale_factor - page_info.scale_factor).abs() < 0.001
             })
             .map(|cached| cached.tile_cache.clone())
             .unwrap_or_default();
 
-        let cell_size = CellSize::new(
-            page_info.img_data.width_cell,
-            page_info.img_data.height_cell,
-        );
         self.page_cache[page_num] = Some(CachedPage {
-            pixels: page_info.img_data.pixels.clone(),
-            pixel_width: page_info.img_data.width_px,
-            pixel_height: page_info.img_data.height_px,
-            cell_size,
+            data: Arc::clone(page_info),
             decoded: None,
             tile_cache: existing_tile_cache,
-            scale_factor: page_info.scale_factor,
         });
         self.update_comment_cache_for_page(page_num, page_info.scale_factor);
     }
@@ -735,7 +723,7 @@ impl ConverterEngine {
                 .page_cache
                 .get(*page_num)
                 .and_then(|opt| opt.as_ref())
-                .map(|c| !c.pixels.is_empty())
+                .map(|c| !c.data.img_data.pixels.is_empty())
                 .unwrap_or(false);
 
             if !has_pixels {
@@ -844,7 +832,7 @@ impl ConverterEngine {
                 continue;
             };
 
-            if cached.pixels.is_empty() {
+            if cached.data.img_data.pixels.is_empty() {
                 continue;
             }
 
@@ -907,7 +895,8 @@ impl ConverterEngine {
                 continue;
             };
 
-            let cell_size = CellSize::new(cached.cell_size.width, viewport.viewport_height_cells);
+            let cell_size =
+                CellSize::new(cached.data.img_data.width_cell, viewport.viewport_height_cells);
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1024,7 +1013,7 @@ impl ConverterEngine {
             };
 
             // Skip if no pixel data (distant page was cleared)
-            if cached.pixels.is_empty() {
+            if cached.data.img_data.pixels.is_empty() {
                 // Mark as pending - pixels may arrive later
                 if new_cursor.is_some_and(|c| c.page == page_num) {
                     log::trace!(
@@ -1106,7 +1095,8 @@ impl ConverterEngine {
                 continue;
             };
 
-            let cell_size = CellSize::new(cached.cell_size.width, viewport.viewport_height_cells);
+            let cell_size =
+                CellSize::new(cached.data.img_data.width_cell, viewport.viewport_height_cells);
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1246,14 +1236,14 @@ impl ConverterEngine {
             let Some(Some(cached)) = self.page_cache.get(rect.page) else {
                 continue;
             };
-            let rects_px = comment_rects_for_page(rects, rect.page, cached.scale_factor);
+            let rects_px = comment_rects_for_page(rects, rect.page, cached.data.scale_factor);
             if rects_px.is_empty() {
                 continue;
             }
             cache.insert(
                 rect.page,
                 CommentCacheEntry {
-                    scale_factor: cached.scale_factor,
+                    scale_factor: cached.data.scale_factor,
                     rects: rects_px,
                 },
             );
@@ -1291,8 +1281,8 @@ impl ConverterEngine {
         }
     }
 
-    /// Clear pixel data for pages far from current to limit memory usage.
-    /// Keeps pixels for nearby pages so overlays can still be re-rendered.
+    /// Clear decoded/tiles for pages far from current to limit memory usage.
+    /// Keeps nearby pages so overlays can still be re-rendered quickly.
     /// Also protects the cursor page and pages with pending cursor updates.
     fn clear_distant_pixels(&mut self, current_page: usize, radius: usize) {
         let start = current_page.saturating_sub(radius);
@@ -1315,10 +1305,10 @@ impl ConverterEngine {
                 if self.pending_cursor_pages.contains(&i) {
                     continue;
                 }
-                if !page.pixels.is_empty() {
-                    log::trace!("Clearing pixel cache for distant page {i}");
-                    page.pixels = Vec::new();
+                if page.decoded.is_some() || !page.tile_cache.is_empty() {
+                    log::trace!("Clearing decoded/tile cache for distant page {i}");
                     page.decoded = None;
+                    page.tile_cache.clear();
                     // Also remove from sent_for_viewport so it can be re-rendered if needed
                     self.sent_for_viewport.remove(&i);
                 }
@@ -1335,7 +1325,7 @@ impl ConverterEngine {
 
         for cached in self.page_cache.iter().flatten() {
             cached_pages += 1;
-            pixel_bytes += cached.pixels.len();
+            pixel_bytes += cached.data.img_data.pixels.len();
             if cached.decoded.is_some() {
                 decoded_count += 1;
             }
@@ -1381,7 +1371,7 @@ impl ConverterEngine {
         log::info!("  page_cache status (pages {start}..{end}):");
         for i in start..end {
             if let Some(Some(cached)) = self.page_cache.get(i) {
-                let has_pixels = !cached.pixels.is_empty();
+                let has_pixels = !cached.data.img_data.pixels.is_empty();
                 let has_decoded = cached.decoded.is_some();
                 let in_sent = self.sent_for_viewport.contains(&i);
                 log::info!(
@@ -1441,9 +1431,21 @@ fn decode_rgb(pixels: &[u8], width: u32, height: u32) -> Result<RgbImage, Pipeli
         .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
 }
 
+#[inline]
+fn cached_cell_size(cached: &CachedPage) -> CellSize {
+    CellSize::new(
+        cached.data.img_data.width_cell,
+        cached.data.img_data.height_cell,
+    )
+}
+
 fn take_decoded(cached: &mut CachedPage) -> Result<DynamicImage, PipelineError> {
     if cached.decoded.is_none() {
-        let rgb = decode_rgb(&cached.pixels, cached.pixel_width, cached.pixel_height)?;
+        let rgb = decode_rgb(
+            &cached.data.img_data.pixels,
+            cached.data.img_data.width_px,
+            cached.data.img_data.height_px,
+        )?;
         cached.decoded = Some(DynamicImage::ImageRgb8(rgb));
     }
     Ok(cached.decoded.take().expect("decoded should be present"))
@@ -1574,16 +1576,20 @@ fn render_page_with_viewport(
     pid: u32,
     kitty_shm_support: bool,
 ) -> Result<ConvertedImage, PipelineError> {
-    let mut img = decode_rgb(&cached.pixels, cached.pixel_width, cached.pixel_height)?;
+    let mut img = decode_rgb(
+        &cached.data.img_data.pixels,
+        cached.data.img_data.width_px,
+        cached.data.img_data.height_px,
+    )?;
     apply_overlays(&mut img, overlays);
     let mut dyn_img = DynamicImage::ImageRgb8(img);
 
-    let mut area_cell_size = cached.cell_size;
+    let mut area_cell_size = cached_cell_size(cached);
     if picker.protocol_type() == ProtocolType::Kitty {
         if let Some(viewport) = viewport {
             if viewport.page == page_num {
                 let (cropped, cell_size) =
-                    crop_to_viewport(dyn_img, cached.cell_size, viewport, picker);
+                    crop_to_viewport(dyn_img, cached_cell_size(cached), viewport, picker);
                 dyn_img = cropped;
                 area_cell_size = cell_size;
             }
@@ -1649,7 +1655,7 @@ fn render_viewport_tiles(
         let tile_area = Rect {
             x: 0,
             y: 0,
-            width: cached.cell_size.width,
+            width: cached.data.img_data.width_cell,
             height: tile_h_cells,
         };
 
@@ -1664,7 +1670,7 @@ fn render_viewport_tiles(
                 // Pad to exact cell boundaries so Resize::None can be used
                 let tile_img = pad_to_cell_bounds(
                     tile_img,
-                    CellSize::new(cached.cell_size.width, tile_h_cells),
+                    CellSize::new(cached.data.img_data.width_cell, tile_h_cells),
                     picker,
                 );
                 let new_protocol = picker.new_protocol(tile_img, tile_area, Resize::None).map_err(
@@ -1686,7 +1692,7 @@ fn render_viewport_tiles(
             // Pad to exact cell boundaries so Resize::None can be used
             let tile_img = pad_to_cell_bounds(
                 tile_img,
-                CellSize::new(cached.cell_size.width, tile_h_cells),
+                CellSize::new(cached.data.img_data.width_cell, tile_h_cells),
                 picker,
             );
             Arc::new(picker.new_protocol(tile_img, tile_area, Resize::None).map_err(|e| {
@@ -1721,7 +1727,10 @@ fn render_viewport_tiles(
 
     Ok(ConvertedImage::Tiled {
         tiles,
-        cell_size: CellSize::new(cached.cell_size.width, viewport.viewport_height_cells),
+        cell_size: CellSize::new(
+            cached.data.img_data.width_cell,
+            viewport.viewport_height_cells,
+        ),
     })
 }
 

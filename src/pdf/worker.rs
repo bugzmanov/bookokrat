@@ -323,7 +323,7 @@ fn handle_page_request(
         let _ = responses.send(RenderResponse::Page {
             id,
             page: page_num,
-            data: Box::new((*cached).clone()),
+            data: Arc::clone(&cached),
         });
         return;
     }
@@ -337,7 +337,7 @@ fn handle_page_request(
             let _ = responses.send(RenderResponse::Page {
                 id,
                 page: page_num,
-                data: Box::new((*cached).clone()),
+                data: Arc::clone(&cached),
             });
         }
         Err(e) => {
