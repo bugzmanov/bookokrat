@@ -5,6 +5,8 @@ PDF issue:
  [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.
  [ ] pdf: zoom with pinching 
  [ ] Modal windows have different border colors. Search window hints are not on the bottom border.
+ [ ] Trim PDF margins mode
+ [ ] DO not invert image colors mode
 
 Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.

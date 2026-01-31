@@ -458,6 +458,38 @@ impl PdfReaderState {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 InputResponse::handled(self.scroll_half_screen(ScrollDirection::Up))
             }
+            KeyCode::Up => {
+                let action = self.handle_normal_mode_key('k');
+                if action.is_some() {
+                    InputResponse::handled(action)
+                } else {
+                    InputResponse::unhandled()
+                }
+            }
+            KeyCode::Down => {
+                let action = self.handle_normal_mode_key('j');
+                if action.is_some() {
+                    InputResponse::handled(action)
+                } else {
+                    InputResponse::unhandled()
+                }
+            }
+            KeyCode::Left => {
+                let action = self.handle_normal_mode_key('h');
+                if action.is_some() {
+                    InputResponse::handled(action)
+                } else {
+                    InputResponse::unhandled()
+                }
+            }
+            KeyCode::Right => {
+                let action = self.handle_normal_mode_key('l');
+                if action.is_some() {
+                    InputResponse::handled(action)
+                } else {
+                    InputResponse::unhandled()
+                }
+            }
             KeyCode::Char(c) => {
                 let action = self.handle_normal_mode_key(c);
                 if action.is_some() {
@@ -544,10 +576,10 @@ impl PdfReaderState {
                     _ => None,
                 }
             }
-            KeyCode::Right => self.next_page(),
-            KeyCode::Down => self.next_screen(),
+            KeyCode::Up => self.scroll_line(ScrollDirection::Up),
+            KeyCode::Down => self.scroll_line(ScrollDirection::Down),
             KeyCode::Left => self.prev_page(),
-            KeyCode::Up => self.prev_screen(),
+            KeyCode::Right => self.next_page(),
             KeyCode::Esc => self.handle_escape_key(),
             KeyCode::Enter => None,
             KeyCode::Tab => None,
@@ -3835,6 +3867,7 @@ impl PdfReaderState {
         self.jump_to_current_search_match()
     }
 }
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputOutcome {
