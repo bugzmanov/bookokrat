@@ -1156,6 +1156,7 @@ impl PdfReaderState {
         let modal_accent = self.accent_color();
         let modal_panel_bg = self.palette.base_01;
         let modal_panel_header_bg = self.palette.base_02;
+        let popup_border = self.palette.popup_border_color();
         let modal_msg = self
             .go_to_page_input
             .map(|page| self.go_to_page_prompt_text(page));
@@ -1226,7 +1227,7 @@ impl PdfReaderState {
                         inner_area,
                         msg.clone(),
                         modal_bg,
-                        accent_color,
+                        popup_border,
                         fg_color,
                     );
                 }
@@ -1292,7 +1293,7 @@ impl PdfReaderState {
                         modal_bg,
                         right_margin,
                         modal_fg,
-                        modal_accent,
+                        popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
                     );
@@ -1332,7 +1333,7 @@ impl PdfReaderState {
                         inner_area,
                         msg.clone(),
                         modal_bg,
-                        accent_color,
+                        popup_border,
                         fg_color,
                     );
                 }
@@ -1464,7 +1465,7 @@ impl PdfReaderState {
                         modal_bg,
                         right_margin,
                         modal_fg,
-                        modal_accent,
+                        popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
                     );
@@ -1543,7 +1544,7 @@ impl PdfReaderState {
                     inner_area,
                     msg.clone(),
                     modal_bg,
-                    accent_color,
+                    popup_border,
                     fg_color,
                 );
             }
@@ -1556,7 +1557,7 @@ impl PdfReaderState {
                     modal_bg,
                     right_margin,
                     modal_fg,
-                    modal_accent,
+                    popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
                 );
@@ -1649,7 +1650,7 @@ impl PdfReaderState {
                     inner_area,
                     msg.clone(),
                     modal_bg,
-                    accent_color,
+                    popup_border,
                     fg_color,
                 );
             }
@@ -1662,7 +1663,7 @@ impl PdfReaderState {
                     modal_bg,
                     right_margin,
                     modal_fg,
-                    modal_accent,
+                    popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
                 );

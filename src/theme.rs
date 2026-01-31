@@ -378,6 +378,10 @@ pub static OCEANIC_NEXT: &LazyLock<Base16Palette> = &OCEANIC_NEXT_PALETTE;
 // ============================================================================
 
 impl Base16Palette {
+    pub fn popup_border_color(&self) -> Color {
+        self.base_05
+    }
+
     pub fn get_interface_colors(
         &self,
         is_content_mode: bool,

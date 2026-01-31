@@ -72,7 +72,7 @@ impl ThemeSelector {
                 Block::default()
                     .title(" Select Theme ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(palette.base_0c))
+                    .border_style(Style::default().fg(palette.popup_border_color()))
                     .style(Style::default().bg(palette.base_00)),
             )
             .highlight_style(

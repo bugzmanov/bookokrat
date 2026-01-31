@@ -434,7 +434,7 @@ impl BookStat {
                 Block::default()
                     .title(" Chapter Statistics ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .border_style(Style::default().fg(current_theme().popup_border_color()))
                     .style(Style::default().bg(current_theme().base_00)),
             )
             .highlight_style(

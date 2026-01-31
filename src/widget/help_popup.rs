@@ -130,7 +130,7 @@ impl HelpPopup {
                 Block::default()
                     .title(" Help - Press ? or ESC to close ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .border_style(Style::default().fg(current_theme().popup_border_color()))
                     .style(Style::default().bg(current_theme().base_00)),
             )
             .wrap(Wrap { trim: false });

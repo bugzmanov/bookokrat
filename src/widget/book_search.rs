@@ -365,9 +365,26 @@ impl BookSearch {
 
         f.render_widget(Clear, popup_area);
 
+        let help_text = match self.focus_mode {
+            FocusMode::Input => "Enter:Search  \"phrase\":Exact  Esc:Cancel",
+            FocusMode::Results => {
+                "j/k:Navigate  Enter:Jump  g/G:Top/Bottom  Space+f:Edit Query  Esc:Cancel"
+            }
+        };
+        let status_line = Line::from(vec![
+            Span::styled(
+                format!("{} results  ", self.results.len()),
+                Style::default().fg(palette.base_0b),
+            ),
+            Span::styled(help_text, Style::default().fg(palette.base_03)),
+        ])
+        .centered();
+
         let block = Block::default()
             .title(" Search Book ")
+            .title_bottom(status_line)
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette.popup_border_color()))
             .style(Style::default().bg(palette.base_00).fg(palette.base_05));
 
         f.render_widget(block.clone(), popup_area);
@@ -376,11 +393,7 @@ impl BookSearch {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(5),
-                Constraint::Length(1),
-            ])
+            .constraints([Constraint::Length(3), Constraint::Min(5)])
             .split(inner);
 
         // Calculate visible results based on the actual results area height
@@ -388,7 +401,6 @@ impl BookSearch {
 
         self.render_search_input(f, chunks[0], palette);
         self.render_results(f, chunks[1], palette);
-        self.render_status_bar(f, chunks[2], palette);
     }
 
     fn render_search_input(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
@@ -652,28 +664,6 @@ impl BookSearch {
         spans
     }
 
-    fn render_status_bar(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
-        let help_text = match self.focus_mode {
-            FocusMode::Input => "Enter:Search  \"phrase\":Exact  Esc:Cancel",
-            FocusMode::Results => {
-                "j/k:Navigate  Enter:Jump  g/G:Top/Bottom  Space+f:Edit Query  Esc:Cancel"
-            }
-        };
-
-        let status = vec![
-            Span::styled(
-                format!("{} results  ", self.results.len()),
-                Style::default().fg(palette.base_0b),
-            ),
-            Span::styled(help_text, Style::default().fg(palette.base_03)),
-        ];
-
-        let status_bar = Paragraph::new(Line::from(status))
-            .style(Style::default().bg(palette.base_00))
-            .alignment(Alignment::Center);
-
-        f.render_widget(status_bar, area);
-    }
 }
 
 impl VimNavMotions for BookSearch {

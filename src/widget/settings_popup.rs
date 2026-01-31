@@ -135,7 +135,7 @@ impl SettingsPopup {
             .title(" Settings ")
             .title_bottom(Line::from(hints).right_aligned())
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(palette.base_0c))
+            .border_style(Style::default().fg(palette.popup_border_color()))
             .style(Style::default().bg(palette.base_00));
 
         let inner = block.inner(popup_area);

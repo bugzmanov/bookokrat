@@ -1306,7 +1306,7 @@ impl CommentsViewer {
 
         let chapter_block = Block::default()
             .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(current_theme().base_02));
+            .border_style(Style::default().fg(current_theme().popup_border_color()));
         let chapter_inner = chapter_block.inner(columns[0]);
         self.last_chapter_area = Some(chapter_inner);
         f.render_widget(chapter_block, columns[0]);
@@ -1348,7 +1348,7 @@ impl CommentsViewer {
                     .right_aligned(),
                 )
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(current_theme().base_0d))
+                .border_style(Style::default().fg(current_theme().popup_border_color()))
                 .style(Style::default().bg(current_theme().base_00))
         } else if self.search_state.active {
             let search_text = if self.search_state.mode == SearchMode::InputMode {
@@ -1372,7 +1372,7 @@ impl CommentsViewer {
                     ),
                 ]))
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(current_theme().base_0d))
+                .border_style(Style::default().fg(current_theme().popup_border_color()))
                 .style(Style::default().bg(current_theme().base_00))
         } else {
             // Show hint when not in search or export mode (right-aligned)
@@ -1410,7 +1410,7 @@ impl CommentsViewer {
                     .right_aligned(),
                 )
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(current_theme().base_0d))
+                .border_style(Style::default().fg(current_theme().popup_border_color()))
                 .style(Style::default().bg(current_theme().base_00))
         }
     }

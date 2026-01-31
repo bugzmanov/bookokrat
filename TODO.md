@@ -4,7 +4,6 @@ PDF issue:
  [ ] BUG: EPUB https://registerspill.thorstenball.com/p/joy-and-curiosity-71 <-- some links are rendered next to text, without a space in between
  [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.
  [ ] pdf: zoom with pinching 
- [ ] Modal windows have different border colors. Search window hints are not on the bottom border.
  [ ] Trim PDF margins mode
  [ ] DO not invert image colors mode
 

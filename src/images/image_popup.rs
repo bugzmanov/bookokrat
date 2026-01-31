@@ -1,4 +1,5 @@
 use crate::ratatui_image::{Image, Resize, ViewportOptions, picker::Picker, protocol::Protocol};
+use crate::theme::current_theme;
 use image::{DynamicImage, GenericImageView};
 use log::debug;
 use ratatui::{
@@ -48,6 +49,7 @@ impl ImagePopup {
         let title = format!(" {} [{}x{} px] ", self.src_path, width, height);
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_style(Style::default().fg(current_theme().popup_border_color()))
             .title(title)
             .style(Style::default().bg(Color::Black));
 
