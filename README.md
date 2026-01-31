@@ -91,6 +91,11 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 cargo install bookokrat
 ```
 
+Note: PDF support is enabled by default. If you want to build without PDF support:
+```bash
+cargo install bookokrat --no-default-features
+```
+
 If you need symbols for profiling or debugging, build with the debug release profile:
 ```bash
 cargo build --profile release-debug

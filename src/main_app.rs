@@ -482,6 +482,7 @@ impl App {
 
         // Show PDF settings popup for upgrading users who haven't configured PDF settings yet
         // (but only if terminal supports graphics and not first-time user)
+        #[cfg(feature = "pdf")]
         if !is_first_time_user
             && !crate::settings::is_pdf_settings_configured()
             && crate::terminal::detect_terminal().supports_graphics

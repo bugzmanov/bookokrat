@@ -28,6 +28,9 @@ pub enum SettingsTab {
 
 impl SettingsTab {
     fn next(self) -> Self {
+        if !cfg!(feature = "pdf") {
+            return SettingsTab::Themes;
+        }
         match self {
             SettingsTab::PdfSupport => SettingsTab::Themes,
             SettingsTab::Themes => SettingsTab::PdfSupport,
@@ -35,6 +38,9 @@ impl SettingsTab {
     }
 
     fn prev(self) -> Self {
+        if !cfg!(feature = "pdf") {
+            return SettingsTab::Themes;
+        }
         self.next() // Only 2 tabs, so next == prev
     }
 }
@@ -60,7 +66,11 @@ impl Default for SettingsPopup {
 
 impl SettingsPopup {
     pub fn new() -> Self {
-        Self::new_with_tab(SettingsTab::PdfSupport)
+        if cfg!(feature = "pdf") {
+            Self::new_with_tab(SettingsTab::PdfSupport)
+        } else {
+            Self::new_with_tab(SettingsTab::Themes)
+        }
     }
 
     pub fn new_with_tab(tab: SettingsTab) -> Self {
@@ -68,6 +78,11 @@ impl SettingsPopup {
         let supports_graphics = caps.supports_graphics;
         let supports_scroll_mode = caps.pdf.supports_scroll_mode;
         let pdf_selected_idx = if supports_graphics { 0 } else { 2 };
+        let current_tab = if cfg!(feature = "pdf") {
+            tab
+        } else {
+            SettingsTab::Themes
+        };
 
         let theme_names = all_theme_names();
         let current_idx = current_theme_index();
@@ -75,7 +90,7 @@ impl SettingsPopup {
         theme_list_state.select(Some(current_idx));
 
         SettingsPopup {
-            current_tab: tab,
+            current_tab,
             pdf_selected_idx,
             supports_scroll_mode,
             supports_graphics,
@@ -109,7 +124,11 @@ impl SettingsPopup {
         let palette = current_theme();
 
         // Build footer hints string for bottom border
-        let hints = " Tab/h/l switch tabs  j/k navigate  Enter select  Esc close ";
+        let hints = if cfg!(feature = "pdf") {
+            " Tab/h/l switch tabs  j/k navigate  Enter select  Esc close "
+        } else {
+            " j/k navigate  Enter select  Esc close "
+        };
 
         // Main block with title and footer hints on bottom border
         let block = Block::default()
@@ -162,7 +181,13 @@ impl SettingsPopup {
         let mut spans = Vec::new();
         spans.push(Span::raw(" "));
 
-        for (idx, name) in tab_names.iter().enumerate() {
+        let tab_iter: Box<dyn Iterator<Item = (usize, &&str)>> = if cfg!(feature = "pdf") {
+            Box::new(tab_names.iter().enumerate())
+        } else {
+            Box::new(tab_names.iter().enumerate().filter(|(idx, _)| *idx == 1))
+        };
+
+        for (idx, name) in tab_iter {
             let is_selected = match (idx, self.current_tab) {
                 (0, SettingsTab::PdfSupport) => true,
                 (1, SettingsTab::Themes) => true,
@@ -186,7 +211,7 @@ impl SettingsPopup {
 
         // Render underline for selected tab
         let underline_y = area.y + 1;
-        if underline_y < area.y + area.height {
+        if underline_y < area.y + area.height && cfg!(feature = "pdf") {
             let underline_area = Rect {
                 x: area.x,
                 y: underline_y,
