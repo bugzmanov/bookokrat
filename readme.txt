@@ -13,15 +13,12 @@
     ▸ Reading history with quick access to recent books
 
   [READING]
-    ▸ Full MathML rendering with ASCII art conversion
-    ▸ Embedded image display with zoom popup viewer
-    ▸ Syntax-highlighted code blocks
-    ▸ Advanced table rendering with rich cell content
-    ▸ Raw HTML view for debugging
-    ▸ PDF rendering with page/scroll modes (graphics terminal required)
-    ▸ PDF table of contents with page number detection
-    ▸ Reading progress tracking with time estimates
-    ▸ Auto-selected image protocol per terminal (Kitty/Sixel/iTerm2/Halfblocks)
+    ▸ EPUB: rich rendering (MathML, code, tables, images, links)
+    ▸ EPUB: adjustable content margins
+    ▸ PDF: true rendering with page/scroll modes + zoom (graphics terminal)
+    ▸ PDF: TOC detection with printed page mapping
+    ▸ Smooth scrolling + multiclick selection
+    ▸ Zen mode for distraction-free reading
 
   [SEARCH & NAVIGATION]
     ▸ Chapter-level search with fuzzy matching
@@ -33,6 +30,7 @@
   [ANNOTATIONS]
     ▸ Text selection with mouse or keyboard
     ▸ Inline comments on selected passages (EPUB/PDF)
+    ▸ Export annotations to Markdown
     ▸ Copy text snippets or entire chapters
     ▸ Selection modes: word, paragraph, custom range
 
@@ -44,13 +42,7 @@
     ▸ Performance profiling overlay
     ▸ Book statistics popup
     ▸ Settings popup for PDF support and render mode (Space+s / Ctrl+s)
-
-  [CUSTOMIZATION]
     ▸ Multiple built-in color themes (Oceanic Next, Catppuccin, Kanagawa)
-    ▸ Custom theme support via Base16 color schemes
-    ▸ Adjustable content margins
-    ▸ Zen mode - distraction-free reading
-    ▸ Persistent settings across sessions (~/.bookokrat_settings.yaml)
 
 ===============================================================================
 
