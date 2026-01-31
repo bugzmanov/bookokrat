@@ -54,6 +54,7 @@ use crossterm::execute;
 use crossterm::terminal::EndSynchronizedUpdate;
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
+use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -133,7 +134,7 @@ pub struct App {
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
     terminal_size: Rect,
-    profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
+    profiler: Arc<Mutex<Option<ProfilerGuard<'static>>>>,
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,

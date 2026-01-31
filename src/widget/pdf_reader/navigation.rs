@@ -26,6 +26,7 @@ use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGH
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
 use crate::settings::{PdfRenderMode, get_pdf_render_mode};
+use pprof::ProfilerGuard;
 
 pub struct InputResponse {
     pub action: Option<InputAction>,
@@ -3887,7 +3888,7 @@ impl PdfReaderState {
         last_bookmark_save: &mut std::time::Instant,
         table_of_contents: &mut TableOfContents,
         toc_height: usize,
-        profiler: &std::sync::Arc<std::sync::Mutex<Option<pprof::ProfilerGuard<'static>>>>,
+        profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
     ) -> InputOutcome {
         let send_conversion = |cmd: crate::pdf::ConversionCommand| {
             if let Some(tx) = conversion_tx {
@@ -4081,7 +4082,7 @@ impl PdfReaderState {
 }
 
 fn toggle_profiling(
-    profiler: &std::sync::Arc<std::sync::Mutex<Option<pprof::ProfilerGuard<'static>>>>,
+    profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
 ) {
     let mut profiler_lock = profiler.lock().unwrap();
 

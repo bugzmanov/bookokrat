@@ -56,12 +56,13 @@ human-panic = "2.0"
 libc = "0.2"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
 arboard = { version = "3.4", features = ["wayland-data-control"] }
-zip = "0.6"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tempfile = "3.8"
-image = "0.25"
+# Restrict image formats to reduce build time; enable more via features below.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 fast_image_resize = "3.0"
 imagesize = "0.13"
-resvg = "0.45.1"
+resvg = { version = "0.45.1", optional = true }
 open = "5.3"
 roxmltree = "0.18"
 html5ever = "0.27"
@@ -115,6 +116,21 @@ default = ["pdf"]
 test-utils = []
 serde = []
 pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64"]
+svg = ["resvg"]
+image-bmp = ["image/bmp"]
+image-tiff = ["image/tiff"]
+image-webp = ["image/webp"]
+image-avif = ["image/avif"]
+image-exr = ["image/exr"]
+image-qoi = ["image/qoi"]
+image-hdr = ["image/hdr"]
+image-ico = ["image/ico"]
+image-pnm = ["image/pnm"]
+image-tga = ["image/tga"]
+image-dds = ["image/dds"]
+image-ff = ["image/ff"]
+zip-bzip2 = ["zip/bzip2"]
+zip-zstd = ["zip/zstd"]
 
 [profile.release]
 debug = false
@@ -125,4 +141,11 @@ codegen-units = 1
 [profile.release-debug]
 inherits = "release"
 debug = true
+strip = false
+
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
 strip = false

@@ -3,7 +3,9 @@ use fast_image_resize as fr;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
 use imagesize;
 use log::{debug, warn};
+#[cfg(feature = "svg")]
 use resvg::tiny_skia::Pixmap;
+#[cfg(feature = "svg")]
 use resvg::usvg;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -257,6 +259,7 @@ impl BookImages {
         Some((svg_data, resources_dir))
     }
 
+    #[cfg(feature = "svg")]
     fn svg_intrinsic_size(
         &self,
         svg_data: &[u8],
@@ -273,6 +276,17 @@ impl BookImages {
         }
     }
 
+    #[cfg(not(feature = "svg"))]
+    fn svg_intrinsic_size(
+        &self,
+        _svg_data: &[u8],
+        _resources_dir: Option<&Path>,
+    ) -> Option<(u32, u32)> {
+        warn!("SVG support disabled; enable feature \"svg\" to render SVG images.");
+        None
+    }
+
+    #[cfg(feature = "svg")]
     fn render_svg_to_image(
         &self,
         image_src: &str,
@@ -316,6 +330,19 @@ impl BookImages {
         Some(DynamicImage::ImageRgba8(image_buffer))
     }
 
+    #[cfg(not(feature = "svg"))]
+    fn render_svg_to_image(
+        &self,
+        image_src: &str,
+        _svg_data: &[u8],
+        _resources_dir: Option<&Path>,
+        _target_size: Option<(u32, u32)>,
+    ) -> Option<DynamicImage> {
+        warn!("SVG support disabled; cannot render '{image_src}'. Enable feature \"svg\".");
+        None
+    }
+
+    #[cfg(feature = "svg")]
     fn parse_svg_tree(&self, svg_data: &[u8], resources_dir: Option<&Path>) -> Option<usvg::Tree> {
         let mut options = usvg::Options::default();
         if let Some(dir) = resources_dir {
@@ -329,6 +356,7 @@ impl BookImages {
         usvg::Tree::from_data(svg_data, &options).ok()
     }
 
+    #[cfg(feature = "svg")]
     fn svg_needs_fonts(svg_data: &[u8]) -> bool {
         let svg_text = String::from_utf8_lossy(svg_data);
         svg_text.contains("<text") || svg_text.contains("font-family")
@@ -383,6 +411,7 @@ impl BookImages {
         out
     }
 
+    #[cfg(feature = "svg")]
     fn svg_padding_for_size(width: u32, height: u32) -> u32 {
         let max_pad = width.min(height) / 4;
         Self::SVG_PADDING_PX.min(max_pad)
