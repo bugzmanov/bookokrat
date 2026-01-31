@@ -438,10 +438,13 @@ impl TerminalInput {
             .map(|s| parse_modifier_num(s))
             .unwrap_or(KeyModifiers::empty());
 
-        let code = if key_num < 128 {
-            KeyCode::Char(char::from_u32(key_num).unwrap_or('\0'))
-        } else {
-            KeyCode::Null
+        let code = match key_num {
+            27 => KeyCode::Esc,
+            13 => KeyCode::Enter,
+            9 => KeyCode::Tab,
+            127 => KeyCode::Backspace,
+            _ if key_num < 128 => KeyCode::Char(char::from_u32(key_num).unwrap_or('\0')),
+            _ => KeyCode::Null,
         };
 
         key_event(code, modifiers)

@@ -254,7 +254,12 @@ impl App {
 
     /// Close current popup and return focus to previous main panel
     fn close_popup_to_previous(&mut self) {
-        self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
+        let panel = if self.zen_mode {
+            MainPanel::Content
+        } else {
+            self.previous_main_panel
+        };
+        self.focused_panel = FocusedPanel::Main(panel);
     }
 
     /// Check if we're in search mode

@@ -7,6 +7,7 @@ PDF issue:
  [ ] Modal windows have different border colors. Search window hints are not on the bottom border.
  [ ] Trim PDF margins mode
  [ ] DO not invert image colors mode
+ [ ] Svg images in epub
 
 Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
