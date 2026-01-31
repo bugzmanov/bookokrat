@@ -429,6 +429,9 @@ impl HtmlToMarkdownConverter {
             "img" => {
                 self.handle_image(attrs, document);
             }
+            "svg" => {
+                self.handle_inline_svg(node, attrs, document);
+            }
             "pre" => {
                 self.handle_pre(attrs, node, document);
             }
@@ -2174,6 +2177,20 @@ impl HtmlToMarkdownConverter {
                     text.push_inline(image_inline);
                 }
             }
+            "svg" => {
+                if let Some(src) = self.inline_svg_data_uri(node) {
+                    let alt_text = self
+                        .get_attr_value(attrs, "aria-label")
+                        .or_else(|| self.get_attr_value(attrs, "title"))
+                        .unwrap_or_default();
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title: None,
+                    };
+                    text.push_inline(image_inline);
+                }
+            }
             _ => {
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     text.push_inline(Inline::Anchor { id });
@@ -2279,6 +2296,20 @@ impl HtmlToMarkdownConverter {
                         alt_text,
                         url: src,
                         title,
+                    };
+                    current_text.push_inline(image_inline);
+                }
+            }
+            "svg" => {
+                if let Some(src) = self.inline_svg_data_uri(node) {
+                    let alt_text = self
+                        .get_attr_value(attrs, "aria-label")
+                        .or_else(|| self.get_attr_value(attrs, "title"))
+                        .unwrap_or_default();
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title: None,
                     };
                     current_text.push_inline(image_inline);
                 }
@@ -2562,6 +2593,59 @@ impl HtmlToMarkdownConverter {
             .iter()
             .find(|attr| attr.name.local.as_ref() == name)
             .map(|attr| attr.value.to_string())
+    }
+
+    fn handle_inline_svg(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        document: &mut Document,
+    ) {
+        if let Some(src) = self.inline_svg_data_uri(node) {
+            let alt_text = self
+                .get_attr_value(attrs, "aria-label")
+                .or_else(|| self.get_attr_value(attrs, "title"))
+                .unwrap_or_default();
+
+            let image_inline = Inline::Image {
+                alt_text,
+                url: src,
+                title: None,
+            };
+
+            let mut content = Text::default();
+            content.push_inline(image_inline);
+            let paragraph_block = Block::Paragraph { content };
+            let paragraph_node = Node::new(paragraph_block, 0..0);
+            document.blocks.push(paragraph_node);
+        }
+    }
+
+    fn inline_svg_data_uri(&self, node: &Rc<markup5ever_rcdom::Node>) -> Option<String> {
+        let mut svg_xml = self.serialize_node_to_html(node);
+        if svg_xml.trim().is_empty() {
+            return None;
+        }
+
+        if let Some(start_idx) = svg_xml.find("<svg") {
+            if let Some(tag_end) = svg_xml[start_idx..].find('>') {
+                let tag_end_idx = start_idx + tag_end;
+                let start_tag = &svg_xml[start_idx..tag_end_idx];
+                let mut insert = String::new();
+                if !start_tag.contains("xmlns=") {
+                    insert.push_str(" xmlns=\"http://www.w3.org/2000/svg\"");
+                }
+                if start_tag.contains("xlink:") && !start_tag.contains("xmlns:xlink=") {
+                    insert.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+                }
+                if !insert.is_empty() {
+                    svg_xml.insert_str(tag_end_idx, &insert);
+                }
+            }
+        }
+
+        let encoded = base64_simd::STANDARD.encode_to_string(svg_xml.as_bytes());
+        Some(format!("data:image/svg+xml;base64,{encoded}"))
     }
 
     fn serialize_node_to_html(&self, node: &Rc<markup5ever_rcdom::Node>) -> String {
