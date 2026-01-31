@@ -1,5 +1,4 @@
 PDF issue:
- [ ] Book stats for PDF: count screens per chapter
  [ ] BUG:PDF empty comments dismissal requires 2 ESC clicks
  [ ] BUG: EPUB https://registerspill.thorstenball.com/p/joy-and-curiosity-71 <-- some links are rendered next to text, without a space in between
  [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.

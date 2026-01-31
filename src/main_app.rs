@@ -2739,8 +2739,10 @@ impl App {
         }
 
         if inner_x >= stats_start && inner_x < stats_end {
+            let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+            let mut opened = false;
+
             if let Some(ref mut book) = self.current_book {
-                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
                 if let Err(e) = self
                     .book_stat
                     .calculate_stats(&mut book.epub, terminal_size)
@@ -2748,12 +2750,31 @@ impl App {
                     error!("Failed to calculate book statistics: {e}");
                     self.show_error(format!("Failed to calculate statistics: {e}"));
                 } else {
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.book_stat.show();
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                    opened = true;
                 }
+            } else if self.is_pdf_mode() {
+                #[cfg(feature = "pdf")]
+                if let Some(ref pdf_reader) = self.pdf_reader {
+                    if let Err(e) = self.book_stat.calculate_pdf_stats(
+                        &pdf_reader.toc_entries,
+                        pdf_reader.rendered.len(),
+                        &pdf_reader.page_numbers,
+                        terminal_size,
+                    ) {
+                        error!("Failed to calculate PDF statistics: {e}");
+                        self.show_error(format!("Failed to calculate statistics: {e}"));
+                    } else {
+                        opened = true;
+                    }
+                }
+            }
+
+            if opened {
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
+                self.book_stat.show();
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
             }
             return true;
         }
@@ -3081,23 +3102,42 @@ impl App {
                 true
             }
             " d" => {
-                if self.current_book.is_some() {
-                    if let Some(ref mut book) = self.current_book {
-                        let terminal_size = (self.terminal_size.width, self.terminal_size.height);
-                        if let Err(e) = self
-                            .book_stat
-                            .calculate_stats(&mut book.epub, terminal_size)
-                        {
-                            error!("Failed to calculate book statistics: {e}");
+                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+                let mut opened = false;
+
+                if let Some(ref mut book) = self.current_book {
+                    if let Err(e) = self
+                        .book_stat
+                        .calculate_stats(&mut book.epub, terminal_size)
+                    {
+                        error!("Failed to calculate book statistics: {e}");
+                        self.show_error(format!("Failed to calculate statistics: {e}"));
+                    } else {
+                        opened = true;
+                    }
+                } else if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    if let Some(ref pdf_reader) = self.pdf_reader {
+                        if let Err(e) = self.book_stat.calculate_pdf_stats(
+                            &pdf_reader.toc_entries,
+                            pdf_reader.rendered.len(),
+                            &pdf_reader.page_numbers,
+                            terminal_size,
+                        ) {
+                            error!("Failed to calculate PDF statistics: {e}");
                             self.show_error(format!("Failed to calculate statistics: {e}"));
                         } else {
-                            if let FocusedPanel::Main(panel) = self.focused_panel {
-                                self.previous_main_panel = panel;
-                            }
-                            self.book_stat.show();
-                            self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                            opened = true;
                         }
                     }
+                }
+
+                if opened {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.book_stat.show();
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
                 }
                 self.key_sequence.clear();
                 true
@@ -3513,7 +3553,10 @@ impl App {
                 Some(BookStatAction::JumpToChapter { chapter_index }) => {
                     self.book_stat.hide();
                     self.set_main_panel_focus(MainPanel::Content);
-                    if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                    if self.is_pdf_mode() {
+                        #[cfg(feature = "pdf")]
+                        self.navigate_pdf_to_page(chapter_index);
+                    } else if let Err(e) = self.navigate_to_chapter(chapter_index) {
                         error!("Failed to navigate to chapter {chapter_index}: {e}");
                         self.show_error(format!("Failed to navigate to chapter: {e}"));
                     }
