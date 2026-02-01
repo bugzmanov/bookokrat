@@ -43,6 +43,8 @@ pub const DEFAULT_WORKERS: usize = 2;
 
 /// Default page cache size (each page can be 5-15MB of pixel data)
 pub const DEFAULT_CACHE_SIZE: usize = 30;
+/// Smaller cache size for Kitty, since the terminal keeps its own image cache.
+pub const DEFAULT_CACHE_SIZE_KITTY: usize = 10;
 
 /// Default prefetch radius (pages before/after current)
 pub const DEFAULT_PREFETCH_RADIUS: usize = 10;

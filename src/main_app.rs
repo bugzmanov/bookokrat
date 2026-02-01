@@ -31,7 +31,10 @@ use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 
 // PDF support (feature-gated)
 #[cfg(feature = "pdf")]
-use crate::pdf::{CellSize, RenderService};
+use crate::pdf::{
+    CellSize, RenderService, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY,
+    DEFAULT_PREFETCH_RADIUS, DEFAULT_WORKERS,
+};
 #[cfg(feature = "pdf")]
 use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
 
@@ -812,24 +815,6 @@ impl App {
         let palette = crate::theme::current_theme();
         let (black, white) = Self::palette_to_mupdf_colors(palette);
 
-        // Create render service
-        let doc_path = std::path::PathBuf::from(path);
-        let service = RenderService::new(doc_path.clone(), cell_size, black, white);
-
-        // Get document info
-        let doc_info = service.document_info();
-        let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
-        let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
-        let toc_entries = doc_info
-            .as_ref()
-            .map_or_else(Vec::new, |info| info.toc.clone());
-
-        info!(
-            "PDF loaded: {} pages, title: {:?}",
-            page_count,
-            doc_title.as_deref().unwrap_or("(none)")
-        );
-
         // Detect terminal protocol and capabilities
         let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
         let caps = match picker.as_mut() {
@@ -848,6 +833,37 @@ impl App {
             Some(crate::terminal::GraphicsProtocol::Kitty)
         );
         let use_kitty = is_kitty;
+
+        // Create render service (use a smaller cache for Kitty to cap memory)
+        let cache_size = if is_kitty {
+            DEFAULT_CACHE_SIZE_KITTY
+        } else {
+            DEFAULT_CACHE_SIZE
+        };
+        let doc_path = std::path::PathBuf::from(path);
+        let service = RenderService::with_config(
+            doc_path.clone(),
+            cell_size,
+            black,
+            white,
+            DEFAULT_WORKERS,
+            cache_size,
+            DEFAULT_PREFETCH_RADIUS,
+        );
+
+        // Get document info
+        let doc_info = service.document_info();
+        let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
+        let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
+        let toc_entries = doc_info
+            .as_ref()
+            .map_or_else(Vec::new, |info| info.toc.clone());
+
+        info!(
+            "PDF loaded: {} pages, title: {:?}",
+            page_count,
+            doc_title.as_deref().unwrap_or("(none)")
+        );
         // is_iterm = actual iTerm terminal (for feature restrictions)
         let is_iterm = caps.kind == crate::terminal::TerminalKind::ITerm;
         let supports_comments = caps.pdf.supports_comments;

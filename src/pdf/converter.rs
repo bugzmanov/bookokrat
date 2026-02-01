@@ -535,9 +535,13 @@ impl ConverterEngine {
                 super::kittyv2::set_viewport_position(new_page as i64);
                 // Clear decoded images for pages far from current to save memory
                 self.clear_distant_decoded(new_page, 20);
+                // Also drop distant pixel buffers to cap memory even if no render happens.
+                self.clear_distant_pixels(new_page, 5);
             }
             ConversionCommand::UpdateViewport(new_viewport) => {
                 let old_viewport = self.viewport.replace(new_viewport);
+                // Drop distant pixel buffers when viewport moves, even if render is skipped.
+                self.clear_distant_pixels(new_viewport.page, 5);
 
                 if self.picker.protocol_type() != ProtocolType::Kitty {
                     let is_same_page =
@@ -1291,6 +1295,16 @@ impl ConverterEngine {
         // Protect the cursor page from clearing
         let cursor_page = self.cursor_rect.as_ref().map(|c| c.page);
 
+        // First, clear images Vec for distant pages (even if not in page_cache yet)
+        for (i, img) in self.images.iter_mut().enumerate() {
+            if img.is_some() && (i < start || i > end) {
+                if cursor_page != Some(i) && !self.pending_cursor_pages.contains(&i) {
+                    *img = None;
+                }
+            }
+        }
+
+        // Then clear page_cache for distant pages
         for (i, cached) in self.page_cache.iter_mut().enumerate() {
             if let Some(page) = cached {
                 // Skip pages within radius
@@ -1307,11 +1321,11 @@ impl ConverterEngine {
                 }
                 if page.decoded.is_some() || !page.tile_cache.is_empty() {
                     log::trace!("Clearing decoded/tile cache for distant page {i}");
-                    page.decoded = None;
-                    page.tile_cache.clear();
-                    // Also remove from sent_for_viewport so it can be re-rendered if needed
-                    self.sent_for_viewport.remove(&i);
                 }
+                // Drop cached page data entirely to free pixel buffers.
+                // Also remove from sent_for_viewport so it can be re-rendered if needed.
+                *cached = None;
+                self.sent_for_viewport.remove(&i);
             }
         }
     }
