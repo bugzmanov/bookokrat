@@ -14,3 +14,6 @@ temp_images/
 tmp/
 logo.inspirations/
 flamegraph.svg
+*.pdf
+.claude/
+.agentastic/

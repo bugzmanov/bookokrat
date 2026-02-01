@@ -1,5 +1,5 @@
+use crate::vendored::tui_textarea::{Input, Key as TextAreaKey};
 use crossterm::event::{KeyCode, KeyModifiers};
-use tui_textarea::{Input, Key as TextAreaKey};
 
 pub fn map_keys_to_input(key: crossterm::event::KeyEvent) -> Option<Input> {
     // Convert crossterm key to tui_textarea input

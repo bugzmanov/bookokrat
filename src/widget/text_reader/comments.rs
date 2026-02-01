@@ -2,11 +2,11 @@ use super::types::*;
 use crate::comments::{BookComments, Comment, CommentTarget};
 use crate::markdown_text_reader::text_selection::SelectionPoint;
 use crate::theme::Base16Palette;
+use crate::vendored::tui_textarea::{Input, Key, TextArea};
 use log::{debug, warn};
 use ratatui::style::Style as RatatuiStyle;
 use ratatui::text::Span;
 use std::sync::{Arc, Mutex};
-use tui_textarea::{Input, Key, TextArea};
 
 #[derive(Clone)]
 struct CommentSelection {

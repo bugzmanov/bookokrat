@@ -1,9 +1,9 @@
 use crate::comments::CommentTarget;
 use crate::ratatui_image::protocol::StatefulProtocol;
+use crate::vendored::tui_textarea::TextArea;
 use image::DynamicImage;
 use ratatui::text::Span;
 use std::sync::Arc;
-use tui_textarea::TextArea;
 
 use crate::types::LinkInfo;
 

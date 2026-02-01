@@ -1,6 +1,4 @@
-use crate::widget::Viewport;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
+use super::widget::Viewport;
 
 /// Specify how to scroll the textarea.
 ///
@@ -10,7 +8,6 @@ use serde::{Deserialize, Serialize};
 /// [`TextArea::scroll`]: https://docs.rs/tui-textarea/latest/tui_textarea/struct.TextArea.html#method.scroll
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Scrolling {
     /// Scroll the textarea by rows (vertically) and columns (horizontally). Passing positive scroll amounts to `rows` and `cols`
     /// scolls it to down and right. Negative integers means the opposite directions. `(i16, i16)` pair can be converted into
@@ -189,13 +186,12 @@ impl From<(i16, i16)> for Scrolling {
 mod tests {
     use super::*;
 
-    // Separate tests for tui-rs support
     #[test]
     fn delta() {
-        use crate::ratatui::buffer::Buffer;
-        use crate::ratatui::layout::Rect;
-        use crate::ratatui::widgets::Widget as _;
-        use crate::TextArea;
+        use super::super::textarea::TextArea;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget as _;
 
         let mut textarea: TextArea = (0..20).map(|i| i.to_string()).collect();
         let r = Rect {

@@ -3,11 +3,11 @@
 //! This module handles keyboard and mouse input for the PDF reader,
 //! including zoom, pan, page navigation, selection, and normal mode.
 
+use crate::vendored::tui_textarea::{CursorMove, Key as TextAreaKey, TextArea};
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::{layout::Rect, style::Style};
-use tui_textarea::{CursorMove, Key as TextAreaKey, TextArea};
 
 use crate::bookmarks::Bookmarks;
 use crate::inputs::text_area_utils::map_keys_to_input;
@@ -3666,7 +3666,7 @@ impl PdfReaderState {
     // Page search methods (vim-style / search in normal mode)
 
     fn start_page_search(&mut self) -> Option<InputAction> {
-        use tui_textarea::TextArea;
+        use crate::vendored::tui_textarea::TextArea;
 
         let mut textarea = TextArea::default();
         textarea.set_cursor_line_style(ratatui::style::Style::default());

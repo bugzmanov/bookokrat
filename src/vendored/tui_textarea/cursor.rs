@@ -1,11 +1,7 @@
-use crate::widget::Viewport;
-use crate::word::{
+use super::widget::Viewport;
+use super::word::{
     find_word_inclusive_end_forward, find_word_start_backward, find_word_start_forward,
 };
-#[cfg(feature = "arbitrary")]
-use arbitrary::Arbitrary;
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 use std::cmp;
 
 /// Specify how to move the cursor.
@@ -13,8 +9,6 @@ use std::cmp;
 /// This type is marked as `#[non_exhaustive]` since more variations may be supported in the future.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "arbitrary", derive(Arbitrary))]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum CursorMove {
     /// Move cursor forward by one character. When the cursor is at the end of line, it moves to the head of next line.
     /// ```
@@ -373,13 +367,13 @@ impl CursorMove {
 
 #[cfg(test)]
 mod tests {
-    // Separate tests for tui-rs support
     #[test]
     fn in_viewport() {
-        use crate::ratatui::buffer::Buffer;
-        use crate::ratatui::layout::Rect;
-        use crate::ratatui::widgets::Widget as _;
-        use crate::{CursorMove, TextArea};
+        use super::super::textarea::TextArea;
+        use super::CursorMove;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget as _;
 
         let mut textarea: TextArea = (0..20).map(|i| i.to_string()).collect();
         let r = Rect {

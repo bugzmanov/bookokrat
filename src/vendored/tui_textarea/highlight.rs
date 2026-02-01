@@ -1,19 +1,15 @@
-use crate::ratatui::style::Style;
-use crate::ratatui::text::Span;
-use crate::util::{num_digits, spaces};
-#[cfg(feature = "ratatui")]
-use ratatui_core::text::Line;
+use super::ratatui::style::Style;
+use super::ratatui::text::{Line, Span};
+use super::util::{num_digits, spaces};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::iter;
-#[cfg(feature = "tuirs")]
-use tui::text::Spans as Line;
 use unicode_width::UnicodeWidthChar as _;
 
 enum Boundary {
     Cursor(Style),
     Select(Style),
-    #[cfg(feature = "search")]
+
     Search(Style),
     End,
 }
@@ -23,7 +19,7 @@ impl Boundary {
         fn rank(b: &Boundary) -> u8 {
             match b {
                 Boundary::Cursor(_) => 3,
-                #[cfg(feature = "search")]
+
                 Boundary::Search(_) => 2,
                 Boundary::Select(_) => 1,
                 Boundary::End => 0,
@@ -36,7 +32,7 @@ impl Boundary {
         match self {
             Boundary::Cursor(s) => Some(*s),
             Boundary::Select(s) => Some(*s),
-            #[cfg(feature = "search")]
+
             Boundary::Search(s) => Some(*s),
             Boundary::End => None,
         }
@@ -146,7 +142,6 @@ impl<'a> LineHighlighter<'a> {
         self.style_begin = style;
     }
 
-    #[cfg(feature = "search")]
     pub fn search(&mut self, matches: impl Iterator<Item = (usize, usize)>, style: Style) {
         for (start, end) in matches {
             if start != end {
@@ -251,11 +246,10 @@ impl<'a> LineHighlighter<'a> {
     }
 }
 
-// Tests for spans don't work with tui-rs
-#[cfg(all(test, feature = "ratatui"))]
+#[cfg(test)]
 mod tests {
+    use super::super::ratatui::style::Color;
     use super::*;
-    use crate::ratatui::style::Color;
     use std::fmt::Debug;
     use unicode_width::UnicodeWidthStr as _;
 
@@ -417,7 +411,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "search")]
     #[test]
     fn into_spans_search() {
         let tests = [
@@ -535,7 +528,6 @@ mod tests {
                 },
                 &[("a", LINE), ("b", SEL), ("c", CUR), ("d", SEL), ("e", LINE)][..],
             ),
-            #[cfg(feature = "search")]
             (
                 "cursor + selection + search",
                 {

@@ -395,7 +395,7 @@ dependencies = [
  "tempfile",
  "textwrap",
  "thiserror 1.0.69",
- "tui-textarea",
+ "unicode-width 0.2.0",
  "vt100",
  "walkdir",
  "wide",
@@ -3842,16 +3842,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
-]
-
-[[package]]
-name = "tui-textarea"
-version = "0.7.0"
-dependencies = [
- "crossterm",
- "ratatui-core",
- "ratatui-widgets",
- "unicode-width 0.2.0",
 ]
 
 [[package]]

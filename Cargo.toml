@@ -71,7 +71,7 @@ markup5ever_rcdom = "0.3"
 serde_yaml = "0.9"
 md5 = "0.7"
 dirs = "5.0"
-tui-textarea = { path = "vendor/tui-textarea", version = "0.7.0" }
+unicode-width = "0.2.0"
 # ansi-to-tui = "7.0.0"
 vt100 = "0.15"
 codepage-437 = "0.1.0"

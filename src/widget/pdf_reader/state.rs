@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::vendored::ratatui_image::FontSize;
+use crate::vendored::tui_textarea::TextArea;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use tui_textarea::TextArea;
 
 use crate::inputs::{KeySeq, MouseTracker};
 use crate::jump_list::JumpList;

@@ -1,22 +1,18 @@
-use crate::cursor::CursorMove;
-use crate::highlight::LineHighlighter;
-use crate::history::{Edit, EditKind, History};
-use crate::input::{Input, Key};
-use crate::ratatui::layout::Alignment;
-use crate::ratatui::style::{Color, Modifier, Style};
-use crate::ratatui::widgets::{Block, Widget};
-use crate::scroll::Scrolling;
-#[cfg(feature = "search")]
-use crate::search::Search;
-use crate::util::{spaces, Pos};
-use crate::widget::Viewport;
-use crate::word::{find_word_exclusive_end_forward, find_word_start_backward};
-#[cfg(feature = "ratatui")]
-use ratatui_core::text::Line;
+use super::cursor::CursorMove;
+use super::highlight::LineHighlighter;
+use super::history::{Edit, EditKind, History};
+use super::input::{Input, Key};
+use super::ratatui::layout::Alignment;
+use super::ratatui::style::{Color, Modifier, Style};
+use super::ratatui::text::Line;
+use super::ratatui::widgets::{Block, Widget};
+use super::scroll::Scrolling;
+use super::search::Search;
+use super::util::{Pos, spaces};
+use super::widget::Viewport;
+use super::word::{find_word_exclusive_end_forward, find_word_start_backward};
 use std::cmp::Ordering;
 use std::fmt;
-#[cfg(feature = "tuirs")]
-use tui::text::Spans as Line;
 use unicode_width::UnicodeWidthChar as _;
 
 #[derive(Debug, Clone)]
@@ -117,7 +113,7 @@ pub struct TextArea<'a> {
     pub(crate) viewport: Viewport,
     pub(crate) cursor_style: Style,
     yank: YankText,
-    #[cfg(feature = "search")]
+
     search: Search,
     alignment: Alignment,
     pub(crate) placeholder: String,
@@ -222,7 +218,7 @@ impl<'a> TextArea<'a> {
             viewport: Viewport::default(),
             cursor_style: Style::default().add_modifier(Modifier::REVERSED),
             yank: YankText::default(),
-            #[cfg(feature = "search")]
+
             search: Search::default(),
             alignment: Alignment::Left,
             placeholder: String::new(),
@@ -874,10 +870,12 @@ impl<'a> TextArea<'a> {
             return;
         }
 
-        let mut deleted = vec![self.lines[start.row]
-            .drain(start.offset..)
-            .as_str()
-            .to_string()];
+        let mut deleted = vec![
+            self.lines[start.row]
+                .drain(start.offset..)
+                .as_str()
+                .to_string(),
+        ];
         deleted.extend(self.lines.drain(start.row + 1..end.row));
         if start.row + 1 < self.lines.len() {
             let mut last_line = self.lines.remove(start.row + 1);
@@ -1603,7 +1601,6 @@ impl<'a> TextArea<'a> {
             hl.cursor_line(self.cursor.1, self.cursor_line_style);
         }
 
-        #[cfg(feature = "search")]
         if let Some(matches) = self.search.matches(line) {
             hl.search(matches, self.search.style);
         }
@@ -2199,8 +2196,7 @@ impl<'a> TextArea<'a> {
     /// // Invalid search pattern
     /// assert!(textarea.set_search_pattern("(hello").is_err());
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn set_search_pattern(&mut self, query: impl AsRef<str>) -> Result<(), regex::Error> {
         self.search.set_pattern(query.as_ref())
     }
@@ -2218,8 +2214,7 @@ impl<'a> TextArea<'a> {
     /// assert!(textarea.search_pattern().is_some());
     /// assert_eq!(textarea.search_pattern().unwrap().as_str(), "hello+");
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn search_pattern(&self) -> Option<&regex::Regex> {
         self.search.pat.as_ref()
     }
@@ -2261,8 +2256,7 @@ impl<'a> TextArea<'a> {
     /// let match_found = textarea.search_forward(false);
     /// assert!(!match_found);
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn search_forward(&mut self, match_cursor: bool) -> bool {
         if let Some(cursor) = self.search.forward(&self.lines, self.cursor, match_cursor) {
             self.cursor = cursor;
@@ -2305,8 +2299,7 @@ impl<'a> TextArea<'a> {
     /// let match_found = textarea.search_back(false);
     /// assert!(!match_found);
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn search_back(&mut self, match_cursor: bool) -> bool {
         if let Some(cursor) = self.search.back(&self.lines, self.cursor, match_cursor) {
             self.cursor = cursor;
@@ -2326,8 +2319,7 @@ impl<'a> TextArea<'a> {
     ///
     /// assert_eq!(textarea.search_style(), Style::default().bg(Color::Blue));
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn search_style(&self) -> Style {
         self.search.style
     }
@@ -2345,8 +2337,7 @@ impl<'a> TextArea<'a> {
     ///
     /// assert_eq!(textarea.search_style(), red_bg);
     /// ```
-    #[cfg(feature = "search")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "search")))]
+
     pub fn set_search_style(&mut self, style: Style) {
         self.search.style = style;
     }
@@ -2406,12 +2397,11 @@ impl<'a> TextArea<'a> {
 mod tests {
     use super::*;
 
-    // Separate tests for tui-rs support
     #[test]
     fn scroll() {
-        use crate::ratatui::buffer::Buffer;
-        use crate::ratatui::layout::Rect;
-        use crate::ratatui::widgets::Widget as _;
+        use ratatui::buffer::Buffer;
+        use ratatui::layout::Rect;
+        use ratatui::widgets::Widget as _;
 
         let mut textarea: TextArea = (0..20).map(|i| i.to_string()).collect();
         let r = Rect {

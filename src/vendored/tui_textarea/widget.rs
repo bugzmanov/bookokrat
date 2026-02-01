@@ -1,15 +1,11 @@
-use crate::ratatui::buffer::Buffer;
-use crate::ratatui::layout::Rect;
-use crate::ratatui::text::{Span, Text};
-use crate::ratatui::widgets::{Paragraph, Widget};
-use crate::textarea::TextArea;
-use crate::util::num_digits;
-#[cfg(feature = "ratatui")]
-use ratatui_core::text::Line;
+use super::ratatui::buffer::Buffer;
+use super::ratatui::layout::Rect;
+use super::ratatui::text::{Line, Span, Text};
+use super::ratatui::widgets::{Paragraph, Widget};
+use super::textarea::TextArea;
+use super::util::num_digits;
 use std::cmp;
 use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(feature = "tuirs")]
-use tui::text::Spans as Line;
 
 // &mut 'a (u16, u16, u16, u16) is not available since `render` method takes immutable reference of TextArea
 // instance. In the case, the TextArea instance cannot be accessed from any other objects since it is mutablly
@@ -154,10 +150,6 @@ impl Widget for &TextArea<'_> {
             .alignment(self.alignment());
         if let Some(b) = self.block() {
             text_area = b.inner(area);
-            // ratatui does not need `clone()` call because `Block` implements `WidgetRef` and `&T` implements `Widget`
-            // where `T: WidgetRef`. So `b.render` internally calls `b.render_ref` and it doesn't move out `self`.
-            #[cfg(feature = "tuirs")]
-            let b = b.clone();
             b.render(area, buf)
         }
         if top_col != 0 {

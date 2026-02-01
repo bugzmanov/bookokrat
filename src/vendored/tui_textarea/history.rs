@@ -1,4 +1,4 @@
-use crate::util::Pos;
+use super::util::Pos;
 use std::collections::VecDeque;
 
 #[derive(Clone, Debug)]
