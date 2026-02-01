@@ -8,7 +8,7 @@ Bookokrat is a terminal-based EPUB and PDF reader with a split-view library and 
 
 
 ## What You Can Do
-- Browse every EPUB in the current directory or automatically detect and read from your Calibre library with proper metadata.
+- Browse every EPUB & PDF in the current directory or automatically detect and read from your Calibre library with proper metadata.
 - Drill into the table of contents, and resume exactly where you left off.
 - Search inside the current chapter or across the whole book, jump through a per-book history, and inspect reading statistics.
 - Highlight text, attach comments, export annotations to Markdown, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
@@ -63,7 +63,7 @@ Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
 ```bash
 sudo apt update && sudo apt install build-essential
 ```
-If you build with the PDF feature (`--features pdf`), install Fontconfig dev files too:
+If you build with the PDF feature, install Fontconfig dev files too:
 ```bash
 sudo apt update && sudo apt install pkg-config libfontconfig1-dev
 ```
@@ -203,7 +203,7 @@ Bookokrat automatically selects the best image protocol for your terminal:
 - **Basic:** Alacritty, Linux default terminals (Halfblocks fallback)
 - **No images:** macOS Terminal.app (no graphics protocol support)
 
-**PDF viewing requires a graphics-capable terminal** (Kitty, Ghostty, WezTerm, or iTerm2). Use the settings popup (`Space+s` or `Ctrl+s`) to disable PDF mode if your terminal does not support graphics.
+**PDF viewing requires a graphics-capable terminal.** For the best PDF experience, **Kitty or Ghostty are strongly recommended**—they support SHM-based image transfer for smooth 60fps rendering. WezTerm and iTerm2 work but with reduced performance and some feature limitations. Use the settings popup (`Space+s` or `Ctrl+s`) to disable PDF mode if your terminal does not support graphics.
 
 If images look wrong, check `bookokrat.log` for the detected protocol. Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
 
