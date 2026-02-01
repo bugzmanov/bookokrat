@@ -1,11 +1,29 @@
 use log::debug;
 
+/// Identifies whether a search result is from EPUB or PDF
+#[derive(Debug, Clone)]
+pub enum SearchResultTarget {
+    /// EPUB result: chapter index and node index in Markdown AST
+    Epub {
+        chapter_index: usize,
+        node_index: usize,
+    },
+    /// PDF result: page index and line bounds for selection
+    Pdf {
+        page_index: usize,
+        line_index: usize,
+        /// Y bounds of the line (y0, y1) for creating selection
+        line_y_bounds: (f32, f32),
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct BookSearchResult {
-    pub chapter_index: usize,
-    pub chapter_title: String,
+    /// Target location (EPUB chapter or PDF page)
+    pub target: SearchResultTarget,
+    /// Display title (chapter title for EPUB, "Page N" for PDF)
+    pub section_title: String,
     pub line_number: usize,
-    pub node_index: usize,
     pub snippet: String,
     pub context_before: String,
     pub context_after: String,
@@ -17,17 +35,21 @@ pub struct BookSearchResult {
 pub struct SearchLine {
     pub text: String,
     pub node_index: usize,
+    /// For PDF: Y bounds of this line (y0, y1). None for EPUB.
+    pub y_bounds: Option<(f32, f32)>,
 }
 
 #[derive(Debug)]
-struct ProcessedChapter {
+struct ProcessedSection {
     index: usize,
     title: String,
     lines: Vec<SearchLine>,
+    is_pdf: bool,
 }
 
 pub struct SearchEngine {
-    chapters: Vec<ProcessedChapter>,
+    sections: Vec<ProcessedSection>,
+    is_pdf_mode: bool,
 }
 
 impl Default for SearchEngine {
@@ -39,17 +61,35 @@ impl Default for SearchEngine {
 impl SearchEngine {
     pub fn new() -> Self {
         Self {
-            chapters: Vec::new(),
+            sections: Vec::new(),
+            is_pdf_mode: false,
         }
     }
 
+    /// Process EPUB chapters for search indexing
     pub fn process_chapters(&mut self, chapters: Vec<(usize, String, Vec<SearchLine>)>) {
-        self.chapters = chapters
+        self.is_pdf_mode = false;
+        self.sections = chapters
             .into_iter()
-            .map(|(index, title, lines)| ProcessedChapter {
+            .map(|(index, title, lines)| ProcessedSection {
                 index,
                 title,
                 lines,
+                is_pdf: false,
+            })
+            .collect();
+    }
+
+    /// Process PDF pages for search indexing
+    pub fn process_pdf_pages(&mut self, pages: Vec<(usize, Vec<SearchLine>)>) {
+        self.is_pdf_mode = true;
+        self.sections = pages
+            .into_iter()
+            .map(|(page_num, lines)| ProcessedSection {
+                index: page_num,
+                title: format!("Page {}", page_num + 1),
+                lines,
+                is_pdf: true,
             })
             .collect();
     }
@@ -81,8 +121,8 @@ impl SearchEngine {
             return Vec::new();
         }
 
-        for chapter in &self.chapters {
-            for (line_idx, line) in chapter.lines.iter().enumerate() {
+        for section in &self.sections {
+            for (line_idx, line) in section.lines.iter().enumerate() {
                 let line_lower = line.text.to_lowercase();
 
                 let line_words: Vec<&str> = line_lower.split_whitespace().collect();
@@ -135,7 +175,7 @@ impl SearchEngine {
                 };
 
                 if include_result {
-                    let (context_before, context_after) = self.extract_context(chapter, line_idx);
+                    let (context_before, context_after) = self.extract_context(section, line_idx);
 
                     // Truncate very long snippet lines to keep results readable
                     let max_snippet_chars = 300;
@@ -146,11 +186,23 @@ impl SearchEngine {
                         line.text.clone()
                     };
 
+                    let target = if section.is_pdf {
+                        SearchResultTarget::Pdf {
+                            page_index: section.index,
+                            line_index: line.node_index,
+                            line_y_bounds: line.y_bounds.unwrap_or((0.0, 0.0)),
+                        }
+                    } else {
+                        SearchResultTarget::Epub {
+                            chapter_index: section.index,
+                            node_index: line.node_index,
+                        }
+                    };
+
                     results.push(BookSearchResult {
-                        chapter_index: chapter.index,
-                        chapter_title: chapter.title.clone(),
+                        target,
+                        section_title: section.title.clone(),
                         line_number: line_idx,
-                        node_index: line.node_index,
                         snippet,
                         context_before,
                         context_after,
@@ -185,8 +237,8 @@ impl SearchEngine {
         let mut results = Vec::new();
         let phrase_lower = phrase.to_lowercase();
 
-        for chapter in &self.chapters {
-            for (line_idx, line) in chapter.lines.iter().enumerate() {
+        for section in &self.sections {
+            for (line_idx, line) in section.lines.iter().enumerate() {
                 let line_lower = line.text.to_lowercase();
 
                 let mut search_start = 0;
@@ -207,7 +259,7 @@ impl SearchEngine {
                 }
 
                 if !match_positions_in_line.is_empty() {
-                    let (context_before, context_after) = self.extract_context(chapter, line_idx);
+                    let (context_before, context_after) = self.extract_context(section, line_idx);
 
                     let max_snippet_chars = 300;
                     let snippet = if line.text.chars().count() > max_snippet_chars {
@@ -217,11 +269,23 @@ impl SearchEngine {
                         line.text.clone()
                     };
 
+                    let target = if section.is_pdf {
+                        SearchResultTarget::Pdf {
+                            page_index: section.index,
+                            line_index: line.node_index,
+                            line_y_bounds: line.y_bounds.unwrap_or((0.0, 0.0)),
+                        }
+                    } else {
+                        SearchResultTarget::Epub {
+                            chapter_index: section.index,
+                            node_index: line.node_index,
+                        }
+                    };
+
                     results.push(BookSearchResult {
-                        chapter_index: chapter.index,
-                        chapter_title: chapter.title.clone(),
+                        target,
+                        section_title: section.title.clone(),
                         line_number: line_idx,
-                        node_index: line.node_index,
                         snippet,
                         context_before,
                         context_after,
@@ -242,7 +306,7 @@ impl SearchEngine {
         results
     }
 
-    fn extract_context(&self, chapter: &ProcessedChapter, line_idx: usize) -> (String, String) {
+    fn extract_context(&self, section: &ProcessedSection, line_idx: usize) -> (String, String) {
         // Limit context to 1 line before and 1 line after to keep results concise
         let context_lines = 1;
         let max_line_length = 200; // Truncate context lines longer than this
@@ -250,7 +314,7 @@ impl SearchEngine {
         let before_start = line_idx.saturating_sub(context_lines);
         let before_end = line_idx;
         let context_before = if before_start < before_end {
-            chapter.lines[before_start..before_end]
+            section.lines[before_start..before_end]
                 .iter()
                 .filter(|line| !line.text.trim().is_empty())
                 .take(1)
@@ -268,10 +332,10 @@ impl SearchEngine {
             String::new()
         };
 
-        let after_start = (line_idx + 1).min(chapter.lines.len());
-        let after_end = (line_idx + 1 + context_lines).min(chapter.lines.len());
+        let after_start = (line_idx + 1).min(section.lines.len());
+        let after_end = (line_idx + 1 + context_lines).min(section.lines.len());
         let context_after = if after_start < after_end {
-            chapter.lines[after_start..after_end]
+            section.lines[after_start..after_end]
                 .iter()
                 .filter(|line| !line.text.trim().is_empty())
                 .take(1)
@@ -293,6 +357,12 @@ impl SearchEngine {
     }
 
     pub fn clear(&mut self) {
-        self.chapters.clear();
+        self.sections.clear();
+        self.is_pdf_mode = false;
+    }
+
+    /// Returns true if the search engine is in PDF mode
+    pub fn is_pdf_mode(&self) -> bool {
+        self.is_pdf_mode
     }
 }

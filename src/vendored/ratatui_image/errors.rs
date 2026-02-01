@@ -14,6 +14,8 @@ pub enum Errors {
     Io(#[from] std::io::Error),
     #[error("Image error: {0}")]
     Image(#[from] image::error::ImageError),
+    #[error("Format error: {0}")]
+    Fmt(#[from] std::fmt::Error),
 }
 
 #[cfg(not(windows))]

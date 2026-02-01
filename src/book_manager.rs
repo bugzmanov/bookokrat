@@ -1,3 +1,5 @@
+#[cfg(feature = "pdf")]
+use crate::settings::is_pdf_enabled;
 use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::BufReader;
@@ -16,10 +18,20 @@ pub struct BookManager {
     pub library_mode: LibraryMode,
 }
 
+/// Format of a book file
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookFormat {
+    Epub,
+    Html,
+    #[cfg(feature = "pdf")]
+    Pdf,
+}
+
 #[derive(Clone)]
 pub struct BookInfo {
     pub path: String,
     pub display_name: String,
+    pub format: BookFormat,
 }
 
 impl Default for BookManager {
@@ -75,17 +87,21 @@ impl BookManager {
             .filter_map(|entry| {
                 let entry = entry.ok()?;
                 let path = entry.path();
-                let extension = path.extension()?.to_str()?;
-                if extension == "epub" || extension == "html" || extension == "htm" {
-                    let path_str = path.to_str()?.to_string();
-                    let display_name = Self::extract_display_name(&path_str);
-                    Some(BookInfo {
-                        path: path_str,
-                        display_name,
-                    })
-                } else {
-                    None
-                }
+                let extension = path.extension()?.to_str()?.to_lowercase();
+                let format = match extension.as_str() {
+                    "epub" => Some(BookFormat::Epub),
+                    "html" | "htm" => Some(BookFormat::Html),
+                    #[cfg(feature = "pdf")]
+                    "pdf" => Some(BookFormat::Pdf),
+                    _ => None,
+                }?;
+                let path_str = path.to_str()?.to_string();
+                let display_name = Self::extract_display_name(&path_str);
+                Some(BookInfo {
+                    path: path_str,
+                    display_name,
+                    format,
+                })
             })
             .collect()
     }
@@ -99,22 +115,32 @@ impl BookManager {
             .filter(|e| e.file_type().is_file())
         {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("epub") {
-                let path_str = match path.to_str() {
-                    Some(s) => s.to_string(),
-                    None => continue,
-                };
+            let path_str = match path.to_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
 
-                let display_name = path
-                    .parent()
-                    .and_then(|parent| Self::parse_calibre_opf(parent))
-                    .unwrap_or_else(|| Self::extract_display_name(&path_str));
+            let format = match Self::detect_format(&path_str) {
+                Some(BookFormat::Epub) => Some(BookFormat::Epub),
+                #[cfg(feature = "pdf")]
+                Some(BookFormat::Pdf) => Some(BookFormat::Pdf),
+                _ => None,
+            };
 
-                books.push(BookInfo {
-                    path: path_str,
-                    display_name,
-                });
-            }
+            let Some(format) = format else {
+                continue;
+            };
+
+            let display_name = path
+                .parent()
+                .and_then(Self::parse_calibre_opf)
+                .unwrap_or_else(|| Self::extract_display_name(&path_str));
+
+            books.push(BookInfo {
+                path: path_str,
+                display_name,
+                format,
+            });
         }
 
         books
@@ -170,6 +196,10 @@ impl BookManager {
 
     pub fn get_book_info(&self, index: usize) -> Option<&BookInfo> {
         self.books.get(index)
+    }
+
+    pub fn get_book_by_path(&self, path: &str) -> Option<&BookInfo> {
+        self.books.iter().find(|book| book.path == path)
     }
 
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
@@ -533,6 +563,27 @@ impl BookManager {
         });
     }
 
+    /// Refresh and get filtered books list
+    pub fn refresh(&mut self) {
+        self.refresh_books();
+    }
+
+    /// Get books filtered by current settings (e.g., PDF enabled/disabled)
+    pub fn get_books(&self) -> Vec<BookInfo> {
+        #[cfg(feature = "pdf")]
+        {
+            if !is_pdf_enabled() {
+                return self
+                    .books
+                    .iter()
+                    .filter(|book| book.format != BookFormat::Pdf)
+                    .cloned()
+                    .collect();
+            }
+        }
+        self.books.clone()
+    }
+
     pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
         self.books.iter().position(|book| book.path == path)
     }
@@ -541,12 +592,34 @@ impl BookManager {
         self.books.iter().any(|book| book.path == path)
     }
 
-    pub fn is_html_file(&self, path: &str) -> bool {
+    /// Get the format of a book by path
+    pub fn get_format(&self, path: &str) -> Option<BookFormat> {
+        self.books
+            .iter()
+            .find(|book| book.path == path)
+            .map(|book| book.format)
+    }
+
+    /// Detect format from file extension (for files not in the managed list)
+    pub fn detect_format(path: &str) -> Option<BookFormat> {
         let path = Path::new(path);
-        match path.extension().and_then(|ext| ext.to_str()) {
-            Some(ext) => ext == "html" || ext == "htm",
-            None => false,
+        let ext = path.extension()?.to_str()?.to_lowercase();
+        match ext.as_str() {
+            "epub" => Some(BookFormat::Epub),
+            "html" | "htm" => Some(BookFormat::Html),
+            #[cfg(feature = "pdf")]
+            "pdf" => Some(BookFormat::Pdf),
+            _ => None,
         }
+    }
+
+    pub fn is_html_file(&self, path: &str) -> bool {
+        Self::detect_format(path) == Some(BookFormat::Html)
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn is_pdf_file(&self, path: &str) -> bool {
+        Self::detect_format(path) == Some(BookFormat::Pdf)
     }
 }
 

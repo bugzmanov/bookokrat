@@ -3,7 +3,7 @@
                               FEATURES AT A GLANCE
 
   [LIBRARY]
-    ▸ Automatic EPUB discovery in current directory
+    ▸ Automatic EPUB / PDF discovery in current directory
     ▸ Calibre library detection with metadata (titles, authors)
     ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
     ▸ Split-view interface with library browser and reader
@@ -12,13 +12,12 @@
     ▸ Reading history with quick access to recent books
 
   [READING]
-    ▸ Full MathML rendering with ASCII art conversion
-    ▸ Embedded image display with zoom popup viewer
-    ▸ Syntax-highlighted code blocks
-    ▸ Advanced table rendering with rich cell content
-    ▸ Raw HTML view for debugging
-    ▸ Reading progress tracking with time estimates
-    ▸ Auto-selected image protocol per terminal (Kitty/Sixel/iTerm2/Halfblocks)
+    ▸ EPUB: rich rendering (MathML, code, tables, images, links)
+    ▸ EPUB: adjustable content margins
+    ▸ PDF: true rendering with page/scroll modes + zoom (graphics terminal)
+    ▸ PDF: TOC detection with printed page mapping
+    ▸ Smooth scrolling + multiclick selection
+    ▸ Zen mode for distraction-free reading
 
   [SEARCH & NAVIGATION]
     ▸ Chapter-level search with fuzzy matching
@@ -29,7 +28,8 @@
 
   [ANNOTATIONS]
     ▸ Text selection with mouse or keyboard
-    ▸ Inline comments on selected passages
+    ▸ Inline comments on selected passages (EPUB/PDF)
+    ▸ Export annotations to Markdown
     ▸ Copy text snippets or entire chapters
     ▸ Selection modes: word, paragraph, custom range
 
@@ -40,13 +40,8 @@
     ▸ External EPUB reader integration
     ▸ Performance profiling overlay
     ▸ Book statistics popup
-
-  [CUSTOMIZATION]
+    ▸ Settings popup for PDF support and render mode (Space+s / Ctrl+s)
     ▸ Multiple built-in color themes (Oceanic Next, Catppuccin, Kanagawa)
-    ▸ Custom theme support via Base16 color schemes
-    ▸ Adjustable content margins
-    ▸ Zen mode - distraction-free reading
-    ▸ Persistent settings across sessions (~/.bookokrat_settings.yaml)
 
 ===============================================================================
 
@@ -61,6 +56,7 @@
 │  Esc           Clear selection, exit search, dismiss popups                 │
 │  ?             Toggle this help screen                                      │
 │  Space+t       Open theme selector                                          │
+│  Space+s       Open settings (PDF support + render mode)                    │
 │  + / -         Increase / decrease content margins                          │
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
@@ -122,11 +118,11 @@
 │ READER PANEL - TEXT & CONTENT                                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  c / Ctrl+C    Copy selected text                                           │
-│  Space+c       Copy entire chapter                                          │
+│  Space+c       Copy chapter (EPUB) / extract page text (PDF)                │
 │  Space+z       Copy debug transcript                                        │
 │  a             Add/edit comment on selection                                │
 │  d             Delete comment under cursor                                  │
-│  Space+s       Toggle raw HTML view                                         │
+│  ss            Toggle raw HTML view (EPUB/HTML only)                        │
 │  Enter         Open image popup (when cursor on image)                      │
 │  p             Toggle performance profiler overlay                          │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -237,6 +233,7 @@ Review and manage notes efficiently:
   ▸ dd deletes the highlighted comment directly from the viewer
 
 Comments are saved per-book and persist across sessions.
+PDF annotations require a graphics-capable terminal.
 
 ===============================================================================
 
@@ -268,7 +265,8 @@ Comments are saved per-book and persist across sessions.
   ▸ Quick book switching: Press Space+h for recent books
   ▸ Search workflow: Use / for chapter searches, Space+F for book-wide
   ▸ Reading statistics: Press Space+d to see chapter counts and progress
-  ▸ Debug view: Press Space+s to toggle raw HTML for rendering issues
+  ▸ Debug view: Press ss to toggle raw HTML for rendering issues (EPUB)
+  ▸ PDF settings: Press Space+s (or Ctrl+s) to toggle support and render mode
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
   ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
@@ -284,6 +282,8 @@ Comments are saved per-book and persist across sessions.
       • Selected theme
       • Content margin setting
       • Custom color themes
+      • PDF enabled flag and render mode
+      • PDF scale and pan shift
 
     Settings persist across sessions and apply to all book directories.
 
@@ -317,6 +317,7 @@ Terminal requirements:
   • True color support recommended
   • UTF-8 encoding
   • Mouse event support (most modern terminals)
+  • Graphics protocol required for PDF viewing (Kitty/Ghostty/WezTerm/iTerm2)
 
 ===============================================================================
 

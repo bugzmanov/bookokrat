@@ -3,9 +3,9 @@ MathML to ASCII converter for terminal rendering.
 Parses MathML expressions and generates properly positioned ASCII art.
 */
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 /// Error types for MathML processing
 #[derive(Debug)]
@@ -26,7 +26,7 @@ impl std::fmt::Display for MathMLError {
 impl std::error::Error for MathMLError {}
 
 /// Unicode subscript character mappings
-static UNICODE_SUBSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
+static UNICODE_SUBSCRIPTS: LazyLock<HashMap<char, char>> = LazyLock::new(|| {
     [
         ('0', '₀'),
         ('1', '₁'),
@@ -70,7 +70,7 @@ static UNICODE_SUBSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
 });
 
 /// Unicode superscript character mappings
-static UNICODE_SUPERSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
+static UNICODE_SUPERSCRIPTS: LazyLock<HashMap<char, char>> = LazyLock::new(|| {
     [
         ('0', '⁰'),
         ('1', '¹'),
@@ -143,7 +143,7 @@ static UNICODE_SUPERSCRIPTS: Lazy<HashMap<char, char>> = Lazy::new(|| {
 });
 
 /// Symbols that are already superscript-sized and can be rendered inline
-static INLINE_SUPERSCRIPT_SYMBOLS: Lazy<HashSet<char>> = Lazy::new(|| {
+static INLINE_SUPERSCRIPT_SYMBOLS: LazyLock<HashSet<char>> = LazyLock::new(|| {
     [
         '′', // Prime
         '″', // Double prime

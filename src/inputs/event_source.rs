@@ -2,6 +2,10 @@ use anyhow::Result;
 pub use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use std::time::Duration;
 
+/// Kitty graphics protocol response (for eviction detection).
+#[cfg(feature = "pdf")]
+pub use super::terminal_input::KittyResponse;
+
 /// Trait for abstracting event sources to enable testing
 pub trait EventSource {
     /// Poll for events with a timeout
@@ -9,6 +13,19 @@ pub trait EventSource {
 
     /// Read the next event
     fn read(&mut self) -> Result<Event>;
+
+    /// Take any pending Kitty graphics protocol responses.
+    /// Returns empty vec for event sources that don't support Kitty response demultiplexing.
+    #[cfg(feature = "pdf")]
+    fn take_kitty_responses(&mut self) -> Vec<KittyResponse> {
+        Vec::new()
+    }
+
+    /// Check if there are pending Kitty responses.
+    #[cfg(feature = "pdf")]
+    fn has_kitty_responses(&self) -> bool {
+        false
+    }
 }
 
 /// Real keyboard event source using crossterm

@@ -1,4 +1,4 @@
-use crate::book_manager::BookManager;
+use crate::book_manager::{BookFormat, BookManager};
 use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
 use crate::bookmarks::Bookmarks;
@@ -23,9 +23,20 @@ use crate::table_of_contents::TocItem;
 use crate::theme::{current_theme, current_theme_name};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
-use crate::widget::theme_selector::{ThemeSelector, ThemeSelectorAction};
 use image::GenericImageView;
 use log::warn;
+
+// Settings popup (used for themes in all modes)
+use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
+
+// PDF support (feature-gated)
+#[cfg(feature = "pdf")]
+use crate::pdf::{
+    CellSize, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY, DEFAULT_PREFETCH_RADIUS,
+    DEFAULT_WORKERS, RenderService,
+};
+#[cfg(feature = "pdf")]
+use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChapterDirection {
@@ -33,15 +44,20 @@ pub enum ChapterDirection {
     Previous,
 }
 
-use std::io::BufReader;
+use std::io::{BufReader, stdout};
 use std::path::{Path, PathBuf};
+#[cfg(feature = "pdf")]
+use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::execute;
+use crossterm::terminal::EndSynchronizedUpdate;
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
+use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -99,6 +115,12 @@ pub enum AppAction {
     Quit,
 }
 
+#[cfg(feature = "pdf")]
+struct PdfEventResult {
+    handled: bool,
+    action: Option<AppAction>,
+}
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
@@ -115,17 +137,64 @@ pub struct App {
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
     terminal_size: Rect,
-    profiler: Arc<Mutex<Option<pprof::ProfilerGuard<'static>>>>,
+    profiler: Arc<Mutex<Option<ProfilerGuard<'static>>>>,
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
-    theme_selector: Option<ThemeSelector>,
+    settings_popup: Option<SettingsPopup>,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
+    test_mode: bool,
     comments_dir: Option<PathBuf>,
+    // PDF support (feature-gated)
+    #[cfg(feature = "pdf")]
+    pdf_service: Option<RenderService>,
+    #[cfg(feature = "pdf")]
+    pdf_reader: Option<PdfReaderState>,
+    #[cfg(feature = "pdf")]
+    pdf_font_size: CellSize,
+    #[cfg(feature = "pdf")]
+    pdf_picker: Option<crate::vendored::ratatui_image::picker::Picker>,
+    #[cfg(feature = "pdf")]
+    pdf_conversion_tx: Option<flume::Sender<crate::pdf::ConversionCommand>>,
+    #[cfg(feature = "pdf")]
+    pdf_conversion_rx:
+        Option<flume::Receiver<Result<crate::pdf::RenderedFrame, crate::pdf::WorkerFault>>>,
+    #[cfg(feature = "pdf")]
+    pdf_pending_display: Option<PdfDisplayPlan>,
+    #[cfg(feature = "pdf")]
+    pdf_kitty_shm_support: Option<bool>,
+    #[cfg(feature = "pdf")]
+    pdf_kitty_delete_range_support: Option<bool>,
+    /// For non-Kitty protocols: track which page we're waiting for to avoid
+    /// unnecessary redraws while the page is being converted.
+    #[cfg(feature = "pdf")]
+    pdf_waiting_for_page: Option<usize>,
+    /// For non-Kitty protocols: suppress redraw while waiting for viewport update.
+    /// Set when scroll/viewport changes, cleared when frame arrives.
+    #[cfg(feature = "pdf")]
+    pdf_waiting_for_viewport: bool,
+    /// Path to the currently opened PDF document (for search indexing)
+    #[cfg(feature = "pdf")]
+    pdf_document_path: Option<PathBuf>,
+}
+
+#[cfg(feature = "pdf")]
+static PDF_KITTY_SHM_SUPPORT: OnceLock<Option<bool>> = OnceLock::new();
+#[cfg(feature = "pdf")]
+static PDF_KITTY_DELETE_RANGE_SUPPORT: OnceLock<Option<bool>> = OnceLock::new();
+
+#[cfg(feature = "pdf")]
+pub fn set_kitty_shm_support_override(support: Option<bool>) {
+    let _ = PDF_KITTY_SHM_SUPPORT.set(support);
+}
+
+#[cfg(feature = "pdf")]
+pub fn set_kitty_delete_range_support_override(support: Option<bool>) {
+    let _ = PDF_KITTY_DELETE_RANGE_SUPPORT.set(support);
 }
 
 pub trait VimNavMotions {
@@ -159,7 +228,7 @@ pub enum PopupWindow {
     BookSearch,
     Help,
     CommentsViewer,
-    ThemeSelector,
+    Settings,
 }
 
 impl Default for App {
@@ -189,7 +258,12 @@ impl App {
 
     /// Close current popup and return focus to previous main panel
     fn close_popup_to_previous(&mut self) {
-        self.focused_panel = FocusedPanel::Main(self.previous_main_panel);
+        let panel = if self.zen_mode {
+            MainPanel::Content
+        } else {
+            self.previous_main_panel
+        };
+        self.focused_panel = FocusedPanel::Main(panel);
     }
 
     /// Check if we're in search mode
@@ -359,12 +433,45 @@ impl App {
             book_search: None,
             help_popup: None,
             comments_viewer: None,
-            theme_selector: None,
+            settings_popup: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
+            test_mode: false,
             comments_dir: comments_dir.map(|p| p.to_path_buf()),
+            #[cfg(feature = "pdf")]
+            pdf_service: None,
+            #[cfg(feature = "pdf")]
+            pdf_reader: None,
+            #[cfg(feature = "pdf")]
+            pdf_font_size: CellSize::new(8, 16), // Default, updated on PDF load
+            #[cfg(feature = "pdf")]
+            pdf_picker: None,
+            #[cfg(feature = "pdf")]
+            pdf_conversion_tx: None,
+            #[cfg(feature = "pdf")]
+            pdf_conversion_rx: None,
+            #[cfg(feature = "pdf")]
+            pdf_pending_display: None,
+            #[cfg(feature = "pdf")]
+            pdf_kitty_shm_support: PDF_KITTY_SHM_SUPPORT.get().copied().unwrap_or(None),
+            #[cfg(feature = "pdf")]
+            pdf_kitty_delete_range_support: PDF_KITTY_DELETE_RANGE_SUPPORT
+                .get()
+                .copied()
+                .unwrap_or(None),
+            #[cfg(feature = "pdf")]
+            pdf_waiting_for_page: None,
+            #[cfg(feature = "pdf")]
+            pdf_waiting_for_viewport: false,
+            #[cfg(feature = "pdf")]
+            pdf_document_path: None,
         };
+
+        // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
+        crate::settings::fix_incompatible_pdf_settings();
+
+        let is_first_time_user = app.bookmarks.get_most_recent().is_none();
 
         if auto_load_recent
             && let Some((recent_path, _)) = app.bookmarks.get_most_recent()
@@ -374,12 +481,26 @@ impl App {
                 error!("Failed to auto-load most recent book: {e}");
                 app.show_error(format!("Failed to auto-load recent book: {e}"));
             }
-        } else if auto_load_recent && app.bookmarks.get_most_recent().is_none() {
+        } else if auto_load_recent && is_first_time_user {
             // No bookmarks exist - show help popup for first-time users
             // Set previous panel to NavigationList so ESC returns there
             app.previous_main_panel = MainPanel::NavigationList;
             app.help_popup = Some(HelpPopup::new());
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+        }
+
+        // Show PDF settings popup for upgrading users who haven't configured PDF settings yet
+        // (but only if terminal supports graphics and not first-time user)
+        #[cfg(feature = "pdf")]
+        if !is_first_time_user
+            && !crate::settings::is_pdf_settings_configured()
+            && crate::terminal::detect_terminal().supports_graphics
+        {
+            app.previous_main_panel = MainPanel::NavigationList;
+            app.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::PdfSupport));
+            app.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+            // Mark as configured so we don't show again
+            crate::settings::set_pdf_settings_configured(true);
         }
 
         app
@@ -414,32 +535,67 @@ impl App {
     // =============================================================================
     // These methods encapsulate complete user actions and maintain consistent state
 
-    /// Open a book for reading - the proper way to load and start reading a book
+    /// Check if we're currently in PDF reading mode
+    #[cfg(feature = "pdf")]
+    pub fn is_pdf_mode(&self) -> bool {
+        self.pdf_reader.is_some()
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    pub fn is_pdf_mode(&self) -> bool {
+        false
+    }
+
+    /// Clear PDF graphics from terminal when switching away from PDF mode
+    #[cfg(feature = "pdf")]
+    fn clear_pdf_graphics(is_kitty: bool) {
+        use std::io::Write;
+        if is_kitty {
+            // Send Kitty graphics protocol command to delete all images
+            // Format: ESC _G a=d,d=A,q=2 ESC \
+            // a=d: action=delete, d=A: delete all from memory, q=2: quiet mode
+            let delete_cmd = b"\x1b_Ga=d,d=A,q=2\x1b\\";
+            let _ = stdout().write_all(delete_cmd);
+            let _ = stdout().flush();
+        }
+        // For iTerm2/Sixel, images are inline and will be overwritten by new content
+    }
+
+    /// Open a book for reading by index - delegates to path-based opening
     pub fn open_book_for_reading(&mut self, book_index: usize) -> Result<()> {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
             let path = book_info.path.clone();
-
-            self.save_bookmark_with_throttle(true);
-            self.load_epub(&path, false)?;
-
-            self.navigation_panel.current_book_index = Some(book_index);
-            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-
-            Ok(())
+            self.open_book_for_reading_by_path(&path)
         } else {
             anyhow::bail!("Invalid book index: {}", book_index)
         }
     }
 
     pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
-        let book_index = self
+        let book_info = self
             .book_manager
-            .books
-            .iter()
-            .position(|book| book.path == path)
+            .get_book_by_path(path)
             .ok_or_else(|| anyhow::anyhow!("Book not found in manager: {}", path))?;
 
-        self.open_book_for_reading(book_index)
+        let format = book_info.format;
+        let path_owned = path.to_string();
+
+        self.save_bookmark_with_throttle(true);
+
+        match format {
+            #[cfg(feature = "pdf")]
+            BookFormat::Pdf => {
+                self.load_pdf(&path_owned, self.test_mode)?;
+            }
+            BookFormat::Epub | BookFormat::Html => {
+                self.load_epub(&path_owned, self.test_mode)?;
+            }
+        }
+
+        self.navigation_panel.current_book_path = Some(path_owned);
+        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+        Ok(())
     }
 
     /// Navigate to a specific chapter - ensures all state is properly updated
@@ -528,6 +684,21 @@ impl App {
     // These methods should only be called by high-level actions above
 
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
+        #[cfg(feature = "pdf")]
+        {
+            // Clear any PDF graphics from terminal before switching to EPUB
+            if let Some(ref pdf_reader) = self.pdf_reader {
+                Self::clear_pdf_graphics(pdf_reader.is_kitty);
+            }
+            self.pdf_service = None;
+            self.pdf_reader = None;
+            self.pdf_picker = None;
+            self.pdf_conversion_tx = None;
+            self.pdf_conversion_rx = None;
+            self.pdf_pending_display = None;
+            self.pdf_document_path = None;
+        }
+
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
             error!("Failed to load EPUB document: {e}");
             self.show_error(format!("Failed to load EPUB: {e}"));
@@ -551,15 +722,20 @@ impl App {
 
         self.initialize_search_engine(&mut doc);
 
-        match BookComments::new(&path_buf, self.comments_dir.as_deref()) {
-            Ok(comments) => {
-                let comments_arc = Arc::new(Mutex::new(comments));
-                self.text_reader.set_book_comments(comments_arc);
+        // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
+        let comments = if ignore_bookmarks {
+            BookComments::new_empty()
+        } else {
+            match BookComments::new(&path_buf, self.comments_dir.as_deref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    warn!("Failed to initialize book comments: {e}");
+                    BookComments::new_empty()
+                }
             }
-            Err(e) => {
-                warn!("Failed to initialize book comments: {e}");
-            }
-        }
+        };
+        let comments_arc = Arc::new(Mutex::new(comments));
+        self.text_reader.set_book_comments(comments_arc);
 
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
@@ -620,6 +796,403 @@ impl App {
             self.text_reader.restore_to_node_index(node_idx);
         }
         Ok(())
+    }
+
+    /// Load a PDF document
+    #[cfg(feature = "pdf")]
+    pub fn load_pdf(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
+        info!("Loading PDF document: {path}");
+
+        // Close any existing EPUB
+        self.current_book = None;
+        // Clear any existing book search (will be re-initialized on demand for new PDF)
+        self.book_search = None;
+
+        // Get terminal font size for rendering
+        let cell_size = self.get_terminal_font_size();
+
+        // Get theme colors for rendering (MuPDF format: 0xRRGGBB)
+        let palette = crate::theme::current_theme();
+        let (black, white) = Self::palette_to_mupdf_colors(palette);
+
+        // Detect terminal protocol and capabilities
+        let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
+        let caps = match picker.as_mut() {
+            Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
+            None => crate::terminal::detect_terminal(),
+        };
+
+        if let Some(reason) = caps.pdf.blocked_reason.as_ref() {
+            warn!("{reason}");
+            self.notifications.show_warning(reason.clone());
+            return Ok(());
+        }
+
+        let is_kitty = matches!(
+            caps.protocol,
+            Some(crate::terminal::GraphicsProtocol::Kitty)
+        );
+        let use_kitty = is_kitty;
+
+        // Create render service (use a smaller cache for Kitty to cap memory)
+        let cache_size = if is_kitty {
+            DEFAULT_CACHE_SIZE_KITTY
+        } else {
+            DEFAULT_CACHE_SIZE
+        };
+        let doc_path = std::path::PathBuf::from(path);
+        let service = RenderService::with_config(
+            doc_path.clone(),
+            cell_size,
+            black,
+            white,
+            DEFAULT_WORKERS,
+            cache_size,
+            DEFAULT_PREFETCH_RADIUS,
+        );
+
+        // Get document info
+        let doc_info = service.document_info();
+        let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
+        let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
+        let toc_entries = doc_info
+            .as_ref()
+            .map_or_else(Vec::new, |info| info.toc.clone());
+
+        info!(
+            "PDF loaded: {} pages, title: {:?}",
+            page_count,
+            doc_title.as_deref().unwrap_or("(none)")
+        );
+        // is_iterm = actual iTerm terminal (for feature restrictions like normal mode)
+        let is_iterm = caps.kind == crate::terminal::TerminalKind::ITerm;
+        let supports_comments = caps.pdf.supports_comments;
+
+        // Get initial page and zoom from bookmark if available (unless ignored)
+        let bookmark = if ignore_bookmarks {
+            None
+        } else {
+            self.bookmarks.get_bookmark(path)
+        };
+        let mut initial_page = bookmark
+            .and_then(|b| {
+                b.pdf_page
+                    .or(b.chapter_index)
+                    .or_else(|| b.chapter_href.parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        if page_count > 0 && initial_page >= page_count {
+            initial_page = page_count - 1;
+        }
+        let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
+
+        // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
+        // Comments are always loaded so underlines are visible even in ToC mode.
+        // comments_enabled controls sidebar UI and interactions (zen mode only).
+        // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state.
+        let (comments_enabled, book_comments) = if supports_comments {
+            let comments = if ignore_bookmarks {
+                crate::comments::BookComments::new_empty()
+            } else {
+                match crate::comments::BookComments::new(
+                    std::path::Path::new(path),
+                    self.comments_dir.as_deref(),
+                ) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::warn!("Failed to initialize PDF comments: {e}");
+                        crate::comments::BookComments::new_empty()
+                    }
+                }
+            };
+            (
+                self.zen_mode, // UI interactions only in zen mode
+                Some(std::sync::Arc::new(std::sync::Mutex::new(comments))),
+            )
+        } else {
+            (false, None)
+        };
+
+        // Create PDF reader state with persisted settings
+        // Prefer per-book zoom from bookmark, fall back to global setting
+        let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
+        let pdf_pan_shift = crate::settings::get_pdf_pan_shift();
+        let mut pdf_reader = PdfReaderState::new(
+            path.to_string(),
+            is_kitty,
+            is_iterm,
+            initial_page,
+            pdf_scale,
+            pdf_pan_shift,
+            0, // global_scroll_offset
+            palette.clone(),
+            crate::theme::current_theme_index(),
+            comments_enabled,
+            supports_comments,
+            book_comments,
+            path.to_string(),
+        );
+        if let Some(supported) = self.pdf_kitty_delete_range_support {
+            pdf_reader.kitty_delete_range_supported = supported;
+        }
+
+        pdf_reader.set_doc_title(doc_title);
+        pdf_reader.toc_entries = toc_entries;
+        let initial_comment_rects = pdf_reader.initial_comment_rects();
+        if page_count > 0 {
+            let mut rendered = Vec::with_capacity(page_count);
+            for _ in 0..page_count {
+                rendered.push(crate::widget::pdf_reader::RenderedInfo::default());
+            }
+            pdf_reader.rendered = rendered;
+            pdf_reader.page_numbers.set_targets(page_count);
+
+            // Feed pre-collected page number samples for content-page mode
+            if let Some(info) = doc_info {
+                for &(page_num, printed) in &info.page_number_samples {
+                    pdf_reader.page_numbers.observe_sample(page_num, printed);
+                }
+            }
+        }
+
+        let mut conversion_tx = None;
+        let mut conversion_rx = None;
+        let cached_shm_support = self.pdf_kitty_shm_support;
+        let disable_shm = std::env::var("BOOKOKRAT_DISABLE_KITTY_SHM").is_ok();
+        let mut kitty_shm_support = cached_shm_support.unwrap_or(!disable_shm);
+        let mut pdf_picker = picker;
+
+        if let Some(picker) = pdf_picker.take() {
+            let (cmd_tx, cmd_rx) = flume::unbounded();
+            let (render_tx, render_rx) = flume::unbounded();
+            const PRERENDER_PAGES: usize = 20;
+
+            if use_kitty {
+                self.pdf_kitty_shm_support = Some(kitty_shm_support);
+            } else {
+                kitty_shm_support = false;
+            }
+
+            if let Err(e) = std::thread::Builder::new()
+                .name("pdf-converter".to_string())
+                .spawn(move || {
+                    let _ = crate::pdf::run_conversion_loop(
+                        render_tx,
+                        cmd_rx,
+                        picker,
+                        PRERENDER_PAGES,
+                        kitty_shm_support,
+                    );
+                })
+            {
+                log::error!("Failed to spawn PDF converter thread: {e}");
+            }
+
+            conversion_tx = Some(cmd_tx);
+            conversion_rx = Some(render_rx);
+        }
+
+        self.pdf_service = Some(service);
+        self.pdf_reader = Some(pdf_reader);
+        self.pdf_document_path = Some(doc_path);
+        self.pdf_font_size = cell_size;
+        self.pdf_picker = pdf_picker;
+        self.pdf_conversion_tx = conversion_tx;
+        self.pdf_conversion_rx = conversion_rx;
+
+        // Sync initial page to service so first render requests the correct page.
+        // Use set_current_page_no_render to avoid triggering a render with zero area.
+        if let Some(ref mut service) = self.pdf_service {
+            service.set_current_page_no_render(initial_page);
+        }
+
+        // Defer the initial render until the layout is known to avoid 0-sized pages.
+        if let Some(cmd_tx) = self.pdf_conversion_tx.as_ref() {
+            let _ = cmd_tx.send(crate::pdf::ConversionCommand::SetPageCount(page_count));
+            let _ = cmd_tx.send(crate::pdf::ConversionCommand::NavigateTo(initial_page));
+            if !initial_comment_rects.is_empty() {
+                let _ = cmd_tx.send(crate::pdf::ConversionCommand::UpdateComments(
+                    initial_comment_rects,
+                ));
+            }
+        }
+
+        // Switch navigation panel to PDF TOC mode
+        self.switch_to_pdf_toc_mode();
+        self.save_bookmark_with_throttle(true);
+
+        Ok(())
+    }
+
+    /// Get terminal font size in pixels
+    #[cfg(feature = "pdf")]
+    fn get_terminal_font_size(&self) -> CellSize {
+        // Default cell size if we can't detect
+        let default = CellSize::new(8, 16);
+
+        // Try to get from picker
+        if let Ok(picker) = crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
+            let (width, height) = picker.font_size();
+            CellSize::new(width, height)
+        } else {
+            default
+        }
+    }
+
+    /// Convert palette colors to MuPDF format (0xRRGGBB as i32)
+    #[cfg(feature = "pdf")]
+    fn palette_to_mupdf_colors(palette: &crate::theme::Base16Palette) -> (i32, i32) {
+        fn color_to_i32(color: Color) -> i32 {
+            match color {
+                Color::Rgb(r, g, b) => ((r as i32) << 16) | ((g as i32) << 8) | (b as i32),
+                _ => 0x000000, // Default to black for non-RGB colors
+            }
+        }
+
+        let black = color_to_i32(palette.base_00); // Background
+        let white = color_to_i32(palette.base_05); // Foreground
+        (black, white)
+    }
+
+    #[cfg(feature = "pdf")]
+    fn render_pdf_in_area(&mut self, f: &mut ratatui::Frame, area: Rect) {
+        let Some(mut pdf_reader) = self.pdf_reader.take() else {
+            return;
+        };
+
+        let (text_color, border_color, _bg_color) =
+            current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
+        let toc_height = self.get_navigation_panel_area().height as usize;
+
+        pdf_reader.render_in_area(
+            f,
+            area,
+            self.pdf_font_size.as_tuple(),
+            text_color,
+            border_color,
+            current_theme().base_00,
+            self.pdf_service.as_mut(),
+            self.pdf_conversion_tx.as_ref(),
+            &mut self.pdf_pending_display,
+            &mut self.bookmarks,
+            &mut self.last_bookmark_save,
+            &mut self.navigation_panel.table_of_contents,
+            toc_height,
+        );
+
+        self.pdf_reader = Some(pdf_reader);
+    }
+
+    /// Switch navigation panel to PDF TOC mode
+    #[cfg(feature = "pdf")]
+    fn switch_to_pdf_toc_mode(&mut self) {
+        let Some(ref pdf_reader) = self.pdf_reader else {
+            return;
+        };
+        pdf_reader.switch_to_toc_mode(&mut self.navigation_panel);
+    }
+
+    #[cfg(feature = "pdf")]
+    fn execute_pdf_display_plan(&mut self) {
+        let Some(plan) = self.pdf_pending_display.take() else {
+            return;
+        };
+
+        let has_popup = self.has_active_popup();
+
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+
+        crate::widget::pdf_reader::execute_display_plan(
+            plan,
+            pdf_reader,
+            has_popup,
+            self.pdf_conversion_tx.as_ref(),
+        );
+    }
+
+    #[cfg(feature = "pdf")]
+    fn update_non_kitty_viewport(&mut self) {
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+        crate::widget::pdf_reader::update_non_kitty_viewport(
+            pdf_reader,
+            self.pdf_conversion_tx.as_ref(),
+        );
+    }
+
+    /// Handle Kitty graphics protocol eviction responses.
+    /// When Kitty evicts an image from its cache and we try to display it,
+    /// it returns an ENOENT error. This method processes those errors and
+    /// marks the affected pages for re-render.
+    #[cfg(feature = "pdf")]
+    fn handle_kitty_eviction_responses(&mut self, event_source: &mut dyn EventSource) {
+        use crate::pdf::ConversionCommand;
+
+        let responses = event_source.take_kitty_responses();
+        if responses.is_empty() {
+            return;
+        }
+
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+
+        let mut evicted_pages = Vec::new();
+
+        for response in responses {
+            if response.is_evicted() || response.is_error() {
+                if let Some(image_id) = response.image_id {
+                    // Image IDs are based on page numbers (page_image_id = page + 1)
+                    let page = image_id.saturating_sub(1) as usize;
+                    log::debug!(
+                        "Kitty response error for image {} (page {}): {}",
+                        image_id,
+                        page,
+                        response.message
+                    );
+
+                    // Clear the Uploaded state for this page so it gets re-converted
+                    if let Some(info) = pdf_reader.rendered.get_mut(page) {
+                        if let Some(crate::pdf::ConvertedImage::Kitty { ref img, .. }) = info.img {
+                            if img.is_uploaded() {
+                                log::debug!("Clearing evicted page {page} for re-render");
+                                info.img = None;
+                                evicted_pages.push(page);
+                            }
+                        }
+                    }
+                }
+            } else {
+                log::info!(
+                    "Kitty response (non-eviction): image_id={:?} message={}",
+                    response.image_id,
+                    response.message
+                );
+            }
+        }
+
+        // Notify converter about failed pages
+        if !evicted_pages.is_empty() {
+            if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+                let _ = tx.send(ConversionCommand::DisplayFailed(evicted_pages.clone()));
+            }
+            if let (Some(service), Some(tx)) =
+                (self.pdf_service.as_ref(), self.pdf_conversion_tx.as_ref())
+            {
+                for &page in &evicted_pages {
+                    if let Some(cached) = service.get_cached_page(page) {
+                        let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&cached)));
+                    }
+                }
+            }
+            // Force a redraw to trigger re-render
+            if let Some(reader) = self.pdf_reader.as_mut() {
+                reader.force_redraw();
+            }
+        }
     }
 
     /// Get the href/path for a chapter at a specific index using the EPUB spine
@@ -722,6 +1295,18 @@ impl App {
     }
 
     pub fn save_bookmark_with_throttle(&mut self, force: bool) {
+        // Handle PDF bookmarks
+        #[cfg(feature = "pdf")]
+        if let Some(ref pdf_reader) = self.pdf_reader {
+            pdf_reader.save_bookmark_with_throttle(
+                &mut self.bookmarks,
+                &mut self.last_bookmark_save,
+                force,
+            );
+            return;
+        }
+
+        // Handle EPUB bookmarks
         if let Some(book) = &self.current_book {
             let chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter())
                 .unwrap_or_else(|| format!("chapter_{}", book.current_chapter()));
@@ -732,6 +1317,8 @@ impl App {
                 Some(self.text_reader.get_current_node_index()),
                 Some(book.current_chapter()),
                 Some(book.total_chapters()),
+                None,
+                None,
             );
 
             // Only save to disk if enough time has passed or if forced
@@ -902,6 +1489,17 @@ impl App {
         self.apply_scroll(net_scroll, initial_column);
     }
 
+    #[cfg(feature = "pdf")]
+    fn should_route_pdf_mouse_to_ui(&self, mouse_event: &MouseEvent) -> bool {
+        crate::widget::pdf_reader::should_route_mouse_to_ui(
+            mouse_event,
+            self.has_active_popup(),
+            self.zen_mode,
+            self.nav_panel_width(),
+            self.help_bar_area,
+        )
+    }
+
     /// Handle non-scroll mouse events (clicks, drags, etc.)
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
@@ -1052,7 +1650,8 @@ impl App {
                                 if viewer.handle_mouse_click(mouse_event.column, mouse_event.row) {
                                     if let Some(entry) = viewer.selected_comment() {
                                         let chapter_href = entry.chapter_href.clone();
-                                        let node_index = entry.primary_comment().node_index();
+                                        let node_index =
+                                            entry.primary_comment().node_index().unwrap_or(0);
                                         viewer.save_position();
                                         self.comments_viewer = None;
                                         self.close_popup_to_previous();
@@ -1070,63 +1669,6 @@ impl App {
                                             self.show_error(format!(
                                                 "Failed to navigate to comment: {e}"
                                             ));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return;
-                }
-
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ThemeSelector)
-                ) {
-                    let click_x = mouse_event.column;
-                    let click_y = mouse_event.row;
-
-                    if let Some(ref mut selector) = self.theme_selector {
-                        // Check if click is outside popup area - close it
-                        if selector.is_outside_popup_area(click_x, click_y) {
-                            self.theme_selector = None;
-                            self.close_popup_to_previous();
-                            return;
-                        }
-
-                        let click_type = self
-                            .mouse_tracker
-                            .detect_click_type(mouse_event.column, mouse_event.row);
-
-                        match click_type {
-                            ClickType::Single | ClickType::Triple => {
-                                selector.handle_mouse_click(mouse_event.column, mouse_event.row);
-                            }
-                            ClickType::Double => {
-                                if selector.handle_mouse_click(mouse_event.column, mouse_event.row)
-                                {
-                                    // Apply theme on double-click
-                                    if let Some(action) = selector.handle_key(
-                                        crossterm::event::KeyEvent::new(
-                                            crossterm::event::KeyCode::Enter,
-                                            crossterm::event::KeyModifiers::NONE,
-                                        ),
-                                        &mut self.key_sequence,
-                                    ) {
-                                        match action {
-                                            ThemeSelectorAction::ThemeChanged => {
-                                                self.text_reader.invalidate_render_cache();
-                                                self.show_info(format!(
-                                                    "Theme: {}",
-                                                    current_theme_name()
-                                                ));
-                                                self.theme_selector = None;
-                                                self.close_popup_to_previous();
-                                            }
-                                            ThemeSelectorAction::Close => {
-                                                self.theme_selector = None;
-                                                self.close_popup_to_previous();
-                                            }
                                         }
                                     }
                                 }
@@ -1160,7 +1702,9 @@ impl App {
                                 mouse_event.row,
                                 nav_area,
                             ) {
-                                self.handle_navigation_panel_enter();
+                                if let Some(action) = self.navigation_panel.get_enter_action() {
+                                    self.handle_navigation_panel_action(action);
+                                }
                             }
                         }
                     }
@@ -1262,6 +1806,17 @@ impl App {
     }
 
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
+        if link_info.link_type != crate::markdown::LinkType::External
+            && let Some(book) = &self.current_book
+        {
+            let current_location = JumpLocation::epub(
+                book.file.clone(),
+                book.current_chapter(),
+                self.text_reader.get_current_node_index(),
+            );
+            self.jump_list.push(current_location);
+        }
+
         match &link_info.link_type {
             crate::markdown::LinkType::External => {
                 if let Err(e) = open::that(&link_info.url) {
@@ -1672,19 +2227,36 @@ impl App {
     }
 
     fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
-        // Only allow jumping within the same book
-        if self.current_book.as_ref().map(|x| &x.file) != Some(&location.epub_path) {
-            anyhow::bail!("Cannot jump to location in different book");
+        match location {
+            JumpLocation::Epub {
+                path,
+                chapter,
+                node,
+            } => {
+                if self.current_book.as_ref().map(|x| &x.file) != Some(&path) {
+                    self.load_epub(&path, true)?;
+                }
+
+                if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(chapter) {
+                    self.navigate_to_chapter(chapter)?;
+                }
+
+                self.text_reader.restore_to_node_index(node);
+
+                self.save_bookmark();
+            }
+            #[cfg(feature = "pdf")]
+            JumpLocation::Pdf {
+                path,
+                page,
+                scroll_offset,
+            } => {
+                // PDF jump handling will be implemented when PDF reader is added
+                log::debug!(
+                    "PDF jump to {path} page {page} offset {scroll_offset} - not yet implemented"
+                );
+            }
         }
-
-        if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(location.chapter_index) {
-            // Use inner function with skip_jump_list=true to avoid corrupting jump history
-            self.navigate_to_chapter_inner(location.chapter_index, true)?;
-        }
-
-        self.text_reader.restore_to_node_index(location.node_index);
-
-        self.save_bookmark();
 
         Ok(())
     }
@@ -1692,21 +2264,23 @@ impl App {
     /// Save current location to jump list before navigating away
     fn save_to_jump_list(&mut self) {
         if let Some(book) = &self.current_book {
-            let current_location = JumpLocation {
-                epub_path: book.file.clone(),
-                chapter_index: book.current_chapter(),
-                node_index: self.text_reader.get_current_node_index(),
-            };
+            let current_location = JumpLocation::epub(
+                book.file.clone(),
+                book.current_chapter(),
+                self.text_reader.get_current_node_index(),
+            );
             self.jump_list.push(current_location);
         }
     }
 
     /// Handle Ctrl+O - jump back in history
     fn jump_back(&mut self) {
-        let current_location = self.current_book.as_ref().map(|book| JumpLocation {
-            epub_path: book.file.clone(),
-            chapter_index: book.current_chapter(),
-            node_index: self.text_reader.get_current_node_index(),
+        let current_location = self.current_book.as_ref().map(|book| {
+            JumpLocation::epub(
+                book.file.clone(),
+                book.current_chapter(),
+                self.text_reader.get_current_node_index(),
+            )
         });
 
         if let Some(location) = self.jump_list.jump_back(current_location) {
@@ -1755,84 +2329,100 @@ impl App {
         main_chunks[0]
     }
 
-    /// Handle Enter key press in navigation panel
-    fn handle_navigation_panel_enter(&mut self) {
-        use crate::navigation_panel::SelectedActionOwned;
-        match self.navigation_panel.get_selected_action() {
-            SelectedActionOwned::BookIndex(index) => {
-                if let Err(e) = self.open_book_for_reading(index) {
-                    error!("Failed to open book at index {index}: {e}");
+    /// Handle a navigation panel action (used by both keyboard Enter and mouse double-click)
+    /// Returns true if the action was a Bypass (caller should continue processing)
+    fn handle_navigation_panel_action(
+        &mut self,
+        action: crate::navigation_panel::NavigationPanelAction,
+    ) -> bool {
+        use crate::navigation_panel::NavigationPanelAction;
+        match action {
+            NavigationPanelAction::Bypass => true,
+            NavigationPanelAction::SelectBook { book_path } => {
+                if let Err(e) = self.open_book_for_reading_by_path(&book_path) {
+                    error!("Failed to open book at path {book_path}: {e}");
                     self.show_error(format!("Failed to open book: {e}"));
                 }
+                false
             }
-            SelectedActionOwned::BackToBooks => {
-                self.navigation_panel.switch_to_book_mode();
+            NavigationPanelAction::SwitchToBookList => {
+                self.switch_to_book_list_mode();
+                false
             }
-            SelectedActionOwned::TocItem(toc_item) => {
-                match toc_item {
-                    TocItem::Chapter { href, anchor, .. } => {
-                        // Find the spine index for this href
-                        if let Some(spine_index) = self.find_spine_index_by_href(&href) {
-                            let _ = self.navigate_to_chapter(spine_index);
-                            // Handle anchor if present
-                            if let Some(anchor_id) = anchor {
-                                self.text_reader
-                                    .store_pending_anchor_scroll(anchor_id.clone());
-                                self.text_reader.set_active_anchor(Some(anchor_id));
-                            } else {
-                                self.text_reader.set_active_anchor(None);
-                            }
-
-                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                            self.navigation_panel
-                                .table_of_contents
-                                .clear_manual_navigation();
-                            self.update_toc_state();
-                        } else {
-                            error!("Could not find spine index for href: {href}");
-                            self.show_error("Chapter not found in book");
-                        }
-                    }
-                    TocItem::Section { href, anchor, .. } => {
-                        if let Some(section_href) = href {
-                            // This section has content - navigate to it
-                            if let Some(spine_index) = self.find_spine_index_by_href(&section_href)
-                            {
-                                let _ = self.navigate_to_chapter(spine_index);
-                                // Handle anchor if present
-                                if let Some(anchor_id) = anchor {
-                                    self.text_reader
-                                        .store_pending_anchor_scroll(anchor_id.clone());
-                                    // Set this anchor as the active one
-                                    self.text_reader.set_active_anchor(Some(anchor_id));
-                                } else {
-                                    self.text_reader.set_active_anchor(None);
-                                }
+            NavigationPanelAction::NavigateToChapter { href, anchor } => {
+                // Check if this is a PDF navigation
+                #[cfg(feature = "pdf")]
+                {
+                    if href.starts_with("pdf:page:") {
+                        if let Some(page_str) = href.strip_prefix("pdf:page:") {
+                            if let Ok(page) = page_str.parse::<usize>() {
+                                self.navigate_pdf_to_page(page);
                                 self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                                // Update the cache to reflect the correct active section
-                                self.update_toc_state();
-                            } else {
-                                error!(
-                                    "Could not find spine index for section href: {section_href}"
-                                );
-                                self.show_error("Section not found in book");
                             }
-                        } else {
-                            // No href - just toggle expansion
-                            self.navigation_panel
-                                .table_of_contents
-                                .toggle_selected_expansion();
                         }
+                        return false;
+                    } else if href.starts_with("pdf:printed:") {
+                        if let Some(printed_str) = href.strip_prefix("pdf:printed:") {
+                            if let Ok(printed) = printed_str.parse::<usize>() {
+                                if let Some(ref pdf_reader) = self.pdf_reader {
+                                    let n_pages = pdf_reader.rendered.len();
+                                    let page_idx = pdf_reader
+                                        .page_numbers
+                                        .map_printed_to_pdf(printed, n_pages)
+                                        .or_else(|| {
+                                            printed.checked_sub(1).filter(|&p| p < n_pages)
+                                        });
+                                    if let Some(page_idx) = page_idx {
+                                        self.navigate_pdf_to_page(page_idx);
+                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                                    }
+                                }
+                            }
+                        }
+                        return false;
+                    } else if href.starts_with("pdf:external:") {
+                        if let Some(url) = href.strip_prefix("pdf:external:") {
+                            if let Err(e) = open::that(url) {
+                                error!("Failed to open external link: {e}");
+                            }
+                        }
+                        return false;
                     }
                 }
+
+                // Find the spine index for this href (EPUB navigation)
+                if let Some(chapter_index) = self.find_spine_index_by_href(&href) {
+                    let _ = self.navigate_to_chapter(chapter_index);
+                    let nav_area = self.get_navigation_panel_area();
+                    let toc_height = nav_area.height as usize;
+                    let anchor_ref = anchor.as_deref();
+                    self.navigation_panel
+                        .table_of_contents
+                        .set_active_from_hint(&href, anchor_ref, Some(toc_height));
+
+                    if let Some(anchor_id) = anchor {
+                        self.text_reader.store_pending_anchor_scroll(anchor_id);
+                    }
+                    self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+                } else {
+                    error!("Could not find spine index for href: {href}");
+                    self.show_error("Chapter not found in book");
+                }
+                false
             }
-            SelectedActionOwned::None => {
-                // Nothing selected
+            NavigationPanelAction::ToggleSection => {
+                self.navigation_panel
+                    .table_of_contents
+                    .toggle_selected_expansion();
+                false
             }
         }
     }
 
     pub fn draw(&mut self, f: &mut ratatui::Frame, fps_counter: &FPSCounter) {
+        let draw_closure_start = std::time::Instant::now();
+        #[cfg(feature = "pdf")]
+        let mut pdf_area = None;
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
             self.save_bookmark();
@@ -1845,6 +2435,24 @@ impl App {
 
         if self.zen_mode {
             // Zen mode: full screen content, no navigation panel or help bar
+            #[cfg(feature = "pdf")]
+            if self.pdf_reader.is_some() {
+                self.render_pdf_in_area(f, f.area());
+                pdf_area = Some(f.area());
+            } else if let Some(ref book) = self.current_book {
+                self.text_reader.render(
+                    f,
+                    f.area(),
+                    book.current_chapter(),
+                    book.total_chapters(),
+                    current_theme(),
+                    true, // always focused in zen mode
+                    true, // zen mode
+                );
+            } else {
+                self.render_default_content(f, f.area(), "Select a file to view its content");
+            }
+            #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
                 self.text_reader.render(
                     f,
@@ -1879,6 +2487,24 @@ impl App {
                 &self.book_manager,
             );
 
+            #[cfg(feature = "pdf")]
+            if self.pdf_reader.is_some() {
+                self.render_pdf_in_area(f, main_chunks[1]);
+                pdf_area = Some(main_chunks[1]);
+            } else if let Some(ref book) = self.current_book {
+                self.text_reader.render(
+                    f,
+                    main_chunks[1],
+                    book.current_chapter(),
+                    book.total_chapters(),
+                    current_theme(),
+                    self.is_main_panel(MainPanel::Content),
+                    false, // not zen mode
+                );
+            } else {
+                self.render_default_content(f, main_chunks[1], "Select a file to view its content");
+            }
+            #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
                 self.text_reader.render(
                     f,
@@ -1895,6 +2521,29 @@ impl App {
 
             self.render_help_bar(f, chunks[1], fps_counter);
             self.help_bar_area = chunks[1];
+        }
+
+        #[cfg(feature = "pdf")]
+        if self.has_active_popup()
+            && let Some(ref pdf_reader) = self.pdf_reader
+            && let Some(area) = pdf_area
+        {
+            if pdf_reader.is_kitty {
+                // Kitty: clear skip flags so dim overlay can render
+                f.render_widget(crate::widget::pdf_reader::TextRegion, area);
+            } else {
+                // iTerm2 protocol (WezTerm, iTerm): fill with dark content to
+                // overwrite the terminal image (just clearing skip flags causes
+                // artifacts due to image placement coordinates).
+                // Use inner area to preserve panel borders.
+                let inner = ratatui::layout::Rect {
+                    x: area.x.saturating_add(1),
+                    y: area.y.saturating_add(1),
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
+            }
         }
 
         if matches!(
@@ -1986,7 +2635,7 @@ impl App {
 
         if matches!(
             self.focused_panel,
-            FocusedPanel::Popup(PopupWindow::ThemeSelector)
+            FocusedPanel::Popup(PopupWindow::Settings)
         ) {
             let dim_block = Block::default().style(
                 Style::default()
@@ -1995,9 +2644,16 @@ impl App {
             );
             f.render_widget(dim_block, f.area());
 
-            if let Some(ref mut theme_selector) = self.theme_selector {
-                theme_selector.render(f, f.area());
+            if let Some(ref mut settings_popup) = self.settings_popup {
+                settings_popup.render(f, f.area());
             }
+        }
+        let draw_closure_elapsed = draw_closure_start.elapsed();
+        if draw_closure_elapsed.as_millis() > 5 {
+            log::debug!(
+                "draw() render closure took {}ms",
+                draw_closure_elapsed.as_millis()
+            );
         }
     }
 
@@ -2073,7 +2729,12 @@ impl App {
         let help_end = help_start + "?: Help".len() as u16;
 
         if inner_x >= comments_start && inner_x < comments_end {
-            if self.current_book.is_some() {
+            if self.is_pdf_mode() {
+                #[cfg(feature = "pdf")]
+                {
+                    self.open_comments_viewer_for_pdf();
+                }
+            } else if self.current_book.is_some() {
                 if let FocusedPanel::Main(panel) = self.focused_panel {
                     self.previous_main_panel = panel;
                 }
@@ -2107,8 +2768,10 @@ impl App {
         }
 
         if inner_x >= stats_start && inner_x < stats_end {
+            let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+            let mut opened = false;
+
             if let Some(ref mut book) = self.current_book {
-                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
                 if let Err(e) = self
                     .book_stat
                     .calculate_stats(&mut book.epub, terminal_size)
@@ -2116,12 +2779,31 @@ impl App {
                     error!("Failed to calculate book statistics: {e}");
                     self.show_error(format!("Failed to calculate statistics: {e}"));
                 } else {
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.book_stat.show();
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                    opened = true;
                 }
+            } else if self.is_pdf_mode() {
+                #[cfg(feature = "pdf")]
+                if let Some(ref pdf_reader) = self.pdf_reader {
+                    if let Err(e) = self.book_stat.calculate_pdf_stats(
+                        &pdf_reader.toc_entries,
+                        pdf_reader.rendered.len(),
+                        &pdf_reader.page_numbers,
+                        terminal_size,
+                    ) {
+                        error!("Failed to calculate PDF statistics: {e}");
+                        self.show_error(format!("Failed to calculate statistics: {e}"));
+                    } else {
+                        opened = true;
+                    }
+                }
+            }
+
+            if opened {
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
+                self.book_stat.show();
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
             }
             return true;
         }
@@ -2130,8 +2812,8 @@ impl App {
             if let FocusedPanel::Main(panel) = self.focused_panel {
                 self.previous_main_panel = panel;
             }
-            self.theme_selector = Some(ThemeSelector::new());
-            self.focused_panel = FocusedPanel::Popup(PopupWindow::ThemeSelector);
+            self.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::Themes));
+            self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             return true;
         }
 
@@ -2209,8 +2891,8 @@ impl App {
                 FocusedPanel::Popup(PopupWindow::CommentsViewer) => {
                     "j/k/Ctrl+d/u: Scroll | /: Search | Enter/DblClick: Jump | ESC: Close"
                 }
-                FocusedPanel::Popup(PopupWindow::ThemeSelector) => {
-                    "j/k: Navigate | Enter: Apply | ESC: Close"
+                FocusedPanel::Popup(PopupWindow::Settings) => {
+                    "Tab/h/l: Tabs | j/k: Navigate | Enter: Apply | ESC: Close"
                 }
             };
             help_text.to_string()
@@ -2299,12 +2981,32 @@ impl App {
         {
             self.set_main_panel_focus(MainPanel::Content);
         }
+
+        // For PDF in Kitty mode, treat zen toggle as reopening at the same page
+        // This prevents glitches when the viewport size changes dramatically
+        #[cfg(feature = "pdf")]
+        if let Some(ref mut pdf_reader) = self.pdf_reader {
+            let nav_width = ((self.terminal_size.width * 30) / 100).max(20);
+            pdf_reader.handle_zen_mode_toggle(
+                self.zen_mode,
+                self.terminal_size.width,
+                nav_width,
+                self.comments_dir.as_deref(),
+                self.test_mode,
+                self.pdf_conversion_tx.as_ref(),
+                self.pdf_service.as_mut(),
+            );
+        }
     }
 
     pub fn set_zen_mode(&mut self, enabled: bool) {
         if self.zen_mode != enabled {
             self.toggle_zen_mode();
         }
+    }
+
+    pub fn set_test_mode(&mut self, enabled: bool) {
+        self.test_mode = enabled;
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus
@@ -2334,8 +3036,34 @@ impl App {
                 self.toggle_zen_mode();
                 true
             }
+            #[cfg(feature = "pdf")]
+            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.open_settings_popup();
+                true
+            }
             _ => false,
         }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn open_settings_popup(&mut self) {
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+        self.settings_popup = Some(SettingsPopup::new());
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+    }
+
+    #[cfg(feature = "pdf")]
+    fn pdf_text_input_active(&self) -> bool {
+        self.pdf_reader
+            .as_ref()
+            .is_some_and(|reader| reader.is_text_input_active())
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    fn pdf_text_input_active(&self) -> bool {
+        false
     }
 
     /// Handle a key sequence and return true if it was handled
@@ -2350,10 +3078,9 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
-            " s" => {
-                // Handle Space->s to show raw HTML source
+            "ss" => {
+                // Raw HTML source toggle (for EPUB/HTML)
                 if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
-                    // Get raw HTML content for current chapter
                     if let Some(ref mut book) = self.current_book {
                         if let Some((raw_html, _)) = book.epub.get_current_str() {
                             self.text_reader.set_raw_html(raw_html);
@@ -2364,9 +3091,24 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " s" => {
+                #[cfg(feature = "pdf")]
+                {
+                    // Settings popup (only with PDF feature)
+                    self.open_settings_popup();
+                    self.key_sequence.clear();
+                    true
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    false
+                }
+            }
             " f" => {
                 // Handle Space->f to open book search (reuse existing search)
-                if self.current_book.is_some() {
+                // Works for both EPUB and PDF
+                let has_document = self.current_book.is_some() || self.is_pdf_mode();
+                if has_document {
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
@@ -2377,7 +3119,9 @@ impl App {
             }
             " F" => {
                 // Handle Space->F to open book search (clear input)
-                if self.current_book.is_some() {
+                // Works for both EPUB and PDF
+                let has_document = self.current_book.is_some() || self.is_pdf_mode();
+                if has_document {
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
@@ -2387,23 +3131,42 @@ impl App {
                 true
             }
             " d" => {
-                if self.current_book.is_some() {
-                    if let Some(ref mut book) = self.current_book {
-                        let terminal_size = (self.terminal_size.width, self.terminal_size.height);
-                        if let Err(e) = self
-                            .book_stat
-                            .calculate_stats(&mut book.epub, terminal_size)
-                        {
-                            error!("Failed to calculate book statistics: {e}");
+                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+                let mut opened = false;
+
+                if let Some(ref mut book) = self.current_book {
+                    if let Err(e) = self
+                        .book_stat
+                        .calculate_stats(&mut book.epub, terminal_size)
+                    {
+                        error!("Failed to calculate book statistics: {e}");
+                        self.show_error(format!("Failed to calculate statistics: {e}"));
+                    } else {
+                        opened = true;
+                    }
+                } else if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    if let Some(ref pdf_reader) = self.pdf_reader {
+                        if let Err(e) = self.book_stat.calculate_pdf_stats(
+                            &pdf_reader.toc_entries,
+                            pdf_reader.rendered.len(),
+                            &pdf_reader.page_numbers,
+                            terminal_size,
+                        ) {
+                            error!("Failed to calculate PDF statistics: {e}");
                             self.show_error(format!("Failed to calculate statistics: {e}"));
                         } else {
-                            if let FocusedPanel::Main(panel) = self.focused_panel {
-                                self.previous_main_panel = panel;
-                            }
-                            self.book_stat.show();
-                            self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                            opened = true;
                         }
                     }
+                }
+
+                if opened {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.book_stat.show();
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
                 }
                 self.key_sequence.clear();
                 true
@@ -2421,8 +3184,23 @@ impl App {
                 true
             }
             " c" => {
-                // Handle Space->c to copy entire chapter content
-                if self.is_main_panel(MainPanel::Content) {
+                if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        let page = self.pdf_reader.as_ref().map(|reader| reader.page);
+                        if let (Some(page), Some(service)) = (page, self.pdf_service.as_mut()) {
+                            service.extract_text(vec![crate::pdf::PageSelectionBounds {
+                                page,
+                                start_x: 0.0,
+                                end_x: f32::MAX,
+                                min_y: 0.0,
+                                max_y: f32::MAX,
+                            }]);
+                            self.notifications.info("Extracting current page text...");
+                        }
+                    }
+                } else if self.is_main_panel(MainPanel::Content) {
+                    // Handle Space->c to copy entire chapter content
                     if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
                         debug!("Copy chapter failed: {e}");
                     } else {
@@ -2470,6 +3248,11 @@ impl App {
                     }
                     self.close_popup_to_previous();
                     self.comments_viewer = None;
+                } else if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.open_comments_viewer_for_pdf();
+                    }
                 } else if self.current_book.is_some() {
                     // Open comments viewer - save current main panel
                     if let FocusedPanel::Main(panel) = self.focused_panel {
@@ -2496,21 +3279,21 @@ impl App {
                 true
             }
             " t" => {
-                // Handle Space->t to toggle theme selector (global)
+                // Handle Space->t to toggle theme selector (opens settings on Themes tab)
                 if matches!(
                     self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ThemeSelector)
+                    FocusedPanel::Popup(PopupWindow::Settings)
                 ) {
-                    // Close theme selector - return to previous panel
+                    // Close settings - return to previous panel
                     self.close_popup_to_previous();
-                    self.theme_selector = None;
+                    self.settings_popup = None;
                 } else {
-                    // Open theme selector - save current main panel
+                    // Open settings on Themes tab - save current main panel
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
-                    self.theme_selector = Some(ThemeSelector::new());
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ThemeSelector);
+                    self.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::Themes));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
                 }
                 self.key_sequence.clear();
                 true
@@ -2714,6 +3497,8 @@ impl App {
     ) -> Option<AppAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        let _ = self.text_reader.dismiss_error_hud();
+
         // If comment input is active, route all input to the text area
         if self.text_reader.is_comment_input_active() {
             if let Some(input) = map_keys_to_input(key) {
@@ -2760,6 +3545,25 @@ impl App {
                                 .queue_global_search_activation(query, node_index);
                         }
                     }
+                    #[cfg(feature = "pdf")]
+                    BookSearchAction::JumpToPdfPage {
+                        page_index,
+                        line_index,
+                        line_y_bounds,
+                        query,
+                    } => {
+                        self.set_main_panel_focus(MainPanel::Content);
+                        self.jump_to_pdf_search_result(
+                            page_index,
+                            line_index,
+                            line_y_bounds,
+                            &query,
+                        );
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    BookSearchAction::JumpToPdfPage { .. } => {
+                        // PDF not supported
+                    }
                     BookSearchAction::Close => {
                         self.close_popup_to_previous();
                     }
@@ -2778,7 +3582,10 @@ impl App {
                 Some(BookStatAction::JumpToChapter { chapter_index }) => {
                     self.book_stat.hide();
                     self.set_main_panel_focus(MainPanel::Content);
-                    if let Err(e) = self.navigate_to_chapter(chapter_index) {
+                    if self.is_pdf_mode() {
+                        #[cfg(feature = "pdf")]
+                        self.navigate_pdf_to_page(chapter_index);
+                    } else if let Err(e) = self.navigate_to_chapter(chapter_index) {
                         error!("Failed to navigate to chapter {chapter_index}: {e}");
                         self.show_error(format!("Failed to navigate to chapter: {e}"));
                     }
@@ -2858,8 +3665,29 @@ impl App {
                         self.close_popup_to_previous();
                         self.set_main_panel_focus(MainPanel::Content);
 
-                        // Set pending node restore before navigating
-                        self.text_reader.restore_to_node_index(target.node_index());
+                        // Handle PDF comments (page-based)
+                        #[cfg(feature = "pdf")]
+                        if let Some(page) = target.page() {
+                            if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+                                let action = pdf_reader.jump_to_page_action(page);
+                                if let InputAction::JumpingToPage { page, .. } = action {
+                                    if let Some(service) = self.pdf_service.as_mut() {
+                                        service.apply_command(crate::pdf::Command::GoToPage(page));
+                                    }
+                                    if let Some(tx) = &self.pdf_conversion_tx {
+                                        let _ = tx
+                                            .send(crate::pdf::ConversionCommand::NavigateTo(page));
+                                    }
+                                }
+                            }
+                            self.comments_viewer = None;
+                            return None;
+                        }
+
+                        // Set pending node restore before navigating (EPUB text comments only)
+                        if let Some(node_index) = target.node_index() {
+                            self.text_reader.restore_to_node_index(node_index);
+                        }
 
                         if let Err(e) = self.navigate_to_chapter_by_href(&chapter_href) {
                             error!("Failed to navigate to chapter {chapter_href}: {e}");
@@ -2872,32 +3700,85 @@ impl App {
                             .as_ref()
                             .and_then(|v| v.selected_comment().cloned())
                         {
+                            let is_pdf_comment = entry.primary_comment().is_pdf();
                             let mut delete_success = false;
-                            let comments = self.text_reader.get_comments();
-                            match comments.lock() {
-                                Ok(mut guard) => {
-                                    for comment in &entry.comments {
-                                        if let Err(e) = guard.delete_comment_by_id(&comment.id) {
-                                            error!("Failed to delete comment: {e}");
-                                            self.show_error(format!(
-                                                "Failed to delete comment: {e}"
-                                            ));
-                                            delete_success = false;
-                                            break;
+                            let mut error_msg: Option<String> = None;
+
+                            #[cfg(feature = "pdf")]
+                            if is_pdf_comment {
+                                let book_comments = self
+                                    .pdf_reader
+                                    .as_ref()
+                                    .and_then(|r| r.book_comments.clone());
+                                if let Some(book_comments) = book_comments {
+                                    match book_comments.lock() {
+                                        Ok(mut guard) => {
+                                            for comment in &entry.comments {
+                                                if let Err(e) =
+                                                    guard.delete_comment_by_id(&comment.id)
+                                                {
+                                                    error!("Failed to delete comment: {e}");
+                                                    error_msg = Some(format!(
+                                                        "Failed to delete comment: {e}"
+                                                    ));
+                                                    delete_success = false;
+                                                    break;
+                                                }
+                                                delete_success = true;
+                                            }
                                         }
-                                        delete_success = true;
+                                        Err(_) => {
+                                            error!("Failed to lock comments for deletion");
+                                            error_msg = Some(
+                                                "Failed to delete comment: lock error".to_string(),
+                                            );
+                                        }
                                     }
                                 }
-                                Err(_) => {
-                                    error!("Failed to lock comments for deletion");
-                                    self.show_error("Failed to delete comment: lock error");
+                                if delete_success {
+                                    if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+                                        pdf_reader.refresh_comment_rects();
+                                    }
                                 }
                             }
 
-                            if delete_success {
-                                for comment in &entry.comments {
-                                    self.text_reader.delete_comment_by_id(&comment.id);
+                            #[cfg(not(feature = "pdf"))]
+                            let _ = is_pdf_comment;
+
+                            if !is_pdf_comment {
+                                let comments = self.text_reader.get_comments();
+                                match comments.lock() {
+                                    Ok(mut guard) => {
+                                        for comment in &entry.comments {
+                                            if let Err(e) = guard.delete_comment_by_id(&comment.id)
+                                            {
+                                                error!("Failed to delete comment: {e}");
+                                                error_msg =
+                                                    Some(format!("Failed to delete comment: {e}"));
+                                                delete_success = false;
+                                                break;
+                                            }
+                                            delete_success = true;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        error!("Failed to lock comments for deletion");
+                                        error_msg = Some(
+                                            "Failed to delete comment: lock error".to_string(),
+                                        );
+                                    }
                                 }
+
+                                if delete_success {
+                                    for comment in &entry.comments {
+                                        self.text_reader.delete_comment_by_id(&comment.id);
+                                    }
+                                }
+                            }
+
+                            if let Some(msg) = error_msg {
+                                self.show_error(msg);
+                            } else if delete_success {
                                 if let Some(ref mut viewer) = self.comments_viewer {
                                     viewer.remove_selected_comment();
                                 }
@@ -2930,25 +3811,55 @@ impl App {
             return None;
         }
 
-        // If theme selector popup is shown, handle keys for it
-        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ThemeSelector) {
-            let action = if let Some(ref mut selector) = self.theme_selector {
-                selector.handle_key(key, &mut self.key_sequence)
+        // If settings popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::Settings) {
+            let action = if let Some(ref mut popup) = self.settings_popup {
+                popup.handle_key(key, &mut self.key_sequence)
             } else {
                 None
             };
 
             if let Some(action) = action {
                 match action {
-                    ThemeSelectorAction::Close => {
+                    SettingsAction::Close => {
                         self.close_popup_to_previous();
-                        self.theme_selector = None;
+                        self.settings_popup = None;
                     }
-                    ThemeSelectorAction::ThemeChanged => {
+                    SettingsAction::SettingsChanged => {
+                        // Invalidate render cache for theme changes
                         self.text_reader.invalidate_render_cache();
+                        self.apply_theme_to_pdf_reader();
                         self.show_info(format!("Theme: {}", current_theme_name()));
-                        self.close_popup_to_previous();
-                        self.theme_selector = None;
+
+                        // Refresh book list in case PDF support was toggled
+                        self.book_manager.refresh();
+                        self.navigation_panel
+                            .book_list
+                            .set_books(self.book_manager.get_books());
+
+                        #[cfg(feature = "pdf")]
+                        {
+                            // Close any open PDF if PDF support was disabled
+                            if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                                if let Some(ref pdf_reader) = self.pdf_reader {
+                                    Self::clear_pdf_graphics(pdf_reader.is_kitty);
+                                }
+                                self.pdf_service = None;
+                                self.pdf_reader = None;
+                                self.pdf_picker = None;
+                                self.pdf_conversion_tx = None;
+                                self.pdf_conversion_rx = None;
+                                self.pdf_pending_display = None;
+                                self.pdf_document_path = None;
+                                // Clear current book path since the PDF is no longer available
+                                self.navigation_panel.current_book_path = None;
+                                // Switch back to book list
+                                self.navigation_panel.switch_to_book_mode();
+                                self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
+                                self.close_popup_to_previous();
+                                self.settings_popup = None;
+                            }
+                        }
                     }
                 }
             }
@@ -2984,48 +3895,23 @@ impl App {
             let action = self
                 .navigation_panel
                 .handle_key(key, &mut self.key_sequence);
-            let mut bypass = false;
-            if let Some(action) = action {
-                use crate::navigation_panel::NavigationPanelAction;
-                match action {
-                    NavigationPanelAction::Bypass => {
-                        bypass = true;
-                    }
-                    NavigationPanelAction::SelectBook { book_index } => {
-                        if let Err(e) = self.open_book_for_reading(book_index) {
-                            self.show_error(format!("Failed to open book: {e}"));
-                        }
-                    }
-                    NavigationPanelAction::SwitchToBookList => {
-                        self.switch_to_book_list_mode();
-                    }
-                    NavigationPanelAction::NavigateToChapter { href, anchor } => {
-                        if let Some(chapter_index) = self.find_spine_index_by_href(&href) {
-                            let _ = self.navigate_to_chapter(chapter_index);
-                            let nav_area = self.get_navigation_panel_area();
-                            let toc_height = nav_area.height as usize;
-                            let anchor_ref = anchor.as_deref();
-                            self.navigation_panel
-                                .table_of_contents
-                                .set_active_from_hint(&href, anchor_ref, Some(toc_height));
-
-                            if let Some(anchor_id) = anchor {
-                                self.text_reader.store_pending_anchor_scroll(anchor_id);
-                            }
-                            self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                        }
-                    }
-                    NavigationPanelAction::ToggleSection => {
-                        self.navigation_panel
-                            .table_of_contents
-                            .toggle_selected_expansion();
-                    }
-                }
-            }
+            let bypass = action
+                .map(|a| self.handle_navigation_panel_action(a))
+                .unwrap_or(false);
 
             if key.code == KeyCode::Char('q') {
                 self.save_bookmark_with_throttle(true);
                 return Some(AppAction::Quit);
+            }
+
+            // Handle ESC in navigation panel mode - dismiss notifications or exit search
+            if key.code == KeyCode::Esc {
+                if self.notifications.has_notification() {
+                    self.notifications.dismiss();
+                } else if self.is_in_search_mode() {
+                    self.cancel_current_search();
+                }
+                return None;
             }
 
             if !bypass {
@@ -3245,6 +4131,11 @@ impl App {
                         return None;
                     }
                     KeyCode::Esc => {
+                        // Clear search first if active (pressing Esc again will exit visual mode)
+                        if self.text_reader.is_searching() {
+                            self.cancel_current_search();
+                            return None;
+                        }
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
@@ -3333,6 +4224,11 @@ impl App {
                     return None;
                 }
                 KeyCode::Esc => {
+                    // Clear search first if active (pressing Esc again will exit normal mode)
+                    if self.text_reader.is_searching() {
+                        self.cancel_current_search();
+                        return None;
+                    }
                     self.text_reader.clear_count();
                     self.text_reader.toggle_normal_mode();
                     return None;
@@ -3506,13 +4402,13 @@ impl App {
                     self.cancel_current_search();
                 }
             }
-            KeyCode::Char('=') | KeyCode::Char('+') => {
+            KeyCode::Char('-') => {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.increase_margin();
                 self.text_reader.restore_to_node_index(current_node);
                 settings::set_margin(self.text_reader.get_margin());
             }
-            KeyCode::Char('-') => {
+            KeyCode::Char('=') | KeyCode::Char('+') => {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.decrease_margin();
                 self.text_reader.restore_to_node_index(current_node);
@@ -3552,6 +4448,7 @@ impl App {
                         lines.push(SearchLine {
                             text: plain_text,
                             node_index,
+                            y_bounds: None,
                         });
                     }
                 }
@@ -3572,6 +4469,7 @@ impl App {
                     lines.push(SearchLine {
                         text: content.clone(),
                         node_index,
+                        y_bounds: None,
                     });
                 }
                 Block::Table { rows, header, .. } => {
@@ -3587,6 +4485,7 @@ impl App {
                             lines.push(SearchLine {
                                 text: row_text.join(" "),
                                 node_index,
+                                y_bounds: None,
                             });
                         }
                     }
@@ -3602,6 +4501,7 @@ impl App {
                             lines.push(SearchLine {
                                 text: row_text.join(" "),
                                 node_index,
+                                y_bounds: None,
                             });
                         }
                     }
@@ -3611,6 +4511,7 @@ impl App {
                         lines.push(SearchLine {
                             text: extract_text_from_text(&item.term),
                             node_index,
+                            y_bounds: None,
                         });
                         // Process each definition (Vec<Vec<Node>>)
                         for definition in &item.definitions {
@@ -3759,7 +4660,81 @@ impl App {
         self.book_search = Some(BookSearch::new(search_engine));
     }
 
+    /// Initialize search engine for PDF documents
+    /// This extracts text from all PDF pages and indexes them for search
+    #[cfg(feature = "pdf")]
+    fn initialize_pdf_search_engine(&mut self) {
+        use mupdf::text_page::TextBlockType;
+        use mupdf::{Document, TextPageFlags};
+
+        let Some(ref doc_path) = self.pdf_document_path else {
+            error!("Cannot initialize PDF search - no document path");
+            return;
+        };
+
+        info!("Initializing PDF search engine for {doc_path:?}");
+
+        let doc = match Document::open(doc_path.to_string_lossy().as_ref()) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to open PDF document for search: {e}");
+                return;
+            }
+        };
+
+        let page_count = doc.page_count().unwrap_or(0) as usize;
+        let mut pages = Vec::with_capacity(page_count);
+
+        for page_num in 0..page_count {
+            let Ok(page) = doc.load_page(page_num as i32) else {
+                continue;
+            };
+
+            let Ok(text_page) = page.to_text_page(TextPageFlags::empty()) else {
+                continue;
+            };
+
+            let mut lines = Vec::new();
+            let mut line_idx = 0;
+
+            for block in text_page.blocks() {
+                if block.r#type() != TextBlockType::Text {
+                    continue;
+                }
+
+                for line in block.lines() {
+                    let bbox = line.bounds();
+                    let text: String = line.chars().filter_map(|ch| ch.char()).collect();
+
+                    if !text.trim().is_empty() {
+                        lines.push(SearchLine {
+                            text,
+                            node_index: line_idx,
+                            y_bounds: Some((bbox.y0, bbox.y1)),
+                        });
+                    }
+                    line_idx += 1;
+                }
+            }
+
+            pages.push((page_num, lines));
+        }
+
+        info!("PDF search indexed {} pages", pages.len());
+
+        let mut search_engine = SearchEngine::new();
+        search_engine.process_pdf_pages(pages);
+
+        self.book_search = Some(BookSearch::new(search_engine));
+    }
+
     fn open_book_search(&mut self, clear_input: bool) {
+        // For PDF, lazily initialize the search engine when first requested
+        #[cfg(feature = "pdf")]
+        if self.pdf_reader.is_some() && self.book_search.is_none() {
+            self.initialize_pdf_search_engine();
+        }
+
         if let Some(ref mut book_search) = self.book_search {
             book_search.open(clear_input);
             self.focused_panel = FocusedPanel::Popup(PopupWindow::BookSearch);
@@ -3811,6 +4786,243 @@ impl App {
     pub fn testing_last_copied_text(&self) -> Option<String> {
         self.text_reader.get_last_copied_text()
     }
+
+    /// Poll PDF render service for completed renders and update state
+    /// Returns true if any renders were processed
+    #[cfg(feature = "pdf")]
+    pub fn poll_pdf_renders(&mut self) -> bool {
+        let Some(service) = self.pdf_service.as_mut() else {
+            return false;
+        };
+
+        let responses = service.poll_responses();
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return false;
+        };
+
+        let result = crate::widget::pdf_reader::apply_render_responses(
+            pdf_reader,
+            responses,
+            self.pdf_conversion_tx.as_ref(),
+            self.pdf_conversion_rx.as_ref(),
+            self.pdf_picker.as_ref(),
+            &mut self.notifications,
+        );
+
+        // Clear waiting flags when a frame arrives
+        if let Some(frame_page) = result.converted_frame_page {
+            if self.pdf_waiting_for_page == Some(frame_page) {
+                log::trace!("Clearing pdf_waiting_for_page: page {frame_page} frame arrived");
+                self.pdf_waiting_for_page = None;
+            }
+            // Clear viewport waiting - any frame arrival means converter is responding
+            if self.pdf_waiting_for_viewport {
+                log::trace!("Clearing pdf_waiting_for_viewport: frame arrived");
+                self.pdf_waiting_for_viewport = false;
+            }
+        }
+
+        result.updated
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    pub fn poll_pdf_renders(&mut self) -> bool {
+        false
+    }
+
+    /// Navigate PDF to a specific page (from TOC navigation)
+    #[cfg(feature = "pdf")]
+    fn navigate_pdf_to_page(&mut self, page: usize) {
+        let toc_height = self.get_navigation_panel_area().height as usize;
+        let Some(mut pdf_reader) = self.pdf_reader.take() else {
+            return;
+        };
+        crate::widget::pdf_reader::navigate_pdf_to_page(
+            &mut pdf_reader,
+            page,
+            self.pdf_service.as_mut(),
+            self.pdf_conversion_tx.as_ref(),
+            &mut self.navigation_panel.table_of_contents,
+            toc_height,
+            &mut self.bookmarks,
+            &mut self.last_bookmark_save,
+        );
+        // For non-Kitty protocols: wait for the page to be converted before redrawing
+        if !pdf_reader.is_kitty {
+            self.pdf_waiting_for_page = Some(page);
+            log::trace!("Set pdf_waiting_for_page to {page} for TOC navigation");
+        }
+        self.pdf_reader = Some(pdf_reader);
+    }
+
+    /// Jump to a PDF search result, navigating to the page and selecting the matched text
+    #[cfg(feature = "pdf")]
+    fn jump_to_pdf_search_result(
+        &mut self,
+        page_index: usize,
+        _line_index: usize,
+        _line_y_bounds: (f32, f32),
+        query: &str,
+    ) {
+        let toc_height = self.get_navigation_panel_area().height as usize;
+        let Some(mut pdf_reader) = self.pdf_reader.take() else {
+            return;
+        };
+
+        // Use the jump_to_search_result method which handles navigation + selection
+        let action = pdf_reader.jump_to_search_result(page_index, query);
+
+        // Process the resulting action using apply_input_action
+        let _outcome = pdf_reader.apply_input_action(
+            action,
+            self.pdf_service.as_mut(),
+            self.pdf_conversion_tx.as_ref(),
+            &mut self.notifications,
+            &mut self.bookmarks,
+            &mut self.last_bookmark_save,
+            &mut self.navigation_panel.table_of_contents,
+            toc_height,
+            &self.profiler,
+        );
+
+        // For non-Kitty protocols: wait for the page to be converted before redrawing
+        if !pdf_reader.is_kitty {
+            self.pdf_waiting_for_page = Some(page_index);
+            log::trace!("Set pdf_waiting_for_page to {page_index} for search result");
+        }
+        self.pdf_reader = Some(pdf_reader);
+    }
+
+    /// Handle input event in PDF mode
+    /// Returns Some(AppAction::Quit) if the app should quit
+    #[cfg(feature = "pdf")]
+    fn handle_pdf_event(&mut self, event: &crossterm::event::Event) -> PdfEventResult {
+        let toc_height = self.get_navigation_panel_area().height as usize;
+        let Some(mut pdf_reader) = self.pdf_reader.take() else {
+            return PdfEventResult {
+                handled: false,
+                action: None,
+            };
+        };
+        let response = pdf_reader.handle_event(event);
+        if !response.handled {
+            self.pdf_reader = Some(pdf_reader);
+            return PdfEventResult {
+                handled: false,
+                action: None,
+            };
+        }
+
+        // Track current page before action to detect navigation
+        let page_before = pdf_reader.page;
+        let is_kitty = pdf_reader.is_kitty;
+
+        // For non-Kitty protocols: set viewport waiting flag before applying action
+        // Don't redraw until the converter responds
+        let is_viewport_change = matches!(response.action, Some(InputAction::ViewportChanged(_)));
+        if !is_kitty && is_viewport_change {
+            self.pdf_waiting_for_viewport = true;
+            log::trace!("Set pdf_waiting_for_viewport=true for scroll event");
+        }
+
+        let outcome = if let Some(action) = response.action {
+            pdf_reader.apply_input_action(
+                action,
+                self.pdf_service.as_mut(),
+                self.pdf_conversion_tx.as_ref(),
+                &mut self.notifications,
+                &mut self.bookmarks,
+                &mut self.last_bookmark_save,
+                &mut self.navigation_panel.table_of_contents,
+                toc_height,
+                &self.profiler,
+            )
+        } else {
+            InputOutcome::None
+        };
+
+        // For non-Kitty protocols: if page changed, wait for the new page to be ready
+        let page_after = pdf_reader.page;
+        if !is_kitty && page_after != page_before {
+            self.pdf_waiting_for_page = Some(page_after);
+            log::trace!("Set pdf_waiting_for_page to {page_after} (was {page_before})");
+        }
+
+        self.pdf_reader = Some(pdf_reader);
+
+        let action = match outcome {
+            InputOutcome::Quit => Some(AppAction::Quit),
+            InputOutcome::None => None,
+        };
+
+        PdfEventResult {
+            handled: true,
+            action,
+        }
+    }
+
+    /// Open comments viewer from PDF mode
+    #[cfg(feature = "pdf")]
+    fn open_comments_viewer_for_pdf(&mut self) {
+        let Some(pdf_reader) = self.pdf_reader.as_ref() else {
+            return;
+        };
+        let Some(book_comments) = pdf_reader.book_comments.clone() else {
+            return;
+        };
+
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+
+        let doc_id = &pdf_reader.comments_doc_id;
+        let toc_entries = &pdf_reader.toc_entries;
+        let current_page = pdf_reader.page;
+        let book_title = pdf_reader
+            .doc_title
+            .clone()
+            .unwrap_or_else(|| pdf_reader.name.clone());
+        let page_count = self
+            .pdf_service
+            .as_ref()
+            .and_then(|s| s.document_info())
+            .map(|info| info.page_count)
+            .unwrap_or(0);
+
+        let mut viewer = crate::widget::comments_viewer::CommentsViewer::new_for_pdf(
+            book_comments,
+            doc_id,
+            toc_entries,
+            page_count,
+            current_page,
+            book_title,
+        );
+        viewer.restore_position();
+        self.comments_viewer = Some(viewer);
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
+    }
+
+    /// Apply current global theme to PDF reader
+    #[cfg(feature = "pdf")]
+    fn apply_theme_to_pdf_reader(&mut self) {
+        let palette = current_theme();
+        let theme_index = crate::theme::current_theme_index();
+
+        if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+            crate::widget::pdf_reader::apply_theme_to_pdf_reader(
+                pdf_reader,
+                palette,
+                theme_index,
+                self.pdf_service.as_mut(),
+                self.pdf_conversion_tx.as_ref(),
+            );
+        }
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    fn apply_theme_to_pdf_reader(&mut self) {
+        // No-op when PDF feature is disabled
+    }
 }
 
 pub struct FPSCounter {
@@ -3849,7 +5061,10 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
     terminal: &mut Terminal<B>,
     app: &mut App,
     event_source: &mut dyn EventSource,
-) -> Result<()> {
+) -> Result<()>
+where
+    B::Error: Send + Sync + 'static,
+{
     let tick_rate = Duration::from_millis(50); // Faster tick rate for smoother animation
     let mut last_tick = std::time::Instant::now();
     let mut fps_counter = FPSCounter::new();
@@ -3862,6 +5077,111 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
             let event = event_source.read()?;
             events_processed += 1;
 
+            // Route events to PDF handler when in PDF mode AND (focused on PDF content OR popup is active)
+            #[cfg(feature = "pdf")]
+            if app.is_pdf_mode()
+                && (app.is_main_panel(MainPanel::Content) || app.has_active_popup())
+            {
+                use crossterm::event::KeyCode;
+                match &event {
+                    Event::Key(key) => {
+                        // When a popup is active, route key events through the standard handler
+                        // so popups can be closed with ESC and other keys work correctly
+                        if app.has_active_popup() {
+                            let visible_height =
+                                terminal.size().unwrap().height.saturating_sub(5) as usize;
+                            if app.handle_key_event_with_screen_height(*key, Some(visible_height))
+                                == Some(AppAction::Quit)
+                            {
+                                should_quit = true;
+                            }
+                            continue;
+                        }
+
+                        let result = app.handle_pdf_event(&event);
+                        if result.action == Some(AppAction::Quit) {
+                            should_quit = true;
+                        }
+                        if result.handled {
+                            continue;
+                        }
+
+                        if !app.pdf_text_input_active() && app.handle_global_hotkeys(*key) {
+                            continue;
+                        }
+                        if key.code == KeyCode::Char('/') && !app.pdf_text_input_active() {
+                            if let FocusedPanel::Main(panel) = app.focused_panel {
+                                app.previous_main_panel = panel;
+                            }
+                            app.open_book_search(false);
+                            continue;
+                        }
+                        if key.code == KeyCode::Tab && !app.has_active_popup() && !app.zen_mode {
+                            app.set_main_panel_focus(MainPanel::NavigationList);
+                        }
+                    }
+                    Event::Resize(_, _) => {
+                        app.handle_resize();
+                        if let Some(pdf_reader) = app.pdf_reader.as_mut() {
+                            pdf_reader.force_redraw();
+                        }
+                    }
+                    Event::Mouse(mouse_event) => {
+                        if app.should_route_pdf_mouse_to_ui(mouse_event) {
+                            match mouse_event.kind {
+                                MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
+                                MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
+                                    app.handle_and_drain_mouse_events(
+                                        *mouse_event,
+                                        Some(event_source),
+                                    );
+                                }
+                                _ => {
+                                    app.handle_non_scroll_mouse_event(*mouse_event);
+                                }
+                            }
+                        } else {
+                            let result = app.handle_pdf_event(&event);
+                            if result.action == Some(AppAction::Quit) {
+                                should_quit = true;
+                            }
+                        }
+                    }
+                    _ => {
+                        let result = app.handle_pdf_event(&event);
+                        if result.action == Some(AppAction::Quit) {
+                            should_quit = true;
+                        }
+                    }
+                }
+            } else {
+                match event {
+                    Event::Mouse(mouse_event) => {
+                        match mouse_event.kind {
+                            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                                // Completely ignore horizontal scroll events to prevent flooding
+                            }
+                            _ => {
+                                app.handle_and_drain_mouse_events(mouse_event, Some(event_source));
+                            }
+                        }
+                    }
+                    Event::Key(key) => {
+                        let visible_height =
+                            terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
+                        if app.handle_key_event_with_screen_height(key, Some(visible_height))
+                            == Some(AppAction::Quit)
+                        {
+                            should_quit = true;
+                        }
+                    }
+                    Event::Resize(_cols, _rows) => {
+                        app.handle_resize();
+                    }
+                    _ => {}
+                }
+            }
+            #[cfg(not(feature = "pdf"))]
             match event {
                 Event::Mouse(mouse_event) => {
                     match mouse_event.kind {
@@ -3901,8 +5221,15 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
 
         if last_tick.elapsed() >= tick_rate {
             let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
+            let epub_hud_expired = app.text_reader.update_hud_message();
             let images_loaded = app.text_reader.check_for_loaded_images();
             let notification_expired = app.notifications.update();
+            #[cfg(feature = "pdf")]
+            let pdf_hud_expired = app
+                .pdf_reader
+                .as_mut()
+                .is_some_and(|reader| reader.update_hud_message());
+            let pdf_renders_ready = app.poll_pdf_renders();
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
@@ -3911,21 +5238,45 @@ pub fn run_app_with_event_source<B: ratatui::backend::Backend>(
                 needs_redraw = true;
                 debug!("Highlight expired, forcing redraw");
             }
+            if epub_hud_expired {
+                needs_redraw = true;
+            }
             if notification_expired {
+                needs_redraw = true;
+            }
+            #[cfg(feature = "pdf")]
+            if pdf_hud_expired {
+                needs_redraw = true;
+            }
+            if pdf_renders_ready {
                 needs_redraw = true;
             }
             last_tick = std::time::Instant::now();
         }
 
-        if needs_redraw {
-            let draw_start = std::time::Instant::now();
-            terminal.draw(|f| app.draw(f, &fps_counter))?;
-            let draw_duration = draw_start.elapsed();
-
-            // Log if drawing/flushing took longer than 10ms
-            if draw_duration.as_millis() > 10 {
-                debug!("Terminal draw/flush took {}ms", draw_duration.as_millis());
+        // For non-Kitty PDF: suppress redraw while waiting for page/viewport to be converted.
+        // This prevents flicker and wasted CPU drawing incomplete state.
+        #[cfg(feature = "pdf")]
+        if app.pdf_waiting_for_page.is_some() || app.pdf_waiting_for_viewport {
+            let hud_active = app
+                .pdf_reader
+                .as_ref()
+                .and_then(|reader| reader.hud_message.as_ref())
+                .is_some();
+            if !hud_active {
+                needs_redraw = false;
             }
+        }
+
+        if needs_redraw {
+            terminal.draw(|f| app.draw(f, &fps_counter))?;
+            #[cfg(feature = "pdf")]
+            {
+                app.execute_pdf_display_plan();
+                app.update_non_kitty_viewport();
+                app.handle_kitty_eviction_responses(event_source);
+            }
+            let _ = execute!(stdout(), EndSynchronizedUpdate);
         }
 
         // If no events were processed, wait a bit to avoid busy-waiting

@@ -1,23 +1,9 @@
+use crate::terminal;
 use ratatui::style::Color;
-use std::env;
 
 /// Detect if the terminal supports true color (24-bit RGB)
 pub fn supports_true_color() -> bool {
-    if let Ok(colorterm) = env::var("COLORTERM") {
-        let colorterm_lower = colorterm.to_lowercase();
-        if colorterm_lower == "truecolor" || colorterm_lower == "24bit" {
-            return true;
-        }
-    }
-
-    if let Ok(term) = env::var("TERM") {
-        let term_lower = term.to_lowercase();
-        if term_lower.contains("truecolor") || term_lower.contains("24bit") {
-            return true;
-        }
-    }
-
-    false
+    terminal::supports_true_color()
 }
 
 /// Convert RGB color to nearest 256-color palette index

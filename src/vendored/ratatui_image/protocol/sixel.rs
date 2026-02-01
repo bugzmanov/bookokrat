@@ -5,50 +5,152 @@
 //! [`sixel-bytes`]: https://github.com/benjajaja/sixel-bytes
 //! [supports]: https://arewesixelyet.com
 //! [Sixel]: https://en.wikipedia.org/wiki/Sixel
+use std::cmp::min;
+
 use icy_sixel::{
     DiffusionMethod, MethodForLargest, MethodForRep, PixelFormat, Quality, sixel_string,
 };
 use image::DynamicImage;
 use ratatui::{buffer::Buffer, layout::Rect};
-use std::cmp::min;
 
-use super::super::{Result, errors::Errors, picker::cap_parser::Parser};
 use super::{ProtocolTrait, StatefulProtocolTrait};
+use crate::vendored::ratatui_image::{Result, errors::Errors, picker::cap_parser::Parser};
+
+#[derive(Clone, Copy)]
+pub struct SixelOptions {
+    pub diffusion: DiffusionMethod,
+    pub largest: MethodForLargest,
+    pub rep: MethodForRep,
+    pub quality: Quality,
+}
+
+impl std::fmt::Debug for SixelOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SixelOptions")
+            .field("diffusion", &format_diffusion(self.diffusion))
+            .field("largest", &format_largest(self.largest))
+            .field("rep", &format_rep(self.rep))
+            .field("quality", &format_quality(self.quality))
+            .finish()
+    }
+}
+
+fn format_diffusion(value: DiffusionMethod) -> &'static str {
+    match value {
+        DiffusionMethod::Auto => "Auto",
+        DiffusionMethod::None => "None",
+        DiffusionMethod::Atkinson => "Atkinson",
+        DiffusionMethod::FS => "FS",
+        DiffusionMethod::JaJuNi => "JaJuNi",
+        DiffusionMethod::Stucki => "Stucki",
+        DiffusionMethod::Burkes => "Burkes",
+        DiffusionMethod::ADither => "ADither",
+        DiffusionMethod::XDither => "XDither",
+    }
+}
+
+fn format_largest(value: MethodForLargest) -> &'static str {
+    match value {
+        MethodForLargest::Auto => "Auto",
+        MethodForLargest::Norm => "Norm",
+        MethodForLargest::Lum => "Lum",
+    }
+}
+
+fn format_rep(value: MethodForRep) -> &'static str {
+    match value {
+        MethodForRep::Auto => "Auto",
+        MethodForRep::CenterBox => "CenterBox",
+        MethodForRep::AverageColors => "AverageColors",
+        MethodForRep::Pixels => "Pixels",
+    }
+}
+
+fn format_quality(value: Quality) -> &'static str {
+    match value {
+        Quality::AUTO => "AUTO",
+        Quality::HIGH => "HIGH",
+        Quality::LOW => "LOW",
+        Quality::FULL => "FULL",
+        Quality::HIGHCOLOR => "HIGHCOLOR",
+    }
+}
+
+impl SixelOptions {
+    pub const DEFAULT: SixelOptions = SixelOptions {
+        diffusion: DiffusionMethod::Stucki,
+        largest: MethodForLargest::Auto,
+        rep: MethodForRep::Auto,
+        quality: Quality::HIGH,
+    };
+
+    pub fn low_quality() -> Self {
+        Self {
+            diffusion: DiffusionMethod::None,
+            largest: MethodForLargest::Auto,
+            rep: MethodForRep::Auto,
+            quality: Quality::LOW,
+        }
+    }
+}
+
+impl Default for SixelOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 // Fixed sixel protocol
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Sixel {
     pub data: String,
     pub area: Rect,
     pub is_tmux: bool,
+    pub options: SixelOptions,
 }
 
 impl Sixel {
-    pub fn new(image: DynamicImage, area: Rect, is_tmux: bool) -> Result<Self> {
-        let data = encode(&image, is_tmux)?;
+    pub fn new(
+        image: DynamicImage,
+        area: Rect,
+        is_tmux: bool,
+        options: SixelOptions,
+    ) -> Result<Self> {
+        let data = encode(&image, is_tmux, options)?;
         Ok(Self {
             data,
             area,
             is_tmux,
+            options,
         })
     }
 }
 
-// TODO: change E to sixel_rs::status::Error and map when calling
-fn encode(img: &DynamicImage, is_tmux: bool) -> Result<String> {
-    let (w, h) = (img.width(), img.height());
-    let img_rgb8 = img.to_rgb8();
+fn encode(img: &DynamicImage, is_tmux: bool, options: SixelOptions) -> Result<String> {
+    let mut img = img.to_rgb8();
+    let w = img.width();
+    let h = img.height();
+    let rounded_h = h.div_ceil(6) * 6;
+    if rounded_h != h {
+        let bg = *img.get_pixel(0, 0);
+        let mut padded = image::ImageBuffer::from_pixel(w, rounded_h, bg);
+        image::imageops::overlay(&mut padded, &img, 0, 0);
+        img = padded;
+    }
+    let img_rgb8 = img;
     let bytes = img_rgb8.as_raw();
+    let w = img_rgb8.width();
+    let h = img_rgb8.height();
 
     let mut data = sixel_string(
         bytes,
         w as i32,
         h as i32,
         PixelFormat::RGB888,
-        DiffusionMethod::Stucki,
-        MethodForLargest::Auto,
-        MethodForRep::Auto,
-        Quality::HIGH,
+        options.diffusion,
+        options.largest,
+        options.rep,
+        options.quality,
     )
     .map_err(|err| Errors::Sixel(err.to_string()))?;
 
@@ -76,7 +178,7 @@ impl ProtocolTrait for Sixel {
 }
 
 fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) {
-    let render_area = match render_area(rect, area, overdraw) {
+    let render_area = match calc_render_area(rect, area, overdraw) {
         None => {
             // If we render out of area, then the buffer will attempt to write regular text (or
             // possibly other sixels) over the image.
@@ -100,7 +202,7 @@ fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) 
         Some(r) => r,
     };
 
-    buf.cell_mut(render_area).map(|cell| cell.set_symbol(data));
+    buf[(render_area.x, render_area.y)].set_symbol(data);
     let mut skip_first = false;
 
     // Skip entire area
@@ -110,12 +212,12 @@ fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) 
                 skip_first = true;
                 continue;
             }
-            buf.cell_mut((x, y)).map(|cell| cell.set_skip(true));
+            buf[(x, y)].set_skip(true);
         }
     }
 }
 
-fn render_area(rect: Rect, area: Rect, overdraw: bool) -> Option<Rect> {
+fn calc_render_area(rect: Rect, area: Rect, overdraw: bool) -> Option<Rect> {
     if overdraw {
         return Some(Rect::new(
             area.x,
@@ -133,7 +235,7 @@ fn render_area(rect: Rect, area: Rect, overdraw: bool) -> Option<Rect> {
 
 impl StatefulProtocolTrait for Sixel {
     fn resize_encode(&mut self, img: DynamicImage, area: Rect) -> Result<()> {
-        let data = encode(&img, self.is_tmux)?;
+        let data = encode(&img, self.is_tmux, self.options)?;
         *self = Sixel {
             data,
             area,

@@ -14,7 +14,7 @@ use super::{
         halfblocks::Halfblocks,
         iterm2::Iterm2,
         kitty::{Kitty, StatefulKitty},
-        sixel::Sixel,
+        sixel::{Sixel, SixelOptions},
     },
 };
 use cap_parser::{Parser, QueryStdioOptions, Response};
@@ -48,6 +48,7 @@ pub struct Picker {
     background_color: Rgba<u8>,
     is_tmux: bool,
     capabilities: Vec<Capability>,
+    sixel_options: SixelOptions,
 }
 
 /// Serde-friendly protocol-type enum for [Picker].
@@ -106,6 +107,18 @@ impl Picker {
         // Detect tmux, and only if positive then take some risky guess for iTerm2 support.
         let (is_tmux, tmux_proto) = detect_tmux_and_outer_protocol_from_env();
 
+        static DEFAULT_PICKER: Picker = Picker {
+            // This is completely arbitrary. For halfblocks, it doesn't have to be precise
+            // since we're not rendering pixels. It should be roughly 1:2 ratio, and some
+            // reasonable size.
+            font_size: (10, 20),
+            background_color: DEFAULT_BACKGROUND,
+            protocol_type: ProtocolType::Halfblocks,
+            is_tmux: false,
+            capabilities: Vec::new(),
+            sixel_options: SixelOptions::DEFAULT,
+        };
+
         // Write and read to stdin to query protocol capabilities and font-size.
         match query_with_timeout(is_tmux, Duration::from_secs(1), options) {
             Ok((capability_proto, font_size, caps)) => {
@@ -124,21 +137,19 @@ impl Picker {
                         protocol_type,
                         is_tmux,
                         capabilities: caps,
+                        sixel_options: SixelOptions::default(),
                     })
                 } else {
-                    Err(Errors::NoFontSize)
+                    let mut p = DEFAULT_PICKER.clone();
+                    p.is_tmux = is_tmux;
+                    Ok(p)
                 }
             }
-            Err(Errors::NoCap) => Ok(Self {
-                // This is completely arbitrary. For halfblocks, it doesn't have to be precise
-                // since we're not rendering pixels. It should be roughly 1:2 ratio, and some
-                // reasonable size.
-                font_size: (10, 20),
-                background_color: DEFAULT_BACKGROUND,
-                protocol_type: ProtocolType::Halfblocks,
-                is_tmux,
-                capabilities: Vec::new(),
-            }),
+            Err(Errors::NoCap | Errors::NoStdinResponse | Errors::NoFontSize) => {
+                let mut p = DEFAULT_PICKER.clone();
+                p.is_tmux = is_tmux;
+                Ok(p)
+            }
             Err(err) => Err(err),
         }
     }
@@ -171,6 +182,7 @@ impl Picker {
             protocol_type,
             is_tmux,
             capabilities: Vec::new(),
+            sixel_options: SixelOptions::default(),
         }
     }
 
@@ -192,6 +204,10 @@ impl Picker {
     /// Change the default background color (transparent black).
     pub fn set_background_color<T: Into<Rgba<u8>>>(&mut self, background_color: T) {
         self.background_color = background_color.into();
+    }
+
+    pub fn set_sixel_options(&mut self, options: SixelOptions) {
+        self.sixel_options = options;
     }
 
     /// Returns the capabilities detected by [Picker::from_query_stdio].
@@ -219,7 +235,12 @@ impl Picker {
 
         match self.protocol_type {
             ProtocolType::Halfblocks => Ok(Protocol::Halfblocks(Halfblocks::new(image, area)?)),
-            ProtocolType::Sixel => Ok(Protocol::Sixel(Sixel::new(image, area, self.is_tmux)?)),
+            ProtocolType::Sixel => Ok(Protocol::Sixel(Sixel::new(
+                image,
+                area,
+                self.is_tmux,
+                self.sixel_options,
+            )?)),
             ProtocolType::Kitty => Ok(Protocol::Kitty(Kitty::new(image, area, self.is_tmux)?)),
             ProtocolType::Iterm2 => Ok(Protocol::ITerm2(Iterm2::new(image, area, self.is_tmux)?)),
         }
@@ -232,6 +253,7 @@ impl Picker {
             ProtocolType::Halfblocks => StatefulProtocolType::Halfblocks(Halfblocks::default()),
             ProtocolType::Sixel => StatefulProtocolType::Sixel(Sixel {
                 is_tmux: self.is_tmux,
+                options: self.sixel_options,
                 ..Sixel::default()
             }),
             ProtocolType::Kitty => StatefulProtocolType::Kitty(StatefulKitty::new(self.is_tmux)),
@@ -278,19 +300,26 @@ fn detect_tmux_and_outer_protocol_from_env() -> (bool, Option<ProtocolType>) {
 }
 
 fn iterm2_from_env() -> Option<ProtocolType> {
-    if env::var("TERM_PROGRAM").is_ok_and(|term_program| {
-        term_program.contains("iTerm")
-            || term_program.contains("WezTerm")
-            || term_program.contains("mintty")
-            || term_program.contains("vscode")
-            || term_program.contains("Tabby")
-            || term_program.contains("Hyper")
-            || term_program.contains("rio")
-            || term_program.contains("Bobcat")
-    }) {
-        return Some(ProtocolType::Iterm2);
+    let term_program = env::var("TERM_PROGRAM").ok().unwrap_or_default();
+
+    // iTerm uses Sixel for better EPUB image quality
+    if term_program.contains("iTerm") {
+        return Some(ProtocolType::Sixel);
     }
     if env::var("LC_TERMINAL").is_ok_and(|lc_term| lc_term.contains("iTerm")) {
+        return Some(ProtocolType::Sixel);
+    }
+
+    // Other terminals use iTerm2 protocol
+    if term_program.contains("WezTerm")
+        || term_program.contains("mintty")
+        || term_program.contains("vscode")
+        || term_program.contains("Tabby")
+        || term_program.contains("Hyper")
+        || term_program.contains("rio")
+        || term_program.contains("Bobcat")
+        || term_program.contains("WarpTerminal")
+    {
         return Some(ProtocolType::Iterm2);
     }
     None

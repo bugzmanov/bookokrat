@@ -1,8 +1,7 @@
-use once_cell::sync::Lazy;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 pub struct TestFailure {
     pub test_name: String,
@@ -25,7 +24,7 @@ pub struct TestReport {
     browser_opened: bool,
 }
 
-static TEST_REPORT: Lazy<Mutex<TestReport>> = Lazy::new(|| {
+static TEST_REPORT: LazyLock<Mutex<TestReport>> = LazyLock::new(|| {
     Mutex::new(TestReport {
         failures: Vec::new(),
         browser_opened: false,

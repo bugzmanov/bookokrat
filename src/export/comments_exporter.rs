@@ -116,7 +116,10 @@ impl<'a> CommentsExporter<'a> {
             return;
         };
 
-        let Some(node) = doc.blocks.get(entry.primary_comment().node_index()) else {
+        let Some(node_idx) = entry.primary_comment().node_index() else {
+            return;
+        };
+        let Some(node) = doc.blocks.get(node_idx) else {
             return;
         };
 
@@ -184,11 +187,19 @@ impl<'a> CommentsExporter<'a> {
     fn extract_full_context_for_export(&self, chapter_href: &str, comment: &Comment) -> String {
         use crate::markdown::Block;
 
+        // For PDF comments (or any comment with quoted_text), use the stored text
+        if let Some(quoted) = &comment.quoted_text {
+            return quoted.clone();
+        }
+
         let Some(doc) = self.doc_cache.get(chapter_href) else {
             return String::new();
         };
 
-        let Some(node) = doc.blocks.get(comment.node_index()) else {
+        let Some(node_idx) = comment.node_index() else {
+            return String::new();
+        };
+        let Some(node) = doc.blocks.get(node_idx) else {
             return String::new();
         };
 
@@ -207,15 +218,15 @@ impl<'a> CommentsExporter<'a> {
                             format!("{}. ", start + idx as u32)
                         }
                     };
-                    let content = Self::extract_list_item_content(item);
-                    result.push_str(&format!("{prefix}{content}\n"));
+                    let item_content = Self::extract_list_item_content(item);
+                    result.push_str(&format!("{prefix}{item_content}\n"));
                 }
                 result
             }
             Block::Quote { content } => {
                 let mut result = String::new();
-                for node in content {
-                    let text = Self::extract_text_from_node(node);
+                for quote_node in content {
+                    let text = Self::extract_text_from_node(quote_node);
                     result.push_str(&format!("> {text}\n"));
                 }
                 result
@@ -226,8 +237,8 @@ impl<'a> CommentsExporter<'a> {
                     let term = Self::extract_text_from_text(&item.term);
                     result.push_str(&format!("**{term}**\n"));
                     for def in &item.definitions {
-                        for node in def {
-                            let text = Self::extract_text_from_node(node);
+                        for def_node in def {
+                            let text = Self::extract_text_from_node(def_node);
                             result.push_str(&format!(": {text}\n"));
                         }
                     }

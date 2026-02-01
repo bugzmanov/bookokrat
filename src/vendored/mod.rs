@@ -3,3 +3,5 @@
 
 #[path = "ratatui_image/lib.rs"]
 pub mod ratatui_image;
+
+pub mod tui_textarea;

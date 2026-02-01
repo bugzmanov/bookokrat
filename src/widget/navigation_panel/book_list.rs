@@ -18,7 +18,7 @@ pub struct BookList {
 
 impl BookList {
     pub fn new(book_manager: &BookManager) -> Self {
-        let books = book_manager.books.clone();
+        let books = book_manager.get_books();
         let has_files = !books.is_empty();
         let mut list_state = ListState::default();
         if has_files {
@@ -30,6 +30,19 @@ impl BookList {
             list_state,
             book_infos: books,
             search_state: SearchState::new(),
+        }
+    }
+
+    pub fn set_books(&mut self, books: Vec<BookInfo>) {
+        // When list changes, reset selection to first item
+        // This prevents index pointing to wrong book after filtering
+        self.book_infos = books;
+        if self.book_infos.is_empty() {
+            self.selected = 0;
+            self.list_state = ListState::default();
+        } else {
+            self.selected = 0;
+            self.list_state = ListState::default().with_selected(Some(0)).with_offset(0);
         }
     }
 
@@ -166,12 +179,16 @@ impl BookList {
         area: Rect,
         is_focused: bool,
         palette: &Base16Palette,
-        current_book_index: Option<usize>,
+        current_book_path: Option<&str>,
         is_calibre_mode: bool,
     ) {
         // Get focus-aware colors
         let (text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
+
+        // Find index of currently open book by path
+        let current_book_index =
+            current_book_path.and_then(|path| self.book_infos.iter().position(|b| b.path == path));
 
         // Create list items
         let mut items: Vec<ListItem> = Vec::new();
@@ -202,12 +219,27 @@ impl BookList {
 
                 let mut spans = Vec::new();
                 let text = &book_info.display_name;
-                let mut last_end = 0;
 
-                for (start, end) in highlight_ranges {
+                // Build char-to-byte mapping for proper Unicode handling
+                // highlight_ranges contains character indices, not byte indices
+                let char_to_byte: Vec<usize> =
+                    text.char_indices().map(|(byte_idx, _)| byte_idx).collect();
+                let text_byte_len = text.len();
+
+                let mut last_end_char = 0;
+
+                for (start_char, end_char) in highlight_ranges {
                     // Add non-highlighted text before this match
-                    if *start > last_end {
-                        spans.push(Span::styled(text[last_end..*start].to_string(), base_style));
+                    if *start_char > last_end_char {
+                        let start_byte = char_to_byte.get(last_end_char).copied().unwrap_or(0);
+                        let end_byte = char_to_byte
+                            .get(*start_char)
+                            .copied()
+                            .unwrap_or(text_byte_len);
+                        spans.push(Span::styled(
+                            text[start_byte..end_byte].to_string(),
+                            base_style,
+                        ));
                     }
 
                     // Add highlighted match text
@@ -219,17 +251,27 @@ impl BookList {
                         Style::default().bg(Color::Rgb(100, 100, 0)).fg(text_color)
                     };
 
+                    let start_byte = char_to_byte.get(*start_char).copied().unwrap_or(0);
+                    let end_byte = char_to_byte
+                        .get(*end_char)
+                        .copied()
+                        .unwrap_or(text_byte_len);
                     spans.push(Span::styled(
-                        text[*start..*end].to_string(),
+                        text[start_byte..end_byte].to_string(),
                         highlight_style,
                     ));
 
-                    last_end = *end;
+                    last_end_char = *end_char;
                 }
 
                 // Add remaining non-highlighted text
-                if last_end < text.len() {
-                    spans.push(Span::styled(text[last_end..].to_string(), base_style));
+                let char_count = char_to_byte.len();
+                if last_end_char < char_count {
+                    let start_byte = char_to_byte
+                        .get(last_end_char)
+                        .copied()
+                        .unwrap_or(text_byte_len);
+                    spans.push(Span::styled(text[start_byte..].to_string(), base_style));
                 }
 
                 Line::from(spans)

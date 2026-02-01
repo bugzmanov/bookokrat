@@ -32,6 +32,12 @@ impl SearchState {
     }
 
     pub fn start_search(&mut self, current_position: usize) {
+        if self.active {
+            self.mode = SearchMode::InputMode;
+            self.current_match_index = None;
+            self.original_position = current_position;
+            return;
+        }
         self.active = true;
         self.mode = SearchMode::InputMode;
         self.query.clear();
@@ -178,19 +184,40 @@ pub fn find_matches_in_text(query: &str, items: &[String]) -> Vec<SearchMatch> {
     }
 
     let query_lower = query.to_lowercase();
+    let query_char_len = query_lower.chars().count();
     let mut matches = Vec::new();
 
     for (index, item) in items.iter().enumerate() {
         let item_lower = item.to_lowercase();
 
+        // Build byte-to-char index mapping for proper Unicode handling
+        let byte_to_char: Vec<usize> = item_lower
+            .char_indices()
+            .map(|(byte_idx, _)| byte_idx)
+            .collect();
+
         // Find all occurrences of the query in this item
         let mut highlight_ranges = Vec::new();
-        let mut search_start = 0;
+        let mut search_start_byte = 0;
 
-        while let Some(pos) = item_lower[search_start..].find(&query_lower) {
-            let actual_pos = search_start + pos;
-            highlight_ranges.push((actual_pos, actual_pos + query.len()));
-            search_start = actual_pos + 1; // Allow overlapping matches
+        while let Some(byte_pos) = item_lower[search_start_byte..].find(&query_lower) {
+            let actual_byte_pos = search_start_byte + byte_pos;
+
+            // Convert byte position to character position
+            let char_pos = byte_to_char
+                .iter()
+                .position(|&b| b == actual_byte_pos)
+                .unwrap_or(0);
+
+            highlight_ranges.push((char_pos, char_pos + query_char_len));
+
+            // Advance to next character boundary after match start
+            let next_char_idx = char_pos + 1;
+            search_start_byte = if next_char_idx < byte_to_char.len() {
+                byte_to_char[next_char_idx]
+            } else {
+                item_lower.len()
+            };
         }
 
         if !highlight_ranges.is_empty() {
@@ -226,6 +253,30 @@ mod tests {
         assert_eq!(matches[0].index, 1);
 
         let matches = find_matches_in_text("98", &items);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].index, 2);
+    }
+
+    #[test]
+    fn test_find_matches_unicode() {
+        let items = vec![
+            "автор неизвестен. русские народные сказки".to_string(),
+            "Война и мир - Толстой".to_string(),
+            "The Great Gatsby".to_string(),
+        ];
+
+        // Search for Cyrillic text
+        let matches = find_matches_in_text("автор", &items);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].index, 0);
+        assert_eq!(matches[0].highlight_ranges[0], (0, 5)); // 5 characters
+
+        // Search that appears multiple times
+        let matches = find_matches_in_text("а", &items);
+        assert!(matches.len() >= 2); // 'а' appears in first two items
+
+        // Mixed search
+        let matches = find_matches_in_text("the", &items);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].index, 2);
     }
