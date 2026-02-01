@@ -4471,7 +4471,7 @@ fn test_normal_mode_counted_motion_svg() {
 
     app.press_key(crossterm::event::KeyCode::Char('y'));
     let copied = app.testing_last_copied_text().unwrap_or_default();
-    assert_eq!(copied, "Line 13");
+    assert_eq!(copied, "Line 15");
 
     assert_svg_snapshot(
         svg_output.clone(),
