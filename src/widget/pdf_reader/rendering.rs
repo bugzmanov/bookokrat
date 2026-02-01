@@ -2030,7 +2030,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let min_sidebar = 24u16;
+        let min_sidebar = MIN_COMMENT_TEXTAREA_WIDTH;
         let max_sidebar = 40u16;
         let gap_total = area.width.saturating_sub(content_width);
         let right_gap = gap_total.saturating_sub(gap_total / 2); // Right half (PDF is centered)
@@ -2063,7 +2063,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let min_sidebar = 24u16;
+        let min_sidebar = MIN_COMMENT_TEXTAREA_WIDTH;
         let max_sidebar = 40u16;
         let gap_total = area.width.saturating_sub(content_width);
         let right_gap = gap_total.saturating_sub(gap_total / 2);
