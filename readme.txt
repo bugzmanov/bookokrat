@@ -3,8 +3,7 @@
                               FEATURES AT A GLANCE
 
   [LIBRARY]
-    ▸ Automatic EPUB discovery in current directory
-    ▸ Automatic PDF discovery in current directory
+    ▸ Automatic EPUB / PDF discovery in current directory
     ▸ Calibre library detection with metadata (titles, authors)
     ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
     ▸ Split-view interface with library browser and reader

@@ -497,7 +497,7 @@ impl SettingsPopup {
             vec![Line::from(vec![
                 Span::styled("! ", Style::default().fg(palette.base_09)),
                 Span::styled(
-                    "Scroll mode uses 500MB-1GB memory",
+                    "Scroll mode uses 300-500MB memory",
                     Style::default().fg(palette.base_09),
                 ),
             ])]

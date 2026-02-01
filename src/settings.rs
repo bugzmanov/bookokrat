@@ -45,7 +45,7 @@ pub enum PdfRenderMode {
     /// Page-at-a-time mode (lower memory usage)
     #[default]
     Page,
-    /// Continuous scroll mode (500MB-1GB memory usage)
+    /// Continuous scroll mode (300-500MB memory usage)
     Scroll,
 }
 
