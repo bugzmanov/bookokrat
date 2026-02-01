@@ -324,12 +324,10 @@ impl RenderService {
                     self.prefetch_in_flight.remove(page);
                 }
                 RenderResponse::Cancelled(id) | RenderResponse::Error { id, .. } => {
-                    if let Some(request) = self.pending_requests.remove(id) {
-                        if let PendingRequest::Page(page) | PendingRequest::Prefetch(page) =
-                            request
-                        {
-                            self.prefetch_in_flight.remove(&page);
-                        }
+                    if let Some(PendingRequest::Page(page) | PendingRequest::Prefetch(page)) =
+                        self.pending_requests.remove(id)
+                    {
+                        self.prefetch_in_flight.remove(&page);
                     }
                 }
                 RenderResponse::ExtractedText { id, .. } => {

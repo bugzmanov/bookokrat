@@ -28,70 +28,68 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn handle_mouse_drag(&mut self, x: u16, y: u16) {
-        if self.is_normal_mode_active() && self.last_inner_text_area.is_some() {
-            // Use the inner text area if available, otherwise fall back to the provided area
-            let text_area = self.last_inner_text_area.unwrap();
+        if self.is_normal_mode_active() {
+            if let Some(text_area) = self.last_inner_text_area {
 
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                if !self.is_image_line(line) {
-                    if self.normal_mode.visual_mode == super::VisualMode::None {
-                        if self.normal_mode.visual_anchor.is_none() {
-                            self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
+                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                    if !self.is_image_line(line) {
+                        if self.normal_mode.visual_mode == super::VisualMode::None {
+                            if self.normal_mode.visual_anchor.is_none() {
+                                self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
+                            }
+                            self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
                         }
-                        self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
+                        self.set_normal_mode_cursor(line, column);
                     }
-
-                    self.set_normal_mode_cursor(line, column);
                 }
-            }
 
-            // Check if we need to auto-scroll due to dragging outside the visible area
-            const SCROLL_MARGIN: u16 = 3;
-            let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
-            let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
+                // Check if we need to auto-scroll due to dragging outside the visible area
+                const SCROLL_MARGIN: u16 = 3;
+                let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
+                let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
 
-            if needs_scroll_up {
-                self.auto_scroll_active = true;
-                self.auto_scroll_speed = -1.0;
-                // Perform immediate scroll like text_reader.rs does
-                self.perform_auto_scroll();
-            } else if needs_scroll_down {
-                self.auto_scroll_active = true;
-                self.auto_scroll_speed = 1.0;
-                // Perform immediate scroll like text_reader.rs does
-                self.perform_auto_scroll();
-            } else {
-                self.auto_scroll_active = false;
+                if needs_scroll_up {
+                    self.auto_scroll_active = true;
+                    self.auto_scroll_speed = -1.0;
+                    // Perform immediate scroll like text_reader.rs does
+                    self.perform_auto_scroll();
+                } else if needs_scroll_down {
+                    self.auto_scroll_active = true;
+                    self.auto_scroll_speed = 1.0;
+                    // Perform immediate scroll like text_reader.rs does
+                    self.perform_auto_scroll();
+                } else {
+                    self.auto_scroll_active = false;
+                }
+                return;
             }
-            return;
         }
 
-        if self.text_selection.is_selecting && self.last_inner_text_area.is_some() {
-            // Use the inner text area if available, otherwise fall back to the provided area
-            let text_area = self.last_inner_text_area.unwrap();
+        if self.text_selection.is_selecting {
+            if let Some(text_area) = self.last_inner_text_area {
+                // Always try to update text selection first, regardless of auto-scroll
+                if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+                    self.text_selection.update_selection(line, column);
+                }
 
-            // Always try to update text selection first, regardless of auto-scroll
-            if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
-                self.text_selection.update_selection(line, column);
-            }
+                // Check if we need to auto-scroll due to dragging outside the visible area
+                const SCROLL_MARGIN: u16 = 3;
+                let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
+                let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
 
-            // Check if we need to auto-scroll due to dragging outside the visible area
-            const SCROLL_MARGIN: u16 = 3;
-            let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
-            let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
-
-            if needs_scroll_up {
-                self.auto_scroll_active = true;
-                self.auto_scroll_speed = -1.0;
-                // Perform immediate scroll like text_reader.rs does
-                self.perform_auto_scroll();
-            } else if needs_scroll_down {
-                self.auto_scroll_active = true;
-                self.auto_scroll_speed = 1.0;
-                // Perform immediate scroll like text_reader.rs does
-                self.perform_auto_scroll();
-            } else {
-                self.auto_scroll_active = false;
+                if needs_scroll_up {
+                    self.auto_scroll_active = true;
+                    self.auto_scroll_speed = -1.0;
+                    // Perform immediate scroll like text_reader.rs does
+                    self.perform_auto_scroll();
+                } else if needs_scroll_down {
+                    self.auto_scroll_active = true;
+                    self.auto_scroll_speed = 1.0;
+                    // Perform immediate scroll like text_reader.rs does
+                    self.perform_auto_scroll();
+                } else {
+                    self.auto_scroll_active = false;
+                }
             }
         }
     }

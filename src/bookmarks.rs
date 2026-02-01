@@ -154,6 +154,7 @@ impl Bookmarks {
             .map(|(path, bookmark)| (path.clone(), bookmark))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_bookmark(
         &mut self,
         path: &str,

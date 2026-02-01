@@ -955,7 +955,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         context: RenderContext,
     ) {
         let _paragraph_lines_start = lines.len();
-        let mut has_anchor_only = false;
         if context == RenderContext::InsideContainer {
             let has_visible_content = content.iter().any(|item| match item {
                 TextOrInline::Text(t) => !t.content.trim().is_empty(),
@@ -1104,7 +1103,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index,
             );
         } else if !has_content {
-            has_anchor_only = has_anchor && !has_visible_text;
+            let has_anchor_only = has_anchor && !has_visible_text;
             if has_anchor_only {
                 return;
             }

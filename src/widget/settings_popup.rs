@@ -159,7 +159,7 @@ impl SettingsPopup {
             .split(padded);
 
         // Render tabs
-        self.render_tabs(f, main_chunks[0], &palette);
+        self.render_tabs(f, main_chunks[0], palette);
 
         // Render content based on selected tab
         let content_area = Rect {
@@ -170,8 +170,8 @@ impl SettingsPopup {
         };
 
         match self.current_tab {
-            SettingsTab::PdfSupport => self.render_pdf_tab(f, content_area, &palette),
-            SettingsTab::Themes => self.render_themes_tab(f, content_area, &palette),
+            SettingsTab::PdfSupport => self.render_pdf_tab(f, content_area, palette),
+            SettingsTab::Themes => self.render_themes_tab(f, content_area, palette),
         }
     }
 
@@ -188,11 +188,10 @@ impl SettingsPopup {
         };
 
         for (idx, name) in tab_iter {
-            let is_selected = match (idx, self.current_tab) {
-                (0, SettingsTab::PdfSupport) => true,
-                (1, SettingsTab::Themes) => true,
-                _ => false,
-            };
+            let is_selected = matches!(
+                (idx, self.current_tab),
+                (0, SettingsTab::PdfSupport) | (1, SettingsTab::Themes)
+            );
 
             let style = if is_selected {
                 Style::default()

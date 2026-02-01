@@ -1006,11 +1006,13 @@ impl PdfReaderState {
         self.navigate_pages(-1)
     }
 
+    #[allow(dead_code)]
     fn next_screen(&mut self) -> Option<InputAction> {
         let pages = self.last_render.pages_shown.max(1) as isize;
         self.navigate_pages(pages)
     }
 
+    #[allow(dead_code)]
     fn prev_screen(&mut self) -> Option<InputAction> {
         let pages = self.last_render.pages_shown.max(1) as isize;
         self.navigate_pages(-pages)
@@ -1098,6 +1100,7 @@ impl PdfReaderState {
         Some(InputAction::Redraw)
     }
 
+    #[allow(dead_code)]
     fn scroll_to_document_bottom(&mut self) -> Option<InputAction> {
         let heights = self
             .zoom
@@ -1173,11 +1176,7 @@ impl PdfReaderState {
 
                 let target_offset = if is_page_mode {
                     // In page mode, scroll to bottom of current page (no cumulative offset)
-                    if page_height > viewport_height {
-                        page_height - viewport_height
-                    } else {
-                        0
-                    }
+                    page_height.saturating_sub(viewport_height)
                 } else {
                     // Scroll mode: calculate cumulative offset
                     let page_start: u32 = heights
@@ -1185,11 +1184,7 @@ impl PdfReaderState {
                         .take(self.page)
                         .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
                         .sum();
-                    if page_height > viewport_height {
-                        page_start + page_height - viewport_height
-                    } else {
-                        page_start
-                    }
+                    page_start + page_height.saturating_sub(viewport_height)
                 };
 
                 if let Some(z) = &mut self.zoom {

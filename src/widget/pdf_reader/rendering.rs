@@ -1152,7 +1152,6 @@ impl PdfReaderState {
     ) -> DisplayBatch<'s> {
         let modal_bg = self.bg_color();
         let modal_fg = self.fg_color();
-        let modal_accent = self.accent_color();
         let modal_panel_bg = self.palette.base_01;
         let modal_panel_header_bg = self.palette.base_02;
         let popup_border = self.palette.popup_border_color();
@@ -1163,13 +1162,11 @@ impl PdfReaderState {
         let input_active = modal_msg.is_some();
         let bg_color = modal_bg;
         let mut fg_color = modal_fg;
-        let mut accent_color = modal_accent;
         let mut muted_color = self.muted_color();
 
         if comment_modal {
             fg_color = self.palette.base_04;
             muted_color = self.palette.base_03;
-            accent_color = self.palette.base_03;
         }
 
         // Fill background; dim mode covers the whole frame so panels are muted too.

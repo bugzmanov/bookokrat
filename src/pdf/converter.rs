@@ -1297,10 +1297,12 @@ impl ConverterEngine {
 
         // First, clear images Vec for distant pages (even if not in page_cache yet)
         for (i, img) in self.images.iter_mut().enumerate() {
-            if img.is_some() && (i < start || i > end) {
-                if cursor_page != Some(i) && !self.pending_cursor_pages.contains(&i) {
-                    *img = None;
-                }
+            if img.is_some()
+                && (i < start || i > end)
+                && cursor_page != Some(i)
+                && !self.pending_cursor_pages.contains(&i)
+            {
+                *img = None;
             }
         }
 
