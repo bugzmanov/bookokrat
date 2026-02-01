@@ -1168,8 +1168,7 @@ impl App {
             {
                 for &page in &evicted_pages {
                     if let Some(cached) = service.get_cached_page(page) {
-                        let data = (*cached).clone();
-                        let _ = tx.send(ConversionCommand::EnqueuePage(data));
+                        let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&cached)));
                     }
                 }
             }

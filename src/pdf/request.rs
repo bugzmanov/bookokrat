@@ -1,6 +1,7 @@
 //! Render request and response types
 
 use ratatui::layout::Rect;
+use std::sync::Arc;
 
 use super::CellSize;
 use super::TocEntry;
@@ -97,7 +98,7 @@ pub enum RenderResponse {
     Page {
         id: RequestId,
         page: usize,
-        data: Box<PageData>,
+        data: Arc<PageData>,
     },
 
     /// Extracted text from selection

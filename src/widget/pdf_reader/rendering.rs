@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::io::stdout;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use crate::vendored::ratatui_image::{FontSize, Image};
 use crossterm::{execute, terminal::BeginSynchronizedUpdate};
@@ -89,8 +90,7 @@ fn send_cached_page_to_converter(
 
     if let Some(cached) = service.get_cached_page(page) {
         log::trace!("Sending cached page {page} to converter (no local image)");
-        let data = (*cached).clone();
-        let _ = tx.send(ConversionCommand::EnqueuePage(data));
+        let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&cached)));
     }
 }
 
@@ -118,7 +118,6 @@ pub(crate) fn apply_render_responses(
         match response {
             RenderResponse::Page { page, data, .. } => {
                 log::trace!("Received page {page} data from worker");
-                let mut data = *data;
 
                 while pdf_reader.rendered.len() <= page {
                     pdf_reader.rendered.push(RenderedInfo::default());
@@ -132,8 +131,8 @@ pub(crate) fn apply_render_responses(
                     data.img_data.height_cell,
                 ));
                 info.scale_factor = Some(data.scale_factor);
-                info.line_bounds = std::mem::take(&mut data.line_bounds);
-                info.link_rects = std::mem::take(&mut data.link_rects);
+                info.line_bounds = data.line_bounds.clone();
+                info.link_rects = data.link_rects.clone();
                 info.page_px_height = Some(data.page_height_px);
 
                 // Track if we have line_bounds for pending search check
@@ -156,7 +155,7 @@ pub(crate) fn apply_render_responses(
 
                 if let Some(tx) = conversion_tx {
                     log::trace!("Sending EnqueuePage for page {page} to converter");
-                    let _ = tx.send(ConversionCommand::EnqueuePage(data));
+                    let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&data)));
                 } else if !use_kitty {
                     if let Some(picker) = picker {
                         if let Some(converted) = convert_page_image(&data.img_data, picker) {
