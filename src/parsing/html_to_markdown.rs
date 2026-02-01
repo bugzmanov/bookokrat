@@ -182,6 +182,29 @@ impl HtmlToMarkdownConverter {
         HtmlToMarkdownConverter {}
     }
 
+    fn attach_container_id_or_insert_anchor(
+        &self,
+        id: String,
+        start_len: usize,
+        document: &mut Document,
+    ) {
+        if start_len < document.blocks.len() {
+            if document.blocks[start_len].id.is_none() {
+                document.blocks[start_len].id = Some(id);
+            } else if document.blocks[start_len].id.as_deref() != Some(&id) {
+                let mut text = Text::default();
+                text.push_inline(Inline::Anchor { id });
+                let anchor_node = Node::new(Block::Paragraph { content: text }, 0..0);
+                document.blocks.insert(start_len, anchor_node);
+            }
+        } else {
+            let mut text = Text::default();
+            text.push_inline(Inline::Anchor { id });
+            let anchor_node = Node::new(Block::Paragraph { content: text }, 0..0);
+            document.blocks.push(anchor_node);
+        }
+    }
+
     fn collect_content(
         &self,
         node: &Rc<markup5ever_rcdom::Node>,
@@ -368,6 +391,7 @@ impl HtmlToMarkdownConverter {
             }
             "div" | "section" | "article" => {
                 let div_id = self.get_attr_value(attrs, "id");
+                let start_len = document.blocks.len();
 
                 let mut has_immediate_heading = false;
                 for child in node.children.borrow().iter() {
@@ -421,6 +445,20 @@ impl HtmlToMarkdownConverter {
                     for child in node.children.borrow().iter() {
                         self.visit_node(child, document);
                     }
+                }
+
+                if let Some(div_id) = div_id {
+                    self.attach_container_id_or_insert_anchor(div_id, start_len, document);
+                }
+            }
+            "span" => {
+                let span_id = self.get_attr_value(attrs, "id");
+                let start_len = document.blocks.len();
+                for child in node.children.borrow().iter() {
+                    self.visit_node(child, document);
+                }
+                if let Some(span_id) = span_id {
+                    self.attach_container_id_or_insert_anchor(span_id, start_len, document);
                 }
             }
             "p" => {
