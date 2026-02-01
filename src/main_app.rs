@@ -32,8 +32,8 @@ use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 // PDF support (feature-gated)
 #[cfg(feature = "pdf")]
 use crate::pdf::{
-    CellSize, RenderService, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY,
-    DEFAULT_PREFETCH_RADIUS, DEFAULT_WORKERS,
+    CellSize, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY, DEFAULT_PREFETCH_RADIUS,
+    DEFAULT_WORKERS, RenderService,
 };
 #[cfg(feature = "pdf")]
 use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
@@ -864,7 +864,7 @@ impl App {
             page_count,
             doc_title.as_deref().unwrap_or("(none)")
         );
-        // is_iterm = actual iTerm terminal (for feature restrictions)
+        // is_iterm = actual iTerm terminal (for feature restrictions like normal mode)
         let is_iterm = caps.kind == crate::terminal::TerminalKind::ITerm;
         let supports_comments = caps.pdf.supports_comments;
 
@@ -2525,11 +2525,25 @@ impl App {
 
         #[cfg(feature = "pdf")]
         if self.has_active_popup()
-            && self.pdf_reader.is_some()
+            && let Some(ref pdf_reader) = self.pdf_reader
             && let Some(area) = pdf_area
         {
-            // Clear image skip flags so the dim overlay can draw over PDFs.
-            f.render_widget(crate::widget::pdf_reader::TextRegion, area);
+            if pdf_reader.is_kitty {
+                // Kitty: clear skip flags so dim overlay can render
+                f.render_widget(crate::widget::pdf_reader::TextRegion, area);
+            } else {
+                // iTerm2 protocol (WezTerm, iTerm): fill with dark content to
+                // overwrite the terminal image (just clearing skip flags causes
+                // artifacts due to image placement coordinates).
+                // Use inner area to preserve panel borders.
+                let inner = ratatui::layout::Rect {
+                    x: area.x.saturating_add(1),
+                    y: area.y.saturating_add(1),
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+                f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
+            }
         }
 
         if matches!(

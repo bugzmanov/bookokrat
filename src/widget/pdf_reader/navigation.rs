@@ -3864,7 +3864,6 @@ impl PdfReaderState {
     }
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InputOutcome {
     None,
@@ -4076,9 +4075,7 @@ impl PdfReaderState {
     }
 }
 
-fn toggle_profiling(
-    profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
-) {
+fn toggle_profiling(profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>) {
     let mut profiler_lock = profiler.lock().unwrap();
 
     if profiler_lock.is_none() {

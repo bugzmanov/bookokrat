@@ -30,12 +30,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn handle_mouse_drag(&mut self, x: u16, y: u16) {
         if self.is_normal_mode_active() {
             if let Some(text_area) = self.last_inner_text_area {
-
                 if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
                     if !self.is_image_line(line) {
                         if self.normal_mode.visual_mode == super::VisualMode::None {
                             if self.normal_mode.visual_anchor.is_none() {
-                                self.normal_mode.visual_anchor = Some(self.normal_mode.cursor.clone());
+                                self.normal_mode.visual_anchor =
+                                    Some(self.normal_mode.cursor.clone());
                             }
                             self.normal_mode.visual_mode = super::VisualMode::CharacterWise;
                         }

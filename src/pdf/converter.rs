@@ -899,8 +899,10 @@ impl ConverterEngine {
                 continue;
             };
 
-            let cell_size =
-                CellSize::new(cached.data.img_data.width_cell, viewport.viewport_height_cells);
+            let cell_size = CellSize::new(
+                cached.data.img_data.width_cell,
+                viewport.viewport_height_cells,
+            );
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1099,8 +1101,10 @@ impl ConverterEngine {
                 continue;
             };
 
-            let cell_size =
-                CellSize::new(cached.data.img_data.width_cell, viewport.viewport_height_cells);
+            let cell_size = CellSize::new(
+                cached.data.img_data.width_cell,
+                viewport.viewport_height_cells,
+            );
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {

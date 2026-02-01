@@ -663,7 +663,6 @@ impl BookSearch {
 
         spans
     }
-
 }
 
 impl VimNavMotions for BookSearch {

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64_simd;
 use fast_image_resize as fr;
 use image::{DynamicImage, GenericImageView, ImageBuffer};
 use imagesize;
@@ -9,7 +10,6 @@ use resvg::tiny_skia::Pixmap;
 use resvg::usvg;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use base64_simd;
 
 use super::image_storage::ImageStorage;
 
@@ -102,12 +102,7 @@ impl BookImages {
         if let Some((svg_data, resources_dir)) =
             self.svg_data_and_resources_dir(epub_path, image_src, chapter_path)
         {
-            return self.render_svg_to_image(
-                image_src,
-                &svg_data,
-                resources_dir.as_deref(),
-                None,
-            );
+            return self.render_svg_to_image(image_src, &svg_data, resources_dir.as_deref(), None);
         }
 
         // Delegate path resolution to ImageStorage with chapter context
@@ -236,8 +231,10 @@ impl BookImages {
         chapter_path: Option<&str>,
     ) -> Option<(Vec<u8>, Option<PathBuf>)> {
         if let Some(svg_data) = Self::decode_svg_data_uri(image_src) {
-            let resources_dir = chapter_path
-                .and_then(|chapter| self.storage.resolve_chapter_dir_with_context(epub_path, chapter));
+            let resources_dir = chapter_path.and_then(|chapter| {
+                self.storage
+                    .resolve_chapter_dir_with_context(epub_path, chapter)
+            });
             return Some((svg_data, resources_dir));
         }
 
