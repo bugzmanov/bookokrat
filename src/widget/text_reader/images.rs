@@ -191,10 +191,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             for (img_src, image) in loaded_images {
                 let mut embedded_images = self.embedded_images.borrow_mut();
                 if let Some(embedded_image) = embedded_images.get_mut(&img_src) {
-                    embedded_image.state = if let Some(ref picker) = self.image_picker {
+                    embedded_image.state = if self.image_picker.is_some() {
                         ImageLoadState::Loaded {
-                            image: Arc::new(image.clone()),
-                            protocol: picker.new_resize_protocol(image),
+                            image: Arc::new(image),
                         }
                     } else {
                         ImageLoadState::Unsupported

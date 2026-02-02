@@ -16,7 +16,7 @@ use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{
-    Resize, StatefulImage, ViewportOptions,
+    Resize,
     picker::{Picker, ProtocolType},
 };
 use crate::search::{SearchMode, SearchState};
@@ -632,24 +632,12 @@ impl MarkdownTextReader {
         let textarea_insert_position = textarea_insert_position;
         let textarea_lines_to_insert = textarea_lines_to_insert;
 
-        // Reset image protocols when scroll changes (for terminals with broken scroll support)
+        // Clear Kitty images when scroll changes (for terminals with broken scroll support)
         let scroll_changed = self.last_rendered_scroll_offset != Some(scroll_offset);
         if scroll_changed {
             if let Some(ref picker) = self.image_picker {
-                // Clear Kitty images before redrawing at new positions
                 if matches!(picker.protocol_type(), ProtocolType::Kitty) {
                     let _ = clear_kitty_images();
-                }
-                // Reset all image protocols to force re-rendering at new positions
-                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
-                    if let ImageLoadState::Loaded { image, .. } = &embedded_image.state {
-                        // Recreate protocol with fresh state
-                        let new_protocol = picker.new_resize_protocol((**image).clone());
-                        embedded_image.state = ImageLoadState::Loaded {
-                            image: Arc::clone(image),
-                            protocol: new_protocol,
-                        };
-                    }
                 }
             }
             self.last_rendered_scroll_offset = Some(scroll_offset);
@@ -675,13 +663,7 @@ impl MarkdownTextReader {
                     if scroll_offset < image_end_line
                         && scroll_offset + area_height > image_start_line
                     {
-                        if let ImageLoadState::Loaded {
-                            ref image,
-                            ref mut protocol,
-                        } = embedded_image.state
-                        {
-                            let scaled_image = image;
-
+                        if let ImageLoadState::Loaded { ref image } = embedded_image.state {
                             if let Some(ref picker) = self.image_picker {
                                 let image_screen_start =
                                     image_start_line.saturating_sub(scroll_offset);
@@ -694,13 +676,12 @@ impl MarkdownTextReader {
                                     .min(area_height - image_screen_start);
 
                                 if visible_image_height > 0 {
-                                    let image_height_cells =
-                                        calculate_image_height_in_cells(scaled_image);
+                                    let calc_height = calculate_image_height_in_cells(image);
 
                                     let (render_y, render_height) = if image_top_clipped > 0 {
                                         (
                                             inner_area.y,
-                                            ((image_height_cells as usize)
+                                            ((calc_height as usize)
                                                 .saturating_sub(image_top_clipped))
                                             .min(area_height)
                                                 as u16,
@@ -708,15 +689,14 @@ impl MarkdownTextReader {
                                     } else {
                                         (
                                             inner_area.y + image_screen_start as u16,
-                                            (image_height_cells as usize)
+                                            (calc_height as usize)
                                                 .min(area_height.saturating_sub(image_screen_start))
                                                 as u16,
                                         )
                                     };
 
                                     // Determine the terminal width required for the pixels
-                                    let (image_width_pixels, _image_height_pixels) =
-                                        scaled_image.dimensions();
+                                    let (image_width_pixels, _) = image.dimensions();
                                     let font_size = picker.font_size();
                                     let image_width_cells =
                                         (image_width_pixels as f32 / font_size.0 as f32).ceil()
@@ -736,24 +716,17 @@ impl MarkdownTextReader {
                                         height: render_height,
                                     };
 
-                                    // Render using the ratatui_image viewport for scrolling
-                                    let current_font_size = picker.font_size();
-                                    let y_offset_pixels = (image_top_clipped as f32
-                                        * current_font_size.1 as f32)
-                                        as u32;
-
-                                    let viewport_options = ViewportOptions {
-                                        y_offset: y_offset_pixels,
-                                        x_offset: 0, // No horizontal scrolling for now
-                                    };
-
-                                    let image_widget = StatefulImage::new()
-                                        .resize(Resize::Viewport(viewport_options));
-                                    frame.render_stateful_widget(
-                                        image_widget,
+                                    // Create fresh protocol and render (like PDF does)
+                                    if let Ok(protocol) = picker.new_protocol(
+                                        (**image).clone(),
                                         image_area,
-                                        protocol,
-                                    );
+                                        Resize::Fit(None),
+                                    ) {
+                                        frame.render_widget(
+                                            crate::ratatui_image::Image::new(&protocol),
+                                            image_area,
+                                        );
+                                    }
                                 }
                             }
                         }

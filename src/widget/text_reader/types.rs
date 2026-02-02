@@ -1,5 +1,5 @@
 use crate::comments::CommentTarget;
-use crate::ratatui_image::protocol::StatefulProtocol;
+// Protocol is created fresh at render time, not stored
 use crate::vendored::tui_textarea::TextArea;
 use image::DynamicImage;
 use ratatui::text::Span;
@@ -137,13 +137,8 @@ impl RichSpan {
 pub enum ImageLoadState {
     NotLoaded,
     Loading,
-    Loaded {
-        image: Arc<DynamicImage>,
-        protocol: StatefulProtocol,
-    },
-    Failed {
-        reason: String,
-    },
+    Loaded { image: Arc<DynamicImage> },
+    Failed { reason: String },
     Unsupported,
 }
 
