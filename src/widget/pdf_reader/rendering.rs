@@ -1506,6 +1506,13 @@ impl PdfReaderState {
             Vec::new()
         };
 
+        // iTerm2/Sixel images are terminal overlays. Clear the full PDF area first so
+        // old placements are overwritten when pages move or temporarily disappear.
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg_color)),
+            img_area,
+        );
+
         // Single page display (no side-by-side)
         let mut page_sizes = Vec::new();
         if let Some(page) = self.rendered.get(self.page) {
@@ -1525,11 +1532,6 @@ impl PdfReaderState {
             self.last_render.img_area = img_area;
             self.last_render.pages_shown = 1;
             self.last_render.unused_width = 0;
-
-            if self.is_iterm && self.rendered.iter().any(|page| page.img.is_some()) {
-                log::debug!("No pages ready to render - keeping previous frame (iTerm2)");
-                return DisplayBatch::NoChange;
-            }
 
             log::debug!("No pages ready to render - showing loading");
             Self::render_loading_in(frame, img_area, &self.palette);

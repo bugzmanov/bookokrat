@@ -74,6 +74,7 @@ pub struct MarkdownTextReader {
     // Image handling
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
+    last_rendered_image_rects: HashMap<String, Rect>,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -244,6 +245,7 @@ impl MarkdownTextReader {
             auto_scroll_speed: 1.0,
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
+            last_rendered_image_rects: HashMap::new(),
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             raw_html_content: None,
@@ -618,12 +620,15 @@ impl MarkdownTextReader {
         let textarea_insert_position = textarea_insert_position;
         let textarea_lines_to_insert = textarea_lines_to_insert;
 
+        let image_clear_style = RatatuiStyle::default().bg(palette.base_00);
+        let mut current_image_rects = HashMap::new();
+
         if !self.show_raw_html {
             self.check_for_loaded_images();
             if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
                 let area_height = inner_area.height as usize;
 
-                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+                for (src, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
                     let image_height_cells = embedded_image.height_cells as usize;
                     let mut image_start_line = embedded_image.lines_before_image;
                     let mut image_end_line = image_start_line + image_height_cells;
@@ -712,11 +717,22 @@ impl MarkdownTextReader {
 
                                     let image_widget = StatefulImage::new()
                                         .resize(Resize::Viewport(viewport_options));
+
+                                    if let Some(prev_area) = self.last_rendered_image_rects.get(src)
+                                        && *prev_area != image_area
+                                    {
+                                        frame.render_widget(
+                                            Block::default().style(image_clear_style),
+                                            *prev_area,
+                                        );
+                                    }
+
                                     frame.render_stateful_widget(
                                         image_widget,
                                         image_area,
                                         protocol,
                                     );
+                                    current_image_rects.insert(src.clone(), image_area);
                                 }
                             }
                         }
@@ -724,6 +740,13 @@ impl MarkdownTextReader {
                 }
             }
         }
+
+        for (src, prev_area) in &self.last_rendered_image_rects {
+            if !current_image_rects.contains_key(src) {
+                frame.render_widget(Block::default().style(image_clear_style), *prev_area);
+            }
+        }
+        self.last_rendered_image_rects = current_image_rects;
 
         if self.comment_input.is_active() {
             if let Some(ref mut textarea) = self.comment_input.textarea {
@@ -1040,6 +1063,7 @@ impl MarkdownTextReader {
             generation: 0,
         };
         self.embedded_images.borrow_mut().clear();
+        self.last_rendered_image_rects.clear();
     }
 
     pub fn set_raw_html(&mut self, html: String) {
