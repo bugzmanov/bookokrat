@@ -15,7 +15,10 @@ use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
-use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
+use crate::ratatui_image::{
+    Resize, StatefulImage, ViewportOptions,
+    picker::{Picker, ProtocolType},
+};
 use crate::search::{SearchMode, SearchState};
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
@@ -33,8 +36,17 @@ use ratatui::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+fn clear_kitty_images() -> std::io::Result<()> {
+    let mut stdout = std::io::stdout();
+    // Kitty graphics protocol: delete all images
+    // APC G a=d; ST  (action=delete, delete all)
+    write!(stdout, "\x1b_Ga=d;\x1b\\")?;
+    stdout.flush()
+}
 
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
@@ -45,6 +57,7 @@ pub struct MarkdownTextReader {
 
     // Scrolling state
     scroll_offset: usize,
+    last_rendered_scroll_offset: Option<usize>,
     last_scroll_time: Instant,
     scroll_speed: usize,
 
@@ -226,6 +239,7 @@ impl MarkdownTextReader {
                 generation: 0,
             },
             scroll_offset: 0,
+            last_rendered_scroll_offset: None,
             last_scroll_time: Instant::now(),
             scroll_speed: 1,
             highlight_visual_line: None,
@@ -617,6 +631,29 @@ impl MarkdownTextReader {
         let scroll_offset = self.scroll_offset;
         let textarea_insert_position = textarea_insert_position;
         let textarea_lines_to_insert = textarea_lines_to_insert;
+
+        // Reset image protocols when scroll changes (for terminals with broken scroll support)
+        let scroll_changed = self.last_rendered_scroll_offset != Some(scroll_offset);
+        if scroll_changed {
+            if let Some(ref picker) = self.image_picker {
+                // Clear Kitty images before redrawing at new positions
+                if matches!(picker.protocol_type(), ProtocolType::Kitty) {
+                    let _ = clear_kitty_images();
+                }
+                // Reset all image protocols to force re-rendering at new positions
+                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+                    if let ImageLoadState::Loaded { image, .. } = &embedded_image.state {
+                        // Recreate protocol with fresh state
+                        let new_protocol = picker.new_resize_protocol((**image).clone());
+                        embedded_image.state = ImageLoadState::Loaded {
+                            image: Arc::clone(image),
+                            protocol: new_protocol,
+                        };
+                    }
+                }
+            }
+            self.last_rendered_scroll_offset = Some(scroll_offset);
+        }
 
         if !self.show_raw_html {
             self.check_for_loaded_images();
