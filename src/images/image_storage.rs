@@ -231,6 +231,52 @@ impl ImageStorage {
         );
         None
     }
+
+    pub fn resolve_chapter_dir_with_context(
+        &self,
+        epub_path: &Path,
+        chapter_path: &str,
+    ) -> Option<PathBuf> {
+        let epub_path_str = epub_path.to_string_lossy().to_string();
+
+        let BookDirInfo {
+            temp_dir: book_dir,
+            content_root,
+        } = self
+            .book_dirs
+            .lock()
+            .unwrap()
+            .get(&epub_path_str)
+            .cloned()?;
+
+        let content_root = content_root.as_deref().unwrap_or_else(|| Path::new(""));
+        let chapter = chapter_path.trim_start_matches('/');
+        let chapter_path = Path::new(chapter);
+
+        let chapter_rel =
+            if !content_root.as_os_str().is_empty() && chapter_path.starts_with(content_root) {
+                chapter_path
+                    .strip_prefix(content_root)
+                    .unwrap_or(chapter_path)
+            } else {
+                chapter_path
+            };
+
+        let resolved_rel = normalize_path(chapter_rel);
+        let resolved_from_root =
+            if !content_root.as_os_str().is_empty() && resolved_rel.starts_with(content_root) {
+                normalize_path(&resolved_rel)
+            } else {
+                normalize_path(&content_root.join(&resolved_rel))
+            };
+
+        let candidate = book_dir.join(&resolved_from_root);
+        if let Some(parent) = candidate.parent() {
+            return Some(parent.to_path_buf());
+        }
+
+        Some(book_dir)
+    }
 }
 
 fn content_root_from_rootfile(root_file: &Path) -> Option<PathBuf> {

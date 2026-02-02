@@ -300,6 +300,11 @@ pub enum Resize {
     /// This is efficient for scrolling as it doesn't require re-encoding the image.
     /// The viewport is specified in pixels relative to the top-left of the image.
     Viewport(ViewportOptions),
+    /// No resize - use the image as-is
+    ///
+    /// This skips all resize operations and just clones the image.
+    /// Use this when the image already matches the target cell dimensions.
+    None,
 }
 
 impl Default for Resize {
@@ -342,11 +347,10 @@ impl Resize {
         let mut image = self.resize_image(source, width, height);
 
         // For viewport mode, don't pad - we want the original image for tiling
-        if !matches!(self, Self::Viewport(_)) {
-            // Always pad to area size with background color, Sixel doesn't have transparency
-            // and would get a white background by the sixel library.
-            // Once Sixel gets transparency support, only pad
-            // `if image.width() != width || image.height() != height`.
+        // Only pad when dimensions don't match to avoid unnecessary allocation
+        if !matches!(self, Self::Viewport(_) | Self::None)
+            && (image.width() != width || image.height() != height)
+        {
             let mut bg: DynamicImage =
                 ImageBuffer::from_pixel(width, height, background_color).into();
             imageops::overlay(&mut bg, &image, 0, 0);
@@ -445,6 +449,7 @@ impl Resize {
                     height.min(image.height() - y),
                 )
             }
+            Self::None => source.image.clone(),
         }
     }
 
@@ -460,6 +465,7 @@ impl Resize {
             Self::Crop(_) => (min(image.width(), width), min(image.height(), height)),
             Self::Scale(_) => fit_area_proportionally(image.width(), image.height(), width, height),
             Self::Viewport(_) => (min(image.width(), width), min(image.height(), height)),
+            Self::None => (image.width(), image.height()),
         }
     }
 }

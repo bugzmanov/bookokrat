@@ -19,13 +19,15 @@ use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picke
 use crate::search::{SearchMode, SearchState};
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
+use crate::widget::hud_message::{HudMessage, HudMode};
 use image::{DynamicImage, GenericImageView};
 use log::{info, warn};
-use normal_mode::NormalModeState;
+use normal_mode::{CursorPosition, NormalModeState};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::Style as RatatuiStyle,
+    style::{Modifier, Style as RatatuiStyle},
+    symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -33,6 +35,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
+const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
@@ -77,6 +82,8 @@ pub struct MarkdownTextReader {
     // Raw HTML mode
     show_raw_html: bool,
     raw_html_content: Option<String>,
+    raw_html_wrapped_lines: Vec<String>,
+    raw_html_last_width: usize,
 
     // Links extracted from AST
     links: Vec<LinkInfo>,
@@ -92,6 +99,9 @@ pub struct MarkdownTextReader {
 
     /// Search state for vim-like search
     search_state: SearchState,
+
+    /// Saved normal mode cursor position when search started (for restore on cancel)
+    original_cursor_for_search: Option<CursorPosition>,
 
     /// Pending anchor scroll after chapter navigation
     pending_anchor_scroll: Option<String>,
@@ -116,6 +126,9 @@ pub struct MarkdownTextReader {
 
     /// Vim normal mode state
     normal_mode: NormalModeState,
+
+    /// Transient HUD message for the bottom title area
+    hud_message: Option<HudMessage>,
 }
 
 impl Default for MarkdownTextReader {
@@ -231,11 +244,14 @@ impl MarkdownTextReader {
             pending_node_restore: None,
             raw_html_content: None,
             show_raw_html: false,
+            raw_html_wrapped_lines: Vec::new(),
+            raw_html_last_width: 0,
             links: Vec::new(),
             embedded_tables: RefCell::new(Vec::new()),
             anchor_positions: HashMap::new(),
             current_chapter_file: None,
             search_state: SearchState::new(),
+            original_cursor_for_search: None,
             pending_anchor_scroll: None,
             last_active_anchor: None,
             pending_global_search: None,
@@ -245,6 +261,7 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             normal_mode: NormalModeState::new(),
+            hud_message: None,
         }
     }
 
@@ -264,9 +281,51 @@ impl MarkdownTextReader {
             ))
         })
     }
+
+    pub fn set_hud_message(
+        &mut self,
+        message: impl Into<String>,
+        mode: HudMode,
+        duration: Duration,
+    ) {
+        self.hud_message = Some(HudMessage::new(message, duration, mode));
+    }
+
+    pub fn set_normal_hud(&mut self, message: impl Into<String>) {
+        self.set_hud_message(message, HudMode::Normal, HUD_NORMAL_DURATION);
+    }
+
+    pub fn set_error_hud(&mut self, message: impl Into<String>) {
+        self.set_hud_message(message, HudMode::Error, HUD_ERROR_DURATION);
+    }
+
+    pub fn update_hud_message(&mut self) -> bool {
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn dismiss_error_hud(&mut self) -> bool {
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.mode == HudMode::Error)
+        {
+            self.hud_message = None;
+            return true;
+        }
+        false
+    }
 }
 
 impl MarkdownTextReader {
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         frame: &mut Frame,
@@ -283,7 +342,14 @@ impl MarkdownTextReader {
         self.visible_height = area.height.saturating_sub(3) as usize;
 
         if self.show_raw_html {
-            self.render_raw_html(frame, area, current_chapter, total_chapters, palette);
+            self.render_raw_html(
+                frame,
+                area,
+                current_chapter,
+                total_chapters,
+                palette,
+                is_focused,
+            );
             return;
         }
 
@@ -329,10 +395,70 @@ impl MarkdownTextReader {
 
         let progress = self.calculate_progress("", width, self.visible_height);
 
+        let (_text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
+        let mode_title = if self.comment_input.is_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0a)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" Comment ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.is_visual_mode_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0e)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" VISUAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.normal_mode.is_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" NORMAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else {
+            None
+        };
+        let progress_title = Line::from(format!(" {progress}% ")).right_aligned();
+
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+        }
+
         let mut block = Block::default()
             .borders(Borders::ALL)
             .title(title_text)
-            .title_bottom(Line::from(format!(" {progress}% ")).right_aligned());
+            .title_bottom(progress_title)
+            .border_style(RatatuiStyle::default().fg(border_color));
+        if let Some(mode_title) = mode_title {
+            block = block.title_bottom(mode_title);
+        }
+        if let Some(hud) = self.hud_message.as_ref() {
+            block = block.title_bottom(hud.styled_line(palette));
+        }
 
         if zen_mode && self.search_state.active {
             let search_hint = match self.search_state.mode {
@@ -673,30 +799,205 @@ impl MarkdownTextReader {
         current_chapter: usize,
         total_chapters: usize,
         palette: &Base16Palette,
+        is_focused: bool,
     ) {
+        self.last_content_area = Some(area);
+        self.visible_height = area.height.saturating_sub(3) as usize;
+
         let title_text = if let Some(ref title) = self.chapter_title {
             format!("[{current_chapter}/{total_chapters}] {title} [RAW HTML]")
         } else {
             format!("Chapter {current_chapter}/{total_chapters} [RAW HTML]")
         };
 
-        let block = ratatui::widgets::Block::default()
-            .borders(ratatui::widgets::Borders::ALL)
-            .title(title_text)
-            .style(RatatuiStyle::default().fg(palette.base_09)); // Red border for raw mode
+        if self
+            .hud_message
+            .as_ref()
+            .is_some_and(|hud| hud.is_expired())
+        {
+            self.hud_message = None;
+        }
 
-        let raw_content = if let Some(html) = &self.raw_html_content {
-            html.clone()
+        // Calculate inner area and width for wrapping
+        let margin_pixels = self.content_margin * 2;
+        let width = area
+            .width
+            .saturating_sub(4)
+            .saturating_sub(margin_pixels * 2) as usize;
+
+        // Wrap raw HTML content if needed (width changed or content changed)
+        if self.raw_html_last_width != width || self.raw_html_wrapped_lines.is_empty() {
+            let raw_content = self
+                .raw_html_content
+                .as_deref()
+                .unwrap_or("Raw HTML content not available");
+
+            self.raw_html_wrapped_lines.clear();
+            for line in raw_content.lines() {
+                if line.is_empty() {
+                    self.raw_html_wrapped_lines.push(String::new());
+                } else {
+                    for wrapped in textwrap::wrap(line, width) {
+                        self.raw_html_wrapped_lines.push(wrapped.to_string());
+                    }
+                }
+            }
+            self.raw_html_last_width = width;
+            self.total_wrapped_lines = self.raw_html_wrapped_lines.len();
+
+            // Sync raw_text_lines for selection/normal mode operations
+            self.raw_text_lines = self.raw_html_wrapped_lines.clone();
+        }
+
+        // Calculate progress
+        let progress = if self.total_wrapped_lines == 0 {
+            0
         } else {
-            "Raw HTML content not available".to_string()
+            let visible_end =
+                (self.scroll_offset + self.visible_height).min(self.total_wrapped_lines);
+            ((visible_end as f32 / self.total_wrapped_lines as f32) * 100.0) as u32
         };
 
-        let paragraph = ratatui::widgets::Paragraph::new(raw_content)
-            .block(block)
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .scroll((self.scroll_offset as u16, 0));
+        // Build mode title for normal mode (matches EPUB styling)
+        let border_color = palette.base_09; // Orange for raw HTML mode
+        let mode_title = if self.is_visual_mode_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0e)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" VISUAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.normal_mode.is_active() {
+            let border_style = RatatuiStyle::default().fg(border_color);
+            let mode_style = RatatuiStyle::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(" NORMAL ", mode_style),
+                ])
+                .left_aligned(),
+            )
+        } else {
+            None
+        };
 
+        let progress_title = Line::from(format!(" {progress}% ")).right_aligned();
+
+        let mut block = ratatui::widgets::Block::default()
+            .borders(ratatui::widgets::Borders::ALL)
+            .title(title_text)
+            .title_bottom(progress_title)
+            .style(RatatuiStyle::default().fg(palette.base_09)); // Red border for raw mode
+
+        if let Some(mode_title) = mode_title {
+            block = block.title_bottom(mode_title);
+        }
+        if let Some(hud) = self.hud_message.as_ref() {
+            block = block.title_bottom(hud.styled_line(palette));
+        }
+
+        // Add search hint if active
+        if self.search_state.active {
+            let search_hint = match self.search_state.mode {
+                SearchMode::InputMode => {
+                    let query = &self.search_state.query;
+                    let match_info = if self.search_state.matches.is_empty() && !query.is_empty() {
+                        " No matches".to_string()
+                    } else if !self.search_state.matches.is_empty() {
+                        format!(" {} matches", self.search_state.matches.len())
+                    } else {
+                        String::new()
+                    };
+                    format!(" / {query}█ {match_info}  ESC: Cancel | Enter: Search ")
+                }
+                SearchMode::NavigationMode => {
+                    let query = &self.search_state.query;
+                    let match_info = self.search_state.get_match_info();
+                    format!(" /{query}  {match_info}  n/N: Navigate | ESC: Exit ")
+                }
+                SearchMode::Inactive => String::new(),
+            };
+            if !search_hint.is_empty() {
+                block = block.title_bottom(Line::from(search_hint).left_aligned());
+            }
+        }
+
+        // Calculate inner area for text
+        let mut inner_area = block.inner(area);
+        inner_area.y = inner_area.y.saturating_add(1);
+        inner_area.height = inner_area.height.saturating_sub(1);
+        inner_area.x = inner_area.x.saturating_add(1);
+        inner_area.x = inner_area.x.saturating_add(margin_pixels);
+        inner_area.width = inner_area.width.saturating_sub(margin_pixels * 2);
+
+        self.last_inner_text_area = Some(inner_area);
+
+        // Selection background color
+        let selection_bg = if is_focused {
+            palette.base_02
+        } else {
+            palette.base_01
+        };
+
+        // Build visible lines with highlighting
+        let mut visible_lines = Vec::new();
+        let end_offset =
+            (self.scroll_offset + self.visible_height).min(self.raw_html_wrapped_lines.len());
+
+        for line_idx in self.scroll_offset..end_offset {
+            if let Some(line_text) = self.raw_html_wrapped_lines.get(line_idx) {
+                let mut line_spans = vec![Span::styled(
+                    line_text.clone(),
+                    RatatuiStyle::default().fg(palette.base_05),
+                )];
+
+                // Apply text selection highlighting
+                if self.text_selection.has_selection() {
+                    let line_with_selection = self.text_selection.apply_selection_highlighting(
+                        line_idx,
+                        line_spans,
+                        selection_bg,
+                    );
+                    line_spans = line_with_selection.spans;
+                }
+
+                // Apply search highlighting
+                line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
+
+                // Apply yank highlight
+                line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
+
+                // Apply visual mode selection
+                line_spans = self.apply_visual_highlight(line_idx, line_spans, palette);
+
+                // Apply normal mode cursor
+                if self.normal_mode.is_active() {
+                    line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);
+                }
+
+                visible_lines.push(Line::from(line_spans));
+            }
+        }
+
+        // Render the block frame
+        let paragraph = Paragraph::new(vec![])
+            .block(block.clone())
+            .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, area);
+
+        // Render the text content
+        let inner_text_paragraph =
+            Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
+        frame.render_widget(inner_text_paragraph, inner_area);
     }
 
     pub fn set_content_from_string(
@@ -739,10 +1040,21 @@ impl MarkdownTextReader {
 
     pub fn set_raw_html(&mut self, html: String) {
         self.raw_html_content = Some(html);
+        self.raw_html_wrapped_lines.clear();
+        self.raw_html_last_width = 0;
     }
 
     pub fn toggle_raw_html(&mut self) {
         self.show_raw_html = !self.show_raw_html;
+        self.scroll_offset = 0;
+        self.text_selection.clear_selection();
+        if self.normal_mode.is_active() {
+            self.normal_mode.deactivate();
+        }
+    }
+
+    pub fn is_raw_html_mode(&self) -> bool {
+        self.show_raw_html
     }
 
     pub fn handle_terminal_resize(&mut self) {

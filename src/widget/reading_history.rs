@@ -50,7 +50,10 @@ impl ReadingHistory {
             let local_time = Local.from_utc_datetime(&bookmark_entry.last_read.naive_utc());
 
             // Get chapter info from bookmark
-            let chapter = bookmark_entry.chapter_index.unwrap_or(0);
+            let chapter = bookmark_entry
+                .pdf_page
+                .or(bookmark_entry.chapter_index)
+                .unwrap_or(0);
             let total_chapters = bookmark_entry.total_chapters.unwrap_or(0);
 
             latest_access
@@ -125,7 +128,7 @@ impl ReadingHistory {
                 Block::default()
                     .title(" Reading History ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .border_style(Style::default().fg(current_theme().popup_border_color()))
                     .style(Style::default().bg(current_theme().base_00)), // Use theme background
             )
             .highlight_style(

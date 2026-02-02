@@ -1,4 +1,4 @@
-use bookokrat::book_manager::{BookInfo, BookManager};
+use bookokrat::book_manager::{BookFormat, BookInfo, BookManager};
 use bookokrat::main_app::VimNavMotions;
 use bookokrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookokrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
@@ -56,6 +56,7 @@ fn create_test_book_manager() -> BookManager {
         books.push(BookInfo {
             display_name: format!("Book {i}"),
             path: "book1.epub".to_string(),
+            format: BookFormat::Epub,
         })
     }
     book_manager.books = books;

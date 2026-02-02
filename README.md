@@ -1,6 +1,6 @@
 # Bookokrat
 
-Bookokrat is a terminal-based EPUB reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, inline annotations, and customizable themes.
+Bookokrat is a terminal-based EPUB and PDF reader with a split-view library and reader, full MathML and image rendering, automatic bookmarks, inline annotations, and customizable themes.
 
 ## Demo
 
@@ -8,11 +8,12 @@ Bookokrat is a terminal-based EPUB reader with a split-view library and reader, 
 
 
 ## What You Can Do
-- Browse every EPUB in the current directory or automatically detect and read from your Calibre library with proper metadata.
+- Browse every EPUB & PDF in the current directory or automatically detect and read from your Calibre library with proper metadata.
 - Drill into the table of contents, and resume exactly where you left off.
 - Search inside the current chapter or across the whole book, jump through a per-book history, and inspect reading statistics.
 - Highlight text, attach comments, export annotations to Markdown, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
-- Open images in-place, follow internal anchors, launch external links in your browser, and hand off the book to your system viewer.
+- Read PDFs with a dedicated renderer (TOC navigation, page/scroll modes, bookmarks, and annotations) in graphics-capable terminals.
+- Open images in-place, follow internal anchors, launch external links in your browser, and hand off the EPUB to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
 - Enter a Vim-style normal mode in the reader for precise motions, visual selection, and yanking to clipboard.
 - Load EPUB bundles (exploded `.epub` directories, including Apple Books exports) without repackaging.
@@ -60,7 +61,11 @@ Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
 
 **Linux (Ubuntu/Debian):**
 ```bash
-sudo apt update && sudo apt install build-essential
+sudo apt update 
+sudo apt install build-essential
+
+# For PDF to work:
+sudo apt install pkg-config libfontconfig1-dev clang libclang-dev
 ```
 
 **Linux (Fedora/RHEL):**
@@ -82,6 +87,23 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 cargo install bookokrat
 ```
 
+Note: PDF support is enabled by default. If you want to build without PDF support:
+```bash
+cargo install bookokrat --no-default-features
+```
+
+If you need symbols for profiling or debugging, build with the debug release profile:
+```bash
+cargo build --profile release-debug
+```
+
+## Vendored Dependency Notice
+
+**Important:** `tui-textarea` is vendored in `vendor/tui-textarea` because the upstream
+repository (https://github.com/rhysd/tui-textarea) is currently unmaintained and out of
+step with the latest `ratatui`. Our vendored copy is based on PR #118:
+https://github.com/rhysd/tui-textarea/pull/118/changes
+
 ### Getting Started
 
 Navigate to a directory with EPUB files and run `bookokrat`. Use `j/k` to navigate, `Enter` to open a book, and `?` for help.
@@ -90,6 +112,7 @@ You can also open a specific file or start in zen mode, but this is not the main
 
 ```bash
 bookokrat path/to/book.epub
+bookokrat path/to/book.pdf
 bookokrat path/to/book.epub --zen-mode
 ```
 
@@ -104,6 +127,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Ctrl+z` - Toggle zen mode (hide sidebar/status bar)
 - `?` - Show help screen
 - `Space+t` - Open theme selector
+- `Space+s` / `Ctrl+s` - Open settings (PDF support + render mode)
 - `+` / `-` - Increase/decrease content margins
 
 ### Navigation (Vim-style)
@@ -127,8 +151,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 
 ### Reader Panel
 - `h` / `l` - Previous/next chapter
-- `Space+s` - Toggle raw HTML view
-- `Space+c` - Copy entire chapter
+- `ss` - Toggle raw HTML view
+- `Space+c` - Copy entire chapter (EPUB) / extract current page text (PDF)
 - `Space+z` - Copy debug transcript
 - `c` or `Ctrl+C` - Copy selection
 - `p` - Toggle profiler overlay
@@ -145,7 +169,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+h` - Toggle reading history popup
 - `Space+d` - Show book statistics popup
 - `Space+a` - Open comments/annotations viewer
-- `Space+o` - Open current book in OS viewer
+- `Space+o` - Open current EPUB in OS viewer
 - `Enter` - Open image popup (when on image) or activate popup selection
 
 ### Popup Navigation
@@ -174,6 +198,8 @@ Bookokrat automatically selects the best image protocol for your terminal:
 - **Good:** WezTerm (some flickering)
 - **Basic:** Alacritty, Linux default terminals (Halfblocks fallback)
 - **No images:** macOS Terminal.app (no graphics protocol support)
+
+**PDF viewing requires a graphics-capable terminal.** For the best PDF experience, **Kitty or Ghostty are strongly recommended**—they support SHM-based image transfer for smooth 60fps rendering. WezTerm and iTerm2 work but with reduced performance and some feature limitations. Use the settings popup (`Space+s` or `Ctrl+s`) to disable PDF mode if your terminal does not support graphics.
 
 If images look wrong, check `bookokrat.log` for the detected protocol. Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
 

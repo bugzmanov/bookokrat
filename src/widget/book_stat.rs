@@ -45,14 +45,42 @@ pub struct BookStat {
     visible: bool,
     terminal_size: (u16, u16),
     last_popup_area: Option<Rect>,
+    stat_unit: StatUnit,
 }
 
 #[derive(Clone, Debug)]
 struct ChapterStat {
     title: String,
-    screens: usize,
+    count: usize,
     chapter_index: usize, // The actual chapter index in the EPUB
     is_top_level: bool,   // Whether this is a top-level chapter or nested section
+}
+
+#[derive(Clone, Copy, Debug)]
+enum StatUnit {
+    Screens,
+    Pages,
+}
+
+impl StatUnit {
+    fn format_count(self, count: usize) -> String {
+        match self {
+            StatUnit::Screens => {
+                if count == 1 {
+                    "1 screen".to_string()
+                } else {
+                    format!("{count} screens")
+                }
+            }
+            StatUnit::Pages => {
+                if count == 1 {
+                    "1 page".to_string()
+                } else {
+                    format!("{count} pages")
+                }
+            }
+        }
+    }
 }
 
 pub enum BookStatAction {
@@ -74,6 +102,7 @@ impl BookStat {
             visible: false,
             terminal_size: (80, 24),
             last_popup_area: None,
+            stat_unit: StatUnit::Screens,
         }
     }
 
@@ -84,6 +113,7 @@ impl BookStat {
     ) -> Result<()> {
         self.terminal_size = terminal_size;
         self.chapter_stats.clear();
+        self.stat_unit = StatUnit::Screens;
 
         let toc = TocParser::parse_toc_structure(epub);
 
@@ -100,6 +130,83 @@ impl BookStat {
         }
 
         debug!("Chapter stats: {:?}", self.chapter_stats);
+
+        Ok(())
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn calculate_pdf_stats(
+        &mut self,
+        toc_entries: &[crate::pdf::TocEntry],
+        page_count: usize,
+        page_numbers: &crate::pdf::PageNumberTracker,
+        terminal_size: (u16, u16),
+    ) -> Result<()> {
+        use crate::pdf::TocTarget;
+
+        self.terminal_size = terminal_size;
+        self.chapter_stats.clear();
+        self.stat_unit = StatUnit::Pages;
+
+        if page_count == 0 {
+            return Ok(());
+        }
+
+        let mut resolved_entries: Vec<(String, usize, usize)> = Vec::new();
+        for entry in toc_entries {
+            let page = match &entry.target {
+                TocTarget::InternalPage(page) => Some(*page),
+                TocTarget::PrintedPage(printed) => page_numbers
+                    .map_printed_to_pdf(*printed, page_count)
+                    .or_else(|| printed.checked_sub(1)),
+                TocTarget::External(_) => None,
+            };
+
+            if let Some(page) = page {
+                resolved_entries.push((entry.title.clone(), entry.level, page));
+            }
+        }
+
+        let has_level_one = resolved_entries.iter().any(|(_, level, _)| *level == 1);
+        let target_level = if has_level_one { 1 } else { 0 };
+        let anchors: Vec<(String, usize)> = resolved_entries
+            .into_iter()
+            .filter(|(_, level, _)| *level == target_level)
+            .map(|(title, _, page)| (title, page))
+            .collect();
+
+        for (idx, (title, start_page)) in anchors.iter().enumerate() {
+            if *start_page >= page_count {
+                continue;
+            }
+
+            let mut end_page = if let Some((_, next_start)) = anchors.get(idx + 1) {
+                *next_start
+            } else {
+                page_count
+            };
+
+            if end_page <= *start_page {
+                end_page = (*start_page + 1).min(page_count);
+            } else {
+                end_page = end_page.min(page_count);
+            }
+
+            let pages = end_page.saturating_sub(*start_page).max(1);
+
+            self.chapter_stats.push(ChapterStat {
+                title: title.clone(),
+                count: pages,
+                chapter_index: *start_page,
+                is_top_level: true,
+            });
+        }
+
+        if !self.chapter_stats.is_empty() {
+            self.list_state.select(Some(0));
+        }
+
+        debug!("PDF chapter stats: {:?}", self.chapter_stats);
 
         Ok(())
     }
@@ -299,7 +406,7 @@ impl BookStat {
             // Only add top-level chapters to the visible stats list
             self.chapter_stats.push(ChapterStat {
                 title: title.to_string(),
-                screens,
+                count: screens,
                 chapter_index,
                 is_top_level,
             });
@@ -312,7 +419,7 @@ impl BookStat {
                 .rev()
                 .find(|stat| stat.is_top_level)
             {
-                last_top_level.screens += screens;
+                last_top_level.count += screens;
             }
         }
     }
@@ -380,7 +487,7 @@ impl BookStat {
         frame.render_widget(Clear, popup_area);
 
         // Calculate cumulative percentages
-        let total_screens: usize = self.chapter_stats.iter().map(|s| s.screens).sum();
+        let total_screens: usize = self.chapter_stats.iter().map(|s| s.count).sum();
         let mut cumulative_screens = 0;
 
         // Create the list items
@@ -402,13 +509,8 @@ impl BookStat {
                     };
 
                     // Update cumulative for next iteration
-                    cumulative_screens += stat.screens;
-
-                    let screens_text = if stat.screens == 1 {
-                        "1 screen".to_string()
-                    } else {
-                        format!("{} screens", stat.screens)
-                    };
+                    cumulative_screens += stat.count;
+                    let count_text = self.stat_unit.format_count(stat.count);
 
                     let content = vec![Line::from(vec![
                         Span::styled(
@@ -418,7 +520,7 @@ impl BookStat {
                         Span::raw(stat.title.replace("\n", " ")),
                         Span::raw(" "),
                         Span::styled(
-                            format!("[{screens_text}]"),
+                            format!("[{count_text}]"),
                             Style::default().fg(current_theme().base_0c),
                         ),
                     ])];
@@ -434,7 +536,7 @@ impl BookStat {
                 Block::default()
                     .title(" Chapter Statistics ")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(current_theme().base_0c))
+                    .border_style(Style::default().fg(current_theme().popup_border_color()))
                     .style(Style::default().bg(current_theme().base_00)),
             )
             .highlight_style(

@@ -1,12 +1,30 @@
+PDF issue:
+ [ ] BUG:PDF empty comments dismissal requires 2 ESC clicks
+ [ ] BUG: EPUB https://registerspill.thorstenball.com/p/joy-and-curiosity-71 <-- some links are rendered next to text, without a space in between
+ [ ] folded/unfolded state of context should be persisted in bookmarks.. maybe.
+ [ ] pdf: zoom with pinching 
+ [ ] Trim PDF margins mode
+ [ ] DO not invert image colors mode
+
+Hard UX:
+ [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
+ [ ] Comments editing in pdf annotations is very non-ergonomic. Potentially need normal mode.
+ --
+ [ ] update & analyze tapes & tests
+ [ ] Analyze the PDF impact: size wise, heap wise and make it sure that it wouldn't affect epub only readers
+ [ ] update help (new stuff & inspiration links)
+    [ ] Make help context dependent
+ [ ] new pictures for the site and potentially new video for the app. 
+
 ideas to implement:
  - [ ] Dimming should probably just use math instead of sticking to fixed palette
  - [x] status bar to show errors and warnings
  - HTML Support & markdown
      [x] show raw html
-         [ ] Format html into readable
-         [ ] Search
+         [x] Format html into readable
+         [x] Search
          [ ] Navigate to the position where rendering mode was showing
-         [ ] Alow mouse selection & copy-paste
+         [x] Alow mouse selection & copy-paste
      [x] Math Formulas
         [ ] Potential improvements: simple devision should be 1 line
      [ ] Markdown
@@ -69,12 +87,10 @@ ideas to implement:
 bugs:
 ---------------------
 [ ] Bug clicking in subchapter triggers image reload
-[ ] Machine Learning Q and A - links not working.
 [ ] Careless people: current chapter highlightning not working
 [ ] Effective rust - chapter 4 
    [ ] Too much visual noise. (potentially because bg highlights)
 [ ] <i>code</i> will have bg color instead of being cursive
-[ ] AI Engineering - footnotes: clicking doesn't  track in history, i.e. can not jump back by clicking ctrl+o 
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

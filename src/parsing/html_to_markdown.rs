@@ -6,12 +6,15 @@ use crate::mathml_renderer::{MathMLParser, mathml_to_ascii};
 use html5ever::parse_document;
 use html5ever::tendril::TendrilSink;
 use markup5ever_rcdom::{NodeData, RcDom};
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::rc::Rc;
+use std::sync::LazyLock;
 
-static SELF_CLOSING_NON_VOID_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)<(iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
+static SELF_CLOSING_NON_VOID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // In XHTML, tags like <title/> and <p/> are valid self-closing tags.
+    // But html5ever parses as HTML5 where these are NOT void elements.
+    // We must convert them to <title></title> and <p></p> before parsing.
+    Regex::new(r"(?i)<(title|p|div|span|a|li|ul|ol|table|tr|td|th|tbody|thead|h1|h2|h3|h4|h5|h6|iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
 });
 
 fn fix_self_closing_tags(html: &str) -> String {
@@ -177,6 +180,29 @@ pub struct HtmlToMarkdownConverter {}
 impl HtmlToMarkdownConverter {
     pub fn new() -> Self {
         HtmlToMarkdownConverter {}
+    }
+
+    fn attach_container_id_or_insert_anchor(
+        &self,
+        id: String,
+        start_len: usize,
+        document: &mut Document,
+    ) {
+        if start_len < document.blocks.len() {
+            if document.blocks[start_len].id.is_none() {
+                document.blocks[start_len].id = Some(id);
+            } else if document.blocks[start_len].id.as_deref() != Some(&id) {
+                let mut text = Text::default();
+                text.push_inline(Inline::Anchor { id });
+                let anchor_node = Node::new(Block::Paragraph { content: text }, 0..0);
+                document.blocks.insert(start_len, anchor_node);
+            }
+        } else {
+            let mut text = Text::default();
+            text.push_inline(Inline::Anchor { id });
+            let anchor_node = Node::new(Block::Paragraph { content: text }, 0..0);
+            document.blocks.push(anchor_node);
+        }
     }
 
     fn collect_content(
@@ -365,6 +391,7 @@ impl HtmlToMarkdownConverter {
             }
             "div" | "section" | "article" => {
                 let div_id = self.get_attr_value(attrs, "id");
+                let start_len = document.blocks.len();
 
                 let mut has_immediate_heading = false;
                 for child in node.children.borrow().iter() {
@@ -419,12 +446,29 @@ impl HtmlToMarkdownConverter {
                         self.visit_node(child, document);
                     }
                 }
+
+                if let Some(div_id) = div_id {
+                    self.attach_container_id_or_insert_anchor(div_id, start_len, document);
+                }
+            }
+            "span" => {
+                let span_id = self.get_attr_value(attrs, "id");
+                let start_len = document.blocks.len();
+                for child in node.children.borrow().iter() {
+                    self.visit_node(child, document);
+                }
+                if let Some(span_id) = span_id {
+                    self.attach_container_id_or_insert_anchor(span_id, start_len, document);
+                }
             }
             "p" => {
                 self.handle_paragraph(attrs, node, document);
             }
             "img" => {
                 self.handle_image(attrs, document);
+            }
+            "svg" => {
+                self.handle_inline_svg(node, attrs, document);
             }
             "pre" => {
                 self.handle_pre(attrs, node, document);
@@ -2171,6 +2215,20 @@ impl HtmlToMarkdownConverter {
                     text.push_inline(image_inline);
                 }
             }
+            "svg" => {
+                if let Some(src) = self.inline_svg_data_uri(node) {
+                    let alt_text = self
+                        .get_attr_value(attrs, "aria-label")
+                        .or_else(|| self.get_attr_value(attrs, "title"))
+                        .unwrap_or_default();
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title: None,
+                    };
+                    text.push_inline(image_inline);
+                }
+            }
             _ => {
                 if let Some(id) = self.get_attr_value(attrs, "id") {
                     text.push_inline(Inline::Anchor { id });
@@ -2276,6 +2334,20 @@ impl HtmlToMarkdownConverter {
                         alt_text,
                         url: src,
                         title,
+                    };
+                    current_text.push_inline(image_inline);
+                }
+            }
+            "svg" => {
+                if let Some(src) = self.inline_svg_data_uri(node) {
+                    let alt_text = self
+                        .get_attr_value(attrs, "aria-label")
+                        .or_else(|| self.get_attr_value(attrs, "title"))
+                        .unwrap_or_default();
+                    let image_inline = Inline::Image {
+                        alt_text,
+                        url: src,
+                        title: None,
                     };
                     current_text.push_inline(image_inline);
                 }
@@ -2559,6 +2631,59 @@ impl HtmlToMarkdownConverter {
             .iter()
             .find(|attr| attr.name.local.as_ref() == name)
             .map(|attr| attr.value.to_string())
+    }
+
+    fn handle_inline_svg(
+        &self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
+        document: &mut Document,
+    ) {
+        if let Some(src) = self.inline_svg_data_uri(node) {
+            let alt_text = self
+                .get_attr_value(attrs, "aria-label")
+                .or_else(|| self.get_attr_value(attrs, "title"))
+                .unwrap_or_default();
+
+            let image_inline = Inline::Image {
+                alt_text,
+                url: src,
+                title: None,
+            };
+
+            let mut content = Text::default();
+            content.push_inline(image_inline);
+            let paragraph_block = Block::Paragraph { content };
+            let paragraph_node = Node::new(paragraph_block, 0..0);
+            document.blocks.push(paragraph_node);
+        }
+    }
+
+    fn inline_svg_data_uri(&self, node: &Rc<markup5ever_rcdom::Node>) -> Option<String> {
+        let mut svg_xml = self.serialize_node_to_html(node);
+        if svg_xml.trim().is_empty() {
+            return None;
+        }
+
+        if let Some(start_idx) = svg_xml.find("<svg") {
+            if let Some(tag_end) = svg_xml[start_idx..].find('>') {
+                let tag_end_idx = start_idx + tag_end;
+                let start_tag = &svg_xml[start_idx..tag_end_idx];
+                let mut insert = String::new();
+                if !start_tag.contains("xmlns=") {
+                    insert.push_str(" xmlns=\"http://www.w3.org/2000/svg\"");
+                }
+                if start_tag.contains("xlink:") && !start_tag.contains("xmlns:xlink=") {
+                    insert.push_str(" xmlns:xlink=\"http://www.w3.org/1999/xlink\"");
+                }
+                if !insert.is_empty() {
+                    svg_xml.insert_str(tag_end_idx, &insert);
+                }
+            }
+        }
+
+        let encoded = base64_simd::STANDARD.encode_to_string(svg_xml.as_bytes());
+        Some(format!("data:image/svg+xml;base64,{encoded}"))
     }
 
     fn serialize_node_to_html(&self, node: &Rc<markup5ever_rcdom::Node>) -> String {
@@ -4648,5 +4773,43 @@ The protocol operates on multiple layers:
         } else {
             panic!("oops 2");
         }
+    }
+
+    #[test]
+    fn test_xhtml_self_closing_tags() {
+        // XHTML uses self-closing tags like <title/> and <p/> which are NOT valid in HTML5.
+        // html5ever parses as HTML5, so we must convert them before parsing.
+        let mut converter = HtmlToMarkdownConverter::new();
+
+        // Self-closing <title/> would consume everything after it as title content
+        let html_title = r#"<html><head><title/></head><body><p>Content</p></body></html>"#;
+        let doc1 = converter.convert(html_title);
+        assert_eq!(
+            doc1.blocks.len(),
+            1,
+            "Self-closing title should not break parsing"
+        );
+
+        // Self-closing <p/> should be converted to empty paragraph
+        let html_empty_p = r#"<body><p class="empty-line"/><p>Content</p></body>"#;
+        let doc2 = converter.convert(html_empty_p);
+        assert_eq!(
+            doc2.blocks.len(),
+            1,
+            "Empty self-closing p should not break parsing"
+        );
+
+        // Full XHTML structure (as found in Russian EPUBs)
+        let html_full = r#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title/><link rel="stylesheet" href="style.css"/></head>
+<body><p>Русский текст</p><p class="empty-line"/><p>Ещё текст</p></body>
+</html>"#;
+        let doc3 = converter.convert(html_full);
+        assert_eq!(
+            doc3.blocks.len(),
+            2,
+            "Full XHTML with Russian text should parse correctly"
+        );
     }
 }

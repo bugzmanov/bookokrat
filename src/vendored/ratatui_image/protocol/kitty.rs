@@ -1,16 +1,15 @@
 /// https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
 use std::fmt::Write;
+use std::io::Write as IoWrite;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::super::{Result, picker::cap_parser::Parser};
-use base64::{Engine, engine::general_purpose};
+use crate::vendored::ratatui_image::{Result, picker::cap_parser::Parser};
 use flate2::Compression;
 use flate2::write::ZlibEncoder;
 use image::DynamicImage;
 use log::debug;
 use ratatui::{buffer::Buffer, layout::Rect};
-use std::io::Write as IoWrite;
 
 use super::{ProtocolTrait, StatefulProtocolTrait};
 
@@ -256,36 +255,57 @@ fn render(area: Rect, rect: Rect, buf: &mut Buffer, id: u32, mut seq: Option<&st
         // first line for obvious reasons.
         let mut symbol = seq.take().unwrap_or_default().to_owned();
 
-        // Save cursor postion, including fg color which is what we want.
-        symbol.push_str("\x1b[s");
+        // the save-cursor-position string len that we write at the beginning
+        let save_cursor_and_placeholder_len: usize = 3 + id_color.len() + (4 * 4);
+        // the worst-case width of the `write!` string at the bottom of this fn
+        const RESTORE_CURSOR_POS_LEN: usize = 19;
 
-        // Start unicode placeholder sequence
-        symbol.push_str(&id_color);
-        add_placeholder(&mut symbol, 0, y, id_extra);
+        let full_width = area.width.min(rect.width);
+        let width_usize = usize::from(full_width);
 
-        for x in 1..(area.width.min(rect.width)) {
-            // Add entire row with positions
-            // Use inherited diacritic values
-            symbol.push('\u{10EEEE}');
+        symbol
+            .reserve(save_cursor_and_placeholder_len + (width_usize * 4) + RESTORE_CURSOR_POS_LEN);
+
+        // Save cursor postion, including fg color which is what we want, and start the unicode
+        // placeholder sequence
+        write!(
+            symbol,
+            "\x1b[s{id_color}\u{10EEEE}{}{}{}",
+            diacritic(y),
+            diacritic(0),
+            diacritic(u16::from(id_extra))
+        )
+        .unwrap();
+
+        // Add entire row with positions
+        // Use inherited diacritic values
+        symbol.extend(std::iter::repeat_n(
+            '\u{10EEEE}',
+            width_usize.saturating_sub(1),
+        ));
+
+        for x in 1..full_width {
             // Skip or something may overwrite it
-            buf.cell_mut((area.left() + x, area.top() + y))
-                .map(|cell| cell.set_skip(true));
+            if let Some(cell) = buf.cell_mut((area.left() + x, area.top() + y)) {
+                cell.set_skip(true);
+            }
         }
 
         // Restore saved cursor position including color, and now we have to move back to
         // the end of the area.
         let right = area.width - 1;
         let down = area.height - 1;
-        symbol.push_str(&format!("\x1b[u\x1b[{right}C\x1b[{down}B"));
+        write!(symbol, "\x1b[u\x1b[{right}C\x1b[{down}B").unwrap();
 
-        buf.cell_mut((area.left(), area.top() + y))
-            .map(|cell| cell.set_symbol(&symbol));
+        if let Some(cell) = buf.cell_mut((area.left(), area.top() + y)) {
+            cell.set_symbol(&symbol);
+        }
     }
 }
 
 /// Create a kitty escape sequence for transmitting and virtual-placement.
 ///
-/// The image will be transmitted as compressed RGB8 in chunks of 4096 bytes.
+/// The image will be transmitted as compressed RGBA in chunks of 4096 bytes.
 /// A "virtual placement" (U=1) is created so that we can place it using unicode placeholders.
 /// Removing the placements when the unicode placeholder is no longer there is being handled
 /// automatically by kitty.
@@ -310,43 +330,41 @@ fn transmit_virtual(img: &DynamicImage, id: u32, is_tmux: bool) -> String {
     let mut data = String::from(start);
 
     // Max chunk size is 4096 bytes of base64 encoded data
-    let chunks = compressed_bytes.chunks(4096 / 4 * 3);
+    const CHARS_PER_CHUNK: usize = 4096;
+    const CHUNK_SIZE: usize = (CHARS_PER_CHUNK / 4) * 3;
+    let chunks = compressed_bytes.chunks(CHUNK_SIZE);
     let chunk_count = chunks.len();
+
+    // Pre-allocate string capacity
+    const WORST_CASE_ADDITIONAL_CHUNK_0_LEN: usize = 50;
+    let bytes_written_per_chunk = 11 + CHARS_PER_CHUNK + (escape.len() * 2);
+    let reserve_size =
+        (chunk_count * bytes_written_per_chunk) + WORST_CASE_ADDITIONAL_CHUNK_0_LEN + end.len();
+    data.reserve_exact(reserve_size);
+
     for (i, chunk) in chunks.enumerate() {
-        let payload = general_purpose::STANDARD.encode(chunk);
+        let payload = base64_simd::STANDARD.encode_to_string(chunk);
         // tmux seems to only allow a limited amount of data in each passthrough sequence, since
         // we're already chunking the data for the kitty protocol that's a good enough chunk size to
         // use for the passthrough chunks too.
-        data.push_str(escape);
+        write!(data, "{escape}_Gq=2,").unwrap();
 
-        match i {
-            0 => {
-                // Transmit and virtual-place but keep sending chunks
-                // Note: o=z indicates zlib compression, f=32 for RGBA
-                let more = if chunk_count > 1 { 1 } else { 0 };
-                write!(
-                    data,
-                    "_Gq=2,i={id},a=T,U=1,f=32,t=d,o=z,s={w},v={h},m={more};{payload}"
-                )
-                .unwrap();
-            }
-            n if n + 1 == chunk_count => {
-                // m=0 means over
-                write!(data, "_Gq=2,m=0;{payload}").unwrap();
-            }
-            _ => {
-                // Keep adding chunks
-                write!(data, "_Gq=2,m=1;{payload}").unwrap();
-            }
+        if i == 0 {
+            // Transmit and virtual-place but keep sending chunks
+            // Note: o=z indicates zlib compression, f=32 for RGBA
+            write!(data, "i={id},a=T,U=1,f=32,t=d,o=z,s={w},v={h},").unwrap();
         }
-        data.push_str(escape);
-        write!(data, "\\").unwrap();
+
+        let more = u8::from(chunk_count > (i + 1));
+        // m=0 means over
+        write!(data, "m={more};{payload}{escape}\\").unwrap();
     }
     data.push_str(end);
 
     data
 }
 
+#[allow(dead_code)]
 fn add_placeholder(str: &mut String, x: u16, y: u16, id_extra: u8) {
     str.push('\u{10EEEE}');
     str.push(diacritic(y));
@@ -656,10 +674,8 @@ static DIACRITICS: [char; 297] = [
     '\u{1D244}',
 ];
 #[inline]
-pub(super) fn diacritic(y: u16) -> char {
-    if y >= DIACRITICS.len() as u16 {
-        DIACRITICS[0]
-    } else {
-        DIACRITICS[y as usize]
-    }
+fn diacritic(y: u16) -> char {
+    *DIACRITICS
+        .get(usize::from(y))
+        .unwrap_or_else(|| &DIACRITICS[0])
 }

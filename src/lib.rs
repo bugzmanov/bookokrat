@@ -29,9 +29,15 @@ pub mod search;
 pub mod search_engine;
 pub mod settings;
 pub mod system_command;
+pub mod terminal;
 pub use components::table;
 pub mod theme;
 pub mod types;
+
+// PDF rendering infrastructure - only available with pdf feature
+#[cfg(feature = "pdf")]
+pub mod pdf;
+
 // Test utilities - only available when test-utils feature is enabled or during tests
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;

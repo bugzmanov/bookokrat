@@ -976,9 +976,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         let mut current_rich_spans = Vec::new();
         let mut has_content = false;
+        let mut has_visible_text = false;
+        let mut has_anchor = false;
 
         for item in content.iter() {
             match item {
+                TextOrInline::Text(t) => {
+                    if !t.content.trim().is_empty() {
+                        has_visible_text = true;
+                    }
+                    let rich_spans = self.render_text_or_inline(item, palette, is_focused);
+                    current_rich_spans.extend(rich_spans);
+                }
                 TextOrInline::Inline(Inline::Image { url, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
@@ -1003,6 +1012,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     // Render the image as a separate block
                     self.render_image_placeholder(url, lines, total_height, width, palette);
                     has_content = true;
+                }
+                TextOrInline::Inline(Inline::Anchor { .. }) => {
+                    has_anchor = true;
                 }
                 // Handle links containing images - render as clickable image
                 TextOrInline::Inline(Inline::Link {
@@ -1060,6 +1072,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     has_content = true;
                 }
                 _ => {
+                    if let TextOrInline::Inline(Inline::Link { text, .. }) = item {
+                        if !Self::text_to_string(text).trim().is_empty() {
+                            has_visible_text = true;
+                        }
+                    }
                     // Accumulate non-image content
                     let rich_spans = self.render_text_or_inline(item, palette, is_focused);
                     current_rich_spans.extend(rich_spans);
@@ -1086,6 +1103,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index,
             );
         } else if !has_content {
+            let has_anchor_only = has_anchor && !has_visible_text;
+            if has_anchor_only {
+                return;
+            }
             // Empty paragraph - just add an empty line
             lines.push(RenderedLine {
                 spans: vec![Span::raw("")],

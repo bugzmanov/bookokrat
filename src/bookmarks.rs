@@ -17,6 +17,12 @@ pub struct Bookmark {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_chapters: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_page: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_zoom: Option<f32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -28,6 +34,55 @@ pub struct Bookmarks {
 }
 
 impl Bookmarks {
+    fn normalize_key(path: &str) -> String {
+        let mut cleaned = std::path::PathBuf::new();
+        for component in Path::new(path).components() {
+            match component {
+                std::path::Component::CurDir => {}
+                _ => cleaned.push(component.as_os_str()),
+            }
+        }
+        cleaned.to_string_lossy().to_string()
+    }
+
+    fn candidate_keys(path: &str) -> Vec<String> {
+        let mut candidates = Vec::new();
+        candidates.push(path.to_string());
+
+        let normalized = Self::normalize_key(path);
+        if normalized != path {
+            candidates.push(normalized.clone());
+        }
+
+        if !normalized.starts_with("./") {
+            candidates.push(format!("./{normalized}"));
+        }
+
+        if let Ok(cwd) = std::env::current_dir() {
+            let path_buf = Path::new(&normalized);
+            if path_buf.is_absolute() {
+                if let Ok(rel) = path_buf.strip_prefix(&cwd) {
+                    let rel_str = rel.to_string_lossy().to_string();
+                    candidates.push(rel_str.clone());
+                    if !rel_str.starts_with("./") {
+                        candidates.push(format!("./{rel_str}"));
+                    }
+                }
+            } else {
+                let abs = cwd.join(path_buf).to_string_lossy().to_string();
+                candidates.push(abs);
+            }
+        }
+
+        candidates
+    }
+
+    fn resolve_existing_key(&self, path: &str) -> Option<String> {
+        Self::candidate_keys(path)
+            .into_iter()
+            .find(|candidate| self.books.contains_key(candidate))
+    }
+
     pub fn ephemeral() -> Self {
         Self {
             books: HashMap::new(),
@@ -84,7 +139,12 @@ impl Bookmarks {
     }
 
     pub fn get_bookmark(&self, path: &str) -> Option<&Bookmark> {
-        self.books.get(path)
+        for candidate in Self::candidate_keys(path) {
+            if let Some(bookmark) = self.books.get(&candidate) {
+                return Some(bookmark);
+            }
+        }
+        None
     }
 
     pub fn get_most_recent(&self) -> Option<(String, &Bookmark)> {
@@ -94,6 +154,7 @@ impl Bookmarks {
             .map(|(path, bookmark)| (path.clone(), bookmark))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_bookmark(
         &mut self,
         path: &str,
@@ -101,15 +162,22 @@ impl Bookmarks {
         node_index: Option<usize>,
         chapter_index: Option<usize>,
         total_chapters: Option<usize>,
+        pdf_page: Option<usize>,
+        pdf_zoom: Option<f32>,
     ) {
+        let key = self
+            .resolve_existing_key(path)
+            .unwrap_or_else(|| path.to_string());
         self.books.insert(
-            path.to_string(),
+            key,
             Bookmark {
                 chapter_href,
                 node_index,
                 last_read: chrono::Utc::now(),
                 chapter_index,
                 total_chapters,
+                pdf_page,
+                pdf_zoom,
             },
         );
 

@@ -92,7 +92,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         for span in line_spans {
             let span_text = span.content.to_string();
-            let span_len = span_text.len();
+            let span_chars: Vec<char> = span_text.chars().collect();
+            let span_len = span_chars.len();
             let span_end = char_offset + span_len;
 
             // Check if any highlights overlap with this span
@@ -103,7 +104,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 for (highlight_start, highlight_end) in &match_item.highlight_ranges {
                     // Check if this highlight overlaps with the current span
                     if *highlight_end > char_offset && *highlight_start < span_end {
-                        // Calculate relative positions within the span
+                        // Calculate relative positions within the span (character indices)
                         let rel_start = highlight_start.saturating_sub(char_offset).min(span_len);
                         let rel_end = highlight_end.saturating_sub(char_offset).min(span_len);
 
@@ -133,7 +134,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         continue;
                     }
 
-                    let text_segment = span_text[start..end].to_string();
+                    // Use character-based slicing to avoid UTF-8 boundary issues
+                    let text_segment: String = span_chars[start..end].iter().collect();
                     let style = if is_highlighted {
                         let is_current = self.search_state.is_current_match(line_idx);
                         if is_current {
@@ -160,12 +162,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
 impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
     fn start_search(&mut self) {
+        // Save cursor position if normal mode is active
+        if self.normal_mode.is_active() {
+            self.original_cursor_for_search = Some(self.normal_mode.cursor.clone());
+        } else {
+            self.original_cursor_for_search = None;
+        }
         self.search_state.start_search(self.scroll_offset);
     }
 
     fn cancel_search(&mut self) {
         let original_position = self.search_state.cancel_search();
         self.scroll_offset = original_position;
+        // Restore cursor position if we saved one
+        if let Some(cursor) = self.original_cursor_for_search.take() {
+            self.normal_mode.cursor = cursor;
+        }
     }
 
     fn confirm_search(&mut self) {
@@ -286,7 +298,11 @@ impl SearchablePanel for crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn get_searchable_content(&self) -> Vec<String> {
-        self.get_visible_text()
+        if self.show_raw_html {
+            self.raw_html_wrapped_lines.clone()
+        } else {
+            self.get_visible_text()
+        }
     }
 }
 

@@ -219,6 +219,7 @@ impl ResizeEncodeRender for StatefulProtocol {
                     data: String::new(),
                     area: Rect::default(),
                     is_tmux: s.is_tmux,
+                    options: s.options,
                 }),
                 StatefulProtocolType::Kitty(k) => {
                     // This case is handled above, but kept for completeness
@@ -344,8 +345,9 @@ impl ImageSource {
         image.as_bytes().hash(&mut state);
         let hash = state.finish();
 
-        // We only need to underlay the background color here if it's not completely transparent.
-        if background_color.0[3] != 0 {
+        // We only need to underlay the background color here if it's not completely transparent
+        // and the image might contain alpha (skip for RGB8 which has no alpha channel).
+        if background_color.0[3] != 0 && !matches!(image, DynamicImage::ImageRgb8(_)) {
             let mut bg: DynamicImage =
                 ImageBuffer::from_pixel(image.width(), image.height(), background_color).into();
             imageops::overlay(&mut bg, &image, 0, 0);
