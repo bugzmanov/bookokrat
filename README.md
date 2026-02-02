@@ -212,3 +212,7 @@ If images look wrong, check `bookokrat.log` for the detected protocol. Experienc
 ## Attribution
 
 This project is based on [bookrat](https://github.com/dmitrysobolev/bookrat) by Dmitry Sobolev, licensed under the MIT License.
+
+## License
+
+This project is licensed under the GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later). See [LICENSE](LICENSE) for details.
