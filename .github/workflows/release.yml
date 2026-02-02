@@ -54,6 +54,12 @@ jobs:
         if: matrix.target != 'x86_64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }}
 
+      - name: Fix musl artifact permissions
+        if: runner.os == 'Linux' && matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" target/x86_64-unknown-linux-musl
+          chmod -R u+rwX target/x86_64-unknown-linux-musl
+
       - name: Package
         shell: bash
         run: |
