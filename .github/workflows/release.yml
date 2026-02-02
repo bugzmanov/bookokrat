@@ -30,22 +30,26 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
+        if: matrix.target != 'x86_64-unknown-linux-musl'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Install system deps (Linux)
-        if: runner.os == 'Linux'
+      - name: Install system deps (Linux glibc)
+        if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev clang libclang-dev
 
-      - name: Build
-        env:
-          RUST_FONTCONFIG_DLOPEN: ${{ matrix.target == 'x86_64-unknown-linux-musl' && 'on' || '' }}
+      - name: Build (musl via muslrust)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          docker run --rm -v "$(pwd)":/volume -w /volume \
+            -e RUST_FONTCONFIG_DLOPEN=on \
+            clux/muslrust:stable \
+            cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Build (native)
+        if: matrix.target != 'x86_64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
