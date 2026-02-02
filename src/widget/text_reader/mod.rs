@@ -52,9 +52,9 @@ fn overlay_force_clear_enabled() -> bool {
 fn konsole_kitty_delete_hack_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("BOOKOKRAT_KONSOLE_KITTY_DELETE_HACK")
-            .map(|v| v != "0")
-            .unwrap_or(false)
+        std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
     })
 }
 
@@ -122,6 +122,7 @@ pub struct MarkdownTextReader {
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
     last_rendered_image_rects: HashMap<String, Rect>,
+    last_konsole_cleanup_key: Option<(usize, u64, u64, Rect)>,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -293,6 +294,7 @@ impl MarkdownTextReader {
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
             last_rendered_image_rects: HashMap::new(),
+            last_konsole_cleanup_key: None,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             raw_html_content: None,
@@ -561,7 +563,17 @@ impl MarkdownTextReader {
             )
         });
         if overlay_images_need_clear {
-            if konsole_kitty_delete_hack_enabled() {
+            let cleanup_key = (
+                self.scroll_offset,
+                self.cache_generation,
+                self.rendered_content.generation,
+                inner_area,
+            );
+            let content_moved = self.last_konsole_cleanup_key != Some(cleanup_key);
+            if konsole_kitty_delete_hack_enabled()
+                && content_moved
+                && !self.last_rendered_image_rects.is_empty()
+            {
                 emit_kitty_delete_all();
             }
             if overlay_force_clear_enabled() {
@@ -570,6 +582,7 @@ impl MarkdownTextReader {
             for rect in self.last_rendered_image_rects.values() {
                 frame.render_widget(Block::default().style(image_clear_style), *rect);
             }
+            self.last_konsole_cleanup_key = Some(cleanup_key);
         }
 
         // First pass: render text lines (no images yet)
@@ -1116,6 +1129,7 @@ impl MarkdownTextReader {
         };
         self.embedded_images.borrow_mut().clear();
         self.last_rendered_image_rects.clear();
+        self.last_konsole_cleanup_key = None;
     }
 
     pub fn set_raw_html(&mut self, html: String) {

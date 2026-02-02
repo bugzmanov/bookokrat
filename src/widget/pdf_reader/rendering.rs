@@ -55,9 +55,9 @@ fn overlay_force_clear_enabled() -> bool {
 fn konsole_kitty_delete_hack_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("BOOKOKRAT_KONSOLE_KITTY_DELETE_HACK")
-            .map(|v| v != "0")
-            .unwrap_or(false)
+        std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
     })
 }
 
@@ -1552,14 +1552,19 @@ impl PdfReaderState {
             Vec::new()
         };
 
-        // iTerm2/Sixel images are terminal overlays. Clear the full PDF area first so
-        // old placements are overwritten when pages move or temporarily disappear.
-        if konsole_kitty_delete_hack_enabled() {
+        // iTerm2/Sixel images are terminal overlays. For Konsole hack mode, only
+        // clear via Kitty delete when layout/zoom changes (not during plain scroll).
+        let zoom_changed =
+            (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
+        let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
+        if konsole_kitty_delete_hack_enabled() && (zoom_changed || area_changed) {
             emit_kitty_delete_all();
         }
         if overlay_force_clear_enabled() {
             clear_rect_direct(img_area);
         }
+        self.last_nonkitty_cleanup_area = Some(img_area);
+        self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
         frame.render_widget(
             Block::default().style(Style::default().bg(bg_color)),
             img_area,

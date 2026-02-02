@@ -550,6 +550,13 @@ impl App {
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
         use std::io::Write;
+        let konsole_hack_enabled = std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"));
+        if konsole_hack_enabled {
+            let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+            let _ = stdout().flush();
+        }
         if is_kitty {
             // Send Kitty graphics protocol command to delete all images
             // Format: ESC _G a=d,d=A,q=2 ESC \
