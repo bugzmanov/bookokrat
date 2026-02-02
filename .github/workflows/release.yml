@@ -46,7 +46,7 @@ jobs:
           docker run --rm -v "$(pwd)":/volume -w /volume \
             -e RUST_FONTCONFIG_DLOPEN=on \
             clux/muslrust:stable \
-            /bin/sh -lc "apt-get update && apt-get install -y g++-musl && cargo build --release --target x86_64-unknown-linux-musl"
+            /bin/sh -lc "apt-get update && apt-get install -y musl-tools && CXX=musl-gcc cargo build --release --target x86_64-unknown-linux-musl"
 
       - name: Build (native)
         if: matrix.target != 'x86_64-unknown-linux-musl'
