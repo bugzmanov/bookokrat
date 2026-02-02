@@ -258,6 +258,11 @@ impl App {
 
     /// Close current popup and return focus to previous main panel
     fn close_popup_to_previous(&mut self) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ImagePopup) {
+            // Force one cleanup pass when closing image popup so stale overlay
+            // fragments are removed before returning to content view.
+            self.text_reader.request_overlay_cleanup_on_next_frame();
+        }
         let panel = if self.zen_mode {
             MainPanel::Content
         } else {

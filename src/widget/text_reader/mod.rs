@@ -416,7 +416,9 @@ impl MarkdownTextReader {
 
         // Account for borders, side padding, and content margin
         let margin_width = (self.content_margin * 2) as usize;
-        let width = area.width.saturating_sub(4) as usize - margin_width * 2;
+        let width = (area.width.saturating_sub(4) as usize)
+            .saturating_sub(margin_width * 2)
+            .max(1);
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -576,10 +578,7 @@ impl MarkdownTextReader {
                 inner_area,
             );
             let content_moved = self.last_konsole_cleanup_key != Some(cleanup_key);
-            if konsole_kitty_delete_hack_enabled()
-                && content_moved
-                && !self.last_rendered_image_rects.is_empty()
-            {
+            if konsole_kitty_delete_hack_enabled() && content_moved {
                 emit_kitty_delete_all();
             }
             if overlay_force_clear_enabled() {
@@ -1182,6 +1181,10 @@ impl MarkdownTextReader {
 
     pub fn invalidate_render_cache(&mut self) {
         self.cache_generation += 1;
+    }
+
+    pub fn request_overlay_cleanup_on_next_frame(&mut self) {
+        self.last_konsole_cleanup_key = None;
     }
 }
 
