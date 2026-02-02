@@ -43,12 +43,12 @@ jobs:
       - name: Build (musl via muslrust)
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
-          docker run --rm -u "$(id -u):$(id -g)" -v "$(pwd)":/volume -w /volume \
-            -e CARGO_HOME=/tmp/cargo \
-            -e RUSTUP_HOME=/tmp/rustup \
+          docker run --rm -v "$(pwd)":/volume -w /volume \
+            -e HOST_UID="$(id -u)" \
+            -e HOST_GID="$(id -g)" \
             -e RUST_FONTCONFIG_DLOPEN=on \
             messense/rust-musl-cross:x86_64-musl \
-            /bin/sh -lc "CC=musl-gcc CXX=musl-g++ cargo build --release --target x86_64-unknown-linux-musl"
+            /bin/sh -lc "CC=musl-gcc CXX=musl-g++ cargo build --release --target x86_64-unknown-linux-musl && chown -R ${HOST_UID}:${HOST_GID} target/x86_64-unknown-linux-musl"
 
       - name: Build (native)
         if: matrix.target != 'x86_64-unknown-linux-musl'
