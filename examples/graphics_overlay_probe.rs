@@ -2,6 +2,8 @@ use std::io::{Write, stdout};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(feature = "pdf")]
+use bookokrat::pdf::kittyv2::{DeleteCommand, DirectTransmit, Format, Quiet};
 use crossterm::{
     cursor::{Hide, Show},
     execute,
@@ -16,6 +18,7 @@ use image::{DynamicImage, ImageBuffer, Rgba, RgbaImage};
 enum Protocol {
     Iterm,
     Sixel,
+    Kitty,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +61,7 @@ fn parse_args() -> Config {
                     cfg.protocol = match value.as_str() {
                         "iterm" | "iterm2" => Protocol::Iterm,
                         "sixel" => Protocol::Sixel,
+                        "kitty" => Protocol::Kitty,
                         _ => cfg.protocol,
                     };
                 }
@@ -155,6 +159,26 @@ fn sixel_payload(img: &DynamicImage) -> String {
     .unwrap_or_default()
 }
 
+#[cfg(feature = "pdf")]
+fn kitty_send(
+    out: &mut impl Write,
+    img: &DynamicImage,
+    w_cells: u16,
+    h_cells: u16,
+    image_id: u32,
+) -> std::io::Result<()> {
+    let rgba = img.to_rgba8();
+    let pixels = rgba.as_raw();
+    DirectTransmit::new(rgba.width(), rgba.height())
+        .format(Format::Rgba)
+        .image_id(image_id)
+        .quiet(Quiet::Silent)
+        .no_cursor_move(true)
+        .dest_cells(w_cells, h_cells)
+        .send(out, pixels)?;
+    Ok(())
+}
+
 fn draw_background(out: &mut impl Write, rows: u16, cols: u16) -> std::io::Result<()> {
     for y in 0..rows {
         write!(out, "\x1b[{};1H", y + 1)?;
@@ -210,8 +234,9 @@ fn main() -> std::io::Result<()> {
     let px_h = (cfg.image_h_cells as u32) * 20;
     let image = make_test_image(cfg.alpha, px_w, px_h);
     let payload = match cfg.protocol {
-        Protocol::Iterm => iterm_payload(&image, cfg.image_w_cells, cfg.image_h_cells),
-        Protocol::Sixel => sixel_payload(&image),
+        Protocol::Iterm => Some(iterm_payload(&image, cfg.image_w_cells, cfg.image_h_cells)),
+        Protocol::Sixel => Some(sixel_payload(&image)),
+        Protocol::Kitty => None,
     };
 
     let mut prev = (10u16, 4u16);
@@ -228,8 +253,38 @@ fn main() -> std::io::Result<()> {
             cfg.clear,
         )?;
 
+        #[cfg(feature = "pdf")]
+        if cfg.protocol == Protocol::Kitty && cfg.clear != ClearMode::None {
+            DeleteCommand::all()
+                .clear()
+                .quiet(Quiet::Silent)
+                .write_to(&mut out)?;
+        }
+
         write!(out, "\x1b[{};{}H", y + 1, x + 1)?;
-        write!(out, "{}", payload)?;
+        match cfg.protocol {
+            Protocol::Kitty => {
+                #[cfg(feature = "pdf")]
+                {
+                    kitty_send(
+                        &mut out,
+                        &image,
+                        cfg.image_w_cells,
+                        cfg.image_h_cells,
+                        7000 + i as u32,
+                    )?;
+                }
+                #[cfg(not(feature = "pdf"))]
+                {
+                    write!(out, "kitty protocol needs --features pdf")?;
+                }
+            }
+            _ => {
+                if let Some(ref seq) = payload {
+                    write!(out, "{seq}")?;
+                }
+            }
+        }
         out.flush()?;
 
         prev = (x, y);
