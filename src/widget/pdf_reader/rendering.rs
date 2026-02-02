@@ -4,9 +4,10 @@
 //! including continuous scroll mode, page display, and UI overlays.
 
 use std::collections::HashMap;
-use std::io::stdout;
+use std::io::{Write, stdout};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::vendored::ratatui_image::{FontSize, Image};
 use crossterm::{execute, terminal::BeginSynchronizedUpdate};
@@ -41,6 +42,61 @@ const KITTY_CACHE_RADIUS: usize = 10;
 
 /// Minimum width in columns for the comment textarea to be usable
 pub(crate) const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
+
+fn overlay_force_clear_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn konsole_kitty_delete_hack_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
+    })
+}
+
+fn emit_kitty_delete_all() {
+    let mut out = stdout();
+    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = out.flush();
+}
+
+/// Clear Konsole images if running in Konsole terminal.
+/// Konsole uses iTerm2 protocol for image display but those images are overlays
+/// that appear on top of text content. This function emits a Kitty delete-all
+/// command to hide the images (Konsole supports this part of the Kitty protocol).
+pub fn clear_konsole_images_if_needed() {
+    if konsole_kitty_delete_hack_enabled() {
+        emit_kitty_delete_all();
+    }
+}
+
+fn clear_rect_direct(rect: Rect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+
+    let mut out = stdout();
+    let blank = " ".repeat(rect.width as usize);
+    let _ = write!(out, "\x1b7");
+    for dy in 0..rect.height {
+        let _ = write!(
+            out,
+            "\x1b[{};{}H{}",
+            rect.y.saturating_add(dy).saturating_add(1),
+            rect.x.saturating_add(1),
+            blank
+        );
+    }
+    let _ = write!(out, "\x1b8");
+    let _ = out.flush();
+}
 
 pub(crate) fn convert_page_image(
     img_data: &crate::pdf::ImageData,
@@ -1506,6 +1562,24 @@ impl PdfReaderState {
             Vec::new()
         };
 
+        // iTerm2/Sixel images are terminal overlays. For Konsole hack mode, only
+        // clear via Kitty delete when layout/zoom changes (not during plain scroll).
+        let zoom_changed =
+            (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
+        let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
+        if konsole_kitty_delete_hack_enabled() && (zoom_changed || area_changed) {
+            emit_kitty_delete_all();
+        }
+        if overlay_force_clear_enabled() {
+            clear_rect_direct(img_area);
+        }
+        self.last_nonkitty_cleanup_area = Some(img_area);
+        self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg_color)),
+            img_area,
+        );
+
         // Single page display (no side-by-side)
         let mut page_sizes = Vec::new();
         if let Some(page) = self.rendered.get(self.page) {
@@ -1525,11 +1599,6 @@ impl PdfReaderState {
             self.last_render.img_area = img_area;
             self.last_render.pages_shown = 1;
             self.last_render.unused_width = 0;
-
-            if self.is_iterm && self.rendered.iter().any(|page| page.img.is_some()) {
-                log::debug!("No pages ready to render - keeping previous frame (iTerm2)");
-                return DisplayBatch::NoChange;
-            }
 
             log::debug!("No pages ready to render - showing loading");
             Self::render_loading_in(frame, img_area, &self.palette);

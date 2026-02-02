@@ -258,6 +258,11 @@ impl App {
 
     /// Close current popup and return focus to previous main panel
     fn close_popup_to_previous(&mut self) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ImagePopup) {
+            // Force one cleanup pass when closing image popup so stale overlay
+            // fragments are removed before returning to content view.
+            self.text_reader.request_overlay_cleanup_on_next_frame();
+        }
         let panel = if self.zen_mode {
             MainPanel::Content
         } else {
@@ -550,6 +555,13 @@ impl App {
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
         use std::io::Write;
+        let konsole_hack_enabled = std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"));
+        if konsole_hack_enabled {
+            let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+            let _ = stdout().flush();
+        }
         if is_kitty {
             // Send Kitty graphics protocol command to delete all images
             // Format: ESC _G a=d,d=A,q=2 ESC \
@@ -2446,6 +2458,7 @@ impl App {
                 self.render_pdf_in_area(f, f.area());
                 pdf_area = Some(f.area());
             } else if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     f.area(),
@@ -2454,12 +2467,14 @@ impl App {
                     current_theme(),
                     true, // always focused in zen mode
                     true, // zen mode
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
             }
             #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     f.area(),
@@ -2468,6 +2483,7 @@ impl App {
                     current_theme(),
                     true, // always focused in zen mode
                     true, // zen_mode: show search hints on border
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
@@ -2498,6 +2514,7 @@ impl App {
                 self.render_pdf_in_area(f, main_chunks[1]);
                 pdf_area = Some(main_chunks[1]);
             } else if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     main_chunks[1],
@@ -2506,12 +2523,14 @@ impl App {
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
                     false, // not zen mode
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
             }
             #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     main_chunks[1],
@@ -2520,6 +2539,7 @@ impl App {
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
                     false, // not zen_mode: search hints in help bar
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
@@ -2549,6 +2569,9 @@ impl App {
                     height: area.height.saturating_sub(2),
                 };
                 f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
+                // Konsole uses iTerm2 protocol but images are overlays that leak through.
+                // Emit Kitty delete-all to hide them when popup is shown.
+                crate::widget::pdf_reader::clear_konsole_images_if_needed();
             }
         }
 

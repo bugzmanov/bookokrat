@@ -287,6 +287,10 @@ pub struct PdfReaderState {
     pub notifications: NotificationManager,
     /// Last viewport update sent to converter (non-Kitty)
     pub last_sent_viewport: Option<ViewportUpdate>,
+    /// Last non-Kitty image area that triggered Konsole cleanup hack
+    pub last_nonkitty_cleanup_area: Option<Rect>,
+    /// Last non-Kitty zoom factor that triggered Konsole cleanup hack
+    pub last_nonkitty_cleanup_zoom: f32,
     /// Last Kitty cache window (page indices) used to bound terminal cache
     pub last_kitty_cache_window: Option<(usize, usize)>,
     /// Pages with active Kitty placements from the last display pass
@@ -371,6 +375,8 @@ impl PdfReaderState {
                 DEFAULT_NOTIFICATION_DURATION,
             ),
             last_sent_viewport: None,
+            last_nonkitty_cleanup_area: None,
+            last_nonkitty_cleanup_zoom: if is_kitty { 1.0 } else { zoom_factor },
             last_kitty_cache_window: None,
             kitty_visible_pages: HashSet::new(),
             kitty_delete_range_supported: false,

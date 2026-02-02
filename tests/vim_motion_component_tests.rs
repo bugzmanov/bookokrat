@@ -275,7 +275,7 @@ fn test_text_reader_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, palette, true, false);
+            text_reader.render(f, area, 1, 5, palette, true, false, false);
         })
         .unwrap();
 
@@ -325,7 +325,7 @@ fn test_text_reader_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, palette, true, false);
+            text_reader.render(f, area, 1, 5, palette, true, false, false);
         })
         .unwrap();
 

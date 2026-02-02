@@ -33,11 +33,68 @@ use ratatui::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
+
+fn overlay_force_clear_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn konsole_kitty_delete_hack_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
+    })
+}
+
+fn emit_kitty_delete_all() {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = out.flush();
+}
+
+/// Clear Konsole images if running in Konsole terminal.
+/// Konsole uses iTerm2 protocol for image display but those images are overlays
+/// that appear on top of text content. This function emits a Kitty delete-all
+/// command to hide the images (Konsole supports this part of the Kitty protocol).
+pub fn clear_konsole_images_if_needed() {
+    if konsole_kitty_delete_hack_enabled() {
+        emit_kitty_delete_all();
+    }
+}
+
+fn clear_rects_direct(rects: impl Iterator<Item = Rect>) {
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b7");
+    for rect in rects {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        let blank = " ".repeat(rect.width as usize);
+        for dy in 0..rect.height {
+            let _ = write!(
+                out,
+                "\x1b[{};{}H{}",
+                rect.y.saturating_add(dy).saturating_add(1),
+                rect.x.saturating_add(1),
+                blank
+            );
+        }
+    }
+    let _ = write!(out, "\x1b8");
+    let _ = out.flush();
+}
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
@@ -74,6 +131,8 @@ pub struct MarkdownTextReader {
     // Image handling
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
+    last_rendered_image_rects: HashMap<String, Rect>,
+    last_konsole_cleanup_key: Option<(usize, u64, u64, Rect)>,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -167,11 +226,17 @@ impl MarkdownTextReader {
                 // Detect if we're in iTerm2.
                 // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
                 let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
+                let is_konsole = std::env::var("KONSOLE_VERSION").is_ok()
+                    || std::env::var("TERM_PROGRAM")
+                        .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"));
 
                 // Check for user override via BOOKOKRAT_PROTOCOL env var
                 let chosen_protocol =
                     if let Some(forced) = crate::terminal::protocol_override_from_env() {
                         forced
+                    } else if is_konsole {
+                        info!("Konsole detected. Using iTerm2 protocol.");
+                        ProtocolType::Iterm2
                     } else if is_iterm2 {
                         // Prefer: Kitty > Sixel > iTerm > Halfblocks
                         // For WezTerm: Force iTerm2 protocol
@@ -244,6 +309,8 @@ impl MarkdownTextReader {
             auto_scroll_speed: 1.0,
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
+            last_rendered_image_rects: HashMap::new(),
+            last_konsole_cleanup_key: None,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             raw_html_content: None,
@@ -339,6 +406,7 @@ impl MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         zen_mode: bool,
+        suppress_images: bool,
     ) {
         // Store content area for hit-testing and mouse interactions
         self.last_content_area = Some(area);
@@ -359,7 +427,9 @@ impl MarkdownTextReader {
 
         // Account for borders, side padding, and content margin
         let margin_width = (self.content_margin * 2) as usize;
-        let width = area.width.saturating_sub(4) as usize - margin_width * 2;
+        let width = (area.width.saturating_sub(4) as usize)
+            .saturating_sub(margin_width * 2)
+            .max(1);
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -503,6 +573,34 @@ impl MarkdownTextReader {
         // Remember the focused text area for mouse hover/selection logic
         self.last_inner_text_area = Some(inner_area);
 
+        let image_clear_style = RatatuiStyle::default().bg(palette.base_00);
+        let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
+            matches!(
+                picker.protocol_type(),
+                crate::ratatui_image::picker::ProtocolType::Iterm2
+                    | crate::ratatui_image::picker::ProtocolType::Sixel
+            )
+        });
+        if overlay_images_need_clear {
+            let cleanup_key = (
+                self.scroll_offset,
+                self.cache_generation,
+                self.rendered_content.generation,
+                inner_area,
+            );
+            let content_moved = self.last_konsole_cleanup_key != Some(cleanup_key);
+            if konsole_kitty_delete_hack_enabled() && content_moved {
+                emit_kitty_delete_all();
+            }
+            if overlay_force_clear_enabled() {
+                clear_rects_direct(self.last_rendered_image_rects.values().copied());
+            }
+            for rect in self.last_rendered_image_rects.values() {
+                frame.render_widget(Block::default().style(image_clear_style), *rect);
+            }
+            self.last_konsole_cleanup_key = Some(cleanup_key);
+        }
+
         // First pass: render text lines (no images yet)
         let mut visible_lines = Vec::new();
         let end_offset =
@@ -618,12 +716,19 @@ impl MarkdownTextReader {
         let textarea_insert_position = textarea_insert_position;
         let textarea_lines_to_insert = textarea_lines_to_insert;
 
-        if !self.show_raw_html {
+        let mut current_image_rects = HashMap::new();
+
+        // Clear Konsole images when suppressing (e.g., popup is shown)
+        if suppress_images && konsole_kitty_delete_hack_enabled() {
+            emit_kitty_delete_all();
+        }
+
+        if !self.show_raw_html && !suppress_images {
             self.check_for_loaded_images();
             if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
                 let area_height = inner_area.height as usize;
 
-                for (_, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+                for (src, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
                     let image_height_cells = embedded_image.height_cells as usize;
                     let mut image_start_line = embedded_image.lines_before_image;
                     let mut image_end_line = image_start_line + image_height_cells;
@@ -712,11 +817,13 @@ impl MarkdownTextReader {
 
                                     let image_widget = StatefulImage::new()
                                         .resize(Resize::Viewport(viewport_options));
+
                                     frame.render_stateful_widget(
                                         image_widget,
                                         image_area,
                                         protocol,
                                     );
+                                    current_image_rects.insert(src.clone(), image_area);
                                 }
                             }
                         }
@@ -724,6 +831,8 @@ impl MarkdownTextReader {
                 }
             }
         }
+
+        self.last_rendered_image_rects = current_image_rects;
 
         if self.comment_input.is_active() {
             if let Some(ref mut textarea) = self.comment_input.textarea {
@@ -1040,6 +1149,8 @@ impl MarkdownTextReader {
             generation: 0,
         };
         self.embedded_images.borrow_mut().clear();
+        self.last_rendered_image_rects.clear();
+        self.last_konsole_cleanup_key = None;
     }
 
     pub fn set_raw_html(&mut self, html: String) {
@@ -1086,6 +1197,10 @@ impl MarkdownTextReader {
 
     pub fn invalidate_render_cache(&mut self) {
         self.cache_generation += 1;
+    }
+
+    pub fn request_overlay_cleanup_on_next_frame(&mut self) {
+        self.last_konsole_cleanup_key = None;
     }
 }
 
