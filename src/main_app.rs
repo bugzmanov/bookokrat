@@ -817,6 +817,12 @@ impl App {
 
         // Detect terminal protocol and capabilities
         let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
+        // Apply user protocol override if set
+        if let Some(forced) = crate::terminal::protocol_override_from_env() {
+            if let Some(ref mut p) = picker {
+                p.set_protocol_type(forced);
+            }
+        }
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal(),

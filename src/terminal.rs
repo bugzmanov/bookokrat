@@ -350,3 +350,14 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
     }
     Some(crate::pdf::kittyv2::probe_delete_range_support())
 }
+
+pub fn protocol_override_from_env() -> Option<ProtocolType> {
+    let value = env::var("BOOKOKRAT_PROTOCOL").ok()?;
+    match value.to_ascii_lowercase().as_str() {
+        "halfblocks" | "half" | "blocks" => Some(ProtocolType::Halfblocks),
+        "sixel" => Some(ProtocolType::Sixel),
+        "kitty" => Some(ProtocolType::Kitty),
+        "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
+        _ => None,
+    }
+}
