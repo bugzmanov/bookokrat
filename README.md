@@ -61,15 +61,11 @@ Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
 
 **Linux (Ubuntu/Debian):**
 ```bash
-sudo apt update && sudo apt install build-essential
-```
-If you build with the PDF feature, install Fontconfig dev files too:
-```bash
-sudo apt update && sudo apt install pkg-config libfontconfig1-dev
-```
-If you build with the PDF feature, `bindgen` needs libclang:
-```bash
-sudo apt update && sudo apt install clang libclang-dev
+sudo apt update 
+sudo apt install build-essential
+
+# For PDF to work:
+sudo apt install pkg-config libfontconfig1-dev clang libclang-dev
 ```
 
 **Linux (Fedora/RHEL):**
