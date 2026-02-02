@@ -505,6 +505,20 @@ impl MarkdownTextReader {
         // Remember the focused text area for mouse hover/selection logic
         self.last_inner_text_area = Some(inner_area);
 
+        let image_clear_style = RatatuiStyle::default().bg(palette.base_00);
+        let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
+            matches!(
+                picker.protocol_type(),
+                crate::ratatui_image::picker::ProtocolType::Iterm2
+                    | crate::ratatui_image::picker::ProtocolType::Sixel
+            )
+        });
+        if overlay_images_need_clear {
+            for rect in self.last_rendered_image_rects.values() {
+                frame.render_widget(Block::default().style(image_clear_style), *rect);
+            }
+        }
+
         // First pass: render text lines (no images yet)
         let mut visible_lines = Vec::new();
         let end_offset =
@@ -620,7 +634,6 @@ impl MarkdownTextReader {
         let textarea_insert_position = textarea_insert_position;
         let textarea_lines_to_insert = textarea_lines_to_insert;
 
-        let image_clear_style = RatatuiStyle::default().bg(palette.base_00);
         let mut current_image_rects = HashMap::new();
 
         if !self.show_raw_html {
@@ -718,15 +731,6 @@ impl MarkdownTextReader {
                                     let image_widget = StatefulImage::new()
                                         .resize(Resize::Viewport(viewport_options));
 
-                                    if let Some(prev_area) = self.last_rendered_image_rects.get(src)
-                                        && *prev_area != image_area
-                                    {
-                                        frame.render_widget(
-                                            Block::default().style(image_clear_style),
-                                            *prev_area,
-                                        );
-                                    }
-
                                     frame.render_stateful_widget(
                                         image_widget,
                                         image_area,
@@ -741,11 +745,6 @@ impl MarkdownTextReader {
             }
         }
 
-        for (src, prev_area) in &self.last_rendered_image_rects {
-            if !current_image_rects.contains_key(src) {
-                frame.render_widget(Block::default().style(image_clear_style), *prev_area);
-            }
-        }
         self.last_rendered_image_rects = current_image_rects;
 
         if self.comment_input.is_active() {
