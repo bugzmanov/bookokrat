@@ -35,14 +35,20 @@ jobs:
           toolchain: stable
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get install -y musl-tools
-      - name: Install system deps
-        if: runner.os == 'Linux'
+      - name: Install system deps (Linux native)
+        if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y pkg-config libfontconfig-dev clang libclang-dev
 
-      - name: Build
+      - name: Install cross (for musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build (musl via cross)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build (native)
+        if: matrix.target != 'x86_64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
