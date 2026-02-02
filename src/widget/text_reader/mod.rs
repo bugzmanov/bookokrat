@@ -49,6 +49,21 @@ fn overlay_force_clear_enabled() -> bool {
     })
 }
 
+fn konsole_kitty_delete_hack_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_KONSOLE_KITTY_DELETE_HACK")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn emit_kitty_delete_all() {
+    let mut out = std::io::stdout();
+    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = out.flush();
+}
+
 fn clear_rects_direct(rects: impl Iterator<Item = Rect>) {
     let mut out = std::io::stdout();
     let _ = write!(out, "\x1b7");
@@ -546,6 +561,9 @@ impl MarkdownTextReader {
             )
         });
         if overlay_images_need_clear {
+            if konsole_kitty_delete_hack_enabled() {
+                emit_kitty_delete_all();
+            }
             if overlay_force_clear_enabled() {
                 clear_rects_direct(self.last_rendered_image_rects.values().copied());
             }

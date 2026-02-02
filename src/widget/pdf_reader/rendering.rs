@@ -52,6 +52,21 @@ fn overlay_force_clear_enabled() -> bool {
     })
 }
 
+fn konsole_kitty_delete_hack_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_KONSOLE_KITTY_DELETE_HACK")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn emit_kitty_delete_all() {
+    let mut out = stdout();
+    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    let _ = out.flush();
+}
+
 fn clear_rect_direct(rect: Rect) {
     if rect.width == 0 || rect.height == 0 {
         return;
@@ -1539,6 +1554,9 @@ impl PdfReaderState {
 
         // iTerm2/Sixel images are terminal overlays. Clear the full PDF area first so
         // old placements are overwritten when pages move or temporarily disappear.
+        if konsole_kitty_delete_hack_enabled() {
+            emit_kitty_delete_all();
+        }
         if overlay_force_clear_enabled() {
             clear_rect_direct(img_area);
         }
