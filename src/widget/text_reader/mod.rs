@@ -62,6 +62,7 @@ fn emit_kitty_delete_all() {
     let mut out = std::io::stdout();
     let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
     let _ = out.flush();
+    crate::terminal::bump_overlay_resend_nonce();
 }
 
 fn clear_rects_direct(rects: impl Iterator<Item = Rect>) {

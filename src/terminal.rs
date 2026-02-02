@@ -1,9 +1,12 @@
 use std::env;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(feature = "pdf")]
 use log::warn;
 
 use crate::vendored::ratatui_image::picker::{Picker, ProtocolType};
+
+static OVERLAY_RESEND_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalKind {
@@ -371,4 +374,12 @@ pub fn protocol_override_from_env() -> Option<ProtocolType> {
         "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
         _ => None,
     }
+}
+
+pub fn bump_overlay_resend_nonce() {
+    OVERLAY_RESEND_NONCE.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn overlay_resend_nonce() -> u64 {
+    OVERLAY_RESEND_NONCE.load(Ordering::Relaxed)
 }

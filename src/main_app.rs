@@ -146,6 +146,7 @@ pub struct App {
     settings_popup: Option<SettingsPopup>,
     notifications: NotificationManager,
     help_bar_area: Rect,
+    last_popup_active: bool,
     zen_mode: bool,
     test_mode: bool,
     comments_dir: Option<PathBuf>,
@@ -337,6 +338,39 @@ impl App {
         matches!(self.focused_panel, FocusedPanel::Popup(_))
     }
 
+    fn is_konsole_terminal() -> bool {
+        std::env::var("KONSOLE_VERSION").is_ok()
+            || std::env::var("TERM_PROGRAM")
+                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
+    }
+
+    fn should_cleanup_overlay_for_popup(&self) -> bool {
+        if !Self::is_konsole_terminal() {
+            return false;
+        }
+
+        #[cfg(feature = "pdf")]
+        if let Some(ref pdf_reader) = self.pdf_reader {
+            return !pdf_reader.is_kitty;
+        }
+
+        self.text_reader.get_image_picker().is_some_and(|picker| {
+            matches!(
+                picker.protocol_type(),
+                crate::ratatui_image::picker::ProtocolType::Iterm2
+                    | crate::ratatui_image::picker::ProtocolType::Sixel
+            )
+        })
+    }
+
+    fn clear_overlay_for_popup(&self) {
+        use std::io::Write;
+        let mut out = stdout();
+        let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+        let _ = out.flush();
+        crate::terminal::bump_overlay_resend_nonce();
+    }
+
     /// Show an informational notification to the user
     pub fn show_info(&mut self, message: impl Into<String>) {
         self.notifications.show_info(message);
@@ -441,6 +475,7 @@ impl App {
             settings_popup: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
+            last_popup_active: false,
             zen_mode: false,
             test_mode: false,
             comments_dir: comments_dir.map(|p| p.to_path_buf()),
@@ -561,6 +596,7 @@ impl App {
         if konsole_hack_enabled {
             let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
             let _ = stdout().flush();
+            crate::terminal::bump_overlay_resend_nonce();
         }
         if is_kitty {
             // Send Kitty graphics protocol command to delete all images
@@ -2441,6 +2477,12 @@ impl App {
         let draw_closure_start = std::time::Instant::now();
         #[cfg(feature = "pdf")]
         let mut pdf_area = None;
+        let popup_active_now = self.has_active_popup();
+        let popup_closed = self.last_popup_active && !popup_active_now;
+        if popup_closed && self.should_cleanup_overlay_for_popup() {
+            // Force overlay payload re-send right after popup closes.
+            crate::terminal::bump_overlay_resend_nonce();
+        }
         let auto_scroll_updated = self.text_reader.update_auto_scroll();
         if auto_scroll_updated {
             self.save_bookmark();
@@ -2564,6 +2606,10 @@ impl App {
             }
         }
 
+        if self.has_active_popup() && self.should_cleanup_overlay_for_popup() {
+            self.clear_overlay_for_popup();
+        }
+
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::ReadingHistory)
@@ -2673,6 +2719,7 @@ impl App {
                 draw_closure_elapsed.as_millis()
             );
         }
+        self.last_popup_active = popup_active_now;
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {

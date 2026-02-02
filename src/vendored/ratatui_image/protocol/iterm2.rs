@@ -337,7 +337,14 @@ fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) 
         bottom - render_area.y,
     );
 
-    buf[(render_area.x, render_area.y)].set_symbol(data);
+    let nonce = crate::terminal::overlay_resend_nonce();
+    if nonce == 0 {
+        buf[(render_area.x, render_area.y)].set_symbol(data);
+    } else {
+        let marker = if nonce & 1 == 0 { "\x1b[0m" } else { "\x1b[m" };
+        let payload = format!("{marker}{data}");
+        buf[(render_area.x, render_area.y)].set_symbol(&payload);
+    }
 
     for x in (render_area.left() + 1)..render_area.right() {
         buf[(x, render_area.top())].set_skip(true);
