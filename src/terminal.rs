@@ -4,6 +4,7 @@ use std::env;
 use log::warn;
 
 use crate::vendored::ratatui_image::picker::{Picker, ProtocolType};
+use log::info;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TerminalKind {
@@ -349,4 +350,25 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
         return None;
     }
     Some(crate::pdf::kittyv2::probe_delete_range_support())
+}
+
+pub fn protocol_override_from_env() -> Option<ProtocolType> {
+    let value = env::var("BOOKOKRAT_PROTOCOL").ok()?;
+    let protocol = match value.to_ascii_lowercase().as_str() {
+        "halfblocks" | "half" | "blocks" => Some(ProtocolType::Halfblocks),
+        "sixel" => Some(ProtocolType::Sixel),
+        "kitty" => Some(ProtocolType::Kitty),
+        "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
+        other => {
+            info!(
+                "Unknown BOOKOKRAT_PROTOCOL value '{}'. Valid options: halfblocks, sixel, kitty, iterm2",
+                other
+            );
+            None
+        }
+    };
+    if let Some(p) = protocol {
+        info!("BOOKOKRAT_PROTOCOL={} -> forcing {:?} protocol", value, p);
+    }
+    protocol
 }

@@ -168,6 +168,20 @@ impl MarkdownTextReader {
                 // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
                 let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
 
+                // Check for user override via BOOKOKRAT_PROTOCOL env var
+                if let Some(forced) = crate::terminal::protocol_override_from_env() {
+                    picker.set_protocol_type(forced);
+                    info!(
+                        "Using forced protocol from BOOKOKRAT_PROTOCOL: {:?}",
+                        forced
+                    );
+                    picker.set_background_color([0, 0, 0, 0]);
+                    return Self {
+                        image_picker: Some(picker),
+                        ..Default::default()
+                    };
+                }
+
                 // Prefer: Kitty > Sixel > iTerm > Halfblocks
                 // For WezTerm: Force iTerm2 protocol
                 // For iTerm2: Try Sixel
