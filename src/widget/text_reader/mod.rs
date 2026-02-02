@@ -169,38 +169,28 @@ impl MarkdownTextReader {
                 let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
 
                 // Check for user override via BOOKOKRAT_PROTOCOL env var
-                if let Some(forced) = crate::terminal::protocol_override_from_env() {
-                    picker.set_protocol_type(forced);
-                    info!(
-                        "Using forced protocol from BOOKOKRAT_PROTOCOL: {:?}",
+                let chosen_protocol =
+                    if let Some(forced) = crate::terminal::protocol_override_from_env() {
                         forced
-                    );
-                    picker.set_background_color([0, 0, 0, 0]);
-                    return Self {
-                        image_picker: Some(picker),
-                        ..Default::default()
+                    } else if is_iterm2 {
+                        // Prefer: Kitty > Sixel > iTerm > Halfblocks
+                        // For WezTerm: Force iTerm2 protocol
+                        // For iTerm2: Try Sixel
+                        info!("iTerm2 detected. Using Sixel protocol.");
+                        ProtocolType::Sixel
+                    } else if is_wezterm {
+                        info!("WezTerm detected. Using iTerm2 protocol.");
+                        ProtocolType::Iterm2
+                    } else if has_kitty {
+                        info!("Kitty protocol detected, using Kitty");
+                        ProtocolType::Kitty
+                    } else if has_sixel {
+                        info!("Sixel protocol detected, using Sixel");
+                        ProtocolType::Sixel
+                    } else {
+                        // Keep whatever was detected (iTerm or Halfblocks)
+                        picker.protocol_type()
                     };
-                }
-
-                // Prefer: Kitty > Sixel > iTerm > Halfblocks
-                // For WezTerm: Force iTerm2 protocol
-                // For iTerm2: Try Sixel
-                let chosen_protocol = if is_iterm2 {
-                    info!("iTerm2 detected. Using Sixel protocol.");
-                    ProtocolType::Sixel
-                } else if is_wezterm {
-                    info!("WezTerm detected. Using iTerm2 protocol.");
-                    ProtocolType::Iterm2
-                } else if has_kitty {
-                    info!("Kitty protocol detected, using Kitty");
-                    ProtocolType::Kitty
-                } else if has_sixel {
-                    info!("Sixel protocol detected, using Sixel");
-                    ProtocolType::Sixel
-                } else {
-                    // Keep whatever was detected (iTerm or Halfblocks)
-                    picker.protocol_type()
-                };
 
                 picker.set_protocol_type(chosen_protocol);
                 info!("Final protocol type: {:?}", picker.protocol_type());
