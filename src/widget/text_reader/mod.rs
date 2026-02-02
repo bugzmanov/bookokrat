@@ -33,11 +33,43 @@ use ratatui::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::io::Write;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
+
+fn overlay_force_clear_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn clear_rects_direct(rects: impl Iterator<Item = Rect>) {
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b7");
+    for rect in rects {
+        if rect.width == 0 || rect.height == 0 {
+            continue;
+        }
+        let blank = " ".repeat(rect.width as usize);
+        for dy in 0..rect.height {
+            let _ = write!(
+                out,
+                "\x1b[{};{}H{}",
+                rect.y.saturating_add(dy).saturating_add(1),
+                rect.x.saturating_add(1),
+                blank
+            );
+        }
+    }
+    let _ = write!(out, "\x1b8");
+    let _ = out.flush();
+}
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
@@ -514,6 +546,9 @@ impl MarkdownTextReader {
             )
         });
         if overlay_images_need_clear {
+            if overlay_force_clear_enabled() {
+                clear_rects_direct(self.last_rendered_image_rects.values().copied());
+            }
             for rect in self.last_rendered_image_rects.values() {
                 frame.render_widget(Block::default().style(image_clear_style), *rect);
             }

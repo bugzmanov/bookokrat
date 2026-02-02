@@ -4,9 +4,10 @@
 //! including continuous scroll mode, page display, and UI overlays.
 
 use std::collections::HashMap;
-use std::io::stdout;
+use std::io::{Write, stdout};
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::vendored::ratatui_image::{FontSize, Image};
 use crossterm::{execute, terminal::BeginSynchronizedUpdate};
@@ -41,6 +42,36 @@ const KITTY_CACHE_RADIUS: usize = 10;
 
 /// Minimum width in columns for the comment textarea to be usable
 pub(crate) const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
+
+fn overlay_force_clear_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
+            .map(|v| v != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn clear_rect_direct(rect: Rect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+
+    let mut out = stdout();
+    let blank = " ".repeat(rect.width as usize);
+    let _ = write!(out, "\x1b7");
+    for dy in 0..rect.height {
+        let _ = write!(
+            out,
+            "\x1b[{};{}H{}",
+            rect.y.saturating_add(dy).saturating_add(1),
+            rect.x.saturating_add(1),
+            blank
+        );
+    }
+    let _ = write!(out, "\x1b8");
+    let _ = out.flush();
+}
 
 pub(crate) fn convert_page_image(
     img_data: &crate::pdf::ImageData,
@@ -1508,6 +1539,9 @@ impl PdfReaderState {
 
         // iTerm2/Sixel images are terminal overlays. Clear the full PDF area first so
         // old placements are overwritten when pages move or temporarily disappear.
+        if overlay_force_clear_enabled() {
+            clear_rect_direct(img_area);
+        }
         frame.render_widget(
             Block::default().style(Style::default().bg(bg_color)),
             img_area,
