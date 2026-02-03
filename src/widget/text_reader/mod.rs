@@ -17,6 +17,7 @@ use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
 use crate::search::{SearchMode, SearchState};
+use crate::terminal_overlay;
 use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use crate::widget::hud_message::{HudMessage, HudMode};
@@ -33,68 +34,11 @@ use ratatui::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::Write;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
-
-fn overlay_force_clear_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
-            .map(|v| v != "0")
-            .unwrap_or(false)
-    })
-}
-
-fn konsole_kitty_delete_hack_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("KONSOLE_VERSION").is_ok()
-            || std::env::var("TERM_PROGRAM")
-                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
-    })
-}
-
-fn emit_kitty_delete_all() {
-    let mut out = std::io::stdout();
-    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-    let _ = out.flush();
-}
-
-/// Clear Konsole images if running in Konsole terminal.
-/// Konsole uses iTerm2 protocol for image display but those images are overlays
-/// that appear on top of text content. This function emits a Kitty delete-all
-/// command to hide the images (Konsole supports this part of the Kitty protocol).
-pub fn clear_konsole_images_if_needed() {
-    if konsole_kitty_delete_hack_enabled() {
-        emit_kitty_delete_all();
-    }
-}
-
-fn clear_rects_direct(rects: impl Iterator<Item = Rect>) {
-    let mut out = std::io::stdout();
-    let _ = write!(out, "\x1b7");
-    for rect in rects {
-        if rect.width == 0 || rect.height == 0 {
-            continue;
-        }
-        let blank = " ".repeat(rect.width as usize);
-        for dy in 0..rect.height {
-            let _ = write!(
-                out,
-                "\x1b[{};{}H{}",
-                rect.y.saturating_add(dy).saturating_add(1),
-                rect.x.saturating_add(1),
-                blank
-            );
-        }
-    }
-    let _ = write!(out, "\x1b8");
-    let _ = out.flush();
-}
 
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
@@ -589,11 +533,13 @@ impl MarkdownTextReader {
                 inner_area,
             );
             let content_moved = self.last_konsole_cleanup_key != Some(cleanup_key);
-            if konsole_kitty_delete_hack_enabled() && content_moved {
-                emit_kitty_delete_all();
+            if terminal_overlay::konsole_kitty_delete_hack_enabled() && content_moved {
+                terminal_overlay::emit_kitty_delete_all();
             }
-            if overlay_force_clear_enabled() {
-                clear_rects_direct(self.last_rendered_image_rects.values().copied());
+            if terminal_overlay::overlay_force_clear_enabled() {
+                terminal_overlay::clear_rects_direct(
+                    self.last_rendered_image_rects.values().copied(),
+                );
             }
             for rect in self.last_rendered_image_rects.values() {
                 frame.render_widget(Block::default().style(image_clear_style), *rect);
@@ -719,8 +665,8 @@ impl MarkdownTextReader {
         let mut current_image_rects = HashMap::new();
 
         // Clear Konsole images when suppressing (e.g., popup is shown)
-        if suppress_images && konsole_kitty_delete_hack_enabled() {
-            emit_kitty_delete_all();
+        if suppress_images && terminal_overlay::konsole_kitty_delete_hack_enabled() {
+            terminal_overlay::emit_kitty_delete_all();
         }
 
         if !self.show_raw_html && !suppress_images {

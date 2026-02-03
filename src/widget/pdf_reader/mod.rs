@@ -23,7 +23,6 @@ pub(crate) use navigation::{
     InputOutcome, apply_theme_to_pdf_reader, navigate_pdf_to_page, should_route_mouse_to_ui,
 };
 pub use region::{DimOverlay, ImageRegion, TextRegion};
-pub use rendering::clear_konsole_images_if_needed;
 pub(crate) use rendering::{
     apply_render_responses, execute_display_plan, update_non_kitty_viewport,
 };

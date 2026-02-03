@@ -554,21 +554,8 @@ impl App {
     /// Clear PDF graphics from terminal when switching away from PDF mode
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
-        use std::io::Write;
-        let konsole_hack_enabled = std::env::var("KONSOLE_VERSION").is_ok()
-            || std::env::var("TERM_PROGRAM")
-                .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"));
-        if konsole_hack_enabled {
-            let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-            let _ = stdout().flush();
-        }
-        if is_kitty {
-            // Send Kitty graphics protocol command to delete all images
-            // Format: ESC _G a=d,d=A,q=2 ESC \
-            // a=d: action=delete, d=A: delete all from memory, q=2: quiet mode
-            let delete_cmd = b"\x1b_Ga=d,d=A,q=2\x1b\\";
-            let _ = stdout().write_all(delete_cmd);
-            let _ = stdout().flush();
+        if is_kitty || crate::terminal_overlay::konsole_kitty_delete_hack_enabled() {
+            crate::terminal_overlay::emit_kitty_delete_all();
         }
         // For iTerm2/Sixel, images are inline and will be overwritten by new content
     }
@@ -2571,7 +2558,7 @@ impl App {
                 f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
                 // Konsole uses iTerm2 protocol but images are overlays that leak through.
                 // Emit Kitty delete-all to hide them when popup is shown.
-                crate::widget::pdf_reader::clear_konsole_images_if_needed();
+                crate::terminal_overlay::clear_konsole_images_if_needed();
             }
         }
 

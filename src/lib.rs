@@ -30,6 +30,7 @@ pub mod search_engine;
 pub mod settings;
 pub mod system_command;
 pub mod terminal;
+pub mod terminal_overlay;
 pub use components::table;
 pub mod theme;
 pub mod types;
