@@ -830,7 +830,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Check if this heading has annotations
         let annotation_ranges = self.get_annotation_ranges(node_index);
-        let has_annotations = !annotation_ranges.is_empty();
 
         let base_modifiers = match level {
             HeadingLevel::H3 => Modifier::BOLD | Modifier::UNDERLINED,
@@ -838,25 +837,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             _ => Modifier::BOLD,
         };
 
-        // Add purple underline if annotated (for H1, H2, H5, H6 which don't have underline by default)
-        let modifiers = if has_annotations && !matches!(level, HeadingLevel::H3 | HeadingLevel::H4)
-        {
-            base_modifiers | Modifier::UNDERLINED
-        } else {
-            base_modifiers
-        };
+        // Track cumulative character position for annotation ranges
+        let mut cumulative_char_pos = 0;
 
         for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
-            let mut style = RatatuiStyle::default()
+            let base_style = RatatuiStyle::default()
                 .fg(heading_color)
-                .add_modifier(modifiers);
+                .add_modifier(base_modifiers);
 
-            // Add purple underline color for annotated headings
-            if has_annotations {
-                style = style.underline_color(palette.base_0e);
-            }
+            // Apply precise underlines at annotation boundaries
+            let line_len = wrapped_line.chars().count();
+            let styled_spans = if annotation_ranges.is_empty() {
+                vec![Span::styled(wrapped_line.to_string(), base_style)]
+            } else {
+                Self::split_text_at_annotation_boundaries(
+                    wrapped_line,
+                    &annotation_ranges,
+                    cumulative_char_pos,
+                    base_style,
+                    palette.base_0e,
+                )
+            };
 
-            let styled_spans = vec![Span::styled(wrapped_line.to_string(), style)];
+            cumulative_char_pos += line_len;
 
             lines.push(RenderedLine {
                 spans: styled_spans,
@@ -1273,6 +1276,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Apply underline styling to spans that overlap with annotation character ranges.
     /// This provides visual feedback for annotated text passages.
     /// `char_offset` is added to span positions for cumulative tracking across multiple items.
+    /// Spans are split at annotation boundaries so only the exact annotated characters are underlined.
     fn apply_annotation_underlines_with_offset(
         rich_spans: Vec<RichSpan>,
         annotation_ranges: &[(usize, usize)],
@@ -1305,30 +1309,75 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let span_end = char_pos + span_len;
 
             // Check if this span overlaps with any annotation range
-            let overlaps = annotation_ranges
+            let overlapping_ranges: Vec<(usize, usize)> = annotation_ranges
                 .iter()
-                .any(|&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start);
+                .filter(|&&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start)
+                .copied()
+                .collect();
 
-            let new_span = if overlaps {
-                // Apply underline styling with purple color
-                let new_style = span
-                    .style
+            if overlapping_ranges.is_empty() {
+                // No overlap, keep span as-is
+                let new_rich_span = match link_info {
+                    Some(info) => RichSpan::Link { span, info },
+                    None => RichSpan::Text(span),
+                };
+                result.push(new_rich_span);
+            } else {
+                // Split span at annotation boundaries for precise underlining
+                let chars: Vec<char> = span.content.chars().collect();
+                let base_style = span.style;
+                let underlined_style = base_style
                     .add_modifier(Modifier::UNDERLINED)
                     .underline_color(underline_color);
-                Span::styled(span.content, new_style)
-            } else {
-                span
-            };
 
-            let new_rich_span = match link_info {
-                Some(info) => RichSpan::Link {
-                    span: new_span,
-                    info,
-                },
-                None => RichSpan::Text(new_span),
-            };
+                // Collect all boundary points within this span
+                let mut boundaries: Vec<usize> = vec![0, span_len];
+                for &(ann_start, ann_end) in &overlapping_ranges {
+                    if ann_start > span_start && ann_start < span_end {
+                        boundaries.push(ann_start - span_start);
+                    }
+                    if ann_end > span_start && ann_end < span_end {
+                        boundaries.push(ann_end - span_start);
+                    }
+                }
+                boundaries.sort_unstable();
+                boundaries.dedup();
 
-            result.push(new_rich_span);
+                // Create sub-spans for each segment
+                for window in boundaries.windows(2) {
+                    let seg_start = window[0];
+                    let seg_end = window[1];
+                    if seg_start >= seg_end {
+                        continue;
+                    }
+
+                    let segment_text: String = chars[seg_start..seg_end].iter().collect();
+                    let abs_start = span_start + seg_start;
+                    let abs_end = span_start + seg_end;
+
+                    // Check if this segment is within any annotation range
+                    let is_annotated = overlapping_ranges
+                        .iter()
+                        .any(|&(ann_start, ann_end)| abs_start >= ann_start && abs_end <= ann_end);
+
+                    let style = if is_annotated {
+                        underlined_style
+                    } else {
+                        base_style
+                    };
+
+                    let sub_span = Span::styled(segment_text, style);
+                    let sub_rich_span = match &link_info {
+                        Some(info) => RichSpan::Link {
+                            span: sub_span,
+                            info: info.clone(),
+                        },
+                        None => RichSpan::Text(sub_span),
+                    };
+                    result.push(sub_rich_span);
+                }
+            }
+
             char_pos = span_end;
         }
 
@@ -1351,9 +1400,82 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         .0
     }
 
+    /// Split plain text into spans at annotation boundaries.
+    /// Returns spans with underline styling only on annotated portions.
+    fn split_text_at_annotation_boundaries(
+        text: &str,
+        annotation_ranges: &[(usize, usize)],
+        char_offset: usize,
+        base_style: RatatuiStyle,
+        underline_color: Color,
+    ) -> Vec<Span<'static>> {
+        let chars: Vec<char> = text.chars().collect();
+        let text_len = chars.len();
+        let text_start = char_offset;
+        let text_end = char_offset + text_len;
+
+        // Find overlapping annotation ranges
+        let overlapping_ranges: Vec<(usize, usize)> = annotation_ranges
+            .iter()
+            .filter(|&&(ann_start, ann_end)| text_start < ann_end && text_end > ann_start)
+            .copied()
+            .collect();
+
+        if overlapping_ranges.is_empty() {
+            return vec![Span::styled(text.to_string(), base_style)];
+        }
+
+        let underlined_style = base_style
+            .add_modifier(Modifier::UNDERLINED)
+            .underline_color(underline_color);
+
+        // Collect all boundary points within this text
+        let mut boundaries: Vec<usize> = vec![0, text_len];
+        for &(ann_start, ann_end) in &overlapping_ranges {
+            if ann_start > text_start && ann_start < text_end {
+                boundaries.push(ann_start - text_start);
+            }
+            if ann_end > text_start && ann_end < text_end {
+                boundaries.push(ann_end - text_start);
+            }
+        }
+        boundaries.sort_unstable();
+        boundaries.dedup();
+
+        // Create spans for each segment
+        let mut result = Vec::new();
+        for window in boundaries.windows(2) {
+            let seg_start = window[0];
+            let seg_end = window[1];
+            if seg_start >= seg_end {
+                continue;
+            }
+
+            let segment_text: String = chars[seg_start..seg_end].iter().collect();
+            let abs_start = text_start + seg_start;
+            let abs_end = text_start + seg_end;
+
+            // Check if this segment is within any annotation range
+            let is_annotated = overlapping_ranges
+                .iter()
+                .any(|&(ann_start, ann_end)| abs_start >= ann_start && abs_end <= ann_end);
+
+            let style = if is_annotated {
+                underlined_style
+            } else {
+                base_style
+            };
+
+            result.push(Span::styled(segment_text, style));
+        }
+
+        result
+    }
+
     /// Apply underline styling to spans in a rendered line.
     /// Works on already-rendered Span<'static> instead of RichSpan.
     /// Returns the updated character position after processing.
+    /// Spans are split at annotation boundaries so only the exact annotated characters are underlined.
     fn apply_underlines_to_line_spans(
         spans: &mut Vec<Span<'static>>,
         annotation_ranges: &[(usize, usize)],
@@ -1368,28 +1490,75 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return char_pos;
         }
 
+        let mut result = Vec::with_capacity(spans.len());
         let mut char_pos = char_offset;
-        for span in spans.iter_mut() {
+
+        for span in spans.drain(..) {
             let span_len = span.content.chars().count();
             let span_start = char_pos;
             let span_end = char_pos + span_len;
 
             // Check if this span overlaps with any annotation range
-            let overlaps = annotation_ranges
+            let overlapping_ranges: Vec<(usize, usize)> = annotation_ranges
                 .iter()
-                .any(|&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start);
+                .filter(|&&(ann_start, ann_end)| span_start < ann_end && span_end > ann_start)
+                .copied()
+                .collect();
 
-            if overlaps {
-                *span = Span::styled(
-                    span.content.clone(),
-                    span.style
-                        .add_modifier(Modifier::UNDERLINED)
-                        .underline_color(underline_color),
-                );
+            if overlapping_ranges.is_empty() {
+                result.push(span);
+            } else {
+                // Split span at annotation boundaries for precise underlining
+                let chars: Vec<char> = span.content.chars().collect();
+                let base_style = span.style;
+                let underlined_style = base_style
+                    .add_modifier(Modifier::UNDERLINED)
+                    .underline_color(underline_color);
+
+                // Collect all boundary points within this span
+                let mut boundaries: Vec<usize> = vec![0, span_len];
+                for &(ann_start, ann_end) in &overlapping_ranges {
+                    if ann_start > span_start && ann_start < span_end {
+                        boundaries.push(ann_start - span_start);
+                    }
+                    if ann_end > span_start && ann_end < span_end {
+                        boundaries.push(ann_end - span_start);
+                    }
+                }
+                boundaries.sort_unstable();
+                boundaries.dedup();
+
+                // Create sub-spans for each segment
+                for window in boundaries.windows(2) {
+                    let seg_start = window[0];
+                    let seg_end = window[1];
+                    if seg_start >= seg_end {
+                        continue;
+                    }
+
+                    let segment_text: String = chars[seg_start..seg_end].iter().collect();
+                    let abs_start = span_start + seg_start;
+                    let abs_end = span_start + seg_end;
+
+                    // Check if this segment is within any annotation range
+                    let is_annotated = overlapping_ranges
+                        .iter()
+                        .any(|&(ann_start, ann_end)| abs_start >= ann_start && abs_end <= ann_end);
+
+                    let style = if is_annotated {
+                        underlined_style
+                    } else {
+                        base_style
+                    };
+
+                    result.push(Span::styled(segment_text, style));
+                }
             }
 
             char_pos = span_end;
         }
+
+        *spans = result;
 
         char_pos
     }
