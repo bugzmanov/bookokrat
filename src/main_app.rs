@@ -1075,7 +1075,7 @@ impl App {
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
-            current_theme().base_00,
+            theme_background(),
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.pdf_pending_display,

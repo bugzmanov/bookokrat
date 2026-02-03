@@ -19,7 +19,7 @@ use crate::pdf::{
     CursorRect, ExtractionRequest, NormalModeState, PageNumberTracker, SelectionRect,
     TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
 };
-use crate::theme::Base16Palette;
+use crate::theme::{Base16Palette, theme_background};
 use crate::widget::hud_message::{HudMessage, HudMode};
 
 use super::types::{LastRender, PageJumpMode, PendingScroll, PrevFrame, RenderedInfo};
@@ -448,7 +448,7 @@ impl PdfReaderState {
     }
 
     pub fn bg_color(&self) -> Color {
-        self.palette.base_00
+        theme_background()
     }
 
     pub fn fg_color(&self) -> Color {
