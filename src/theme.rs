@@ -43,6 +43,7 @@ pub enum BuiltinTheme {
     Kanagawa,
     KanagawaDragon,
     RosepineMoon,
+    Moonfly,
 }
 
 impl BuiltinTheme {
@@ -53,6 +54,7 @@ impl BuiltinTheme {
             BuiltinTheme::Kanagawa => "Kanagawa",
             BuiltinTheme::KanagawaDragon => "Kanagawa Dragon",
             BuiltinTheme::RosepineMoon => "Rosepine Moon",
+            BuiltinTheme::Moonfly => "Moonfly",
         }
     }
 
@@ -63,6 +65,7 @@ impl BuiltinTheme {
             BuiltinTheme::Kanagawa => &KANAGAWA_PALETTE,
             BuiltinTheme::KanagawaDragon => &KANAGAWA_DRAGON_PALETTE,
             BuiltinTheme::RosepineMoon => &ROSEPINE_MOON_PALETTE,
+            BuiltinTheme::Moonfly => &MOONFLY_PALETTE,
         }
     }
 
@@ -73,6 +76,7 @@ impl BuiltinTheme {
             BuiltinTheme::Kanagawa,
             BuiltinTheme::KanagawaDragon,
             BuiltinTheme::RosepineMoon,
+            BuiltinTheme::Moonfly,
         ]
     }
 }
@@ -400,6 +404,26 @@ static ROSEPINE_MOON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16P
     base_0d: smart_color(0x3e8fb0),
     base_0e: smart_color(0xc4a7e7),
     base_0f: smart_color(0x908caa),
+});
+
+// Moonfly theme - deep black with vibrant accent colors
+static MOONFLY_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
+    base_00: smart_color(0x080808), // black - main background
+    base_01: smart_color(0x1c1c1c), // grey11 - lighter background
+    base_02: smart_color(0x323437), // grey0 - selection background
+    base_03: smart_color(0x808080), // grey50 - comments
+    base_04: smart_color(0x9e9e9e), // grey62 - dark foreground
+    base_05: smart_color(0xc6c6c6), // white - default foreground
+    base_06: smart_color(0xe4e4e4), // grey89 - light foreground
+    base_07: smart_color(0xe4e4e4), // grey89 - lightest
+    base_08: smart_color(0xff5189), // crimson - red
+    base_09: smart_color(0xde935f), // orange
+    base_0a: smart_color(0xe3c78a), // yellow
+    base_0b: smart_color(0x8cc85f), // green
+    base_0c: smart_color(0x79dac8), // turquoise - cyan
+    base_0d: smart_color(0x80a0ff), // blue - signature moonfly blue
+    base_0e: smart_color(0xcf87e8), // violet - purple
+    base_0f: smart_color(0xf09479), // coral - brown/extra
 });
 
 // Backward compatibility alias
