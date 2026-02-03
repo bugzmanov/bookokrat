@@ -1,7 +1,8 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    PdfRenderMode, get_pdf_render_mode, is_pdf_enabled, set_pdf_enabled, set_pdf_render_mode,
+    PdfRenderMode, get_pdf_render_mode, is_pdf_enabled, is_transparent_background, set_pdf_enabled,
+    set_pdf_render_mode, set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -12,7 +13,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 pub enum SettingsAction {
@@ -52,7 +53,7 @@ pub struct SettingsPopup {
     supports_scroll_mode: bool,
     supports_graphics: bool,
     // Themes tab state
-    theme_list_state: ListState,
+    theme_selected_idx: usize,
     theme_names: Vec<String>,
     // Common
     last_popup_area: Option<Rect>,
@@ -85,16 +86,13 @@ impl SettingsPopup {
         };
 
         let theme_names = all_theme_names();
-        let current_idx = current_theme_index();
-        let mut theme_list_state = ListState::default();
-        theme_list_state.select(Some(current_idx));
 
         SettingsPopup {
             current_tab,
             pdf_selected_idx,
             supports_scroll_mode,
             supports_graphics,
-            theme_list_state,
+            theme_selected_idx: 0,
             theme_names,
             last_popup_area: None,
         }
@@ -385,36 +383,88 @@ impl SettingsPopup {
     }
 
     fn render_themes_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
-        // No section header - derived from tab name "Select Theme"
-        let current_idx = current_theme_index();
-        let selected_idx = self.theme_list_state.selected().unwrap_or(0);
+        let theme_list_height = self.theme_names.len() as u16;
 
-        // Calculate visible range based on area height and scroll offset
-        let visible_height = area.height as usize;
-        let offset = self.theme_list_state.offset();
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(theme_list_height), // Theme list
+                Constraint::Length(1),                 // spacer
+                Constraint::Length(1),                 // Background header
+                Constraint::Length(1),                 // empty line
+                Constraint::Length(2),                 // Transparent Background options
+                Constraint::Min(0),                    // remaining space
+            ])
+            .split(area);
 
-        for (visual_idx, theme_idx) in (offset..self.theme_names.len())
-            .take(visible_height)
-            .enumerate()
-        {
-            if visual_idx >= visible_height {
-                break;
-            }
+        // Theme list (indices 0 to theme_names.len()-1)
+        let current_theme_idx = current_theme_index();
 
-            let name = &self.theme_names[theme_idx];
-            let is_current = theme_idx == current_idx;
-            let is_selected = theme_idx == selected_idx;
+        for (theme_idx, name) in self.theme_names.iter().enumerate() {
+            let is_current = theme_idx == current_theme_idx;
+            let is_selected = self.theme_selected_idx < self.theme_names.len()
+                && self.theme_selected_idx == theme_idx;
 
             let line_area = Rect {
-                x: area.x,
-                y: area.y + visual_idx as u16,
-                width: area.width,
+                x: chunks[0].x,
+                y: chunks[0].y + theme_idx as u16,
+                width: chunks[0].width,
                 height: 1,
             };
 
             let line = self.render_theme_option(name, is_current, is_selected, palette);
             f.render_widget(Paragraph::new(line), line_area);
         }
+
+        // Background section header
+        self.render_section_header(f, chunks[2], "Background", palette, palette.base_06);
+
+        // Transparent Background options (indices theme_names.len() and theme_names.len()+1)
+        let transparent = is_transparent_background();
+        let radio_selected = "●";
+        let radio_unselected = "○";
+
+        let trans_options_area = Rect {
+            x: chunks[4].x + 2,
+            y: chunks[4].y,
+            width: chunks[4].width.saturating_sub(2),
+            height: chunks[4].height,
+        };
+
+        let trans_options_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(trans_options_area);
+
+        let theme_radio = if !transparent {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let theme_line = self.render_radio_option(
+            theme_radio,
+            "Theme color",
+            None,
+            Style::default().fg(palette.base_06),
+            self.theme_selected_idx == self.theme_names.len(),
+            palette,
+        );
+        f.render_widget(Paragraph::new(theme_line), trans_options_chunks[0]);
+
+        let trans_radio = if transparent {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let trans_line = self.render_radio_option(
+            trans_radio,
+            "Transparent",
+            None,
+            Style::default().fg(palette.base_06),
+            self.theme_selected_idx == self.theme_names.len() + 1,
+            palette,
+        );
+        f.render_widget(Paragraph::new(trans_line), trans_options_chunks[1]);
     }
 
     fn render_theme_option(
@@ -588,32 +638,25 @@ impl SettingsPopup {
         self.pdf_selected_idx = prev_idx;
     }
 
+    fn theme_max_idx(&self) -> usize {
+        self.theme_names.len() + 1
+    }
+
     fn theme_next(&mut self) {
-        let i = match self.theme_list_state.selected() {
-            Some(i) => {
-                if i >= self.theme_names.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.theme_list_state.select(Some(i));
+        let max_idx = self.theme_max_idx();
+        if self.theme_selected_idx >= max_idx {
+            self.theme_selected_idx = 0;
+        } else {
+            self.theme_selected_idx += 1;
+        }
     }
 
     fn theme_previous(&mut self) {
-        let i = match self.theme_list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.theme_names.len().saturating_sub(1)
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.theme_list_state.select(Some(i));
+        if self.theme_selected_idx == 0 {
+            self.theme_selected_idx = self.theme_max_idx();
+        } else {
+            self.theme_selected_idx -= 1;
+        }
     }
 
     fn apply_pdf_selected(&self) -> Option<SettingsAction> {
@@ -651,9 +694,23 @@ impl SettingsPopup {
     }
 
     fn apply_theme_selected(&self) -> Option<SettingsAction> {
-        if let Some(idx) = self.theme_list_state.selected() {
-            if idx != current_theme_index() {
-                set_theme_by_index_and_save(idx);
+        let theme_count = self.theme_names.len();
+        if self.theme_selected_idx < theme_count {
+            // Theme selection
+            if self.theme_selected_idx != current_theme_index() {
+                set_theme_by_index_and_save(self.theme_selected_idx);
+                return Some(SettingsAction::SettingsChanged);
+            }
+        } else if self.theme_selected_idx == theme_count {
+            // "Theme color" option - disable transparency
+            if is_transparent_background() {
+                set_transparent_background(false);
+                return Some(SettingsAction::SettingsChanged);
+            }
+        } else if self.theme_selected_idx == theme_count + 1 {
+            // "Transparent" option - enable transparency
+            if !is_transparent_background() {
+                set_transparent_background(true);
                 return Some(SettingsAction::SettingsChanged);
             }
         }
@@ -774,9 +831,7 @@ impl VimNavMotions for SettingsPopup {
                 self.pdf_selected_idx = self.pdf_min_selectable_idx();
             }
             SettingsTab::Themes => {
-                if !self.theme_names.is_empty() {
-                    self.theme_list_state.select(Some(0));
-                }
+                self.theme_selected_idx = 0;
             }
         }
     }
@@ -787,10 +842,7 @@ impl VimNavMotions for SettingsPopup {
                 self.pdf_selected_idx = self.pdf_max_selectable_idx();
             }
             SettingsTab::Themes => {
-                if !self.theme_names.is_empty() {
-                    self.theme_list_state
-                        .select(Some(self.theme_names.len() - 1));
-                }
+                self.theme_selected_idx = self.theme_max_idx();
             }
         }
     }

@@ -1,7 +1,7 @@
 use super::CurrentBookInfo;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
-use crate::theme::Base16Palette;
+use crate::theme::{Base16Palette, theme_background};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -837,9 +837,9 @@ impl TableOfContents {
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(palette.base_00)),
+                    .style(Style::default().bg(theme_background())),
             )
-            .style(Style::default().bg(palette.base_00));
+            .style(Style::default().bg(theme_background()));
 
         if is_focused {
             toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg))

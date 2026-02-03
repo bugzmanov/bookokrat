@@ -4,7 +4,7 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::theme::Base16Palette;
+use crate::theme::{Base16Palette, theme_background};
 use crate::types::LinkInfo;
 use ratatui::{
     layout::Constraint,
@@ -1511,7 +1511,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 } else {
                     palette.base_03
                 });
-                style = style.bg(palette.base_00);
+                style = style.bg(theme_background());
 
                 if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
                     style = style

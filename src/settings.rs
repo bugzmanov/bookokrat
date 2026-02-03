@@ -69,6 +69,9 @@ pub struct Settings {
     #[serde(default)]
     pub margin: u16,
 
+    #[serde(default)]
+    pub transparent_background: bool,
+
     #[serde(default = "default_pdf_scale")]
     pub pdf_scale: f32,
 
@@ -111,6 +114,7 @@ impl Default for Settings {
             version: CURRENT_VERSION,
             theme: default_theme(),
             margin: 0,
+            transparent_background: false,
             pdf_scale: default_pdf_scale(),
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
@@ -235,6 +239,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(&format!("version: {}\n", settings.version));
     content.push_str(&format!("theme: \"{}\"\n", settings.theme));
     content.push_str(&format!("margin: {}\n", settings.margin));
+    content.push_str(&format!(
+        "transparent_background: {}\n",
+        settings.transparent_background
+    ));
     content.push_str(&format!("pdf_scale: {}\n", settings.pdf_scale));
     content.push_str(&format!("pdf_pan_shift: {}\n", settings.pdf_pan_shift));
     let mode_str = match settings.pdf_render_mode {
@@ -334,6 +342,20 @@ pub fn get_margin() -> u16 {
 pub fn set_margin(margin: u16) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.margin = margin;
+    }
+    save_settings();
+}
+
+pub fn is_transparent_background() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.transparent_background)
+        .unwrap_or(false)
+}
+
+pub fn set_transparent_background(transparent: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.transparent_background = transparent;
     }
     save_settings();
 }

@@ -1,6 +1,6 @@
 use crate::book_manager::{BookInfo, BookManager};
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
-use crate::theme::Base16Palette;
+use crate::theme::{Base16Palette, theme_background};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -307,10 +307,10 @@ impl BookList {
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(palette.base_00)),
+                    .style(Style::default().bg(theme_background())),
             )
             .highlight_style(highlight_style)
-            .style(Style::default().bg(palette.base_00));
+            .style(Style::default().bg(theme_background()));
 
         f.render_stateful_widget(files, area, &mut self.list_state);
     }

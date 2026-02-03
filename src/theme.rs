@@ -239,6 +239,15 @@ pub fn current_theme_name() -> String {
     theme_name(current_theme_index())
 }
 
+/// Get effective background color (transparent or theme color)
+pub fn theme_background() -> Color {
+    if settings::is_transparent_background() {
+        Color::Reset
+    } else {
+        current_theme().base_00
+    }
+}
+
 /// Get current theme palette
 pub fn current_theme() -> &'static Base16Palette {
     let index = current_theme_index();

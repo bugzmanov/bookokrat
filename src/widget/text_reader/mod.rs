@@ -18,7 +18,7 @@ use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
 use crate::search::{SearchMode, SearchState};
 use crate::terminal_overlay;
-use crate::theme::Base16Palette;
+use crate::theme::{Base16Palette, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::hud_message::{HudMessage, HudMode};
 use image::{DynamicImage, GenericImageView};
@@ -517,7 +517,7 @@ impl MarkdownTextReader {
         // Remember the focused text area for mouse hover/selection logic
         self.last_inner_text_area = Some(inner_area);
 
-        let image_clear_style = RatatuiStyle::default().bg(palette.base_00);
+        let image_clear_style = RatatuiStyle::default().bg(theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
             matches!(
                 picker.protocol_type(),
@@ -811,8 +811,8 @@ impl MarkdownTextReader {
                                 height: textarea_height,
                             };
 
-                            let clear_block =
-                                Block::default().style(RatatuiStyle::default().bg(palette.base_00));
+                            let clear_block = Block::default()
+                                .style(RatatuiStyle::default().bg(theme_background()));
                             frame.render_widget(clear_block, textarea_rect);
 
                             let padded_rect = Rect {
@@ -825,7 +825,7 @@ impl MarkdownTextReader {
                             textarea.set_style(
                                 RatatuiStyle::default()
                                     .fg(palette.base_05)
-                                    .bg(palette.base_00),
+                                    .bg(theme_background()),
                             );
                             textarea.set_cursor_style(
                                 RatatuiStyle::default()
@@ -839,7 +839,7 @@ impl MarkdownTextReader {
                                 .style(
                                     RatatuiStyle::default()
                                         .fg(palette.base_04)
-                                        .bg(palette.base_00),
+                                        .bg(theme_background()),
                                 );
                             textarea.set_block(block);
 

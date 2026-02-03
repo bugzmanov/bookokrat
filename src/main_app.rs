@@ -20,7 +20,7 @@ use crate::search_engine::{SearchEngine, SearchLine};
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::{current_theme, current_theme_name};
+use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use image::GenericImageView;
@@ -2435,7 +2435,7 @@ impl App {
 
         self.terminal_size = f.area();
 
-        let background_block = Block::default().style(Style::default().bg(current_theme().base_00));
+        let background_block = Block::default().style(Style::default().bg(theme_background()));
         f.render_widget(background_block, f.area());
 
         if self.zen_mode {
@@ -2682,11 +2682,11 @@ impl App {
             .borders(Borders::ALL)
             .title("Content")
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
 
         let paragraph = Paragraph::new(content)
             .block(content_border)
-            .style(Style::default().fg(text_color).bg(current_theme().base_00));
+            .style(Style::default().fg(text_color).bg(theme_background()));
 
         f.render_widget(paragraph, area);
     }
@@ -2917,7 +2917,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
 
         let inner_area = block.inner(area);
         f.render_widget(block, area);
@@ -2930,7 +2930,7 @@ impl App {
         let left_para = Paragraph::new(left_content).style(
             Style::default()
                 .fg(current_theme().base_03)
-                .bg(current_theme().base_00),
+                .bg(theme_background()),
         );
         f.render_widget(left_para, inner_area);
 
@@ -2980,7 +2980,7 @@ impl App {
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
         f.render_widget(right_para, inner_area);
     }
 
