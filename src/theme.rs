@@ -42,6 +42,7 @@ pub enum BuiltinTheme {
     CatppuccinMocha,
     Kanagawa,
     KanagawaDragon,
+    RosepineMoon,
 }
 
 impl BuiltinTheme {
@@ -51,6 +52,7 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha => "Catppuccin Mocha",
             BuiltinTheme::Kanagawa => "Kanagawa",
             BuiltinTheme::KanagawaDragon => "Kanagawa Dragon",
+            BuiltinTheme::RosepineMoon => "Rosepine Moon",
         }
     }
 
@@ -60,6 +62,7 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha => &CATPPUCCIN_MOCHA_PALETTE,
             BuiltinTheme::Kanagawa => &KANAGAWA_PALETTE,
             BuiltinTheme::KanagawaDragon => &KANAGAWA_DRAGON_PALETTE,
+            BuiltinTheme::RosepineMoon => &ROSEPINE_MOON_PALETTE,
         }
     }
 
@@ -69,6 +72,7 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha,
             BuiltinTheme::Kanagawa,
             BuiltinTheme::KanagawaDragon,
+            BuiltinTheme::RosepineMoon,
         ]
     }
 }
@@ -376,6 +380,26 @@ static KANAGAWA_DRAGON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base1
     base_0d: smart_color(0x8ba4b0),
     base_0e: smart_color(0xa292a3),
     base_0f: smart_color(0x7aa89f),
+});
+
+// Rosepine Moon theme - romantic palette with rose/gold/pine
+static ROSEPINE_MOON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
+    base_00: smart_color(0x18191a),
+    base_01: smart_color(0x212223),
+    base_02: smart_color(0x363738),
+    base_03: smart_color(0x6e6a86),
+    base_04: smart_color(0x908caa),
+    base_05: smart_color(0xe0def4),
+    base_06: smart_color(0xe0def4),
+    base_07: smart_color(0xe0def4),
+    base_08: smart_color(0xeb6f92),
+    base_09: smart_color(0xc4a7e7),
+    base_0a: smart_color(0xea9a97),
+    base_0b: smart_color(0xf6c177),
+    base_0c: smart_color(0x9ccfd8),
+    base_0d: smart_color(0x3e8fb0),
+    base_0e: smart_color(0xc4a7e7),
+    base_0f: smart_color(0x908caa),
 });
 
 // Backward compatibility alias
