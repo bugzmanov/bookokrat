@@ -2478,7 +2478,12 @@ impl App {
         #[cfg(feature = "pdf")]
         let mut pdf_area = None;
         let popup_active_now = self.has_active_popup();
+        let popup_opened = !self.last_popup_active && popup_active_now;
         let popup_closed = self.last_popup_active && !popup_active_now;
+        if popup_opened && self.should_cleanup_overlay_for_popup() {
+            // Clear once when popup appears so underlying graphics don't bleed through.
+            self.clear_overlay_for_popup();
+        }
         if popup_closed && self.should_cleanup_overlay_for_popup() {
             // Force overlay payload re-send right after popup closes.
             crate::terminal::bump_overlay_resend_nonce();
@@ -2604,10 +2609,6 @@ impl App {
                 };
                 f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
             }
-        }
-
-        if self.has_active_popup() && self.should_cleanup_overlay_for_popup() {
-            self.clear_overlay_for_popup();
         }
 
         if matches!(
