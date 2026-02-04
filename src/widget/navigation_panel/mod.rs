@@ -118,6 +118,12 @@ impl NavigationPanel {
     pub fn switch_to_book_mode(&mut self) {
         self.mode = NavigationMode::BookSelection;
         // Keep current_book_path so we can highlight the open book
+        // Also update selection to point to the current book if one is open
+        if let Some(ref path) = self.current_book_path {
+            if let Some(index) = self.book_list.find_book_index_by_path(path) {
+                self.book_list.set_selection_to_index(index);
+            }
+        }
     }
 
     pub fn is_in_book_mode(&self) -> bool {

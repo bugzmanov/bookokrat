@@ -1,3 +1,5 @@
+#[cfg(feature = "pdf")]
+use crate::book_manager::BookFormat;
 use crate::book_manager::{BookInfo, BookManager};
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::{Base16Palette, theme_background};
@@ -71,6 +73,10 @@ impl BookList {
     pub fn set_selection_to_index(&mut self, index: usize) {
         self.selected = index;
         self.list_state.select(Some(index));
+    }
+
+    pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
+        self.book_infos.iter().position(|b| b.path == path)
     }
 
     pub fn scroll_down(&mut self, area_height: u16) {
@@ -194,9 +200,17 @@ impl BookList {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
+            // Check if this is a PDF (dimmed styling)
+            #[cfg(feature = "pdf")]
+            let is_pdf = book_info.format == BookFormat::Pdf;
+            #[cfg(not(feature = "pdf"))]
+            let is_pdf = false;
+
             // Determine base style for this book
             let base_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
+            } else if is_pdf {
+                Style::default().fg(palette.base_04) // Dimmed for PDFs
             } else {
                 Style::default().fg(text_color)
             };

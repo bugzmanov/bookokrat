@@ -30,7 +30,7 @@ pub fn extract_toc(doc: &Document, page_count: usize) -> Vec<TocEntry> {
         if !outlines.is_empty() {
             let mut entries = Vec::new();
             flatten_outlines(&outlines, 0, &mut entries);
-            if !entries.is_empty() {
+            if looks_like_valid_toc(&entries) {
                 return entries;
             }
         }
@@ -38,6 +38,38 @@ pub fn extract_toc(doc: &Document, page_count: usize) -> Vec<TocEntry> {
 
     // Fallback: scan pages for TOC entries when outlines unavailable
     extract_toc_from_pages(doc, page_count)
+}
+
+/// Check if extracted outline entries look like a valid table of contents.
+/// A real TOC should have multiple short entries, not random body text.
+fn looks_like_valid_toc(entries: &[TocEntry]) -> bool {
+    // Need at least 3 entries for a real TOC
+    if entries.len() < 3 {
+        return false;
+    }
+
+    // Check that entries look like chapter titles (not body text)
+    let mut valid_count = 0;
+    for entry in entries {
+        let title_len = entry.title.chars().count();
+        // Chapter titles are typically under 100 characters
+        // Real body text tends to have multiple sentences
+        let sentence_count = entry
+            .title
+            .matches(". ")
+            .count()
+            .saturating_add(entry.title.matches("? ").count())
+            .saturating_add(entry.title.matches("! ").count());
+
+        // Allow titles up to 100 chars with at most one sentence break
+        // (some titles legitimately have periods, e.g., "Example: Using ASP.NET Core")
+        if title_len <= 100 && sentence_count <= 1 {
+            valid_count += 1;
+        }
+    }
+
+    // At least 70% of entries should look like valid chapter titles
+    valid_count * 100 / entries.len() >= 70
 }
 
 fn flatten_outlines(outlines: &[mupdf::Outline], level: usize, entries: &mut Vec<TocEntry>) {
@@ -52,10 +84,10 @@ fn flatten_outlines(outlines: &[mupdf::Outline], level: usize, entries: &mut Vec
         };
 
         if let Some(target) = target {
-            let title = outline.title.trim();
+            let title = strip_outline_leader_chars(outline.title.trim());
             if !title.is_empty() {
                 entries.push(TocEntry {
-                    title: title.to_string(),
+                    title,
                     level,
                     target,
                 });
@@ -66,6 +98,34 @@ fn flatten_outlines(outlines: &[mupdf::Outline], level: usize, entries: &mut Vec
             flatten_outlines(&outline.down, level + 1, entries);
         }
     }
+}
+
+/// Strip trailing leader characters from outline titles.
+/// PDFs often embed visual leader dots (◆, ·, ., etc.) in outline titles.
+fn strip_outline_leader_chars(title: &str) -> String {
+    let chars: Vec<char> = title.chars().collect();
+    if chars.len() < 3 {
+        return title.to_string();
+    }
+
+    // Find trailing run of repeated characters (leader dots pattern)
+    let last_char = chars[chars.len() - 1];
+    let mut run_start = chars.len() - 1;
+
+    // Count how many consecutive identical characters at the end
+    while run_start > 0 && chars[run_start - 1] == last_char {
+        run_start -= 1;
+    }
+
+    let run_length = chars.len() - run_start;
+
+    // If we have 3+ repeated non-alphanumeric chars at the end, strip them
+    if run_length >= 3 && !last_char.is_alphanumeric() && !last_char.is_whitespace() {
+        let result: String = chars[..run_start].iter().collect();
+        return result.trim_end().to_string();
+    }
+
+    title.to_string()
 }
 
 // ============================================================================
@@ -196,6 +256,7 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
         return Vec::new();
     };
     let page_height = bounds.y1 - bounds.y0;
+    let page_width = bounds.x1 - bounds.x0;
     let line_bounds = super::super::worker::extract_line_bounds(page, 1.0);
     let link_rects = super::super::worker::extract_link_rects(page, 1.0);
 
@@ -206,6 +267,14 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
             .then_with(|| a.x0.partial_cmp(&b.x0).unwrap_or(std::cmp::Ordering::Equal))
     });
 
+    // Find minimum x position to establish left margin baseline
+    let min_x = ordered_lines
+        .iter()
+        .filter(|l| l.y0 >= page_height * 0.08 && l.y1 <= page_height * 0.92)
+        .map(|l| l.x0)
+        .fold(f32::MAX, f32::min);
+    let indent_step = page_width * 0.025; // ~2.5% of page width per indent level
+
     let mut entries = Vec::new();
     let mut pending_title: Option<(String, usize, f32)> = None;
     let mut pending_prefix: Option<(String, f32)> = None;
@@ -215,20 +284,22 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
             continue;
         }
 
-        let text = line_text(line);
-        if text.trim().is_empty() {
+        let raw_text = line_text(line);
+        if raw_text.trim().is_empty() {
             continue;
         }
 
-        if is_toc_heading(&text) {
+        if is_toc_heading(&raw_text) {
             continue;
         }
 
-        if line_is_roman_numeral_only(&text) && line.y0 < page_height * 0.2 {
+        if line_is_roman_numeral_only(&raw_text) && line.y0 < page_height * 0.2 {
             continue;
         }
 
-        let level = line_indent_level(&text);
+        // Compute indent level from physical x-position
+        let base_level = ((line.x0 - min_x).max(0.0) / indent_step) as usize;
+
         let line_height = (line.y1 - line.y0).max(1.0);
         let max_gap = line_height * 12.0;
 
@@ -243,103 +314,111 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
             }
         }
 
-        if let Some((printed_page, number_start)) = extract_trailing_page_number(&text) {
-            let use_pending = pending_title
-                .as_ref()
-                .is_some_and(|(_, _, y1)| (line.y0 - *y1).abs() <= max_gap);
-            let (mut title, title_level) = if use_pending {
-                let (pending, pending_level, _) = pending_title.take().unwrap();
-                (Some(pending), pending_level)
-            } else {
-                (strip_toc_title(&text, number_start), level)
-            };
+        // Split line on bullet separators (■, •, etc.) for multi-entry lines
+        let segments = split_on_bullet_separators(&raw_text);
 
-            if let Some((prefix, y1)) = pending_prefix.take() {
-                if (line.y0 - y1).abs() <= max_gap * 2.0 {
-                    if let Some(title_text) = title.take() {
-                        if !starts_with_digit(&title_text) {
-                            title = Some(format!("{prefix} {title_text}"));
-                        } else {
-                            title = Some(title_text);
+        for text in segments {
+            // Use physical indent level from line position
+            let level = base_level;
+
+            if let Some((printed_page, number_start)) = extract_trailing_page_number(&text) {
+                let use_pending = pending_title
+                    .as_ref()
+                    .is_some_and(|(_, _, y1)| (line.y0 - *y1).abs() <= max_gap);
+                let (mut title, title_level) = if use_pending {
+                    let (pending, pending_level, _) = pending_title.take().unwrap();
+                    (Some(pending), pending_level)
+                } else {
+                    (strip_toc_title(&text, number_start), level)
+                };
+
+                if let Some((prefix, y1)) = pending_prefix.take() {
+                    if (line.y0 - y1).abs() <= max_gap * 2.0 {
+                        if let Some(title_text) = title.take() {
+                            if !starts_with_digit(&title_text) {
+                                title = Some(format!("{prefix} {title_text}"));
+                            } else {
+                                title = Some(title_text);
+                            }
+                        }
+                    } else {
+                        pending_prefix = Some((prefix, y1));
+                    }
+                }
+
+                let Some(title) = title else {
+                    continue;
+                };
+
+                let target = if let Some(link) = link_for_line(line, &link_rects) {
+                    match &link.target {
+                        super::super::types::LinkTarget::Internal { page } => {
+                            TocTarget::InternalPage(*page)
+                        }
+                        super::super::types::LinkTarget::External { uri } => {
+                            TocTarget::External(uri.clone())
                         }
                     }
                 } else {
-                    pending_prefix = Some((prefix, y1));
-                }
+                    TocTarget::PrintedPage(printed_page)
+                };
+
+                entries.push(TocEntry {
+                    title,
+                    level: title_level,
+                    target,
+                });
+                continue;
             }
 
-            let Some(title) = title else {
+            if line_is_dots_only(&text) {
                 continue;
-            };
+            }
 
-            let target = if let Some(link) = link_for_line(line, &link_rects) {
-                match &link.target {
-                    super::super::types::LinkTarget::Internal { page } => {
-                        TocTarget::InternalPage(*page)
-                    }
-                    super::super::types::LinkTarget::External { uri } => {
-                        TocTarget::External(uri.clone())
-                    }
-                }
-            } else {
-                TocTarget::PrintedPage(printed_page)
-            };
-
-            entries.push(TocEntry {
-                title,
-                level: title_level,
-                target,
-            });
-            continue;
-        }
-
-        if line_is_dots_only(&text) {
-            continue;
-        }
-
-        if let Some(number) = extract_standalone_number(&text) {
-            if let Some((pending, pending_level, y1)) = pending_title.take() {
-                if (line.y0 - y1).abs() <= max_gap * 2.0 {
-                    let mut title = pending;
-                    if let Some((prefix, py)) = pending_prefix.take() {
-                        if (line.y0 - py).abs() <= max_gap * 2.0 && !starts_with_digit(&title) {
-                            title = format!("{prefix} {title}");
-                        } else {
-                            pending_prefix = Some((prefix, py));
+            if let Some(number) = extract_standalone_number(&text) {
+                if let Some((pending, pending_level, y1)) = pending_title.take() {
+                    if (line.y0 - y1).abs() <= max_gap * 2.0 {
+                        let mut title = pending;
+                        if let Some((prefix, py)) = pending_prefix.take() {
+                            if (line.y0 - py).abs() <= max_gap * 2.0 && !starts_with_digit(&title) {
+                                title = format!("{prefix} {title}");
+                            } else {
+                                pending_prefix = Some((prefix, py));
+                            }
                         }
+                        entries.push(TocEntry {
+                            title,
+                            level: pending_level,
+                            target: TocTarget::PrintedPage(number),
+                        });
+                        continue;
                     }
-                    entries.push(TocEntry {
-                        title,
-                        level: pending_level,
-                        target: TocTarget::PrintedPage(number),
-                    });
-                    continue;
+                    pending_title = Some((pending, pending_level, y1));
                 }
-                pending_title = Some((pending, pending_level, y1));
-            }
 
-            pending_prefix = Some((number.to_string(), line.y1));
-            continue;
-        }
-
-        if line_has_letters(&text) {
-            let cleaned = text
-                .trim()
-                .trim_matches(|c: char| c == '.' || c == '·')
-                .trim();
-            if cleaned.is_empty() {
+                pending_prefix = Some((number.to_string(), line.y1));
                 continue;
             }
-            if let Some((pending, _, y1)) = pending_title.as_ref() {
-                if contains_digit(pending)
-                    && !contains_digit(cleaned)
-                    && (line.y0 - *y1).abs() <= max_gap * 2.0
-                {
+
+            if line_has_letters(&text) {
+                let cleaned = text
+                    .trim()
+                    .trim_matches(|c: char| c == '.' || c == '·')
+                    .trim();
+                if cleaned.is_empty() {
                     continue;
                 }
+                if let Some((pending, _, y1)) = pending_title.as_ref() {
+                    if contains_digit(pending)
+                        && !contains_digit(cleaned)
+                        && (line.y0 - *y1).abs() <= max_gap * 2.0
+                    {
+                        continue;
+                    }
+                }
+                pending_title = Some((cleaned.to_string(), level, line.y1));
             }
-            pending_title = Some((cleaned.to_string(), level, line.y1));
-        }
+        } // end of segments loop
     }
 
     entries
@@ -375,21 +454,73 @@ fn extract_trailing_page_number(text: &str) -> Option<(usize, usize)> {
         end -= 1;
     }
 
+    // Try Arabic numerals first
     let mut start = end;
     while start > 0 && bytes[start - 1].is_ascii_digit() {
         start -= 1;
     }
-    if start == end {
-        return None;
+    if start < end {
+        let digits = &trimmed[start..end];
+        if let Ok(number) = digits.parse::<usize>() {
+            // Reject if:
+            // - Number is 0
+            // - Number looks like a year (1800-2100)
+            // - Number is preceded by '(' (indicates year in citation)
+            // - Number is too large for a page number (> 1500)
+            let is_year = (1800..=2100).contains(&number);
+            let preceded_by_paren =
+                start > 0 && (bytes[start - 1] == b'(' || bytes[start - 1] == b'[');
+            if number > 0 && number <= 1500 && !is_year && !preceded_by_paren {
+                return Some((number, start));
+            }
+        }
     }
 
-    let digits = &trimmed[start..end];
-    let number = digits.parse::<usize>().ok()?;
-    if number == 0 {
-        return None;
+    // Try Roman numerals (i, v, x, l, c, d, m - lowercase only for page numbers)
+    start = end;
+    while start > 0
+        && matches!(
+            bytes[start - 1],
+            b'i' | b'v' | b'x' | b'l' | b'c' | b'd' | b'm'
+        )
+    {
+        start -= 1;
+    }
+    if start < end && end - start <= 10 {
+        let roman = &trimmed[start..end];
+        if let Some(number) = parse_roman_numeral(roman) {
+            return Some((number, start));
+        }
     }
 
-    Some((number, start))
+    None
+}
+
+/// Parse a lowercase Roman numeral string to a number.
+fn parse_roman_numeral(s: &str) -> Option<usize> {
+    let mut total = 0usize;
+    let mut prev = 0usize;
+
+    for c in s.chars().rev() {
+        let val = match c {
+            'i' => 1,
+            'v' => 5,
+            'x' => 10,
+            'l' => 50,
+            'c' => 100,
+            'd' => 500,
+            'm' => 1000,
+            _ => return None,
+        };
+        if val < prev {
+            total = total.checked_sub(val)?;
+        } else {
+            total = total.checked_add(val)?;
+        }
+        prev = val;
+    }
+
+    if total > 0 { Some(total) } else { None }
 }
 
 fn strip_toc_title(text: &str, number_start: usize) -> Option<String> {
@@ -404,6 +535,29 @@ fn strip_toc_title(text: &str, number_start: usize) -> Option<String> {
     }
     if !line_has_letters(trimmed) {
         return None;
+    }
+    // Reject entries that look like quotes or body text:
+    // - Start with dash/hyphen (attribution like "-Prof. Dr. ...")
+    // - Contain sentence patterns (lowercase word after space indicates body text)
+    // - Are too long (> 60 chars) and mostly lowercase
+    if trimmed.starts_with('-') || trimmed.starts_with('—') || trimmed.starts_with('–') {
+        return None;
+    }
+    // Check for body text pattern: words after first that start lowercase
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() > 2 {
+        let lowercase_starts = words[1..]
+            .iter()
+            .filter(|w| {
+                w.chars()
+                    .next()
+                    .is_some_and(|c| c.is_lowercase() && c.is_alphabetic())
+            })
+            .count();
+        // If more than half of words (after first) start lowercase, likely body text
+        if lowercase_starts > words.len() / 2 {
+            return None;
+        }
     }
     Some(trimmed.to_string())
 }
@@ -423,6 +577,46 @@ fn line_has_letters(text: &str) -> bool {
     text.chars().any(|c| c.is_alphabetic())
 }
 
+/// Split a line on bullet separators (■, •, ◆, etc.) that indicate multiple TOC entries.
+/// Returns segments that each potentially contain a TOC entry.
+fn split_on_bullet_separators(text: &str) -> Vec<String> {
+    // Common bullet/separator characters used in PDF TOCs
+    let separators = ['■', '•', '◆', '●', '▪', '◾'];
+
+    // Check if any separator exists
+    if !text.chars().any(|c| separators.contains(&c)) {
+        return vec![text.to_string()];
+    }
+
+    // Split on separators
+    let mut segments = Vec::new();
+    let mut current = String::new();
+
+    for c in text.chars() {
+        if separators.contains(&c) {
+            let trimmed = current.trim().to_string();
+            if !trimmed.is_empty() {
+                segments.push(trimmed);
+            }
+            current.clear();
+        } else {
+            current.push(c);
+        }
+    }
+
+    // Don't forget the last segment
+    let trimmed = current.trim().to_string();
+    if !trimmed.is_empty() {
+        segments.push(trimmed);
+    }
+
+    if segments.is_empty() {
+        vec![text.to_string()]
+    } else {
+        segments
+    }
+}
+
 fn line_is_dots_only(text: &str) -> bool {
     text.chars()
         .all(|c| c.is_whitespace() || c == '.' || c == '·')
@@ -436,10 +630,6 @@ fn line_is_roman_numeral_only(text: &str) -> bool {
     trimmed
         .chars()
         .all(|c| matches!(c, 'I' | 'V' | 'X' | 'L' | 'C' | 'D' | 'M'))
-}
-
-fn line_indent_level(text: &str) -> usize {
-    text.chars().take_while(|c| c.is_whitespace()).count() / 4
 }
 
 fn starts_with_digit(text: &str) -> bool {
