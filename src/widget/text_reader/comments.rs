@@ -146,10 +146,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.comment_input.textarea = Some(textarea);
         self.comment_input.target = Some(target.clone());
         self.comment_input.target_node_index = target.node_index();
-        // Add 2 lines: one empty line for visual separation, then the textarea
         self.comment_input
             .target_line
-            .replace(end_line.saturating_add(2));
+            .replace(end_line.saturating_add(1));
         self.comment_input.edit_mode = Some(CommentEditMode::Creating);
     }
 

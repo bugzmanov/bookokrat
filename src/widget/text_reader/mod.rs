@@ -576,7 +576,8 @@ impl MarkdownTextReader {
 
                     let min_lines = 3;
                     let actual_content_lines = content_lines.max(min_lines);
-                    textarea_lines_to_insert = actual_content_lines + 2;
+                    // +2 for border, +1 for empty line before, +1 for empty line after
+                    textarea_lines_to_insert = actual_content_lines + 4;
                 }
             }
         }
@@ -786,7 +787,8 @@ impl MarkdownTextReader {
                     if target_line >= self.scroll_offset
                         && target_line < self.scroll_offset + self.visible_height
                     {
-                        let visual_position = target_line - self.scroll_offset;
+                        // +1 to leave an empty line before the textarea
+                        let visual_position = target_line - self.scroll_offset + 1;
 
                         let textarea_y = inner_area.y + visual_position as u16;
 
