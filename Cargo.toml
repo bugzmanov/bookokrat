@@ -132,6 +132,10 @@ image-ff = ["image/ff"]
 zip-bzip2 = ["zip/bzip2"]
 zip-zstd = ["zip/zstd"]
 
+[[example]]
+name = "diagnose_pdf_toc"
+required-features = ["pdf"]
+
 [profile.release]
 debug = false
 strip = true

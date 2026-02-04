@@ -2,6 +2,751 @@
 
 use mupdf::Document;
 
+// ============================================================================
+// Diagnostic Types (for debugging TOC extraction)
+// ============================================================================
+
+/// Diagnostic information about TOC extraction process.
+#[derive(Debug)]
+pub struct TocDiagnostics {
+    /// Source of the final TOC
+    pub source: TocSource,
+    /// Raw outline info (if outlines exist)
+    pub outline_info: Option<OutlineInfo>,
+    /// Heuristics info (if fallback was used)
+    pub heuristics_info: Option<HeuristicsInfo>,
+    /// Final extracted entries
+    pub entries: Vec<TocEntry>,
+}
+
+/// Where the TOC came from
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TocSource {
+    /// From PDF metadata outlines
+    Metadata,
+    /// From heuristic page scanning
+    Heuristics,
+    /// No TOC found
+    None,
+}
+
+/// Information about PDF outline metadata
+#[derive(Debug)]
+pub struct OutlineInfo {
+    /// Number of top-level outline entries
+    pub top_level_count: usize,
+    /// Total flattened entry count
+    pub total_count: usize,
+    /// Whether validation passed
+    pub validation_passed: bool,
+    /// Validation details
+    pub validation: ValidationInfo,
+}
+
+/// Validation statistics
+#[derive(Debug)]
+pub struct ValidationInfo {
+    /// Total entries checked
+    pub total_entries: usize,
+    /// Entries that look like valid titles
+    pub valid_entries: usize,
+    /// Percentage valid (need >= 70%)
+    pub valid_percent: usize,
+    /// Examples of invalid entries (title, length, sentence_count)
+    pub invalid_examples: Vec<(String, usize, usize)>,
+}
+
+/// Information about heuristic extraction
+#[derive(Debug)]
+pub struct HeuristicsInfo {
+    /// Pages scanned for TOC heading
+    pub pages_scanned: usize,
+    /// Pages with "Contents" heading found
+    pub heading_pages: Vec<PageScanInfo>,
+    /// Selected TOC start page
+    pub toc_start_page: Option<usize>,
+    /// After backtracking
+    pub toc_start_after_backtrack: Option<usize>,
+    /// Pages extracted from
+    pub extraction_pages: Vec<PageExtractionInfo>,
+    /// Hierarchy inference details
+    pub hierarchy_info: HierarchyInferenceInfo,
+}
+
+/// Info about scanning a page for TOC heading
+#[derive(Debug)]
+pub struct PageScanInfo {
+    /// Page index (0-based)
+    pub page_idx: usize,
+    /// Whether "Contents" heading was found
+    pub has_heading: bool,
+    /// Score (lines with page numbers)
+    pub score: usize,
+    /// Total lines on page
+    pub total_lines: usize,
+    /// Sample of raw lines (first 10 with content)
+    pub sample_lines: Vec<LineScanInfo>,
+}
+
+/// Info about a single line during TOC scanning
+#[derive(Debug)]
+pub struct LineScanInfo {
+    /// Raw text of the line
+    pub text: String,
+    /// Whether trailing page number was detected
+    pub has_page_number: bool,
+    /// The detected page number (if any)
+    pub page_number: Option<String>,
+    /// Whether title extraction succeeded
+    pub title_ok: bool,
+    /// Reason for rejection (if any)
+    pub reject_reason: Option<String>,
+}
+
+/// Info about extracting entries from a page
+#[derive(Debug)]
+pub struct PageExtractionInfo {
+    /// Page index (0-based)
+    pub page_idx: usize,
+    /// Total lines on page
+    pub total_lines: usize,
+    /// Lines with trailing page numbers
+    pub lines_with_page_numbers: usize,
+    /// Entries extracted
+    pub entries_extracted: usize,
+    /// Sample of extracted entries (title, level, target)
+    pub sample_entries: Vec<(String, usize, String)>,
+}
+
+/// Info about hierarchy inference
+#[derive(Debug)]
+pub struct HierarchyInferenceInfo {
+    /// Whether inference was applied
+    pub applied: bool,
+    /// Reason if not applied
+    pub skip_reason: Option<String>,
+    /// Entries with section numbers
+    pub entries_with_numbers: usize,
+    /// Total entries
+    pub total_entries: usize,
+}
+
+/// Extract TOC with full diagnostic information.
+pub fn extract_toc_with_diagnostics(doc: &Document, page_count: usize) -> TocDiagnostics {
+    // Try metadata outlines first
+    if let Ok(outlines) = doc.outlines() {
+        if !outlines.is_empty() {
+            let mut entries = Vec::new();
+            flatten_outlines(&outlines, 0, &mut entries);
+
+            let validation = compute_validation_info(&entries);
+            let validation_passed = validation.valid_percent >= 70 && entries.len() >= 3;
+
+            let outline_info = OutlineInfo {
+                top_level_count: outlines.len(),
+                total_count: entries.len(),
+                validation_passed,
+                validation,
+            };
+
+            if validation_passed {
+                return TocDiagnostics {
+                    source: TocSource::Metadata,
+                    outline_info: Some(outline_info),
+                    heuristics_info: None,
+                    entries,
+                };
+            }
+
+            // Outlines exist but failed validation - try heuristics
+            let (heuristics_info, heuristic_entries) =
+                extract_toc_from_pages_with_diagnostics(doc, page_count);
+
+            if !heuristic_entries.is_empty() {
+                return TocDiagnostics {
+                    source: TocSource::Heuristics,
+                    outline_info: Some(outline_info),
+                    heuristics_info: Some(heuristics_info),
+                    entries: heuristic_entries,
+                };
+            }
+
+            // Heuristics also failed, return empty
+            return TocDiagnostics {
+                source: TocSource::None,
+                outline_info: Some(outline_info),
+                heuristics_info: Some(heuristics_info),
+                entries: Vec::new(),
+            };
+        }
+    }
+
+    // No outlines - use heuristics
+    let (heuristics_info, entries) = extract_toc_from_pages_with_diagnostics(doc, page_count);
+
+    let source = if entries.is_empty() {
+        TocSource::None
+    } else {
+        TocSource::Heuristics
+    };
+
+    TocDiagnostics {
+        source,
+        outline_info: None,
+        heuristics_info: Some(heuristics_info),
+        entries,
+    }
+}
+
+fn compute_validation_info(entries: &[TocEntry]) -> ValidationInfo {
+    let mut valid_count = 0;
+    let mut invalid_examples = Vec::new();
+
+    for entry in entries {
+        let title_len = entry.title.chars().count();
+        let sentence_count = entry
+            .title
+            .matches(". ")
+            .count()
+            .saturating_add(entry.title.matches("? ").count())
+            .saturating_add(entry.title.matches("! ").count());
+
+        if title_len <= 100 && sentence_count <= 1 {
+            valid_count += 1;
+        } else if invalid_examples.len() < 5 {
+            invalid_examples.push((entry.title.clone(), title_len, sentence_count));
+        }
+    }
+
+    let valid_percent = if entries.is_empty() {
+        0
+    } else {
+        valid_count * 100 / entries.len()
+    };
+
+    ValidationInfo {
+        total_entries: entries.len(),
+        valid_entries: valid_count,
+        valid_percent,
+        invalid_examples,
+    }
+}
+
+fn extract_toc_from_pages_with_diagnostics(
+    doc: &Document,
+    n_pages: usize,
+) -> (HeuristicsInfo, Vec<TocEntry>) {
+    let max_scan = n_pages.min(30);
+
+    // Step 1: Find TOC start page
+    let (heading_pages, toc_start_page) = find_toc_start_with_diagnostics(doc, max_scan);
+
+    let Some(start_idx) = toc_start_page else {
+        return (
+            HeuristicsInfo {
+                pages_scanned: max_scan,
+                heading_pages,
+                toc_start_page: None,
+                toc_start_after_backtrack: None,
+                extraction_pages: Vec::new(),
+                hierarchy_info: HierarchyInferenceInfo {
+                    applied: false,
+                    skip_reason: Some("No TOC start page found".to_string()),
+                    entries_with_numbers: 0,
+                    total_entries: 0,
+                },
+            },
+            Vec::new(),
+        );
+    };
+
+    // Step 2: Backtrack
+    let start_idx_after_backtrack = backtrack_toc_start(doc, start_idx);
+
+    // Step 3: Extract entries from pages
+    let mut entries = Vec::new();
+    let mut extraction_pages = Vec::new();
+    let mut saw_entries = false;
+    let end = (start_idx_after_backtrack + 5).min(n_pages);
+
+    for page_idx in start_idx_after_backtrack..end {
+        let Ok(page) = doc.load_page(page_idx as i32) else {
+            continue;
+        };
+
+        let (page_info, page_entries) =
+            extract_toc_entries_from_page_with_diagnostics(&page, page_idx);
+        extraction_pages.push(page_info);
+
+        if !page_entries.is_empty() {
+            entries.extend(page_entries);
+            saw_entries = true;
+        } else if saw_entries {
+            break;
+        }
+    }
+
+    // Step 4: Infer hierarchy
+    let hierarchy_info = infer_toc_hierarchy_with_diagnostics(&mut entries);
+
+    (
+        HeuristicsInfo {
+            pages_scanned: max_scan,
+            heading_pages,
+            toc_start_page: Some(start_idx),
+            toc_start_after_backtrack: Some(start_idx_after_backtrack),
+            extraction_pages,
+            hierarchy_info,
+        },
+        entries,
+    )
+}
+
+fn find_toc_start_with_diagnostics(
+    doc: &Document,
+    max_pages: usize,
+) -> (Vec<PageScanInfo>, Option<usize>) {
+    let mut page_infos = Vec::new();
+    let mut best: Option<(usize, usize)> = None;
+    let mut earliest: Option<(usize, usize)> = None;
+    let mut headings = Vec::new();
+
+    for page_idx in 0..max_pages {
+        let Ok(page) = doc.load_page(page_idx as i32) else {
+            continue;
+        };
+        let Ok(bounds) = page.bounds() else {
+            continue;
+        };
+        let page_height = bounds.y1 - bounds.y0;
+        let line_bounds = super::super::worker::extract_line_bounds_merged(&page, 1.0);
+
+        let mut has_heading = false;
+        for line in &line_bounds {
+            if line.y0 > page_height * 0.3 {
+                continue;
+            }
+            let text = line_text(line);
+            if is_toc_heading(&text) {
+                has_heading = true;
+                break;
+            }
+        }
+
+        let mut score = 0;
+        let mut sample_lines = Vec::new();
+
+        if has_heading {
+            headings.push(page_idx);
+
+            // Track pending title for two-line pattern scoring
+            let mut pending_title_for_score: Option<f32> = None; // stores y1 of title line
+            let line_height_estimate = line_bounds
+                .iter()
+                .map(|l| l.y1 - l.y0)
+                .fold(12.0_f32, f32::max);
+            let max_gap = line_height_estimate * 2.5;
+
+            for line in &line_bounds {
+                let text = line_text(line);
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let mut line_info = LineScanInfo {
+                    text: truncate_for_diag(&text, 60),
+                    has_page_number: false,
+                    page_number: None,
+                    title_ok: false,
+                    reject_reason: None,
+                };
+
+                if let Some((page_num, number_start)) = extract_trailing_page_number(&text) {
+                    line_info.has_page_number = true;
+                    line_info.page_number = Some(format!("{}", page_num));
+
+                    if let Some(_title) = strip_toc_title(&text, number_start) {
+                        // Single line with both title and page number
+                        line_info.title_ok = true;
+                        score += 1;
+                        pending_title_for_score = None;
+                    } else {
+                        // Page number only - check if we have a pending title
+                        if let Some(title_y1) = pending_title_for_score.take() {
+                            if (line.y0 - title_y1).abs() <= max_gap {
+                                // Title on previous line, page number on this line
+                                line_info.title_ok = true;
+                                line_info.reject_reason =
+                                    Some("matched with pending title".to_string());
+                                score += 1;
+                            } else {
+                                line_info.reject_reason =
+                                    Some(diagnose_title_rejection(&text, number_start));
+                            }
+                        } else {
+                            line_info.reject_reason =
+                                Some(diagnose_title_rejection(&text, number_start));
+                        }
+                    }
+                } else {
+                    // No page number - could be a title line
+                    if looks_like_toc_title_line(trimmed) {
+                        pending_title_for_score = Some(line.y1);
+                        line_info.reject_reason =
+                            Some("potential title (waiting for page number)".to_string());
+                    } else {
+                        line_info.reject_reason = Some(diagnose_page_number_rejection(&text));
+                        // Clear pending if gap too large
+                        if let Some(title_y1) = pending_title_for_score {
+                            if (line.y0 - title_y1).abs() > max_gap {
+                                pending_title_for_score = None;
+                            }
+                        }
+                    }
+                }
+
+                if sample_lines.len() < 15 {
+                    sample_lines.push(line_info);
+                }
+            }
+
+            if score >= 3 && earliest.is_none_or(|(idx, _)| page_idx < idx) {
+                earliest = Some((page_idx, score));
+            }
+            if best.is_none_or(|(_, best_score)| score > best_score) {
+                best = Some((page_idx, score));
+            }
+        }
+
+        if has_heading || score > 0 {
+            page_infos.push(PageScanInfo {
+                page_idx,
+                has_heading,
+                score,
+                total_lines: line_bounds.len(),
+                sample_lines,
+            });
+        }
+    }
+
+    let best_idx = best.map(|(idx, _)| idx);
+    let result = if let Some(best_idx) = best_idx {
+        let earliest_near = headings
+            .into_iter()
+            .filter(|idx| *idx <= best_idx && best_idx.saturating_sub(*idx) <= 2)
+            .min();
+        earliest_near.or(Some(best_idx))
+    } else {
+        earliest.or(best).map(|(idx, _)| idx)
+    };
+
+    (page_infos, result)
+}
+
+/// Check if a line looks like a TOC title (no page number, but could be a chapter/section name).
+fn looks_like_toc_title_line(text: &str) -> bool {
+    let trimmed = text.trim();
+
+    // Must have some letters
+    if !trimmed.chars().any(|c| c.is_alphabetic()) {
+        return false;
+    }
+
+    // Should be reasonably short (TOC titles are typically under 80 chars)
+    if trimmed.chars().count() > 80 {
+        return false;
+    }
+
+    // Should not look like body text (multiple sentences)
+    let sentence_count = trimmed
+        .matches(". ")
+        .count()
+        .saturating_add(trimmed.matches("? ").count())
+        .saturating_add(trimmed.matches("! ").count());
+    if sentence_count > 1 {
+        return false;
+    }
+
+    // Reject if starts with dash (attribution)
+    if trimmed.starts_with('-') || trimmed.starts_with('—') || trimmed.starts_with('–') {
+        return false;
+    }
+
+    true
+}
+
+fn extract_toc_entries_from_page_with_diagnostics(
+    page: &mupdf::Page,
+    page_idx: usize,
+) -> (PageExtractionInfo, Vec<TocEntry>) {
+    let Ok(bounds) = page.bounds() else {
+        return (
+            PageExtractionInfo {
+                page_idx,
+                total_lines: 0,
+                lines_with_page_numbers: 0,
+                entries_extracted: 0,
+                sample_entries: Vec::new(),
+            },
+            Vec::new(),
+        );
+    };
+
+    let page_height = bounds.y1 - bounds.y0;
+    let page_width = bounds.x1 - bounds.x0;
+    let line_bounds = super::super::worker::extract_line_bounds_merged(page, 1.0);
+    let link_rects = super::super::worker::extract_link_rects(page, 1.0);
+
+    let total_lines = line_bounds.len();
+
+    let mut ordered_lines: Vec<_> = line_bounds.iter().collect();
+    ordered_lines.sort_by(|a, b| {
+        a.y0.partial_cmp(&b.y0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.x0.partial_cmp(&b.x0).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let min_x = ordered_lines
+        .iter()
+        .filter(|l| l.y0 >= page_height * 0.08 && l.y1 <= page_height * 0.92)
+        .map(|l| l.x0)
+        .fold(f32::MAX, f32::min);
+    let indent_step = page_width * 0.025;
+
+    let mut entries = Vec::new();
+    let mut lines_with_page_numbers = 0;
+    let mut pending_title: Option<(String, usize, f32)> = None;
+    let mut pending_prefix: Option<(String, f32)> = None;
+
+    for line in ordered_lines {
+        if line.y0 < page_height * 0.08 || line.y1 > page_height * 0.92 {
+            continue;
+        }
+
+        let raw_text = line_text(line);
+        if raw_text.trim().is_empty() {
+            continue;
+        }
+
+        if is_toc_heading(&raw_text) {
+            continue;
+        }
+
+        if line_is_roman_numeral_only(&raw_text) && line.y0 < page_height * 0.2 {
+            continue;
+        }
+
+        let base_level = ((line.x0 - min_x).max(0.0) / indent_step) as usize;
+        let line_height = (line.y1 - line.y0).max(1.0);
+        let max_gap = line_height * 12.0;
+
+        if let Some((_, _, y1)) = pending_title {
+            if line.y0 > y1 + max_gap {
+                pending_title = None;
+            }
+        }
+        if let Some((_, y1)) = pending_prefix {
+            if line.y0 > y1 + max_gap * 2.0 {
+                pending_prefix = None;
+            }
+        }
+
+        let segments = split_on_bullet_separators(&raw_text);
+
+        for text in segments {
+            let level = base_level;
+
+            if let Some((printed_page, number_start)) = extract_trailing_page_number(&text) {
+                lines_with_page_numbers += 1;
+
+                let use_pending = pending_title
+                    .as_ref()
+                    .is_some_and(|(_, _, y1)| (line.y0 - *y1).abs() <= max_gap);
+                let (mut title, title_level) = if use_pending {
+                    let (pending, pending_level, _) = pending_title.take().unwrap();
+                    (Some(pending), pending_level)
+                } else {
+                    (strip_toc_title(&text, number_start), level)
+                };
+
+                if let Some((prefix, y1)) = pending_prefix.take() {
+                    if (line.y0 - y1).abs() <= max_gap * 2.0 {
+                        if let Some(title_text) = title.take() {
+                            if !starts_with_digit(&title_text) {
+                                title = Some(format!("{prefix} {title_text}"));
+                            } else {
+                                title = Some(title_text);
+                            }
+                        }
+                    } else {
+                        pending_prefix = Some((prefix, y1));
+                    }
+                }
+
+                let Some(title) = title else {
+                    continue;
+                };
+
+                let target = if let Some(link) = link_for_line(line, &link_rects) {
+                    match &link.target {
+                        super::super::types::LinkTarget::Internal { page } => {
+                            TocTarget::InternalPage(*page)
+                        }
+                        super::super::types::LinkTarget::External { uri } => {
+                            TocTarget::External(uri.clone())
+                        }
+                    }
+                } else {
+                    TocTarget::PrintedPage(printed_page)
+                };
+
+                entries.push(TocEntry {
+                    title,
+                    level: title_level,
+                    target,
+                });
+                continue;
+            }
+
+            if line_is_dots_only(&text) {
+                continue;
+            }
+
+            if let Some(number) = extract_standalone_number(&text) {
+                if let Some((pending, pending_level, y1)) = pending_title.take() {
+                    if (line.y0 - y1).abs() <= max_gap * 2.0 {
+                        let mut title = pending;
+                        if let Some((prefix, py)) = pending_prefix.take() {
+                            if (line.y0 - py).abs() <= max_gap * 2.0 && !starts_with_digit(&title) {
+                                title = format!("{prefix} {title}");
+                            } else {
+                                pending_prefix = Some((prefix, py));
+                            }
+                        }
+                        entries.push(TocEntry {
+                            title,
+                            level: pending_level,
+                            target: TocTarget::PrintedPage(number),
+                        });
+                        continue;
+                    }
+                    pending_title = Some((pending, pending_level, y1));
+                }
+                pending_prefix = Some((number.to_string(), line.y1));
+                continue;
+            }
+
+            if line_has_letters(&text) {
+                let cleaned = text
+                    .trim()
+                    .trim_matches(|c: char| c == '.' || c == '·')
+                    .trim();
+                if cleaned.is_empty() {
+                    continue;
+                }
+                if let Some((pending, _, y1)) = pending_title.as_ref() {
+                    if contains_digit(pending)
+                        && !contains_digit(cleaned)
+                        && (line.y0 - *y1).abs() <= max_gap * 2.0
+                    {
+                        continue;
+                    }
+                }
+                pending_title = Some((cleaned.to_string(), level, line.y1));
+            }
+        }
+    }
+
+    let sample_entries: Vec<_> = entries
+        .iter()
+        .take(5)
+        .map(|e| {
+            let target_str = match &e.target {
+                TocTarget::InternalPage(p) => format!("page:{}", p),
+                TocTarget::PrintedPage(p) => format!("printed:{}", p),
+                TocTarget::External(u) => format!("ext:{}", u),
+            };
+            (e.title.clone(), e.level, target_str)
+        })
+        .collect();
+
+    (
+        PageExtractionInfo {
+            page_idx,
+            total_lines,
+            lines_with_page_numbers,
+            entries_extracted: entries.len(),
+            sample_entries,
+        },
+        entries,
+    )
+}
+
+fn infer_toc_hierarchy_with_diagnostics(entries: &mut [TocEntry]) -> HierarchyInferenceInfo {
+    if entries.len() < 3 {
+        return HierarchyInferenceInfo {
+            applied: false,
+            skip_reason: Some(format!("Too few entries: {}", entries.len())),
+            entries_with_numbers: 0,
+            total_entries: entries.len(),
+        };
+    }
+
+    let parsed: Vec<Option<SectionNumber>> = entries
+        .iter()
+        .map(|e| SectionNumber::parse(&e.title).map(|(num, _)| num))
+        .collect();
+
+    let with_numbers = parsed.iter().filter(|p| p.is_some()).count();
+
+    if with_numbers < entries.len() / 2 {
+        return HierarchyInferenceInfo {
+            applied: false,
+            skip_reason: Some(format!(
+                "Not enough entries with section numbers: {}/{}",
+                with_numbers,
+                entries.len()
+            )),
+            entries_with_numbers: with_numbers,
+            total_entries: entries.len(),
+        };
+    }
+
+    let mut saw_hierarchy = false;
+    for i in 1..parsed.len() {
+        if let (Some(prev), Some(curr)) = (&parsed[i - 1], &parsed[i]) {
+            if curr.is_child_of(prev) || prev.depth() != curr.depth() {
+                saw_hierarchy = true;
+                break;
+            }
+        }
+    }
+
+    if !saw_hierarchy {
+        return HierarchyInferenceInfo {
+            applied: false,
+            skip_reason: Some("No hierarchical pattern detected in section numbers".to_string()),
+            entries_with_numbers: with_numbers,
+            total_entries: entries.len(),
+        };
+    }
+
+    // Apply hierarchy
+    for (i, entry) in entries.iter_mut().enumerate() {
+        if let Some(ref num) = parsed[i] {
+            entry.level = num.depth().saturating_sub(1);
+        }
+    }
+
+    HierarchyInferenceInfo {
+        applied: true,
+        skip_reason: None,
+        entries_with_numbers: with_numbers,
+        total_entries: entries.len(),
+    }
+}
+
 /// Target of a TOC entry
 #[derive(Clone, Debug)]
 pub enum TocTarget {
@@ -177,7 +922,7 @@ fn find_toc_start(doc: &Document, max_pages: usize) -> Option<usize> {
             continue;
         };
         let page_height = bounds.y1 - bounds.y0;
-        let line_bounds = super::super::worker::extract_line_bounds(&page, 1.0);
+        let line_bounds = super::super::worker::extract_line_bounds_merged(&page, 1.0);
 
         let mut has_heading = false;
         for line in &line_bounds {
@@ -197,12 +942,38 @@ fn find_toc_start(doc: &Document, max_pages: usize) -> Option<usize> {
 
         headings.push(page_idx);
 
+        // Track pending title for two-line pattern scoring
+        let mut pending_title_for_score: Option<f32> = None;
+        let line_height_estimate = line_bounds
+            .iter()
+            .map(|l| l.y1 - l.y0)
+            .fold(12.0_f32, f32::max);
+        let max_gap = line_height_estimate * 2.5;
+
         let mut score = 0;
         for line in &line_bounds {
             let text = line_text(line);
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
             if let Some((_, number_start)) = extract_trailing_page_number(&text) {
                 if strip_toc_title(&text, number_start).is_some() {
+                    // Single line with both title and page number
                     score += 1;
+                    pending_title_for_score = None;
+                } else if let Some(title_y1) = pending_title_for_score.take() {
+                    // Page number only - check if we have a pending title
+                    if (line.y0 - title_y1).abs() <= max_gap {
+                        score += 1;
+                    }
+                }
+            } else if looks_like_toc_title_line(trimmed) {
+                pending_title_for_score = Some(line.y1);
+            } else if let Some(title_y1) = pending_title_for_score {
+                if (line.y0 - title_y1).abs() > max_gap {
+                    pending_title_for_score = None;
                 }
             }
         }
@@ -257,7 +1028,7 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
     };
     let page_height = bounds.y1 - bounds.y0;
     let page_width = bounds.x1 - bounds.x0;
-    let line_bounds = super::super::worker::extract_line_bounds(page, 1.0);
+    let line_bounds = super::super::worker::extract_line_bounds_merged(page, 1.0);
     let link_rects = super::super::worker::extract_link_rects(page, 1.0);
 
     let mut ordered_lines: Vec<_> = line_bounds.iter().collect();
@@ -425,6 +1196,142 @@ fn extract_toc_entries_from_page(page: &mupdf::Page) -> Vec<TocEntry> {
 }
 
 // Helper functions for TOC extraction
+
+fn truncate_for_diag(s: &str, max_len: usize) -> String {
+    if s.chars().count() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(max_len - 1).collect::<String>())
+    }
+}
+
+fn diagnose_page_number_rejection(text: &str) -> String {
+    let trimmed = text.trim_end();
+    if trimmed.len() < 2 {
+        return "line too short".to_string();
+    }
+
+    let bytes = trimmed.as_bytes();
+    let mut end = trimmed.len();
+
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+
+    if end == 0 {
+        return "only whitespace".to_string();
+    }
+
+    // Check what's at the end
+    let last_chars: String = trimmed
+        .chars()
+        .rev()
+        .take(10)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+
+    // Check for Arabic numerals
+    let mut start = end;
+    while start > 0 && bytes[start - 1].is_ascii_digit() {
+        start -= 1;
+    }
+
+    if start < end {
+        let digits = &trimmed[start..end];
+        if let Ok(number) = digits.parse::<usize>() {
+            if number == 0 {
+                return format!("number is 0: '{}'", digits);
+            }
+            if (1800..=2100).contains(&number) {
+                return format!("looks like year: {}", number);
+            }
+            if number > 1500 {
+                return format!("number too large: {}", number);
+            }
+            if start > 0 && (bytes[start - 1] == b'(' || bytes[start - 1] == b'[') {
+                return format!("preceded by paren: {}", number);
+            }
+        }
+    }
+
+    // Check for Roman numerals
+    let mut roman_start = end;
+    while roman_start > 0
+        && matches!(
+            bytes[roman_start - 1],
+            b'i' | b'v'
+                | b'x'
+                | b'l'
+                | b'c'
+                | b'd'
+                | b'm'
+                | b'I'
+                | b'V'
+                | b'X'
+                | b'L'
+                | b'C'
+                | b'D'
+                | b'M'
+        )
+    {
+        roman_start -= 1;
+    }
+
+    if roman_start < end {
+        let potential_roman = &trimmed[roman_start..end];
+        // Check if it's uppercase (we only accept lowercase for page numbers)
+        if potential_roman.chars().any(|c| c.is_uppercase()) {
+            return format!("uppercase roman '{}' (need lowercase)", potential_roman);
+        }
+        return format!("no trailing number found, ends with: '{}'", last_chars);
+    }
+
+    format!("no trailing number, ends with: '{}'", last_chars)
+}
+
+fn diagnose_title_rejection(text: &str, number_start: usize) -> String {
+    let raw = text[..number_start].trim_end();
+    let trimmed = raw
+        .trim_end_matches(['.', '·', '-', '–', '—'])
+        .trim_end_matches('[')
+        .trim_end()
+        .trim();
+
+    if trimmed.len() < 2 {
+        return format!("title too short after stripping: '{}'", trimmed);
+    }
+
+    if !trimmed.chars().any(|c| c.is_alphabetic()) {
+        return format!("no letters in title: '{}'", trimmed);
+    }
+
+    if trimmed.starts_with('-') || trimmed.starts_with('—') || trimmed.starts_with('–') {
+        return format!("starts with dash: '{}'", truncate_for_diag(trimmed, 30));
+    }
+
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.len() > 2 {
+        let lowercase_starts = words[1..]
+            .iter()
+            .filter(|w| {
+                w.chars()
+                    .next()
+                    .is_some_and(|c| c.is_lowercase() && c.is_alphabetic())
+            })
+            .count();
+        if lowercase_starts > words.len() / 2 {
+            return format!(
+                "looks like body text ({}/{} words start lowercase)",
+                lowercase_starts,
+                words.len() - 1
+            );
+        }
+    }
+
+    "unknown reason".to_string()
+}
 
 fn line_text(line: &super::super::types::LineBounds) -> String {
     line.chars.iter().map(|c| c.c).collect()
