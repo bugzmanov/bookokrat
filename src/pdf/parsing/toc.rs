@@ -659,6 +659,215 @@ fn link_for_line<'a>(
 }
 
 // ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test using exact TOC structure from "Dependency Injection" book.
+    /// The test PDF contains only the outline metadata (no copyrighted content).
+    /// This ensures our TOC extraction correctly handles real-world technical books.
+    #[test]
+    fn test_di_book_toc_extraction() {
+        let path = "tests/testdata/di_book_toc_test.pdf";
+        let doc = mupdf::Document::open(path).expect("Failed to open test PDF");
+        let page_count = doc.page_count().expect("Failed to get page count") as usize;
+
+        let entries = extract_toc(&doc, page_count);
+
+        // Should not be empty - the outline should be accepted
+        assert!(
+            !entries.is_empty(),
+            "TOC extraction returned empty - outline was likely rejected by looks_like_valid_toc"
+        );
+
+        // Should have exactly 229 entries (the DI book's full TOC)
+        assert_eq!(
+            entries.len(),
+            229,
+            "Expected 229 TOC entries from DI book, got {}",
+            entries.len()
+        );
+
+        // Verify first entry (book title)
+        assert_eq!(entries[0].title, "Dependency Injection");
+        assert_eq!(entries[0].level, 0);
+        assert!(matches!(entries[0].target, TocTarget::InternalPage(0)));
+
+        // Verify front matter entries (level 0)
+        assert_eq!(entries[1].title, "brief contents");
+        assert_eq!(entries[1].level, 0);
+
+        assert_eq!(entries[2].title, "contents");
+        assert_eq!(entries[2].level, 0);
+
+        // Verify Part 1 (level 0)
+        let part1 = entries
+            .iter()
+            .find(|e| e.title.contains("Part 1:"))
+            .expect("Part 1 not found");
+        assert_eq!(part1.level, 0);
+        assert_eq!(part1.title, "Part 1: Putting Dependency Injection");
+
+        // Verify Chapter 1 (level 1)
+        let chapter1 = entries
+            .iter()
+            .find(|e| e.title.starts_with("1 The basics"))
+            .expect("Chapter 1 not found");
+        assert_eq!(chapter1.level, 1);
+        assert_eq!(
+            chapter1.title,
+            "1 The basics of Dependency Injection: What, why, and how"
+        );
+
+        // Verify Section 1.1 with tab character (level 2)
+        let section_1_1 = entries
+            .iter()
+            .find(|e| e.title.contains("Writing maintainable code"))
+            .expect("Section 1.1 not found");
+        assert_eq!(section_1_1.level, 2);
+        assert!(
+            section_1_1.title.contains('\t'),
+            "Section title should contain tab: {}",
+            section_1_1.title
+        );
+
+        // Verify Subsection 1.1.1 (level 3)
+        let subsection_1_1_1 = entries
+            .iter()
+            .find(|e| e.title.contains("Common myths about DI"))
+            .expect("Subsection 1.1.1 not found");
+        assert_eq!(subsection_1_1_1.level, 3);
+
+        // Verify Part 4 exists (last part)
+        let part4 = entries
+            .iter()
+            .find(|e| e.title.contains("Part 4:"))
+            .expect("Part 4 not found");
+        assert_eq!(part4.level, 0);
+        assert_eq!(part4.title, "Part 4: DI Containers");
+
+        // Verify last entries (back matter at level 1)
+        let glossary = entries.iter().find(|e| e.title == "glossary");
+        assert!(glossary.is_some(), "glossary entry not found");
+        assert_eq!(glossary.unwrap().level, 1);
+
+        let index = entries.iter().find(|e| e.title == "index");
+        assert!(index.is_some(), "index entry not found");
+        assert_eq!(index.unwrap().level, 1);
+
+        // Verify page numbers are preserved correctly
+        if let TocTarget::InternalPage(page) = chapter1.target {
+            assert_eq!(page, 33, "Chapter 1 should be on page 33");
+        } else {
+            panic!("Expected InternalPage target for Chapter 1");
+        }
+
+        // Count entries by level to verify structure
+        let level_counts: Vec<usize> = (0..=3)
+            .map(|l| entries.iter().filter(|e| e.level == l).count())
+            .collect();
+
+        assert!(
+            level_counts[0] > 10,
+            "Should have front matter and parts at level 0"
+        );
+        assert!(level_counts[1] > 15, "Should have chapters at level 1");
+        assert!(level_counts[2] > 40, "Should have sections at level 2");
+        assert!(
+            level_counts[3] > 100,
+            "Should have many subsections at level 3"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_valid_toc_accepts_di_book_titles() {
+        // Sample of actual DI book titles - should all be accepted
+        let entries = vec![
+            TocEntry {
+                title: "Dependency Injection".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(0),
+            },
+            TocEntry {
+                title: "Part 1: Putting Dependency Injection".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(31),
+            },
+            TocEntry {
+                title: "1 The basics of Dependency Injection: What, why, and how".to_string(),
+                level: 1,
+                target: TocTarget::InternalPage(33),
+            },
+            TocEntry {
+                title: "1.1\tWriting maintainable code".to_string(),
+                level: 2,
+                target: TocTarget::InternalPage(35),
+            },
+            TocEntry {
+                title: "1.1.1\tCommon myths about DI".to_string(),
+                level: 3,
+                target: TocTarget::InternalPage(35),
+            },
+        ];
+
+        assert!(
+            looks_like_valid_toc(&entries),
+            "DI book titles should be accepted as valid TOC"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_valid_toc_rejects_body_text() {
+        let entries = vec![
+            TocEntry {
+                title: "This is a very long sentence that looks like body text from a paragraph in the document. It has multiple sentences and exceeds what you'd expect from a chapter title.".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(0),
+            },
+            TocEntry {
+                title: "Another long body text entry. This one also has multiple sentences. And even more text here.".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(1),
+            },
+            TocEntry {
+                title: "Yet more body text that should not be considered a valid TOC entry. Multiple periods indicate sentences.".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(2),
+            },
+        ];
+
+        assert!(
+            !looks_like_valid_toc(&entries),
+            "Body text should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_valid_toc_requires_minimum_entries() {
+        let entries = vec![
+            TocEntry {
+                title: "Chapter 1".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(0),
+            },
+            TocEntry {
+                title: "Chapter 2".to_string(),
+                level: 0,
+                target: TocTarget::InternalPage(1),
+            },
+        ];
+
+        assert!(
+            !looks_like_valid_toc(&entries),
+            "Should require at least 3 entries"
+        );
+    }
+}
+
+// ============================================================================
 // TOC Hierarchy Inference
 // ============================================================================
 
