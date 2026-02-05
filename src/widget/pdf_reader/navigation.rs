@@ -1464,7 +1464,6 @@ impl PdfReaderState {
                     // In scroll mode, scroll to the page position in document
                     zoom.scroll_to_page(page, &heights, SEPARATOR_HEIGHT);
                 }
-                zoom.cell_pan_from_left = 0;
             }
         }
     }
@@ -4120,6 +4119,7 @@ pub(crate) fn save_pdf_bookmark(
         .unwrap_or(0);
 
     let zoom_factor = pdf_reader.zoom.as_ref().map(|z| z.factor);
+    let pan_position = pdf_reader.zoom.as_ref().map(|z| z.cell_pan_from_left);
     bookmarks.update_bookmark(
         &pdf_reader.name,
         chapter_href,
@@ -4128,6 +4128,7 @@ pub(crate) fn save_pdf_bookmark(
         Some(pdf_reader.rendered.len().max(1)),
         Some(page),
         zoom_factor,
+        pan_position,
     );
 
     let now = std::time::Instant::now();

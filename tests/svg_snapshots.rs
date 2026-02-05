@@ -2790,6 +2790,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             total_chapters: Some(10 + (i % 20)),
             pdf_page: None,
             pdf_zoom: None,
+            pdf_pan: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2805,6 +2806,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             total_chapters: Some(10 + (i % 20)),
             pdf_page: None,
             pdf_zoom: None,
+            pdf_pan: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2822,6 +2824,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             bookmark.chapter_index,
             bookmark.total_chapters,
             bookmark.pdf_page,
+            None,
             None,
         );
     }

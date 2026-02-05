@@ -890,6 +890,7 @@ impl App {
             initial_page = page_count - 1;
         }
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
+        let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -921,7 +922,7 @@ impl App {
         // Create PDF reader state with persisted settings
         // Prefer per-book zoom from bookmark, fall back to global setting
         let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
-        let pdf_pan_shift = crate::settings::get_pdf_pan_shift();
+        let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1322,6 +1323,7 @@ impl App {
                 Some(self.text_reader.get_current_node_index()),
                 Some(book.current_chapter()),
                 Some(book.total_chapters()),
+                None,
                 None,
                 None,
             );
