@@ -200,20 +200,21 @@ impl BookList {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
-            // Check if this is a PDF (dimmed styling)
+            // Check if this is a PDF
             #[cfg(feature = "pdf")]
             let is_pdf = book_info.format == BookFormat::Pdf;
             #[cfg(not(feature = "pdf"))]
             let is_pdf = false;
 
-            // Determine base style for this book
+            // Determine base style for this book (PDFs now have same color as EPUBs)
             let base_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
-            } else if is_pdf {
-                Style::default().fg(palette.base_04) // Dimmed for PDFs
             } else {
                 Style::default().fg(text_color)
             };
+
+            // PDF prefix style (magenta color)
+            let pdf_prefix_style = Style::default().fg(palette.base_0e);
 
             // Check if this item is a search match
             let is_search_match = self.search_state.is_match(idx);
@@ -232,6 +233,12 @@ impl BookList {
                     .unwrap_or(&empty_vec);
 
                 let mut spans = Vec::new();
+
+                // Add [pdf]prefix if this is a PDF
+                if is_pdf {
+                    spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                }
+
                 let text = &book_info.display_name;
 
                 // Build char-to-byte mapping for proper Unicode handling
@@ -291,10 +298,12 @@ impl BookList {
                 Line::from(spans)
             } else {
                 // No search active or not a match - render normally
-                Line::from(vec![Span::styled(
-                    book_info.display_name.clone(),
-                    base_style,
-                )])
+                let mut spans = Vec::new();
+                if is_pdf {
+                    spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                }
+                spans.push(Span::styled(book_info.display_name.clone(), base_style));
+                Line::from(spans)
             };
 
             items.push(ListItem::new(content));
