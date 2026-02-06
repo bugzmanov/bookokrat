@@ -5105,7 +5105,8 @@ impl App {
             toc_entries
                 .iter()
                 .position(|entry| {
-                    map_toc_target_to_page(&entry.target) == Some(start) && entry.title.trim() == title
+                    map_toc_target_to_page(&entry.target) == Some(start)
+                        && entry.title.trim() == title
                 })
                 .or_else(|| {
                     toc_entries
