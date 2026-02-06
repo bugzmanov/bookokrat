@@ -1,5 +1,6 @@
 #[cfg(feature = "pdf")]
 use crate::settings::is_pdf_enabled;
+use crate::settings::{BookSortOrder, get_book_sort_order};
 use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::BufReader;
@@ -570,18 +571,46 @@ impl BookManager {
 
     /// Get books filtered by current settings (e.g., PDF enabled/disabled)
     pub fn get_books(&self) -> Vec<BookInfo> {
+        let mut books: Vec<BookInfo>;
         #[cfg(feature = "pdf")]
         {
             if !is_pdf_enabled() {
-                return self
+                books = self
                     .books
                     .iter()
                     .filter(|book| book.format != BookFormat::Pdf)
                     .cloned()
                     .collect();
+            } else {
+                books = self.books.clone();
             }
         }
-        self.books.clone()
+        #[cfg(not(feature = "pdf"))]
+        {
+            books = self.books.clone();
+        }
+
+        if get_book_sort_order() == BookSortOrder::ByType {
+            books.sort_by(|a, b| {
+                let type_order = |f: &BookFormat| -> u8 {
+                    match f {
+                        #[cfg(feature = "pdf")]
+                        BookFormat::Pdf => 0,
+                        BookFormat::Epub => 1,
+                        BookFormat::Html => 2,
+                    }
+                };
+                type_order(&a.format)
+                    .cmp(&type_order(&b.format))
+                    .then_with(|| {
+                        a.display_name
+                            .to_lowercase()
+                            .cmp(&b.display_name.to_lowercase())
+                    })
+            });
+        }
+
+        books
     }
 
     pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {

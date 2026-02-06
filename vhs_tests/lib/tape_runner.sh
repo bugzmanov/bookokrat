@@ -201,6 +201,8 @@ term_close() {
 # Global: file override from tape (EPUB/PDF)
 TAPE_FILE=""
 TAPE_PDF_FILE=""
+TAPE_NOFILE=false         # If true, launch without a file argument
+TAPE_WINDOW_PERCENT=""    # Window size as percent of screen (empty = maximize)
 
 # Parse and execute a single tape command
 # Returns 0 on success, 1 on error
@@ -228,6 +230,70 @@ execute_command() {
             TAPE_FILE="$arg"
             log_verbose "File: $arg"
             return 0
+            ;;
+        nofile)
+            # Launch without opening a specific file (shows book list)
+            TAPE_NOFILE=true
+            log_verbose "No file mode"
+            return 0
+            ;;
+        window)
+            # Window size directive (handled before launch, skip during execution)
+            return 0
+            ;;
+        type)
+            # Type a string with visible per-character delay (single osascript call)
+            if [ -z "$arg" ]; then
+                log_error "type requires a string"
+                return 1
+            fi
+            log_verbose "type: $arg"
+            case "$TERMINAL_TYPE" in
+                ghostty|*) send_type_slow "$arg" 0.03 ;;
+            esac
+            ;;
+        rapid)
+            # Type keys instantly (no per-character delay, for zoom/margin keys)
+            if [ -z "$arg" ]; then
+                log_error "rapid requires a string"
+                return 1
+            fi
+            log_verbose "rapid: $arg"
+            case "$TERMINAL_TYPE" in
+                ghostty|*) send_type "$arg" ;;
+            esac
+            ;;
+        repeat_key)
+            # Send a key N times in a single osascript (avoids per-command overhead)
+            # Usage: repeat_key <key> <count> [delay_seconds]
+            local rkey=$(echo "$arg" | awk '{print $1}')
+            local rcount=$(echo "$arg" | awk '{print $2}')
+            local rdelay=$(echo "$arg" | awk '{print $3}')
+            rdelay="${rdelay:-0.05}"
+            if [ -z "$rkey" ] || [ -z "$rcount" ]; then
+                log_error "repeat_key requires: key count [delay]"
+                return 1
+            fi
+            log_verbose "repeat_key: $rkey x$rcount (delay: ${rdelay}s)"
+            case "$TERMINAL_TYPE" in
+                ghostty|*) send_key_repeated "$rkey" "$rcount" "$rdelay" ;;
+            esac
+            ;;
+        repeat_ctrl)
+            # Send ctrl+key N times in a single osascript (avoids per-command overhead)
+            # Usage: repeat_ctrl <key> <count> [delay_seconds]
+            local rkey=$(echo "$arg" | awk '{print $1}')
+            local rcount=$(echo "$arg" | awk '{print $2}')
+            local rdelay=$(echo "$arg" | awk '{print $3}')
+            rdelay="${rdelay:-0.1}"
+            if [ -z "$rkey" ] || [ -z "$rcount" ]; then
+                log_error "repeat_ctrl requires: key count [delay]"
+                return 1
+            fi
+            log_verbose "repeat_ctrl: $rkey x$rcount (delay: ${rdelay}s)"
+            case "$TERMINAL_TYPE" in
+                ghostty|*) send_ctrl_key_repeated "$rkey" "$rcount" "$rdelay" ;;
+            esac
             ;;
         screenshot)
             if [ -z "$arg" ]; then
@@ -342,6 +408,8 @@ run_tape() {
     TAPE_ERRORS=()
     TAPE_FILE=""
     TAPE_PDF_FILE=""
+    TAPE_NOFILE=false
+    TAPE_WINDOW_PERCENT=""
     CURRENT_TAPE=$(basename "$tape_file" .tape)
 
     local tape_name=$(basename "$tape_file")
@@ -378,6 +446,19 @@ run_tape() {
         log_info "PDF from tape: $TAPE_PDF_FILE"
     fi
 
+    # Extract nofile directive
+    if echo "$commands" | grep -q "^nofile|"; then
+        TAPE_NOFILE=true
+        log_info "No-file mode (book list)"
+    fi
+
+    # Extract window size directive
+    local window_line=$(echo "$commands" | grep "^window|" | head -1)
+    if [ -n "$window_line" ]; then
+        TAPE_WINDOW_PERCENT=$(echo "$window_line" | cut -d'|' -f2 | tr -d ' ')
+        log_info "Window size: ${TAPE_WINDOW_PERCENT}%"
+    fi
+
     # Use tape's file override, else PDF, else default
     local test_file="${TAPE_FILE:-${TAPE_PDF_FILE:-$default_test_file}}"
     # Resolve relative to project root
@@ -391,11 +472,30 @@ run_tape() {
     # Launch the app with --test-mode for reproducible state (no bookmarks/settings)
     log_info "🚀 Launching $TERMINAL_TYPE..."
     WINDOW_TITLE="VHS_TEST_${CURRENT_TAPE}"
-    # Quote args to handle spaces in file paths
+
+    # Configure window size (non-maximize needs resize after launch)
+    if [ -n "$TAPE_WINDOW_PERCENT" ]; then
+        GHOSTTY_MAXIMIZE=false
+    else
+        GHOSTTY_MAXIMIZE=true
+    fi
+
+    # Set working directory for nofile mode (app scans cwd for books)
+    if [ "$TAPE_NOFILE" = "true" ]; then
+        GHOSTTY_WORKING_DIR="$PROJECT_ROOT"
+    else
+        GHOSTTY_WORKING_DIR=""
+    fi
+
+    # Build launch arguments
     local quoted_args=""
-    for arg in "$test_file" "--test-mode"; do
-        quoted_args+=" $(printf %q "$arg")"
-    done
+    if [ "$TAPE_NOFILE" = "true" ]; then
+        quoted_args=" --test-mode"
+    else
+        for arg in "$test_file" "--test-mode"; do
+            quoted_args+=" $(printf %q "$arg")"
+        done
+    fi
     local window_id=$(term_launch "$WINDOW_TITLE" "$binary" "$quoted_args")
 
     if [ -z "$window_id" ]; then
@@ -421,6 +521,13 @@ run_tape() {
 
     # Small delay for app to fully render
     sleep 1
+
+    # Resize window if a specific size was requested
+    if [ -n "$TAPE_WINDOW_PERCENT" ] && [ "$TERMINAL_TYPE" = "ghostty" ]; then
+        log_info "Resizing window to ${TAPE_WINDOW_PERCENT}%"
+        resize_ghostty_window "$TAPE_WINDOW_PERCENT"
+        sleep 0.5
+    fi
 
     # Execute each command
     # Use while loop with redirect to avoid subshell (preserves array modifications)

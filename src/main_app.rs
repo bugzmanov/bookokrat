@@ -2423,6 +2423,33 @@ impl App {
                     .toggle_selected_expansion();
                 false
             }
+            NavigationPanelAction::ToggleSortOrder => {
+                use crate::settings::{BookSortOrder, get_book_sort_order, set_book_sort_order};
+                let new_order = match get_book_sort_order() {
+                    BookSortOrder::ByName => BookSortOrder::ByType,
+                    BookSortOrder::ByType => BookSortOrder::ByName,
+                };
+                set_book_sort_order(new_order);
+                let current_path = self.navigation_panel.current_book_path.clone();
+                self.navigation_panel
+                    .book_list
+                    .set_books(self.book_manager.get_books());
+                if let Some(ref path) = current_path {
+                    if let Some(idx) = self
+                        .navigation_panel
+                        .book_list
+                        .find_book_index_by_path(path)
+                    {
+                        self.navigation_panel.book_list.set_selection_to_index(idx);
+                    }
+                }
+                let label = match new_order {
+                    BookSortOrder::ByName => "by name",
+                    BookSortOrder::ByType => "by type",
+                };
+                self.show_info(format!("Sort: {label}"));
+                false
+            }
         }
     }
 

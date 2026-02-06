@@ -38,6 +38,17 @@ pub struct YamlTheme {
     pub base0f: String,
 }
 
+/// Book list sort order
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BookSortOrder {
+    /// Sort alphabetically by name
+    #[default]
+    ByName,
+    /// Group by type: PDFs first, then EPUBs, each sorted by name
+    ByType,
+}
+
 /// PDF render mode for Kitty terminals
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +101,9 @@ pub struct Settings {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_themes: Vec<YamlTheme>,
+
+    #[serde(default)]
+    pub book_sort_order: BookSortOrder,
 }
 
 fn default_true() -> bool {
@@ -121,6 +135,7 @@ impl Default for Settings {
             pdf_enabled: true,
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
+            book_sort_order: BookSortOrder::default(),
         }
     }
 }
@@ -255,6 +270,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "pdf_settings_configured: {}\n",
         settings.pdf_settings_configured
     ));
+    let sort_str = match settings.book_sort_order {
+        BookSortOrder::ByName => "by_name",
+        BookSortOrder::ByType => "by_type",
+    };
+    content.push_str(&format!("book_sort_order: {}\n", sort_str));
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -427,6 +447,20 @@ pub fn is_pdf_settings_configured() -> bool {
 pub fn set_pdf_settings_configured(configured: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.pdf_settings_configured = configured;
+    }
+    save_settings();
+}
+
+pub fn get_book_sort_order() -> BookSortOrder {
+    SETTINGS
+        .read()
+        .map(|s| s.book_sort_order)
+        .unwrap_or_default()
+}
+
+pub fn set_book_sort_order(order: BookSortOrder) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.book_sort_order = order;
     }
     save_settings();
 }

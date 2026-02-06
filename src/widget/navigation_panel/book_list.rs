@@ -2,6 +2,7 @@
 use crate::book_manager::BookFormat;
 use crate::book_manager::{BookInfo, BookManager};
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
+use crate::settings::{BookSortOrder, get_book_sort_order};
 use crate::theme::{Base16Palette, theme_background};
 use ratatui::{
     Frame,
@@ -318,10 +319,11 @@ impl BookList {
             Style::default().bg(selection_bg).fg(selection_fg)
         };
 
-        let title = if is_calibre_mode {
-            "Books [Calibre]"
-        } else {
-            "Books"
+        let title = match (is_calibre_mode, get_book_sort_order()) {
+            (true, BookSortOrder::ByType) => "Books [Calibre] [by type]",
+            (true, BookSortOrder::ByName) => "Books [Calibre]",
+            (false, BookSortOrder::ByType) => "Books [by type]",
+            (false, BookSortOrder::ByName) => "Books",
         };
 
         let files = List::new(items)

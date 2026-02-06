@@ -22,6 +22,7 @@ pub enum NavigationPanelAction {
     },
     ToggleSection,
     SwitchToBookList,
+    ToggleSortOrder,
     Bypass, // when the component assumes the upper layer should handle the action
 }
 
@@ -250,6 +251,9 @@ impl NavigationPanel {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.move_selection_up();
                 None
+            }
+            KeyCode::Char('S') if self.mode == NavigationMode::BookSelection => {
+                Some(NavigationPanelAction::ToggleSortOrder)
             }
             KeyCode::Char('H') => {
                 self.handle_shift_h();
