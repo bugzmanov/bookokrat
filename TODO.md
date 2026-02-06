@@ -6,11 +6,7 @@ PDF issue:
  [ ] Trim PDF margins mode
  [ ] DO not invert image colors mode
  [ ] links jumping with jump back is super unstable: after 1-2 successfull jumps back it looses capability of jumping (pdf links)
- [ ] Bug: closing pdf brings cursor to the beginnning of the book list  
- [ ] In pdf it should be possible to copy chapter as a whole not just a page.
  [ ] MAYBE: copy the whole book: pdf & epub. 
- [ ] Book issues: 
-     - data and reality ToC not detected
 
 Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.

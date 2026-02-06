@@ -119,6 +119,7 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  c / Ctrl+C    Copy selected text                                           │
 │  Space+c       Copy chapter (EPUB) / extract page text (PDF)                │
+│  Space+C       Copy TOC selection (PDF, requires TOC focus)                 │
 │  Space+z       Copy debug transcript                                        │
 │  a             Add/edit comment on selection                                │
 │  d             Delete comment under cursor                                  │

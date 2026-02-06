@@ -33,7 +33,7 @@ use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 #[cfg(feature = "pdf")]
 use crate::pdf::{
     CellSize, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY, DEFAULT_PREFETCH_RADIUS,
-    DEFAULT_WORKERS, RenderService,
+    DEFAULT_WORKERS, PageSelectionBounds, RenderService, TocTarget,
 };
 #[cfg(feature = "pdf")]
 use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
@@ -3228,6 +3228,33 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " C" => {
+                // Handle Space->C to copy selected TOC item in PDF (only works when TOC is focused)
+                if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        // Only works when navigation panel is focused and in TOC mode
+                        if self.is_main_panel(MainPanel::NavigationList)
+                            && self.navigation_panel.mode
+                                == crate::navigation_panel::NavigationMode::TableOfContents
+                        {
+                            self.copy_pdf_toc_selection();
+                        } else {
+                            self.notifications
+                                .warn("Space+C: Navigate to TOC first (Tab to switch)");
+                        }
+                    }
+                } else if self.is_main_panel(MainPanel::Content) {
+                    // For EPUB, same as Space+c
+                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
+                        debug!("Copy chapter failed: {e}");
+                    } else {
+                        debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             " o" => {
                 // Handle Space->o to open current EPUB with system viewer (global)
                 self.open_with_system_viewer();
@@ -4976,6 +5003,169 @@ impl App {
         PdfEventResult {
             handled: true,
             action,
+        }
+    }
+
+    /// Copy pages for the selected TOC item in PDF
+    #[cfg(feature = "pdf")]
+    fn copy_pdf_toc_selection(&mut self) {
+        use crate::navigation_panel::{SelectedTocItem, TocItem};
+
+        let Some(pdf_reader) = self.pdf_reader.as_ref() else {
+            return;
+        };
+        let Some(service) = self.pdf_service.as_mut() else {
+            return;
+        };
+
+        let page_count = pdf_reader.rendered.len();
+        let toc_entries = &pdf_reader.toc_entries;
+        let page_numbers = &pdf_reader.page_numbers;
+
+        // Get the selected TOC item
+        let selected = self.navigation_panel.table_of_contents.get_selected_item();
+        let Some(SelectedTocItem::TocItem(toc_item)) = selected else {
+            self.notifications.warn("No TOC item selected");
+            return;
+        };
+
+        // Extract all pages covered by this TOC item (including children for sections)
+        let pages = Self::collect_toc_item_pages(toc_item, toc_entries, page_count, page_numbers);
+
+        if pages.is_empty() {
+            self.notifications.warn("No pages found for this TOC item");
+            return;
+        }
+
+        // Create bounds for all pages
+        let bounds: Vec<PageSelectionBounds> = pages
+            .iter()
+            .map(|&page| PageSelectionBounds {
+                page,
+                start_x: 0.0,
+                end_x: f32::MAX,
+                min_y: 0.0,
+                max_y: f32::MAX,
+            })
+            .collect();
+
+        let title = toc_item.title();
+        let page_info = if pages.len() == 1 {
+            format!("page {}", pages[0] + 1)
+        } else {
+            format!("{} pages", pages.len())
+        };
+
+        service.extract_text(bounds);
+        self.notifications
+            .info(format!("Extracting \"{title}\" ({page_info})..."));
+    }
+
+    /// Collect all pages covered by a TOC item (including children for sections)
+    #[cfg(feature = "pdf")]
+    fn collect_toc_item_pages(
+        toc_item: &crate::navigation_panel::TocItem,
+        toc_entries: &[crate::pdf::TocEntry],
+        page_count: usize,
+        page_numbers: &crate::pdf::PageNumberTracker,
+    ) -> Vec<usize> {
+        use crate::navigation_panel::TocItem;
+
+        let map_toc_target_to_page = |target: &TocTarget| -> Option<usize> {
+            match target {
+                TocTarget::InternalPage(page) => Some(*page),
+                TocTarget::PrintedPage(printed) => page_numbers
+                    .map_printed_to_pdf(*printed, page_count)
+                    .or_else(|| printed.checked_sub(1).filter(|&p| p < page_count)),
+                TocTarget::External(_) => None,
+            }
+        };
+
+        // Parse page number from href format "pdf:page:N" or "pdf:printed:N"
+        // For printed pages, convert to actual PDF page index
+        let parse_page_from_href = |href: Option<&str>| -> Option<usize> {
+            let h = href?;
+            if let Some(page_str) = h.strip_prefix("pdf:page:") {
+                page_str.parse().ok()
+            } else if let Some(printed_str) = h.strip_prefix("pdf:printed:") {
+                let printed: usize = printed_str.parse().ok()?;
+                // Try to map via page_numbers, fallback to printed-1 if not available
+                page_numbers
+                    .map_printed_to_pdf(printed, page_count)
+                    .or_else(|| printed.checked_sub(1).filter(|&p| p < page_count))
+            } else {
+                None
+            }
+        };
+
+        // Get the start page for this item
+        let start_page = parse_page_from_href(toc_item.href());
+        let entry_index = start_page.and_then(|start| {
+            let title = toc_item.title().trim();
+            toc_entries
+                .iter()
+                .position(|entry| {
+                    map_toc_target_to_page(&entry.target) == Some(start) && entry.title.trim() == title
+                })
+                .or_else(|| {
+                    toc_entries
+                        .iter()
+                        .position(|entry| map_toc_target_to_page(&entry.target) == Some(start))
+                })
+        });
+
+        let next_page_after_entry = |idx: usize, start: usize| -> Option<usize> {
+            toc_entries
+                .iter()
+                .skip(idx + 1)
+                .filter_map(|entry| map_toc_target_to_page(&entry.target))
+                .find(|&page| page > start)
+        };
+
+        match toc_item {
+            TocItem::Chapter { .. } => {
+                // For a chapter (leaf), return just the pages from this chapter to the next
+                if let Some(start) = start_page {
+                    let end = entry_index
+                        .and_then(|idx| next_page_after_entry(idx, start))
+                        .unwrap_or(page_count);
+                    (start..end).collect()
+                } else {
+                    vec![]
+                }
+            }
+            TocItem::Section { children, .. } => {
+                // For a section, collect pages from this section and all children
+                let mut pages = Vec::new();
+
+                // Add pages from the section itself (if it has content)
+                if let Some(start) = start_page {
+                    // Find the first child's page to determine this section's own content range
+                    let first_child_page = children
+                        .iter()
+                        .find_map(|child| parse_page_from_href(child.href()));
+
+                    let section_end = first_child_page
+                        .or_else(|| entry_index.and_then(|idx| next_page_after_entry(idx, start)))
+                        .unwrap_or(page_count);
+
+                    pages.extend(start..section_end);
+                }
+
+                // Recursively collect pages from children
+                for child in children {
+                    pages.extend(Self::collect_toc_item_pages(
+                        child,
+                        toc_entries,
+                        page_count,
+                        page_numbers,
+                    ));
+                }
+
+                pages.sort_unstable();
+                pages.dedup();
+                pages
+            }
         }
     }
 
