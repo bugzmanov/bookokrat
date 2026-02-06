@@ -1028,7 +1028,8 @@ The application primarily uses the Markdown AST-based pipeline through MarkdownT
 - `Space+d`: Show book statistics popup
 - `Space+o`: Open current book in external system EPUB reader
 - `Space+s`: Toggle raw HTML view
-- `Space+c`: Copy entire chapter to clipboard
+- `Space+c`: Copy entire chapter (EPUB) / extract page text (PDF)
+- `Space+C`: Copy selected TOC item (PDF, requires TOC focus)
 - `Space+z`: Copy debug transcript
 - `Space+f`: Reopen last book-wide search
 - `Space+F`: Start fresh book-wide search

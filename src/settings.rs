@@ -38,6 +38,17 @@ pub struct YamlTheme {
     pub base0f: String,
 }
 
+/// Book list sort order
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum BookSortOrder {
+    /// Sort alphabetically by name
+    #[default]
+    ByName,
+    /// Group by type: PDFs first, then EPUBs, each sorted by name
+    ByType,
+}
+
 /// PDF render mode for Kitty terminals
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +80,9 @@ pub struct Settings {
     #[serde(default)]
     pub margin: u16,
 
+    #[serde(default)]
+    pub transparent_background: bool,
+
     #[serde(default = "default_pdf_scale")]
     pub pdf_scale: f32,
 
@@ -87,6 +101,9 @@ pub struct Settings {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_themes: Vec<YamlTheme>,
+
+    #[serde(default)]
+    pub book_sort_order: BookSortOrder,
 }
 
 fn default_true() -> bool {
@@ -111,12 +128,14 @@ impl Default for Settings {
             version: CURRENT_VERSION,
             theme: default_theme(),
             margin: 0,
+            transparent_background: false,
             pdf_scale: default_pdf_scale(),
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
             pdf_enabled: true,
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
+            book_sort_order: BookSortOrder::default(),
         }
     }
 }
@@ -235,6 +254,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(&format!("version: {}\n", settings.version));
     content.push_str(&format!("theme: \"{}\"\n", settings.theme));
     content.push_str(&format!("margin: {}\n", settings.margin));
+    content.push_str(&format!(
+        "transparent_background: {}\n",
+        settings.transparent_background
+    ));
     content.push_str(&format!("pdf_scale: {}\n", settings.pdf_scale));
     content.push_str(&format!("pdf_pan_shift: {}\n", settings.pdf_pan_shift));
     let mode_str = match settings.pdf_render_mode {
@@ -247,6 +270,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "pdf_settings_configured: {}\n",
         settings.pdf_settings_configured
     ));
+    let sort_str = match settings.book_sort_order {
+        BookSortOrder::ByName => "by_name",
+        BookSortOrder::ByType => "by_type",
+    };
+    content.push_str(&format!("book_sort_order: {}\n", sort_str));
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -338,6 +366,20 @@ pub fn set_margin(margin: u16) {
     save_settings();
 }
 
+pub fn is_transparent_background() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.transparent_background)
+        .unwrap_or(false)
+}
+
+pub fn set_transparent_background(transparent: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.transparent_background = transparent;
+    }
+    save_settings();
+}
+
 pub fn get_custom_themes() -> Vec<YamlTheme> {
     SETTINGS
         .read()
@@ -405,6 +447,20 @@ pub fn is_pdf_settings_configured() -> bool {
 pub fn set_pdf_settings_configured(configured: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.pdf_settings_configured = configured;
+    }
+    save_settings();
+}
+
+pub fn get_book_sort_order() -> BookSortOrder {
+    SETTINGS
+        .read()
+        .map(|s| s.book_sort_order)
+        .unwrap_or_default()
+}
+
+pub fn set_book_sort_order(order: BookSortOrder) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.book_sort_order = order;
     }
     save_settings();
 }

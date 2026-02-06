@@ -171,14 +171,26 @@ impl BookSearch {
             }
             KeyCode::Char(c) => {
                 // In input mode, all characters including 'j' and 'k' should be typed
-                self.search_input.insert(self.cursor_position, c);
+                // cursor_position is a character index, convert to byte index for insert
+                let byte_idx = self
+                    .search_input
+                    .char_indices()
+                    .nth(self.cursor_position)
+                    .map(|(i, _)| i)
+                    .unwrap_or(self.search_input.len());
+                self.search_input.insert(byte_idx, c);
                 self.cursor_position += 1;
                 self.schedule_search();
             }
             KeyCode::Backspace => {
                 if self.cursor_position > 0 {
                     self.cursor_position -= 1;
-                    self.search_input.remove(self.cursor_position);
+                    // Convert character index to byte index for remove
+                    if let Some((byte_idx, _)) =
+                        self.search_input.char_indices().nth(self.cursor_position)
+                    {
+                        self.search_input.remove(byte_idx);
+                    }
                     self.schedule_search();
                 }
             }
@@ -186,7 +198,8 @@ impl BookSearch {
                 self.cursor_position = self.cursor_position.saturating_sub(1);
             }
             KeyCode::Right => {
-                self.cursor_position = (self.cursor_position + 1).min(self.search_input.len());
+                let char_count = self.search_input.chars().count();
+                self.cursor_position = (self.cursor_position + 1).min(char_count);
             }
             _ => {}
         }

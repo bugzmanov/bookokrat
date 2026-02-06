@@ -42,6 +42,8 @@ pub enum BuiltinTheme {
     CatppuccinMocha,
     Kanagawa,
     KanagawaDragon,
+    RosepineMoon,
+    Moonfly,
 }
 
 impl BuiltinTheme {
@@ -51,6 +53,8 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha => "Catppuccin Mocha",
             BuiltinTheme::Kanagawa => "Kanagawa",
             BuiltinTheme::KanagawaDragon => "Kanagawa Dragon",
+            BuiltinTheme::RosepineMoon => "Rosepine Moon",
+            BuiltinTheme::Moonfly => "Moonfly",
         }
     }
 
@@ -60,6 +64,8 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha => &CATPPUCCIN_MOCHA_PALETTE,
             BuiltinTheme::Kanagawa => &KANAGAWA_PALETTE,
             BuiltinTheme::KanagawaDragon => &KANAGAWA_DRAGON_PALETTE,
+            BuiltinTheme::RosepineMoon => &ROSEPINE_MOON_PALETTE,
+            BuiltinTheme::Moonfly => &MOONFLY_PALETTE,
         }
     }
 
@@ -69,6 +75,8 @@ impl BuiltinTheme {
             BuiltinTheme::CatppuccinMocha,
             BuiltinTheme::Kanagawa,
             BuiltinTheme::KanagawaDragon,
+            BuiltinTheme::RosepineMoon,
+            BuiltinTheme::Moonfly,
         ]
     }
 }
@@ -239,6 +247,15 @@ pub fn current_theme_name() -> String {
     theme_name(current_theme_index())
 }
 
+/// Get effective background color (transparent or theme color)
+pub fn theme_background() -> Color {
+    if settings::is_transparent_background() {
+        Color::Reset
+    } else {
+        current_theme().base_00
+    }
+}
+
 /// Get current theme palette
 pub fn current_theme() -> &'static Base16Palette {
     let index = current_theme_index();
@@ -367,6 +384,46 @@ static KANAGAWA_DRAGON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base1
     base_0d: smart_color(0x8ba4b0),
     base_0e: smart_color(0xa292a3),
     base_0f: smart_color(0x7aa89f),
+});
+
+// Rosepine Moon theme - romantic palette with rose/gold/pine
+static ROSEPINE_MOON_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
+    base_00: smart_color(0x18191a),
+    base_01: smart_color(0x212223),
+    base_02: smart_color(0x363738),
+    base_03: smart_color(0x6e6a86),
+    base_04: smart_color(0x908caa),
+    base_05: smart_color(0xe0def4),
+    base_06: smart_color(0xe0def4),
+    base_07: smart_color(0xe0def4),
+    base_08: smart_color(0xeb6f92),
+    base_09: smart_color(0xc4a7e7),
+    base_0a: smart_color(0xea9a97),
+    base_0b: smart_color(0xf6c177),
+    base_0c: smart_color(0x9ccfd8),
+    base_0d: smart_color(0x3e8fb0),
+    base_0e: smart_color(0xc4a7e7),
+    base_0f: smart_color(0x908caa),
+});
+
+// Moonfly theme - deep black with vibrant accent colors
+static MOONFLY_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
+    base_00: smart_color(0x080808), // black - main background
+    base_01: smart_color(0x1c1c1c), // grey11 - lighter background
+    base_02: smart_color(0x323437), // grey0 - selection background
+    base_03: smart_color(0x808080), // grey50 - comments
+    base_04: smart_color(0x9e9e9e), // grey62 - dark foreground
+    base_05: smart_color(0xc6c6c6), // white - default foreground
+    base_06: smart_color(0xe4e4e4), // grey89 - light foreground
+    base_07: smart_color(0xe4e4e4), // grey89 - lightest
+    base_08: smart_color(0xff5189), // crimson - red
+    base_09: smart_color(0xde935f), // orange
+    base_0a: smart_color(0xe3c78a), // yellow
+    base_0b: smart_color(0x8cc85f), // green
+    base_0c: smart_color(0x79dac8), // turquoise - cyan
+    base_0d: smart_color(0x80a0ff), // blue - signature moonfly blue
+    base_0e: smart_color(0xcf87e8), // violet - purple
+    base_0f: smart_color(0xf09479), // coral - brown/extra
 });
 
 // Backward compatibility alias

@@ -137,11 +137,31 @@ fn create_test_failure_handler(
     }
 }
 
+fn open_test_book(app: &mut App, filename: &str) {
+    let path = app
+        .book_manager
+        .books
+        .iter()
+        .find(|b| b.path.ends_with(filename))
+        .unwrap_or_else(|| panic!("test book {filename} not found in testdata"))
+        .path
+        .clone();
+    let _ = app.open_book_for_reading_by_path(&path);
+}
+
+fn open_first_book(app: &mut App) {
+    let path = app
+        .book_manager
+        .books
+        .first()
+        .expect("no books found in test directory")
+        .path
+        .clone();
+    let _ = app.open_book_for_reading_by_path(&path);
+}
+
 fn open_first_test_book(app: &mut App) {
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(app, "digital_frontier.epub");
 }
 
 fn seed_sample_comments(app: &mut App) {
@@ -344,10 +364,7 @@ fn test_inline_comment_rendering_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
     let chapter_href = app
@@ -439,10 +456,7 @@ fn test_list_comment_rendering_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
     let chapter_href = app
@@ -581,10 +595,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
     let chapter_href = app
@@ -712,10 +723,7 @@ fn test_list_comment_rendering_complex_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
     let chapter_href = app
@@ -856,11 +864,7 @@ fn test_content_scrolling_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-        // Force animation to complete for testing
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Perform scrolling - 5 lines down
     for _ in 0..5 {
@@ -920,13 +924,8 @@ fn test_chapter_title_normal_length_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the 7-chapter test book to get chapter with title
-    if let Some(book_info) = app.book_manager.get_book_info(1) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-        // Switch to content focus like runtime behavior after loading
-        app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::Content);
-        // Force animation to complete for testing
-    }
+    open_test_book(&mut app, "test_book_7_chapters.epub");
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::Content);
 
     terminal
         .draw(|f| {
@@ -980,10 +979,7 @@ fn test_chapter_title_narrow_terminal_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the 7-chapter test book to get chapter with title
-    if let Some(book_info) = app.book_manager.get_book_info(1) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "test_book_7_chapters.epub");
 
     app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
 
@@ -1103,10 +1099,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Scroll to the bottom first using keyboard
     for _ in 0..50 {
@@ -1174,10 +1167,7 @@ fn test_mouse_event_batching_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Create a simulated event source with many rapid scroll events
     let events = vec![
@@ -1268,10 +1258,7 @@ fn test_horizontal_scroll_handling_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Create a simulated event source with many rapid horizontal scroll events
     // This simulates the "5 log scrolls" that cause freezing
@@ -1399,10 +1386,7 @@ fn test_edge_case_mouse_coordinates_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Create a simulated event source with edge case coordinates that would trigger crossterm overflow bug
     let events = vec![
@@ -1497,10 +1481,7 @@ fn test_text_selection_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -1585,10 +1566,7 @@ fn test_text_selection_with_auto_scroll_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -1677,10 +1655,7 @@ fn test_continuous_auto_scroll_down_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -1794,10 +1769,7 @@ fn test_continuous_auto_scroll_up_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -1917,10 +1889,7 @@ fn test_timer_based_auto_scroll_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -2045,10 +2014,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -2162,10 +2128,7 @@ fn test_double_click_word_selection_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -2262,10 +2225,7 @@ fn test_triple_click_paragraph_selection_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and switch to content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // First draw to initialize the content area
     terminal
@@ -2378,10 +2338,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load the first book and ensure we're in content view
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "digital_frontier.epub");
 
     // Ensure content panel has focus
     app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::Content);
@@ -2467,10 +2424,7 @@ fn test_toc_navigation_bug_svg() {
     let (mut app, _comments_dir) = create_test_app_isolated();
 
     // Load a book that has hierarchical TOC structure
-    if let Some(book_info) = app.book_manager.get_book_info(1) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_test_book(&mut app, "test_book_7_chapters.epub");
 
     // Start with file list panel focused to show the TOC
     app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::NavigationList);
@@ -2537,8 +2491,9 @@ fn test_toc_back_to_books_list_svg() {
     let mut terminal = create_test_terminal(100, 30);
     let (mut app, _comments_dir) = create_test_app_isolated();
 
-    // Load a book to enter TOC mode
-    app.press_key(crossterm::event::KeyCode::Enter);
+    // Load a deterministic book to enter TOC mode
+    open_test_book(&mut app, "digital_frontier.epub");
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::NavigationList);
 
     // Navigate to "<< Books List" (first item)
     // Since we're already at the top, just press Enter
@@ -2575,8 +2530,9 @@ fn test_toc_chapter_navigation_svg() {
     let mut terminal = create_test_terminal(100, 30);
     let (mut app, _comments_dir) = create_test_app_isolated();
 
-    // Load a book to enter TOC mode
-    app.press_key(crossterm::event::KeyCode::Enter);
+    // Load a deterministic book to enter TOC mode
+    open_test_book(&mut app, "digital_frontier.epub");
+    app.focused_panel = bookokrat::FocusedPanel::Main(bookokrat::MainPanel::NavigationList);
 
     // Navigate down to a chapter (skip "<< Books List")
     app.press_char_times('j', 3); // Move to 3rd chapter
@@ -2701,10 +2657,7 @@ fn test_mathml_content_rendering_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -2790,6 +2743,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             total_chapters: Some(10 + (i % 20)),
             pdf_page: None,
             pdf_zoom: None,
+            pdf_pan: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2805,6 +2759,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             total_chapters: Some(10 + (i % 20)),
             pdf_page: None,
             pdf_zoom: None,
+            pdf_pan: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2822,6 +2777,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             bookmark.chapter_index,
             bookmark.total_chapters,
             bookmark.pdf_page,
+            None,
             None,
         );
     }
@@ -2936,10 +2892,7 @@ fn test_headings_h1_to_h6_rendering_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3046,10 +2999,7 @@ fn test_table_with_links_and_linebreaks_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3215,10 +3165,7 @@ fetchData('https://api.example.com/data')
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3291,10 +3238,7 @@ fn test_epub_type_attributes_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3382,10 +3326,7 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3452,10 +3393,7 @@ Q = xW<sub>Q</sub></pre>
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3568,10 +3506,7 @@ fn test_definition_list_with_complex_content_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3811,10 +3746,7 @@ fn test_lists_with_tables_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     terminal
         .draw(|f| {
@@ -3916,10 +3848,7 @@ hello_world()</code></pre>
     );
 
     // Load the test document
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
 
     // Initial draw to establish content
     terminal
@@ -4268,10 +4197,7 @@ fn test_normal_mode_visual_selection_yank_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
     terminal
@@ -4355,10 +4281,7 @@ fn test_normal_mode_jump_to_bottom_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
     terminal
@@ -4435,10 +4358,7 @@ fn test_normal_mode_counted_motion_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
     terminal
@@ -4531,10 +4451,7 @@ fn test_image_inside_anchor_link_svg() {
         Some(comments_dir.path()),
     );
 
-    if let Some(book_info) = app.book_manager.get_book_info(0) {
-        let path = book_info.path.clone();
-        let _ = app.open_book_for_reading_by_path(&path);
-    }
+    open_first_book(&mut app);
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
 
     terminal

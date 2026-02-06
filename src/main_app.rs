@@ -20,7 +20,7 @@ use crate::search_engine::{SearchEngine, SearchLine};
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::{current_theme, current_theme_name};
+use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use image::GenericImageView;
@@ -33,7 +33,7 @@ use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 #[cfg(feature = "pdf")]
 use crate::pdf::{
     CellSize, DEFAULT_CACHE_SIZE, DEFAULT_CACHE_SIZE_KITTY, DEFAULT_PREFETCH_RADIUS,
-    DEFAULT_WORKERS, RenderService,
+    DEFAULT_WORKERS, PageSelectionBounds, RenderService, TocTarget,
 };
 #[cfg(feature = "pdf")]
 use crate::widget::pdf_reader::{InputAction, InputOutcome, PdfDisplayPlan, PdfReaderState};
@@ -258,6 +258,11 @@ impl App {
 
     /// Close current popup and return focus to previous main panel
     fn close_popup_to_previous(&mut self) {
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::ImagePopup) {
+            // Force one cleanup pass when closing image popup so stale overlay
+            // fragments are removed before returning to content view.
+            self.text_reader.request_overlay_cleanup_on_next_frame();
+        }
         let panel = if self.zen_mode {
             MainPanel::Content
         } else {
@@ -549,14 +554,8 @@ impl App {
     /// Clear PDF graphics from terminal when switching away from PDF mode
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
-        use std::io::Write;
-        if is_kitty {
-            // Send Kitty graphics protocol command to delete all images
-            // Format: ESC _G a=d,d=A,q=2 ESC \
-            // a=d: action=delete, d=A: delete all from memory, q=2: quiet mode
-            let delete_cmd = b"\x1b_Ga=d,d=A,q=2\x1b\\";
-            let _ = stdout().write_all(delete_cmd);
-            let _ = stdout().flush();
+        if is_kitty || crate::terminal_overlay::konsole_kitty_delete_hack_enabled() {
+            crate::terminal_overlay::emit_kitty_delete_all();
         }
         // For iTerm2/Sixel, images are inline and will be overwritten by new content
     }
@@ -817,6 +816,12 @@ impl App {
 
         // Detect terminal protocol and capabilities
         let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
+        // Apply user protocol override if set
+        if let Some(forced) = crate::terminal::protocol_override_from_env() {
+            if let Some(ref mut p) = picker {
+                p.set_protocol_type(forced);
+            }
+        }
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal(),
@@ -885,6 +890,7 @@ impl App {
             initial_page = page_count - 1;
         }
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
+        let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -916,7 +922,7 @@ impl App {
         // Create PDF reader state with persisted settings
         // Prefer per-book zoom from bookmark, fall back to global setting
         let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
-        let pdf_pan_shift = crate::settings::get_pdf_pan_shift();
+        let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1070,7 +1076,7 @@ impl App {
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
-            current_theme().base_00,
+            theme_background(),
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.pdf_pending_display,
@@ -1317,6 +1323,7 @@ impl App {
                 Some(self.text_reader.get_current_node_index()),
                 Some(book.current_chapter()),
                 Some(book.total_chapters()),
+                None,
                 None,
                 None,
             );
@@ -2416,6 +2423,33 @@ impl App {
                     .toggle_selected_expansion();
                 false
             }
+            NavigationPanelAction::ToggleSortOrder => {
+                use crate::settings::{BookSortOrder, get_book_sort_order, set_book_sort_order};
+                let new_order = match get_book_sort_order() {
+                    BookSortOrder::ByName => BookSortOrder::ByType,
+                    BookSortOrder::ByType => BookSortOrder::ByName,
+                };
+                set_book_sort_order(new_order);
+                let current_path = self.navigation_panel.current_book_path.clone();
+                self.navigation_panel
+                    .book_list
+                    .set_books(self.book_manager.get_books());
+                if let Some(ref path) = current_path {
+                    if let Some(idx) = self
+                        .navigation_panel
+                        .book_list
+                        .find_book_index_by_path(path)
+                    {
+                        self.navigation_panel.book_list.set_selection_to_index(idx);
+                    }
+                }
+                let label = match new_order {
+                    BookSortOrder::ByName => "by name",
+                    BookSortOrder::ByType => "by type",
+                };
+                self.show_info(format!("Sort: {label}"));
+                false
+            }
         }
     }
 
@@ -2430,7 +2464,7 @@ impl App {
 
         self.terminal_size = f.area();
 
-        let background_block = Block::default().style(Style::default().bg(current_theme().base_00));
+        let background_block = Block::default().style(Style::default().bg(theme_background()));
         f.render_widget(background_block, f.area());
 
         if self.zen_mode {
@@ -2440,6 +2474,7 @@ impl App {
                 self.render_pdf_in_area(f, f.area());
                 pdf_area = Some(f.area());
             } else if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     f.area(),
@@ -2448,12 +2483,14 @@ impl App {
                     current_theme(),
                     true, // always focused in zen mode
                     true, // zen mode
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
             }
             #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     f.area(),
@@ -2462,6 +2499,7 @@ impl App {
                     current_theme(),
                     true, // always focused in zen mode
                     true, // zen_mode: show search hints on border
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, f.area(), "Select a file to view its content");
@@ -2492,6 +2530,7 @@ impl App {
                 self.render_pdf_in_area(f, main_chunks[1]);
                 pdf_area = Some(main_chunks[1]);
             } else if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     main_chunks[1],
@@ -2500,12 +2539,14 @@ impl App {
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
                     false, // not zen mode
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
             }
             #[cfg(not(feature = "pdf"))]
             if let Some(ref book) = self.current_book {
+                let suppress_images = self.has_active_popup();
                 self.text_reader.render(
                     f,
                     main_chunks[1],
@@ -2514,6 +2555,7 @@ impl App {
                     current_theme(),
                     self.is_main_panel(MainPanel::Content),
                     false, // not zen_mode: search hints in help bar
+                    suppress_images,
                 );
             } else {
                 self.render_default_content(f, main_chunks[1], "Select a file to view its content");
@@ -2543,6 +2585,9 @@ impl App {
                     height: area.height.saturating_sub(2),
                 };
                 f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
+                // Konsole uses iTerm2 protocol but images are overlays that leak through.
+                // Emit Kitty delete-all to hide them when popup is shown.
+                crate::terminal_overlay::clear_konsole_images_if_needed();
             }
         }
 
@@ -2666,11 +2711,11 @@ impl App {
             .borders(Borders::ALL)
             .title("Content")
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
 
         let paragraph = Paragraph::new(content)
             .block(content_border)
-            .style(Style::default().fg(text_color).bg(current_theme().base_00));
+            .style(Style::default().fg(text_color).bg(theme_background()));
 
         f.render_widget(paragraph, area);
     }
@@ -2901,7 +2946,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
 
         let inner_area = block.inner(area);
         f.render_widget(block, area);
@@ -2914,7 +2959,7 @@ impl App {
         let left_para = Paragraph::new(left_content).style(
             Style::default()
                 .fg(current_theme().base_03)
-                .bg(current_theme().base_00),
+                .bg(theme_background()),
         );
         f.render_widget(left_para, inner_area);
 
@@ -2964,7 +3009,7 @@ impl App {
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
-            .style(Style::default().bg(current_theme().base_00));
+            .style(Style::default().bg(theme_background()));
         f.render_widget(right_para, inner_area);
     }
 
@@ -3201,6 +3246,33 @@ impl App {
                     }
                 } else if self.is_main_panel(MainPanel::Content) {
                     // Handle Space->c to copy entire chapter content
+                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
+                        debug!("Copy chapter failed: {e}");
+                    } else {
+                        debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " C" => {
+                // Handle Space->C to copy selected TOC item in PDF (only works when TOC is focused)
+                if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        // Only works when navigation panel is focused and in TOC mode
+                        if self.is_main_panel(MainPanel::NavigationList)
+                            && self.navigation_panel.mode
+                                == crate::navigation_panel::NavigationMode::TableOfContents
+                        {
+                            self.copy_pdf_toc_selection();
+                        } else {
+                            self.notifications
+                                .warn("Space+C: Navigate to TOC first (Tab to switch)");
+                        }
+                    }
+                } else if self.is_main_panel(MainPanel::Content) {
+                    // For EPUB, same as Space+c
                     if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
                         debug!("Copy chapter failed: {e}");
                     } else {
@@ -4958,6 +5030,170 @@ impl App {
         PdfEventResult {
             handled: true,
             action,
+        }
+    }
+
+    /// Copy pages for the selected TOC item in PDF
+    #[cfg(feature = "pdf")]
+    fn copy_pdf_toc_selection(&mut self) {
+        use crate::navigation_panel::{SelectedTocItem, TocItem};
+
+        let Some(pdf_reader) = self.pdf_reader.as_ref() else {
+            return;
+        };
+        let Some(service) = self.pdf_service.as_mut() else {
+            return;
+        };
+
+        let page_count = pdf_reader.rendered.len();
+        let toc_entries = &pdf_reader.toc_entries;
+        let page_numbers = &pdf_reader.page_numbers;
+
+        // Get the selected TOC item
+        let selected = self.navigation_panel.table_of_contents.get_selected_item();
+        let Some(SelectedTocItem::TocItem(toc_item)) = selected else {
+            self.notifications.warn("No TOC item selected");
+            return;
+        };
+
+        // Extract all pages covered by this TOC item (including children for sections)
+        let pages = Self::collect_toc_item_pages(toc_item, toc_entries, page_count, page_numbers);
+
+        if pages.is_empty() {
+            self.notifications.warn("No pages found for this TOC item");
+            return;
+        }
+
+        // Create bounds for all pages
+        let bounds: Vec<PageSelectionBounds> = pages
+            .iter()
+            .map(|&page| PageSelectionBounds {
+                page,
+                start_x: 0.0,
+                end_x: f32::MAX,
+                min_y: 0.0,
+                max_y: f32::MAX,
+            })
+            .collect();
+
+        let title = toc_item.title();
+        let page_info = if pages.len() == 1 {
+            format!("page {}", pages[0] + 1)
+        } else {
+            format!("{} pages", pages.len())
+        };
+
+        service.extract_text(bounds);
+        self.notifications
+            .info(format!("Extracting \"{title}\" ({page_info})..."));
+    }
+
+    /// Collect all pages covered by a TOC item (including children for sections)
+    #[cfg(feature = "pdf")]
+    fn collect_toc_item_pages(
+        toc_item: &crate::navigation_panel::TocItem,
+        toc_entries: &[crate::pdf::TocEntry],
+        page_count: usize,
+        page_numbers: &crate::pdf::PageNumberTracker,
+    ) -> Vec<usize> {
+        use crate::navigation_panel::TocItem;
+
+        let map_toc_target_to_page = |target: &TocTarget| -> Option<usize> {
+            match target {
+                TocTarget::InternalPage(page) => Some(*page),
+                TocTarget::PrintedPage(printed) => page_numbers
+                    .map_printed_to_pdf(*printed, page_count)
+                    .or_else(|| printed.checked_sub(1).filter(|&p| p < page_count)),
+                TocTarget::External(_) => None,
+            }
+        };
+
+        // Parse page number from href format "pdf:page:N" or "pdf:printed:N"
+        // For printed pages, convert to actual PDF page index
+        let parse_page_from_href = |href: Option<&str>| -> Option<usize> {
+            let h = href?;
+            if let Some(page_str) = h.strip_prefix("pdf:page:") {
+                page_str.parse().ok()
+            } else if let Some(printed_str) = h.strip_prefix("pdf:printed:") {
+                let printed: usize = printed_str.parse().ok()?;
+                // Try to map via page_numbers, fallback to printed-1 if not available
+                page_numbers
+                    .map_printed_to_pdf(printed, page_count)
+                    .or_else(|| printed.checked_sub(1).filter(|&p| p < page_count))
+            } else {
+                None
+            }
+        };
+
+        // Get the start page for this item
+        let start_page = parse_page_from_href(toc_item.href());
+        let entry_index = start_page.and_then(|start| {
+            let title = toc_item.title().trim();
+            toc_entries
+                .iter()
+                .position(|entry| {
+                    map_toc_target_to_page(&entry.target) == Some(start)
+                        && entry.title.trim() == title
+                })
+                .or_else(|| {
+                    toc_entries
+                        .iter()
+                        .position(|entry| map_toc_target_to_page(&entry.target) == Some(start))
+                })
+        });
+
+        let next_page_after_entry = |idx: usize, start: usize| -> Option<usize> {
+            toc_entries
+                .iter()
+                .skip(idx + 1)
+                .filter_map(|entry| map_toc_target_to_page(&entry.target))
+                .find(|&page| page > start)
+        };
+
+        match toc_item {
+            TocItem::Chapter { .. } => {
+                // For a chapter (leaf), return just the pages from this chapter to the next
+                if let Some(start) = start_page {
+                    let end = entry_index
+                        .and_then(|idx| next_page_after_entry(idx, start))
+                        .unwrap_or(page_count);
+                    (start..end).collect()
+                } else {
+                    vec![]
+                }
+            }
+            TocItem::Section { children, .. } => {
+                // For a section, collect pages from this section and all children
+                let mut pages = Vec::new();
+
+                // Add pages from the section itself (if it has content)
+                if let Some(start) = start_page {
+                    // Find the first child's page to determine this section's own content range
+                    let first_child_page = children
+                        .iter()
+                        .find_map(|child| parse_page_from_href(child.href()));
+
+                    let section_end = first_child_page
+                        .or_else(|| entry_index.and_then(|idx| next_page_after_entry(idx, start)))
+                        .unwrap_or(page_count);
+
+                    pages.extend(start..section_end);
+                }
+
+                // Recursively collect pages from children
+                for child in children {
+                    pages.extend(Self::collect_toc_item_pages(
+                        child,
+                        toc_entries,
+                        page_count,
+                        page_numbers,
+                    ));
+                }
+
+                pages.sort_unstable();
+                pages.dedup();
+                pages
+            }
         }
     }
 

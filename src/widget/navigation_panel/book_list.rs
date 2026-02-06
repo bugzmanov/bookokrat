@@ -1,6 +1,9 @@
+#[cfg(feature = "pdf")]
+use crate::book_manager::BookFormat;
 use crate::book_manager::{BookInfo, BookManager};
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
-use crate::theme::Base16Palette;
+use crate::settings::{BookSortOrder, get_book_sort_order};
+use crate::theme::{Base16Palette, theme_background};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -71,6 +74,10 @@ impl BookList {
     pub fn set_selection_to_index(&mut self, index: usize) {
         self.selected = index;
         self.list_state.select(Some(index));
+    }
+
+    pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
+        self.book_infos.iter().position(|b| b.path == path)
     }
 
     pub fn scroll_down(&mut self, area_height: u16) {
@@ -194,12 +201,21 @@ impl BookList {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
-            // Determine base style for this book
+            // Check if this is a PDF
+            #[cfg(feature = "pdf")]
+            let is_pdf = book_info.format == BookFormat::Pdf;
+            #[cfg(not(feature = "pdf"))]
+            let is_pdf = false;
+
+            // Determine base style for this book (PDFs now have same color as EPUBs)
             let base_style = if Some(idx) == current_book_index {
                 Style::default().fg(palette.base_08) // Red for currently open book
             } else {
                 Style::default().fg(text_color)
             };
+
+            // PDF prefix style (magenta color)
+            let pdf_prefix_style = Style::default().fg(palette.base_0e);
 
             // Check if this item is a search match
             let is_search_match = self.search_state.is_match(idx);
@@ -218,6 +234,12 @@ impl BookList {
                     .unwrap_or(&empty_vec);
 
                 let mut spans = Vec::new();
+
+                // Add [pdf]prefix if this is a PDF
+                if is_pdf {
+                    spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                }
+
                 let text = &book_info.display_name;
 
                 // Build char-to-byte mapping for proper Unicode handling
@@ -277,10 +299,12 @@ impl BookList {
                 Line::from(spans)
             } else {
                 // No search active or not a match - render normally
-                Line::from(vec![Span::styled(
-                    book_info.display_name.clone(),
-                    base_style,
-                )])
+                let mut spans = Vec::new();
+                if is_pdf {
+                    spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                }
+                spans.push(Span::styled(book_info.display_name.clone(), base_style));
+                Line::from(spans)
             };
 
             items.push(ListItem::new(content));
@@ -295,10 +319,11 @@ impl BookList {
             Style::default().bg(selection_bg).fg(selection_fg)
         };
 
-        let title = if is_calibre_mode {
-            "Books [Calibre]"
-        } else {
-            "Books"
+        let title = match (is_calibre_mode, get_book_sort_order()) {
+            (true, BookSortOrder::ByType) => "Books [Calibre] [by type]",
+            (true, BookSortOrder::ByName) => "Books [Calibre]",
+            (false, BookSortOrder::ByType) => "Books [by type]",
+            (false, BookSortOrder::ByName) => "Books",
         };
 
         let files = List::new(items)
@@ -307,10 +332,10 @@ impl BookList {
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(palette.base_00)),
+                    .style(Style::default().bg(theme_background())),
             )
             .highlight_style(highlight_style)
-            .style(Style::default().bg(palette.base_00));
+            .style(Style::default().bg(theme_background()));
 
         f.render_stateful_widget(files, area, &mut self.list_state);
     }

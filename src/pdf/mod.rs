@@ -26,7 +26,11 @@ pub use normal_mode::{
     visual_rects_for_range,
 };
 pub use parsing::page_numbers::{PageNumberTracker, detect_page_number, sample_targets};
-pub use parsing::toc::{TocEntry, TocTarget};
+pub use parsing::toc::{
+    HeuristicsInfo, HierarchyInferenceInfo, LineScanInfo, OutlineInfo, PageExtractionInfo,
+    PageScanInfo, TocDiagnostics, TocEntry, TocSource, TocTarget, ValidationInfo, extract_toc,
+    extract_toc_with_diagnostics,
+};
 pub use request::{
     PageSelectionBounds, RenderParams, RenderRequest, RenderResponse, RequestId, WorkerFault,
 };

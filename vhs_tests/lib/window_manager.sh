@@ -14,6 +14,8 @@ GHOSTTY_PID=""          # PID of Ghostty process we launched
 GHOSTTY_PID_FILE=""     # PID file for shell process
 GHOSTTY_TEMP_SCRIPT=""  # Temp script file
 GHOSTTY_MANAGED=false   # True if we launched a managed instance
+GHOSTTY_MAXIMIZE=${GHOSTTY_MAXIMIZE:-true}    # Window maximize on launch
+GHOSTTY_WORKING_DIR=${GHOSTTY_WORKING_DIR:-}  # Working directory for launched process
 
 # Get all Ghostty window IDs currently on screen
 get_all_ghostty_window_ids() {
@@ -73,9 +75,15 @@ launch_ghostty() {
     GHOSTTY_TEMP_SCRIPT=$(mktemp)
     GHOSTTY_PID_FILE="${GHOSTTY_TEMP_SCRIPT}.pid"
 
+    local cd_cmd=""
+    if [ -n "$GHOSTTY_WORKING_DIR" ]; then
+        cd_cmd="cd $(printf %q "$GHOSTTY_WORKING_DIR")"
+    fi
+
     cat > "$GHOSTTY_TEMP_SCRIPT" << SCRIPT
 #!/bin/bash
 echo \$\$ > "$GHOSTTY_PID_FILE"
+$cd_cmd
 "$command" $args
 # Keep shell open briefly for final capture
 sleep 2
@@ -83,11 +91,15 @@ SCRIPT
     chmod +x "$GHOSTTY_TEMP_SCRIPT"
 
     # Launch Ghostty via open (required on macOS)
-    # --maximize=true: Open window maximized (fixes small window issue)
     # --window-save-state=never: Prevent restoring previous session
     # --confirm-close-surface=false: Don't prompt when closing
-    open -na Ghostty --args \
-        --maximize=true \
+    local ghostty_app="${GHOSTTY_APP:-Ghostty}"
+    local maximize_flag=""
+    if [ "$GHOSTTY_MAXIMIZE" = "true" ]; then
+        maximize_flag="--maximize=true"
+    fi
+    open -na "$ghostty_app" --args \
+        $maximize_flag \
         --window-save-state=never \
         --confirm-close-surface=false \
         --title="$title" \
@@ -214,6 +226,149 @@ tell application "System Events"
     key code 48 using shift down
 end tell
 ' 2>/dev/null
+}
+
+# Resize Ghostty window to a percentage of the screen, centered
+# Usage: resize_ghostty_window PERCENT CG_WINDOW_ID
+# Uses CGWindowID to reliably identify the correct window among multiple Ghostty windows
+resize_ghostty_window() {
+    local percent="$1"
+    local cg_window_id="${2:-$GHOSTTY_WINDOW_ID}"
+
+    if [ -z "$cg_window_id" ]; then
+        echo "  WARNING: No window ID for resize" >&2
+        return 1
+    fi
+
+    # Swift: get screen size, find our window by CGWindowID, match to AX window, resize
+    swift -e "
+import Cocoa
+
+let targetCGId = $cg_window_id
+let percent = $percent
+
+// Screen size in points
+let screen = NSScreen.main!
+let sw = Int(screen.frame.width)
+let sh = Int(screen.frame.height)
+let tw = sw * percent / 100
+let th = sh * percent / 100
+let tx = (sw - tw) / 2
+let ty = (sh - th) / 2
+
+// Find our window's current position via CGWindowList
+let options = CGWindowListOption(arrayLiteral: .optionOnScreenOnly)
+guard let windowList = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else { exit(1) }
+
+var targetPid: pid_t = 0
+var targetX: Int = 0
+var targetY: Int = 0
+
+for window in windowList {
+    guard let wid = window[kCGWindowNumber as String] as? Int, wid == targetCGId else { continue }
+    guard let pid = window[kCGWindowOwnerPID as String] as? pid_t else { exit(1) }
+    guard let bounds = window[kCGWindowBounds as String] as? [String: Any] else { exit(1) }
+    targetPid = pid
+    targetX = bounds[\"X\"] as? Int ?? 0
+    targetY = bounds[\"Y\"] as? Int ?? 0
+    break
+}
+guard targetPid != 0 else { fputs(\"Window \(targetCGId) not found\n\", stderr); exit(1) }
+
+// Match to Accessibility window by position and resize
+let app = AXUIElementCreateApplication(targetPid)
+var axWindows: CFTypeRef?
+AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &axWindows)
+guard let windowArray = axWindows as? [AXUIElement] else { exit(1) }
+
+for axWin in windowArray {
+    var posVal: CFTypeRef?
+    AXUIElementCopyAttributeValue(axWin, kAXPositionAttribute as CFString, &posVal)
+    guard let posVal = posVal else { continue }
+    var pos = CGPoint.zero
+    AXValueGetValue(posVal as! AXValue, .cgPoint, &pos)
+
+    if Int(pos.x) == targetX && Int(pos.y) == targetY {
+        var newPos = CGPoint(x: CGFloat(tx), y: CGFloat(ty))
+        var newSize = CGSize(width: CGFloat(tw), height: CGFloat(th))
+        if let posAttr = AXValueCreate(.cgPoint, &newPos) {
+            AXUIElementSetAttributeValue(axWin, kAXPositionAttribute as CFString, posAttr)
+        }
+        if let sizeAttr = AXValueCreate(.cgSize, &newSize) {
+            AXUIElementSetAttributeValue(axWin, kAXSizeAttribute as CFString, sizeAttr)
+        }
+        exit(0)
+    }
+}
+fputs(\"No AX window matched position (\(targetX),\(targetY))\n\", stderr)
+exit(1)
+" 2>&1 | sed 's/^/  /'
+}
+
+# Send a key N times in a single osascript (avoids per-command overhead)
+# Usage: send_key_repeated "j" 20 0.03
+send_key_repeated() {
+    local key="$1"
+    local count="$2"
+    local char_delay="${3:-0.05}"
+    osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.1
+tell application \"System Events\"
+    repeat $count times
+        keystroke \"$key\"
+        delay $char_delay
+    end repeat
+end tell
+" 2>/dev/null
+}
+
+# Send ctrl+key N times in a single osascript (avoids per-command overhead)
+# Usage: send_ctrl_key_repeated "d" 19 0.1
+send_ctrl_key_repeated() {
+    local key="$1"
+    local count="$2"
+    local char_delay="${3:-0.1}"
+    osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.1
+tell application \"System Events\"
+    repeat $count times
+        keystroke \"$key\" using control down
+        delay $char_delay
+    end repeat
+end tell
+" 2>/dev/null
+}
+
+# Type an entire string at once (much faster than per-character send_key)
+# Usage: send_type "some text"
+send_type() {
+    local text="$1"
+    osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.1
+tell application \"System Events\"
+    keystroke \"$text\"
+end tell
+" 2>/dev/null
+}
+
+# Type with a visible per-character delay (single osascript, no process-per-char overhead)
+# Usage: send_type_slow "some text" [char_delay]
+send_type_slow() {
+    local text="$1"
+    local char_delay="${2:-0.03}"
+    osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.1
+tell application \"System Events\"
+    repeat with c in characters of \"$text\"
+        keystroke c
+        delay $char_delay
+    end repeat
+end tell
+" 2>/dev/null
 }
 
 # Close the Ghostty window gracefully

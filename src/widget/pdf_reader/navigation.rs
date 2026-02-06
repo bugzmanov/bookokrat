@@ -772,40 +772,51 @@ impl PdfReaderState {
             return Vec::new();
         }
 
-        let query_lower = query.to_lowercase();
+        let query_lower: Vec<char> = query.to_lowercase().chars().collect();
+        let query_len = query_lower.len();
         let mut rects = Vec::new();
 
         for line in &rendered.line_bounds {
-            // Build the line text from characters
-            let line_text: String = line.chars.iter().map(|c| c.c).collect();
-            let line_lower = line_text.to_lowercase();
+            // Build the line text as characters (lowercased for comparison)
+            let line_chars: Vec<char> = line.chars.iter().map(|c| c.c).collect();
+            let line_lower: Vec<char> = line_chars.iter().flat_map(|c| c.to_lowercase()).collect();
 
-            // Find all occurrences of the query in this line
+            // Find all occurrences of the query in this line (character-based search)
             let mut search_start = 0;
-            while let Some(match_start) = line_lower[search_start..].find(&query_lower) {
-                let abs_start = search_start + match_start;
-                let abs_end = abs_start + query_lower.len();
+            while search_start + query_len <= line_lower.len() {
+                // Check if query matches at this position
+                let matches = line_lower[search_start..search_start + query_len]
+                    .iter()
+                    .zip(query_lower.iter())
+                    .all(|(a, b)| a == b);
 
-                // Get character positions for the match
-                if abs_start < line.chars.len() && abs_end <= line.chars.len() {
-                    let start_x = line.chars[abs_start].x;
-                    // For end x, use next char's x or line's x1
-                    let end_x = if abs_end < line.chars.len() {
-                        line.chars[abs_end].x
-                    } else {
-                        line.x1
-                    };
+                if matches {
+                    let abs_start = search_start;
+                    let abs_end = search_start + query_len;
 
-                    rects.push(SelectionRect {
-                        page,
-                        topleft_x: start_x.round() as u32,
-                        topleft_y: line.y0.round() as u32,
-                        bottomright_x: end_x.round() as u32,
-                        bottomright_y: line.y1.round() as u32,
-                    });
+                    // Get character positions for the match
+                    if abs_start < line.chars.len() && abs_end <= line.chars.len() {
+                        let start_x = line.chars[abs_start].x;
+                        // For end x, use next char's x or line's x1
+                        let end_x = if abs_end < line.chars.len() {
+                            line.chars[abs_end].x
+                        } else {
+                            line.x1
+                        };
+
+                        rects.push(SelectionRect {
+                            page,
+                            topleft_x: start_x.round() as u32,
+                            topleft_y: line.y0.round() as u32,
+                            bottomright_x: end_x.round() as u32,
+                            bottomright_y: line.y1.round() as u32,
+                        });
+                    }
+
+                    search_start = abs_start + 1;
+                } else {
+                    search_start += 1;
                 }
-
-                search_start = abs_start + 1;
             }
         }
 
@@ -1464,7 +1475,6 @@ impl PdfReaderState {
                     // In scroll mode, scroll to the page position in document
                     zoom.scroll_to_page(page, &heights, SEPARATOR_HEIGHT);
                 }
-                zoom.cell_pan_from_left = 0;
             }
         }
     }
@@ -4120,6 +4130,7 @@ pub(crate) fn save_pdf_bookmark(
         .unwrap_or(0);
 
     let zoom_factor = pdf_reader.zoom.as_ref().map(|z| z.factor);
+    let pan_position = pdf_reader.zoom.as_ref().map(|z| z.cell_pan_from_left);
     bookmarks.update_bookmark(
         &pdf_reader.name,
         chapter_href,
@@ -4128,6 +4139,7 @@ pub(crate) fn save_pdf_bookmark(
         Some(pdf_reader.rendered.len().max(1)),
         Some(page),
         zoom_factor,
+        pan_position,
     );
 
     let now = std::time::Instant::now();

@@ -9,6 +9,7 @@ use crate::vendored::ratatui_image::picker::{Picker, ProtocolType};
 pub enum TerminalKind {
     Kitty,
     Ghostty,
+    Konsole,
     WezTerm,
     ITerm,
     AppleTerminal,
@@ -146,6 +147,9 @@ fn detect_kind(env: &TerminalEnv) -> TerminalKind {
     if env.term_program == "ghostty" {
         return TerminalKind::Ghostty;
     }
+    if env.term_program == "konsole" || env::var("KONSOLE_VERSION").is_ok() {
+        return TerminalKind::Konsole;
+    }
     if env.term_program == "wezterm" {
         return TerminalKind::WezTerm;
     }
@@ -188,6 +192,7 @@ fn supports_graphics_from_env(env: &TerminalEnv) -> bool {
     let graphics_terminals = [
         "kitty",
         "ghostty",
+        "konsole",
         "iterm.app",
         "wezterm",
         "mintty",
@@ -211,6 +216,7 @@ fn supports_graphics_from_env(env: &TerminalEnv) -> bool {
 fn guess_protocol_from_env(env: &TerminalEnv, kind: TerminalKind) -> Option<GraphicsProtocol> {
     match kind {
         TerminalKind::Kitty | TerminalKind::Ghostty => Some(GraphicsProtocol::Kitty),
+        TerminalKind::Konsole => Some(GraphicsProtocol::Iterm2),
         TerminalKind::WezTerm => Some(GraphicsProtocol::Iterm2),
         TerminalKind::ITerm => {
             if iterm_supports_kitty(env) {
@@ -261,6 +267,8 @@ fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut
         if iterm_supports_kitty(&caps.env) {
             protocol = Some(GraphicsProtocol::Kitty);
         }
+    } else if caps.kind == TerminalKind::Konsole {
+        protocol = Some(GraphicsProtocol::Iterm2);
     } else if caps.kind == TerminalKind::WezTerm {
         protocol = Some(GraphicsProtocol::Iterm2);
     }
@@ -271,6 +279,9 @@ fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut
                 picker.set_protocol_type(ProtocolType::Kitty);
             }
             TerminalKind::WezTerm => {
+                picker.set_protocol_type(ProtocolType::Iterm2);
+            }
+            TerminalKind::Konsole => {
                 picker.set_protocol_type(ProtocolType::Iterm2);
             }
             _ => {}
@@ -349,4 +360,15 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
         return None;
     }
     Some(crate::pdf::kittyv2::probe_delete_range_support())
+}
+
+pub fn protocol_override_from_env() -> Option<ProtocolType> {
+    let value = env::var("BOOKOKRAT_PROTOCOL").ok()?;
+    match value.to_ascii_lowercase().as_str() {
+        "halfblocks" | "half" | "blocks" => Some(ProtocolType::Halfblocks),
+        "sixel" => Some(ProtocolType::Sixel),
+        "kitty" => Some(ProtocolType::Kitty),
+        "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
+        _ => None,
+    }
 }

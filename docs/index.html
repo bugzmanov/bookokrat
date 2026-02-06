@@ -3,36 +3,46 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering</title>
+        <title>Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering</title>
 
         <!-- SEO Meta Tags -->
-        <meta name="description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal." />
-        <meta name="keywords" content="epub reader, pdf reader, terminal epub reader, terminal pdf reader, tui epub, tui pdf, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application" />
+        <meta
+            name="description"
+            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal."
+        />
+        <meta
+            name="keywords"
+            content="epub reader, pdf reader, terminal epub reader, terminal pdf reader, tui epub, tui pdf, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application"
+        />
         <meta name="author" content="Rafael Bagmanov" />
         <meta name="robots" content="index, follow" />
         <link rel="canonical" href="https://github.com/bugzmanov/bookokrat" />
 
         <!-- Open Graph Meta Tags (Facebook, LinkedIn) -->
         <meta property="og:type" content="website" />
-        <meta property="og:title" content="Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering" />
-        <meta property="og:description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal." />
+        <meta property="og:title" content="Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering" />
+        <meta
+            property="og:description"
+            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal."
+        />
         <meta property="og:url" content="https://github.com/bugzmanov/bookokrat" />
-        <meta property="og:image" content="https://bugzmanov.github.io/bookokrat/3.png" />
-        <meta property="og:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing book reading interface" />
+        <meta property="og:image" content="https://bugzmanov.github.io/bookokrat/help.png" />
+        <meta property="og:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing help overlay" />
         <meta property="og:site_name" content="Bookokrat" />
 
         <!-- Twitter Card Meta Tags -->
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Bookokrat - Terminal EPUB & PDF Reader with Full HTML Rendering" />
-        <meta name="twitter:description" content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support." />
-        <meta name="twitter:image" content="https://bugzmanov.github.io/bookokrat/3.png" />
-        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB/PDF reader demo" />
+        <meta name="twitter:title" content="Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering" />
+        <meta
+            name="twitter:description"
+            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support."
+        />
+        <meta name="twitter:image" content="https://bugzmanov.github.io/bookokrat/help.png" />
+        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing help overlay" />
 
         <!-- Additional SEO -->
-        <meta name="theme-color" content="#00ff88" />
+        <meta name="theme-color" content="#0b0d0f" />
         <meta name="application-name" content="Bookokrat" />
-
-        <!-- Favicon -->
         <link rel="icon" type="image/svg+xml" href="favicon.svg" />
 
         <!-- Structured Data (JSON-LD) -->
@@ -46,7 +56,7 @@
           "description": "Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
           "url": "https://github.com/bugzmanov/bookokrat",
           "downloadUrl": "https://crates.io/crates/bookokrat",
-          "softwareVersion": "0.2.2",
+          "softwareVersion": "0.3.1",
           "author": {
             "@type": "Person",
             "name": "Rafael Bagmanov"
@@ -63,7 +73,7 @@
           },
           "codeRepository": "https://github.com/bugzmanov/bookokrat",
           "keywords": "epub reader, pdf reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
-          "screenshot": "https://bugzmanov.github.io/bookokrat/3.png",
+          "screenshot": "https://bugzmanov.github.io/bookokrat/help.png",
           "featureList": [
             "Complete EPUB/HTML rendering with html5ever parser",
             "Inline images in terminal (Kitty, Sixel, iTerm2, Halfblocks)",
@@ -88,6 +98,20 @@
         }
         </script>
         <style>
+            @import url("https://fonts.googleapis.com/css2?family=Rubik+Mono+One&family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;600&display=swap");
+
+            :root {
+                --bg: #0b0d0f;
+                --bg-2: #101417;
+                --ink: #e6e7e8;
+                --muted: #a0a6ad;
+                --accent: #7af06a;
+                --accent-2: #f8b34a;
+                --stroke: #1c2329;
+                --card: #0f1317;
+                --glow: 0 0 18px rgba(122, 240, 106, 0.25);
+            }
+
             * {
                 margin: 0;
                 padding: 0;
@@ -95,2129 +119,791 @@
             }
 
             body {
-                font-family: "Courier New", "Courier", monospace;
-                background: #000;
-                color: #fff;
-                line-height: 1.5;
-                overflow-x: hidden;
+                font-family: "Space Grotesk", system-ui, sans-serif;
+                background: radial-gradient(1200px 800px at 20% -10%, rgba(122, 240, 106, 0.08), transparent 55%),
+                    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px),
+                    var(--bg);
+                color: var(--ink);
+                line-height: 1.6;
             }
 
-            /* Scanlines - DISABLED */
-            body::before {
-                display: none;
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 0 2rem;
             }
 
-            /* Exclude screenshots from scanlines */
-            .hero-screenshot {
-                isolation: isolate;
-            }
-
-            @keyframes scanlines {
-                0% {
-                    transform: translateY(0);
-                }
-                100% {
-                    transform: translateY(10px);
-                }
-            }
-
-            /* Vignette + Screen Curvature */
-            body::after {
-                content: "";
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                pointer-events: none;
-                z-index: 10001;
-                background: radial-gradient(
-                    ellipse at center,
-                    rgba(0, 0, 0, 0) 0%,
-                    rgba(0, 0, 0, 0.3) 100%
-                );
-                box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.5);
-            }
-
-            /* Screen flicker - DISABLED */
-            html {
-                animation: none;
-            }
-
-            /* Screen curve effect - DISABLED */
-
-            /* Header */
             header {
-                position: fixed;
+                position: sticky;
                 top: 0;
-                left: 0;
-                right: 0;
-                z-index: 1000;
-                background: #000;
-                border-bottom: 1px solid #1a1a1a;
-                padding: 1.5rem 2rem;
+                z-index: 20;
+                background: rgba(11, 13, 15, 0.85);
+                backdrop-filter: blur(8px);
+                border-bottom: 1px solid var(--stroke);
             }
 
             nav {
-                max-width: 1400px;
-                margin: 0 auto;
                 display: flex;
-                justify-content: space-between;
                 align-items: center;
+                justify-content: space-between;
+                padding: 1.25rem 0;
             }
 
             .logo {
-                font-size: 1rem;
-                font-weight: 400;
-                display: flex;
-                align-items: center;
-                gap: 0.5rem;
-            }
-
-            .logo::before {
-                content: "/";
-                color: #00ff88;
-                font-size: 1.5rem;
+                font-family: "Rubik Mono One", sans-serif;
+                font-size: 1.1rem;
+                letter-spacing: 0.08em;
             }
 
             .nav-links {
                 display: flex;
-                gap: 2rem;
+                gap: 1.5rem;
                 list-style: none;
+                font-size: 0.95rem;
             }
 
             .nav-links a {
-                color: #fff;
+                color: var(--ink);
                 text-decoration: none;
-                font-size: 0.875rem;
-                transition: color 0.2s;
-                text-transform: uppercase;
             }
 
             .nav-links a:hover {
-                color: #00ff88;
+                color: var(--accent);
             }
 
-            /* Geometric decoration */
-            .geometric-bg {
-                position: fixed;
-                top: 0;
-                right: 0;
-                width: 50%;
-                height: 100%;
-                pointer-events: none;
-                z-index: 0;
-            }
-
-            .geometric-shape {
-                position: absolute;
-                border: 2px solid #00ff88;
-                opacity: 0.3;
-            }
-
-            .shape-1 {
-                top: 20%;
-                right: 10%;
-                width: 300px;
-                height: 300px;
-                clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
-            }
-
-            .shape-2 {
-                bottom: 15%;
-                right: 20%;
-                width: 200px;
-                height: 200px;
-                border-radius: 50%;
-            }
-
-            /* Hero */
             .hero {
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                padding: 8rem 2rem 4rem;
-                position: relative;
-                background: #000;
+                padding: 5rem 0 3rem;
             }
 
-            .hero-content {
-                max-width: 1400px;
-                margin: 0 auto;
-                width: 100%;
-                position: relative;
-                z-index: 1;
+            .hero-grid {
                 display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 6rem;
+                grid-template-columns: 1.1fr 0.9fr;
+                gap: 3rem;
                 align-items: center;
             }
 
-            .hero-text {
-                max-width: 600px;
-                position: relative;
-                z-index: 2;
+            .hero h1 {
+                font-family: "Rubik Mono One", sans-serif;
+                font-size: clamp(2rem, 4vw, 3.2rem);
+                line-height: 1.1;
+                margin-bottom: 1.5rem;
             }
 
-            .hero-screenshots {
-                position: relative;
-                z-index: 2;
-                width: 740px;
-                height: 462px;
-                overflow: hidden;
+            .hero p {
+                color: var(--muted);
+                font-size: 1.05rem;
+                margin-bottom: 2rem;
             }
 
-            /* Vignette effect on entire slideshow */
-            .hero-screenshots::after {
-                content: "";
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                box-shadow: inset 0 0 150px 50px rgba(0, 0, 0, 0.95);
-                pointer-events: none;
-                z-index: 10;
-            }
-
-            .screenshots-container {
+            .tag-row {
                 display: flex;
-                transition: transform 0.5s ease;
-                height: 100%;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                margin-bottom: 1.5rem;
+                font-family: "JetBrains Mono", ui-monospace, monospace;
+                font-size: 0.85rem;
             }
 
-            .hero-screenshot {
-                border: none;
-                overflow: hidden;
-                background: #000;
-                flex-shrink: 0;
-                width: 740px;
-                height: 100%;
-                isolation: isolate;
-                position: relative;
+            .tag {
+                border: 1px solid var(--stroke);
+                padding: 0.35rem 0.7rem;
+                border-radius: 6px;
+                background: var(--card);
+                color: var(--muted);
             }
 
-            .hero-screenshot img {
+            .cta-row {
+                display: flex;
+                gap: 1rem;
+                flex-wrap: wrap;
+            }
+
+            .cta {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0.85rem 1.5rem;
+                border-radius: 8px;
+                font-weight: 600;
+                text-decoration: none;
+                border: 1px solid var(--stroke);
+                color: var(--ink);
+                background: var(--card);
+                transition: transform 0.2s ease;
+            }
+
+            .cta.primary {
+                border-color: var(--accent);
+                color: #0b0d0f;
+                background: var(--accent);
+                box-shadow: var(--glow);
+            }
+
+            .cta:hover {
+                transform: translateY(-2px);
+            }
+
+            .hero-panel {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 1rem;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3);
+            }
+
+            .hero-panel img {
                 width: 100%;
-                height: 100%;
                 display: block;
-                object-fit: contain;
+                border-radius: 8px;
+                border: 1px solid #182028;
+                background: #000;
+                box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6);
+            }
+
+            .hero-slider {
                 position: relative;
             }
 
-            .carousel-nav {
+            .hero-slide {
+                display: none;
+            }
+
+            .hero-slide.active {
+                display: block;
+            }
+
+            .hero-slider-nav {
                 position: absolute;
                 top: 50%;
                 transform: translateY(-50%);
                 background: rgba(0, 0, 0, 0.5);
-                border: 1px solid #333;
-                color: #fff;
-                font-size: 1.5rem;
-                width: 40px;
-                height: 40px;
+                border: 1px solid var(--stroke);
+                color: var(--ink);
+                font-family: "JetBrains Mono", ui-monospace, monospace;
+                font-size: 0.9rem;
+                width: 28px;
+                height: 28px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
                 cursor: pointer;
-                z-index: 10;
-                transition: all 0.2s;
-                font-family: monospace;
+                border-radius: 6px;
+                transition: color 0.2s ease, border-color 0.2s ease;
             }
 
-            .carousel-nav:hover {
-                background: rgba(0, 255, 136, 0.2);
-                border-color: #00ff88;
-                color: #00ff88;
+            .hero-slider-nav:hover {
+                color: var(--accent);
+                border-color: var(--accent);
             }
 
-            .carousel-prev {
-                left: 10px;
+            .hero-slider-prev {
+                left: 6px;
             }
 
-            .carousel-next {
-                right: 10px;
+            .hero-slider-next {
+                right: 6px;
             }
 
-            .carousel-indicators {
-                position: absolute;
-                bottom: 20px;
-                left: 50%;
-                transform: translateX(-50%);
-                display: flex;
-                gap: 0.5rem;
-                z-index: 10;
-            }
 
-            .carousel-dot {
-                width: 8px;
-                height: 8px;
-                border: 1px solid #333;
-                background: transparent;
-                cursor: pointer;
-                transition: all 0.2s;
-            }
-
-            .carousel-dot.active {
-                background: #00ff88;
-                border-color: #00ff88;
-            }
-
-            /* Remove CRT effects from images */
-            .hero-screenshot::before,
-            .hero-screenshot::after {
-                display: none !important;
-            }
-
-            .hero-screenshot,
-            .hero-screenshot img {
-                mix-blend-mode: normal;
-            }
-
-            /* Ensure screenshots container is above scanlines */
-            .hero-screenshots {
-                position: relative;
-                z-index: 10002;
-            }
-
-            .screenshot-placeholder {
-                width: 100%;
-                aspect-ratio: 3/2;
-                background: #0a0a0a;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                position: relative;
-            }
-
-            .screenshot-placeholder::before {
-                content: "";
-                position: absolute;
-                top: 10%;
-                left: 10%;
-                right: 10%;
-                bottom: 10%;
-                border: 1px solid #1a1a1a;
-            }
-
-            .placeholder-text {
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                color: #333;
-                z-index: 1;
-            }
-
-            .hero-tag {
-                display: inline-block;
-                border: 1px solid #fff;
-                padding: 0.5rem 1.5rem;
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                margin-bottom: 3rem;
-                text-transform: uppercase;
-            }
-
-            h1 {
-                font-size: 5rem;
-                font-weight: 400;
-                line-height: 1.1;
-                margin-bottom: 3rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-                position: relative;
-            }
-
-            h1::before {
-                content: attr(data-text);
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: repeating-linear-gradient(
-                    0deg,
-                    rgba(0, 0, 0, 0.15),
-                    rgba(0, 0, 0, 0.15) 1px,
-                    transparent 1px,
-                    transparent 2px
-                );
-                pointer-events: none;
-                z-index: 1;
-            }
-
-            h1 {
-                animation: textFlicker 0.3s infinite;
-            }
-
-            @keyframes textFlicker {
-                0% {
-                    opacity: 0.97;
-                }
-                50% {
-                    opacity: 1;
-                }
-                100% {
-                    opacity: 0.97;
-                }
-            }
-
-            h1 .highlight {
-                color: #00ff88;
-                text-shadow:
-                    0 0 20px #00ff88,
-                    0 0 40px #00ff88,
-                    0 0 60px #00ff88,
-                    2px 0 2px rgba(255, 0, 0, 0.5),
-                    -2px 0 2px rgba(0, 0, 255, 0.5);
-            }
-
-            .hero-subtitle {
-                font-size: 1rem;
-                max-width: 600px;
-                line-height: 1.8;
-                margin-bottom: 4rem;
-                color: #fff;
-            }
-
-            .hero-cta {
-                display: inline-block;
-                background: #00ff88;
-                color: #000;
-                padding: 1rem 3rem;
-                text-decoration: none;
-                font-size: 0.875rem;
-                font-weight: 600;
-                text-transform: uppercase;
-                letter-spacing: 0.1em;
-                transition: transform 0.2s;
-                text-shadow: none;
-                position: relative;
-                overflow: hidden;
-            }
-
-            .hero-cta::before {
-                content: "";
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: repeating-linear-gradient(
-                    0deg,
-                    rgba(0, 0, 0, 0.1),
-                    rgba(0, 0, 0, 0.1) 1px,
-                    transparent 1px,
-                    transparent 2px
-                );
-                pointer-events: none;
-                z-index: 1;
-            }
-
-            .hero-cta {
-                animation: buttonFlicker 0.4s infinite;
-            }
-
-            @keyframes buttonFlicker {
-                0% {
-                    opacity: 0.98;
-                }
-                50% {
-                    opacity: 1;
-                }
-                100% {
-                    opacity: 0.98;
-                }
-            }
-
-            .hero-cta:hover {
-                transform: scale(1.05);
-            }
-
-            /* Section */
             .section {
-                max-width: 1400px;
-                margin: 0 auto;
-                padding: 8rem 2rem;
-                border-top: 1px solid #1a1a1a;
-                position: relative;
-                background: #000;
+                padding: 4rem 0;
             }
 
-            .section-label {
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                margin-bottom: 3rem;
-                color: #999;
-                text-transform: uppercase;
-            }
-
-            .section-label::before {
-                content: "// ";
-                color: #00ff88;
+            .section-header {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 2rem;
+                margin-bottom: 2rem;
             }
 
             .section-title {
-                font-size: 2.5rem;
-                font-weight: 400;
-                margin-bottom: 2rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
+                font-family: "Rubik Mono One", sans-serif;
+                font-size: clamp(1.5rem, 3vw, 2.1rem);
             }
 
-            .section-description {
-                font-size: 1rem;
-                color: #fff;
-                max-width: 600px;
-                margin-bottom: 4rem;
-                line-height: 1.8;
+            .section-desc {
+                color: var(--muted);
+                max-width: 520px;
             }
 
-            /* Features */
-            .features {
+            .media-grid {
                 display: grid;
                 grid-template-columns: repeat(2, 1fr);
-                gap: 3rem;
+                gap: 2rem;
             }
 
-            .feature {
-                border-left: 2px solid #1a1a1a;
-                padding-left: 2rem;
-                transition: border-color 0.3s;
+            .media-card {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 1.5rem;
+                box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
             }
 
-            .feature:hover {
-                border-left-color: #00ff88;
-            }
-
-            .feature-title {
-                font-size: 1.25rem;
-                margin-bottom: 1rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            .feature-description {
-                font-size: 0.9rem;
-                color: #fff;
-                line-height: 1.8;
-            }
-
-            /* Terminal */
-            .terminal-section {
-                padding: 6rem 2rem;
-                border-top: 1px solid #1a1a1a;
+            .media-frame {
+                border-radius: 8px;
+                border: 1px solid #182028;
+                overflow: hidden;
                 background: #000;
+                box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.6);
             }
 
-            .terminal-wrapper {
-                max-width: 1400px;
-                margin: 0 auto;
+            .media-frame video,
+            .media-frame img {
+                width: 100%;
+                display: block;
             }
 
-            .terminal-label {
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                margin-bottom: 2rem;
-                color: #999;
-                text-transform: uppercase;
+            .media-frame.video-demo {
+                position: relative;
             }
 
-            .terminal-label::before {
-                content: "// ";
-                color: #00ff88;
-            }
-
-            .terminal {
-                background: #0a0a0a;
-                border: 1px solid #1a1a1a;
-                padding: 2rem;
-                font-size: 1rem;
-                line-height: 2;
-            }
-
-            .terminal-line {
+            .media-frame .demo-play {
+                position: absolute;
+                inset: 0;
                 display: flex;
+                align-items: center;
+                justify-content: center;
+                background: rgba(0, 0, 0, 0.18);
+                cursor: pointer;
+                transition: background 0.2s ease;
+            }
+
+            .media-frame .demo-play:hover {
+                background: rgba(0, 0, 0, 0.1);
+            }
+
+            .media-frame .demo-play span {
+                width: 44px;
+                height: 44px;
+                border-radius: 50%;
+                background: rgba(11, 13, 15, 0.85);
+                border: 1px solid rgba(122, 240, 106, 0.5);
+                color: var(--accent);
+                font-size: 1.1rem;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                box-shadow: 0 0 12px rgba(122, 240, 106, 0.18);
+            }
+
+            .feature-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1.5rem;
+            }
+
+            .feature-card {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 1.5rem;
+                min-height: 180px;
+            }
+
+            .feature-card h4 {
+                margin-bottom: 0.75rem;
+                color: var(--accent);
+            }
+
+            .feature-card p {
+                color: var(--muted);
+                font-size: 0.95rem;
+            }
+
+            .split {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 2rem;
+            }
+
+            .terminal-note {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 10px;
+                padding: 1.25rem;
+                font-family: "JetBrains Mono", ui-monospace, monospace;
+                color: var(--muted);
+            }
+
+            .install {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 2rem;
+            }
+
+            .install details {
+                border-bottom: 1px solid var(--stroke);
+                padding: 0.75rem 0;
+            }
+
+            .install details:last-child {
+                border-bottom: none;
+            }
+
+            .install summary {
+                display: grid;
+                grid-template-columns: 1fr auto auto;
+                align-items: center;
+                gap: 1rem;
+                cursor: pointer;
+                list-style: none;
+                font-family: "JetBrains Mono", ui-monospace, monospace;
+                color: var(--ink);
+                position: relative;
+                padding-right: 1.8rem;
+            }
+
+            .install summary::-webkit-details-marker {
+                display: none;
+            }
+
+            .install summary::after {
+                content: "+";
+                color: var(--muted);
+                position: absolute;
+                right: 0;
+                top: 50%;
+                transform: translateY(-50%);
+            }
+
+            .install details[open] summary::after {
+                content: "–";
+                color: var(--accent);
+            }
+
+            .install .install-command {
+                color: var(--muted);
+                text-align: right;
+                min-width: 240px;
+            }
+
+            .install .copy-btn {
+                border: 1px solid var(--stroke);
+                background: transparent;
+                color: var(--muted);
+                font-family: "JetBrains Mono", ui-monospace, monospace;
+                font-size: 0.75rem;
+                padding: 0.3rem 0.5rem;
+                border-radius: 6px;
+                cursor: pointer;
+                text-transform: uppercase;
+                letter-spacing: 0.08em;
+                transition: color 0.2s ease, border-color 0.2s ease;
+            }
+
+            .install .copy-btn:hover {
+                color: var(--accent);
+                border-color: var(--accent);
+            }
+
+            .install .install-body {
+                margin-top: 0.75rem;
+                color: var(--muted);
+                font-size: 0.95rem;
+                line-height: 1.7;
+            }
+
+            .install .install-body code {
+                color: var(--ink);
+            }
+
+            .install .install-body ul {
+                margin: 0.5rem 0 0;
+                padding-left: 1.1rem;
+                display: grid;
+                gap: 0.4rem;
+            }
+
+            .install .install-body li {
+                line-height: 1.6;
+            }
+
+            .faq {
+                display: grid;
                 gap: 1rem;
             }
 
-            .terminal-prompt {
-                color: #00ff88;
-                text-shadow: 0 0 10px #00ff88;
+            .faq details {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 10px;
+                padding: 1rem 1.25rem;
             }
 
-            .terminal-command {
-                color: #fff;
-            }
-
-            /* Install */
-            .install-section {
-                padding: 8rem 2rem;
-                border-top: 1px solid #1a1a1a;
-                background: #000;
-            }
-
-            .install-wrapper {
-                max-width: 1400px;
-                margin: 0 auto;
-            }
-
-            .install-label {
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                margin-bottom: 2rem;
-                color: #999;
-                text-transform: uppercase;
-            }
-
-            .install-label::before {
-                content: "// ";
-                color: #00ff88;
-            }
-
-            .install-title {
-                font-size: 2rem;
-                margin-bottom: 2rem;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            .install-description {
-                font-size: 1rem;
-                color: #fff;
-                margin-bottom: 3rem;
-                line-height: 1.8;
-            }
-
-            .install-description a {
-                color: #00ff88;
-                text-decoration: none;
-            }
-
-            .install-description a:hover {
-                text-decoration: underline;
-            }
-
-            .install-box {
-                background: #0a0a0a;
-                border: 1px solid #1a1a1a;
-                padding: 2rem;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                gap: 2rem;
-                max-width: 800px;
-            }
-
-            .install-command {
-                flex: 1;
-                font-size: 1rem;
-            }
-
-            .copy-btn {
-                background: #00ff88;
-                color: #000;
-                border: none;
-                padding: 0.75rem 2rem;
-                font-family: "Courier New", monospace;
-                font-size: 0.875rem;
-                font-weight: 600;
-                cursor: pointer;
-                transition: opacity 0.2s;
-                text-transform: uppercase;
-                letter-spacing: 0.1em;
-                text-shadow: none;
-                position: relative;
-                overflow: hidden;
-            }
-
-            .copy-btn::before {
-                content: "";
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: repeating-linear-gradient(
-                    0deg,
-                    rgba(0, 0, 0, 0.1),
-                    rgba(0, 0, 0, 0.1) 1px,
-                    transparent 1px,
-                    transparent 2px
-                );
-                pointer-events: none;
-                z-index: 1;
-            }
-
-            .copy-btn {
-                animation: buttonFlicker 0.4s infinite;
-            }
-
-            .copy-btn:hover {
-                opacity: 0.8;
-            }
-
-            /* Links */
-            .links-section {
-                padding: 6rem 2rem;
-                border-top: 1px solid #1a1a1a;
-                background: #000;
-            }
-
-            .links-wrapper {
-                max-width: 1400px;
-                margin: 0 auto;
-            }
-
-            .links-label {
-                font-size: 0.75rem;
-                letter-spacing: 0.2em;
-                margin-bottom: 2rem;
-                color: #999;
-                text-transform: uppercase;
-            }
-
-            .links-label::before {
-                content: "// ";
-                color: #00ff88;
-            }
-
-            .links-list {
-                list-style: none;
-            }
-
-            .links-list li {
-                border-bottom: 1px solid #1a1a1a;
-            }
-
-            .links-list a {
-                color: #fff;
-                text-decoration: none;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 1.5rem 0;
-                font-size: 1rem;
-                transition: color 0.2s;
-                text-transform: uppercase;
-                letter-spacing: 0.05em;
-            }
-
-            .links-list a:hover {
-                color: #00ff88;
-            }
-
-            .link-arrow {
-                color: #00ff88;
-            }
-
-            /* Footer */
             footer {
-                border-top: 1px solid #1a1a1a;
-                padding: 3rem 2rem;
-                background: #000;
-            }
-
-            .footer-content {
-                max-width: 1400px;
-                margin: 0 auto;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                font-size: 0.875rem;
-                color: #666;
+                padding: 3rem 0 4rem;
+                color: var(--muted);
+                border-top: 1px solid var(--stroke);
             }
 
             .footer-links {
                 display: flex;
-                gap: 2rem;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+                margin-top: 1rem;
             }
 
             .footer-links a {
-                color: #666;
+                color: var(--muted);
                 text-decoration: none;
-                transition: color 0.2s;
             }
 
             .footer-links a:hover {
-                color: #00ff88;
+                color: var(--accent);
             }
 
-            /* Responsive */
-            @media (max-width: 768px) {
-                h1 {
-                    font-size: 2.5rem;
+            @media (max-width: 980px) {
+                .hero-grid,
+                .media-grid,
+                .feature-grid,
+                .split {
+                    grid-template-columns: 1fr;
                 }
 
                 .nav-links {
                     display: none;
                 }
-
-                .hero-content {
-                    grid-template-columns: 1fr;
-                    gap: 3rem;
-                }
-
-                .hero-screenshots {
-                    width: 100%;
-                    height: 400px;
-                    margin-top: 2rem;
-                }
-
-                .hero-screenshot {
-                    width: 280px;
-                }
-
-                .hero-screenshot:nth-child(1),
-                .hero-screenshot:nth-child(2),
-                .hero-screenshot:nth-child(3),
-                .hero-screenshot:nth-child(4) {
-                    transform: none;
-                    position: relative;
-                    margin-bottom: 1rem;
-                }
-
-                .hero-screenshot:hover {
-                    transform: scale(1.02);
-                }
-
-                .features {
-                    grid-template-columns: 1fr;
-                }
-
-                .section-title {
-                    font-size: 1.75rem;
-                }
-
-                .install-box {
-                    flex-direction: column;
-                    text-align: center;
-                }
-
-                .footer-content {
-                    flex-direction: column;
-                    gap: 2rem;
-                    text-align: center;
-                }
-
-                .geometric-bg {
-                    display: none;
-                }
-
-                .screenshots-grid {
-                    gap: 1rem;
-                }
             }
         </style>
     </head>
     <body>
-        <div class="geometric-bg">
-            <div class="geometric-shape shape-1"></div>
-            <div class="geometric-shape shape-2"></div>
-        </div>
-
         <header>
-            <nav>
-                <div class="logo">bookokrat</div>
-                <ul class="nav-links">
-                    <li><a href="#features">features</a></li>
-                    <li><a href="#install">install</a></li>
-                    <li>
-                        <a href="https://github.com/bugzmanov/bookokrat"
-                            >github</a
-                        >
-                    </li>
-                    <li>
-                        <a href="https://github.com/bugzmanov/bookokrat" target="_blank" rel="noopener">
-                            <img src="https://img.shields.io/github/stars/bugzmanov/bookokrat?style=social" alt="GitHub stars" style="vertical-align: middle; margin-top: -2px;">
-                        </a>
-                    </li>
-                </ul>
-            </nav>
+            <div class="container">
+                <nav>
+                    <div class="logo">BOOKOKRAT</div>
+                    <ul class="nav-links">
+                        <li><a href="#demos">Demos</a></li>
+                        <li><a href="#features">Features</a></li>
+                        <li><a href="#install">Install</a></li>
+                        <li><a href="https://github.com/bugzmanov/bookokrat">GitHub</a></li>
+                    </ul>
+                </nav>
+            </div>
         </header>
 
         <main>
             <section class="hero">
-                <div class="hero-content">
-                    <div class="hero-text">
-                        <div class="hero-tag">for terminal workflows</div>
-                        <h1>
-                            TERMINAL<br /><span class="highlight">EPUB/PDF</span
-                            ><br />READER
-                        </h1>
-                        <p class="hero-subtitle">
-                            // FULL-FEATURED EPUB + PDF RENDERING • IMAGES • TABLES &
-                            CODE BLOCKS • VIM KEYBINDINGS • MOUSE SUPPORT<br />INLINE
-                            ANNOTATIONS • LOCAL & GLOBAL SEARCH <br /><br />READ
-                            TECHNICAL BOOKS WITHOUT LEAVING YOUR TERMINAL
-                        </p>
-                        <a href="#install" class="hero-cta">Install</a>
-                    </div>
-                    <div class="hero-screenshots">
-                        <div class="screenshots-container">
-                            <div class="hero-screenshot">
-                                <img
-                                    src="3.png"
-                                    alt="Bookokrat help screen"
-                                    onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>HELP SCREEN</div></div>'"
-                                />
-                            </div>
-                            <div class="hero-screenshot">
-                                <img
-                                    src="2.png"
-                                    alt="Reading view"
-                                    onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>READING VIEW</div></div>'"
-                                />
-                            </div>
-                            <div class="hero-screenshot">
-                                <img
-                                    src="4.png"
-                                    alt="Book content"
-                                    onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>BOOK CONTENT</div></div>'"
-                                />
-                            </div>
-                            <div class="hero-screenshot">
-                                <img
-                                    src="1.png"
-                                    alt="Chapter navigation"
-                                    onerror="this.parentElement.innerHTML='<div class=\'screenshot-placeholder\'><div class=\'placeholder-text\'>NAVIGATION</div></div>'"
-                                />
-                            </div>
+                <div class="container hero-grid">
+                    <div>
+                        <div class="tag-row">
+                            <span class="tag">EPUB + HTML</span>
+                            <span class="tag">PDF MODE</span>
+                            <span class="tag">IMAGES</span>
+                            <span class="tag">MATHML</span>
                         </div>
-                        <button
-                            class="carousel-nav carousel-prev"
-                            onclick="prevSlide()"
-                        >
-                            ←
-                        </button>
-                        <button
-                            class="carousel-nav carousel-next"
-                            onclick="nextSlide()"
-                        >
-                            →
-                        </button>
-                        <div class="carousel-indicators">
-                            <div
-                                class="carousel-dot active"
-                                onclick="goToSlide(0)"
-                            ></div>
-                            <div
-                                class="carousel-dot"
-                                onclick="goToSlide(1)"
-                            ></div>
-                            <div
-                                class="carousel-dot"
-                                onclick="goToSlide(2)"
-                            ></div>
-                            <div
-                                class="carousel-dot"
-                                onclick="goToSlide(3)"
-                            ></div>
+                        <h1>READ PDF/EPUB BOOKS IN THE TERMINAL</h1>
+                        <p>
+                            Bookokrat renders EPUB and PDF content with real layouts, images,
+                            and math. Built for readers who live in the terminal.
+                        </p>
+                        <div class="cta-row">
+                            <a class="cta primary" href="#install">Install</a>
+                            <a class="cta" href="#demos">Watch demos</a>
+                        </div>
+                    </div>
+                    <div class="hero-panel">
+                        <div class="hero-slider" aria-label="Bookokrat screenshots">
+                            <div class="hero-slide active">
+                                <img src="help.png" alt="Bookokrat help screen" />
+                            </div>
+                            <div class="hero-slide">
+                                <img src="epub.png" alt="Bookokrat EPUB reading view" />
+                            </div>
+                            <div class="hero-slide">
+                                <img src="theme_selection.png" alt="Bookokrat theme selection" />
+                            </div>
+                            <div class="hero-slide">
+                                <img src="zen_mode_epub.png" alt="Bookokrat zen mode with Catppuccin Mocha theme" />
+                            </div>
+                            <div class="hero-slide">
+                                <img src="pdf_view.png" alt="Bookokrat PDF reader with Rosepine Moon theme" />
+                            </div>
+                            <div class="hero-slide">
+                                <img src="2.png" alt="Bookokrat reading view" />
+                            </div>
+                            <button class="hero-slider-nav hero-slider-prev" type="button" aria-label="Previous screenshot">←</button>
+                            <button class="hero-slider-nav hero-slider-next" type="button" aria-label="Next screenshot">→</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="demos">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Demos</h2>
+                        <p class="section-desc">
+                            EPUB and PDF, captured in the terminal.
+                        </p>
+                    </div>
+                    <div class="media-grid">
+                        <div class="media-card">
+                            <h3>EPUB / HTML demo</h3>
+                            <div class="media-frame video-demo">
+                                <video
+                                    class="demo-video"
+                                    src="epub_demo_720p.mp4"
+                                    poster="epub_demo.png"
+                                    playsinline
+                                ></video>
+                                <button class="demo-play" type="button" aria-label="Play EPUB demo">
+                                    <span>▶</span>
+                                </button>
+                            </div>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Tables, code blocks, MathML, and images rendered inline.
+                            </p>
+                        </div>
+                        <div class="media-card">
+                            <h3>PDF demo</h3>
+                            <div class="media-frame video-demo">
+                                <video
+                                    class="demo-video"
+                                    src="demo_pdf_720p.mp4"
+                                    poster="demo_pdf.png"
+                                    playsinline
+                                ></video>
+                                <button class="demo-play" type="button" aria-label="Play PDF demo">
+                                    <span>▶</span>
+                                </button>
+                            </div>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Page/scroll modes, outline, search, and annotations.
+                            </p>
                         </div>
                     </div>
                 </div>
             </section>
 
             <section class="section" id="features">
-                <div class="section-label">features</div>
-                <h2 class="section-title">Built for technical reading</h2>
-                <p class="section-description">
-                    Everything you need to read and research technical books in
-                    your terminal
-                </p>
-
-                <div class="features">
-                    <div class="feature">
-                        <h3 class="feature-title">
-                            EPUB + PDF rendering
-                        </h3>
-                        <p class="feature-description">
-                            Proper table layouts, syntax-highlighted code
-                            blocks, bold/italic text, blockquotes, lists, and
-                            MathML equations for EPUBs plus a dedicated PDF
-                            renderer with page/scroll modes and TOC support.
-                        </p>
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Features that matter</h2>
+                        <p class="section-desc">Everything you expect, nothing you do not.</p>
                     </div>
-
-                    <div class="feature">
-                        <h3 class="feature-title">Annotate & research</h3>
-                        <p class="feature-description">
-                            Press 'a' on any selection to attach timestamped
-                            notes in EPUBs or PDFs. Export all annotations to
-                            Markdown. Full-text search across books. Copy
-                            chapters or selections. Your reading workspace in
-                            the terminal.
-                        </p>
-                    </div>
-
-                    <div class="feature">
-                        <h3 class="feature-title">
-                            Vim keybindings + mouse support
-                        </h3>
-                        <p class="feature-description">
-                            Full vim motions (j/k, gg/G, /, Ctrl+o/i) for
-                            keyboard users. Comprehensive mouse support for
-                            everyone else. Use whichever you prefer—or both.
-                        </p>
-                    </div>
-
-                    <div class="feature">
-                        <h3 class="feature-title">Never lose your place</h3>
-                        <p class="feature-description">
-                            Automatic bookmarks per book. Reading history popup
-                            (Space+h). Chapter statistics and progress tracking.
-                            Jump list remembers your navigation path in EPUBs
-                            and PDFs.
-                        </p>
-                    </div>
-
-                    <div class="feature">
-                        <h3 class="feature-title">Works in any terminal</h3>
-                        <p class="feature-description">
-                            Auto-detects true color (24-bit) or falls back to
-                            256-color palette. Images render via Kitty, Sixel,
-                            iTerm2, or Unicode halfblocks—whatever your terminal
-                            supports. PDF viewing needs a graphics-capable
-                            terminal.
-                        </p>
-                    </div>
-
-                    <div class="feature">
-                        <h3 class="feature-title">Cross-platform</h3>
-                        <p class="feature-description">
-                            Native binaries for macOS (Intel & Apple Silicon) and
-                            Linux. Install via Homebrew, download pre-built binaries,
-                            or build from source on any platform including Windows.
-                        </p>
-                    </div>
-                </div>
-            </section>
-
-            <section class="install-section" id="install">
-                <div class="install-wrapper">
-                    <div class="install-label">installation</div>
-                    <h2 class="install-title">Get Started</h2>
-
-                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Homebrew (macOS)</h3>
-                    <div class="install-box" style="margin-bottom: 2rem;">
-                        <code class="install-command">brew install bookokrat</code>
-                        <button class="copy-btn" onclick="copyText('brew install bookokrat', this)">
-                            copy
-                        </button>
-                    </div>
-
-                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Pre-built Binary (Linux)</h3>
-                    <p class="install-description">
-                        Download from <a href="https://github.com/bugzmanov/bookokrat/releases">GitHub Releases</a>. Static musl binary works on all distributions.
-                    </p>
-                    <div class="install-box" style="margin-bottom: 2rem;">
-                        <code class="install-command" style="font-size: 0.85rem;">curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz</code>
-                        <button class="copy-btn" onclick="copyText('curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz && tar -xzf bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz && sudo mv bookokrat /usr/local/bin/', this)">
-                            copy
-                        </button>
-                    </div>
-
-                    <h3 style="font-size: 1.25rem; margin-bottom: 1.5rem; text-transform: uppercase; letter-spacing: 0.05em;">Cargo (all platforms)</h3>
-                    <p class="install-description">
-                        Build from source with Cargo (Rust's package manager).
-                        <a href="https://rustup.rs">Get Rust at rustup.rs</a>
-                    </p>
-
-                    <div style="margin-bottom: 2rem;">
-                        <div style="font-size: 0.875rem; color: #999; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
-                            // Prerequisites (Cargo only)
+                    <div class="feature-grid">
+                        <div class="feature-card">
+                            <h4>EPUB + HTML</h4>
+                            <p>Proper layout: tables, lists, images, and code blocks.</p>
                         </div>
-                        <p style="font-size: 0.95rem; color: #fff; margin-bottom: 1.5rem; line-height: 1.8;">
-                            Building from source requires a C compiler/linker:
-                        </p>
-
-                        <div style="display: grid; gap: 1rem; max-width: 800px;">
-                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
-                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Linux (Ubuntu/Debian)</div>
-                                <code style="color: #fff; font-size: 0.9rem;">sudo apt update && sudo apt install build-essential</code>
-                                <div style="color: #bdbdbd; font-size: 0.85rem; margin-top: 0.5rem; line-height: 1.6;">
-                                    For <code style="color: #00ff88;">--features pdf</code>, also install <code style="color: #00ff88;">pkg-config libfontconfig1-dev</code>.
-                                </div>
-                                <div style="color: #bdbdbd; font-size: 0.85rem; margin-top: 0.35rem; line-height: 1.6;">
-                                    For <code style="color: #00ff88;">--features pdf</code>, also install <code style="color: #00ff88;">clang libclang-dev</code> (bindgen).
-                                </div>
-                            </div>
-
-                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
-                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Linux (Fedora/RHEL)</div>
-                                <code style="color: #fff; font-size: 0.9rem;">sudo dnf install gcc make</code>
-                            </div>
-
-                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
-                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">macOS</div>
-                                <code style="color: #fff; font-size: 0.9rem;">xcode-select --install</code>
-                            </div>
-
-                            <div style="background: #0a0a0a; border: 1px solid #1a1a1a; padding: 1.25rem;">
-                                <div style="color: #00ff88; font-size: 0.875rem; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.1em;">Windows</div>
-                                <div style="color: #fff; font-size: 0.9rem;">
-                                    Install <a href="https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022" target="_blank" style="color: #00ff88; text-decoration: underline;">Visual Studio Build Tools</a> with "Desktop development with C++" workload
-                                </div>
-                            </div>
+                        <div class="feature-card">
+                            <h4>PDF modes</h4>
+                            <p>Page and scroll views with TOC and fast navigation.</p>
                         </div>
-                    </div>
-
-                    <div class="install-box">
-                        <code class="install-command"
-                            >cargo install bookokrat</code
-                        >
-                        <button class="copy-btn" onclick="copyText('cargo install bookokrat', this)">
-                            copy
-                        </button>
-                    </div>
-                    <p class="install-description" style="margin-top: 1rem;">
-                        PDF support is enabled by default. To build without it, use
-                        <code style="color: #00ff88;">cargo install bookokrat --no-default-features</code>.
-                    </p>
-
-                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #1a1a1a; max-width: 800px;">
-                        <div style="font-size: 0.875rem; color: #999; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
-                            // Quick Start
+                        <div class="feature-card">
+                            <h4>MathML</h4>
+                            <p>Readable equations for math-heavy books.</p>
                         </div>
-                        <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
-                            1. Navigate to a directory with EPUB or PDF files<br/>
-                            2. Run <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">bookokrat</code><br/>
-                            3. Use <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">j/k</code> to navigate, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">Enter</code> to open a book, <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem; border-radius: 2px;">?</code> for help
+                        <div class="feature-card">
+                            <h4>Annotations</h4>
+                            <p>Attach notes, export Markdown, and track history.</p>
                         </div>
-                    </div>
-
-                    <div id="troubleshooting" style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #ff6666; max-width: 800px;">
-                        <div style="font-size: 0.875rem; color: #ff6666; margin-bottom: 1rem; text-transform: uppercase; letter-spacing: 0.1em;">
-                            // Troubleshooting
+                        <div class="feature-card">
+                            <h4>Vim + Mouse</h4>
+                            <p>Keyboard-first or mouse-friendly, your choice.</p>
                         </div>
-                        <div style="font-size: 0.95rem; line-height: 1.8; color: #fff;">
-                            <strong style="color: #ff6666;">Error: "linker 'cc' not found"</strong><br/>
-                            Install a C compiler: <code style="color: #00ff88;">xcode-select --install</code> (macOS), <code style="color: #00ff88;">sudo apt install build-essential</code> (Debian/Ubuntu), or <code style="color: #00ff88;">sudo dnf install gcc make</code> (Fedora).
-                            <br/><br/>
-                            <strong style="color: #ff6666;">Error: "The system library `fontconfig` required by crate `yeslogic-fontconfig-sys` was not found"</strong><br/>
-                            On Ubuntu/Debian, install: <code style="color: #00ff88;">sudo apt install pkg-config libfontconfig1-dev</code>
-                            <br/><br/>
-                            <strong style="color: #ff6666;">Error: "Unable to find libclang"</strong><br/>
-                            On Ubuntu/Debian, install: <code style="color: #00ff88;">sudo apt install clang libclang-dev</code>
+                        <div class="feature-card">
+                            <h4>Graphics</h4>
+                            <p>Kitty, Sixel, iTerm2, and Unicode image backends.</p>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <section class="section" style="padding: 6rem 2rem">
-                <div class="section-label">demo</div>
-                <h2 class="section-title">See it in action</h2>
-                <p class="section-description">
-                    Watch bookokrat handle real technical content
-                </p>
-
-                <div style="max-width: 800px; margin: 0 auto">
-                    <div
-                        style="
-                            background: #0a0a0a;
-                            border: 1px solid #1a1a1a;
-                            padding: 1rem;
-                            border-radius: 4px;
-                        "
-                    >
-                        <img
-                            src="https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8"
-                            alt="Bookokrat demo showing EPUB/PDF reading in terminal"
-                            style="
-                                width: 100%;
-                                display: block;
-                                border-radius: 2px;
-                            "
-                        />
+            <section class="section">
+                <div class="container split">
+                    <div>
+                        <h2 class="section-title">Reading workflow</h2>
+                        <p class="section-desc">
+                            Full-text search, jump list, bookmarks, and annotation export
+                            make Bookokrat a research tool.
+                        </p>
+                    </div>
+                    <div class="terminal-note">
+                        PDF rendering requires a graphics-capable terminal. If images render,
+                        PDF pages will too. EPUB works everywhere.
                     </div>
                 </div>
             </section>
 
-            <section class="section" style="padding: 6rem 2rem">
-                <div class="section-label">comparison</div>
-                <h2 class="section-title">How does it compare?</h2>
-                <p class="section-description">
-                    Terminal EPUB/PDF readers compared side-by-side
-                </p>
-
-                <div
-                    style="max-width: 1200px; margin: 0 auto; overflow-x: auto"
-                >
-                    <table
-                        style="
-                            border-collapse: collapse;
-                            width: 100%;
-                            font-family:
-                                &quot;Courier New&quot;, &quot;Courier&quot;,
-                                monospace;
-                            font-size: 0.875rem;
-                            background: #0a0a0a;
-                            border: 1px solid #1a1a1a;
-                        "
-                    >
-                        <thead>
-                            <tr style="background: #000">
-                                <th
-                                    style="
-                                        text-align: left;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                        color: #fff;
-                                    "
-                                >
-                                    Feature ↓ / Reader →
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/bugzmanov/bookokrat"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #00ff88;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >Bookokrat</a
-                                    >
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/aeosynth/bk"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #666;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >bk</a
-                                    >
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/wustho/epr"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #666;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >epr</a
-                                    >
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/wustho/epy"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #666;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >epy</a
-                                    >
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/wustho/baca"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #666;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >baca</a
-                                    >
-                                </th>
-                                <th
-                                    style="
-                                        text-align: center;
-                                        padding: 1rem;
-                                        border-bottom: 2px solid #00ff88;
-                                    "
-                                >
-                                    <a
-                                        href="https://github.com/superstarryeyes/lue"
-                                        target="_blank"
-                                        rel="noopener"
-                                        style="
-                                            color: #666;
-                                            text-decoration: underline;
-                                            cursor: pointer;
-                                        "
-                                        >Lue</a
-                                    >
-                                </th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    EPUB support
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Inline images in terminal
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗*
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗*
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span> (ANSI)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    MathML rendering
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Table of contents
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                    (basic)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Search
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                    (chapter &amp; book)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                    (incremental)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                    (regex)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    <span style="color: #00ff88">✓</span>
-                                    (regex)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Bookmarks / resume
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Highlights / notes
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Text-to-speech (TTS)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Multi-format (beyond EPUB)
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                            </tr>
-                            <tr>
-                                <td
-                                    style="
-                                        padding: 0.75rem 1rem;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #fff;
-                                    "
-                                >
-                                    Library / history view
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #00ff88;
-                                    "
-                                >
-                                    ✓
-                                </td>
-                                <td
-                                    style="
-                                        text-align: center;
-                                        border-top: 1px solid #1a1a1a;
-                                        color: #666;
-                                    "
-                                >
-                                    ✗
-                                </td>
-                            </tr>
-                        </tbody>
-                    </table>
-                    <div
-                        style="
-                            font-size: 0.75rem;
-                            color: #666;
-                            margin-top: 1rem;
-                            font-family: &quot;Courier New&quot;, monospace;
-                        "
-                    >
-                        * epr/epy can open images via external viewer; not
-                        inline in the terminal.
+            <section class="section" id="install">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Install</h2>
+                        <p class="section-desc">Pick a path and start reading.</p>
+                    </div>
+                    <div class="install">
+                        <details>
+                            <summary>
+                                <span>Homebrew (macOS)</span>
+                                <span class="install-command">brew install bookokrat</span>
+                                <button class="copy-btn" type="button" data-copy="brew install bookokrat">Copy</button>
+                            </summary>
+                            <div class="install-body">
+                                <ul>
+                                    <li>Prereqs: Homebrew installed.</li>
+                                    <li>PDF support is enabled by default.</li>
+                                </ul>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>
+                                <span>Linux binary</span>
+                                <span class="install-command">GitHub Releases (musl)</span>
+                            </summary>
+                            <div class="install-body">
+                                <ul>
+                                    <li>Prereqs: <code>curl</code> and <code>tar</code>.</li>
+                                    <li>Download and extract:</li>
+                                    <li><code>curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.3.1-x86_64-unknown-linux-musl.tar.gz</code></li>
+                                    <li><code>tar -xzf bookokrat-v0.3.1-x86_64-unknown-linux-musl.tar.gz</code></li>
+                                    <li>Install to your <code>PATH</code>:</li>
+                                    <li><code>sudo mv bookokrat /usr/local/bin/</code></li>
+                                </ul>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>
+                                <span>Arch Linux</span>
+                                <span class="install-command">AUR (bookokrat-bin)</span>
+                            </summary>
+                            <div class="install-body">
+                                <ul>
+                                    <li>Install with your AUR helper:</li>
+                                    <li><code>yay -S bookokrat-bin</code> or <code>paru -S bookokrat-bin</code>.</li>
+                                </ul>
+                            </div>
+                        </details>
+                        <details>
+                            <summary>
+                                <span>Cargo (all platforms)</span>
+                                <span class="install-command">cargo install bookokrat</span>
+                                <button class="copy-btn" type="button" data-copy="cargo install bookokrat">Copy</button>
+                            </summary>
+                            <div class="install-body">
+                                <ul>
+                                    <li>Prereqs: Rust toolchain + C compiler/linker.</li>
+                                    <li>Linux (Debian/Ubuntu): <code>sudo apt install build-essential</code>.</li>
+                                    <li>Linux (Fedora/RHEL): <code>sudo dnf install gcc make</code>.</li>
+                                    <li>macOS: <code>xcode-select --install</code>.</li>
+                                    <li>Windows: Visual Studio Build Tools with C++ workload.</li>
+                                    <li>PDF builds on Linux: <code>pkg-config</code>, <code>libfontconfig1-dev</code>, <code>clang</code>, <code>libclang-dev</code>.</li>
+                                    <li>Without PDF: <code>cargo install bookokrat --no-default-features</code>.</li>
+                                </ul>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </section>
 
-            <section class="section" id="terminals" style="padding: 6rem 2rem">
-                <div class="section-label">terminal support</div>
-                <h2 class="section-title">Image Rendering</h2>
-                <p class="section-description">
-                    Bookokrat auto-detects the best image protocol for your terminal. Here's what to expect.
-                </p>
-
-                <div style="max-width: 900px;">
-                    <!-- Experience tiers -->
-                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: 3rem;">
-                        <div style="background: linear-gradient(180deg, rgba(0,255,136,0.1) 0%, transparent 100%); border: 1px solid #00ff88; padding: 1.5rem; text-align: center;">
-                            <div style="color: #00ff88; font-size: 1.5rem; margin-bottom: 0.5rem;">★★★</div>
-                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #00ff88; margin-bottom: 1rem;">EXCELLENT</div>
-                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
-                                Kitty<br/>Ghostty<br/>iTerm2
-                            </div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); border: 1px solid #666; padding: 1.5rem; text-align: center;">
-                            <div style="color: #666; font-size: 1.5rem; margin-bottom: 0.5rem;">★★☆</div>
-                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #666; margin-bottom: 1rem;">GOOD</div>
-                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
-                                WezTerm<br/><span style="font-size: 0.75rem; color: #666;">(some flickering)</span>
-                            </div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); border: 1px solid #333; padding: 1.5rem; text-align: center;">
-                            <div style="color: #333; font-size: 1.5rem; margin-bottom: 0.5rem;">★☆☆</div>
-                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #333; margin-bottom: 1rem;">BASIC</div>
-                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
-                                Alacritty<br/>Linux default terminal<br/><span style="font-size: 0.75rem; color: #666;">(halfblocks)</span>
-                            </div>
-                        </div>
-                        <div style="background: rgba(255,0,0,0.02); border: 1px solid #ff6666; padding: 1.5rem; text-align: center;">
-                            <div style="color: #ff6666; font-size: 1.5rem; margin-bottom: 0.5rem;">✗</div>
-                            <div style="font-size: 0.75rem; letter-spacing: 0.1em; color: #ff6666; margin-bottom: 1rem;">NO IMAGES</div>
-                            <div style="font-size: 0.875rem; color: #fff; line-height: 1.6;">
-                                macOS<br/>Terminal.app
-                            </div>
-                        </div>
+            <section class="section">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">FAQ</h2>
+                        <p class="section-desc">Short answers for common setup questions.</p>
                     </div>
-
-                    <!-- Protocol details table -->
-                    <table style="border-collapse: collapse; width: 100%; font-size: 0.875rem; background: #0a0a0a; border: 1px solid #1a1a1a;">
-                        <thead>
-                            <tr style="background: #000;">
-                                <th style="text-align: left; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Terminal</th>
-                                <th style="text-align: center; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Protocol</th>
-                                <th style="text-align: left; padding: 1rem; border-bottom: 2px solid #00ff88; color: #fff;">Notes</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Kitty</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Kitty</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native support</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Ghostty</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Kitty</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native support</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">iTerm2</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">Sixel</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Native protocol causes flickering; Kitty buggy in recent betas</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">WezTerm</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #00ff88;">iTerm2</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">
-                                    Kitty buggy (<a href="https://github.com/wezterm/wezterm/issues/986" target="_blank" style="color: #00ff88;">#986</a>);
-                                    Sixel broken on Windows (<a href="https://github.com/wezterm/wezterm/issues/5758" target="_blank" style="color: #00ff88;">#5758</a>)
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Alacritty</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Halfblocks</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">
-                                    No graphics protocol support (<a href="https://github.com/alacritty/alacritty/issues/910" target="_blank" style="color: #00ff88;">#910</a>)
-                                </td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #fff;">Others</td>
-                                <td style="text-align: center; padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Auto-detect</td>
-                                <td style="padding: 0.75rem 1rem; border-top: 1px solid #1a1a1a; color: #666;">Kitty → Sixel → iTerm2 → Halfblocks</td>
-                            </tr>
-                        </tbody>
-                    </table>
-
-                    <!-- Call to action -->
-                    <div style="margin-top: 2rem; padding: 1.5rem; background: #0a0a0a; border: 1px solid #1a1a1a; display: flex; align-items: center; gap: 1rem;">
-                        <span style="color: #00ff88; font-size: 1.5rem;">?</span>
-                        <div style="flex: 1;">
-                            <div style="color: #fff; font-size: 0.95rem;">
-                                Images look wrong? Check <code style="color: #00ff88; background: #000; padding: 0.2rem 0.5rem;">bookokrat.log</code> for the detected protocol.
-                            </div>
-                            <div style="color: #666; font-size: 0.875rem; margin-top: 0.5rem;">
-                                Experiencing issues not covered above? Just <a href="https://github.com/bugzmanov/bookokrat/issues" target="_blank" style="color: #00ff88;">open an issue</a> — happy to help!
-                            </div>
-                        </div>
+                    <div class="faq">
+                        <details>
+                            <summary>Is PDF support enabled by default?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Yes. To build without PDF support use <code>--no-default-features</code>.
+                            </p>
+                        </details>
+                        <details>
+                            <summary>What do I need to build from source?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                A C compiler and standard build tools. For PDF builds on Linux, install
+                                <code>pkg-config</code>, <code>libfontconfig1-dev</code>, and <code>libclang-dev</code>.
+                            </p>
+                        </details>
+                        <details>
+                            <summary>Does it work on Windows?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Yes, via Cargo. Install the Visual Studio Build Tools with C++ workload.
+                            </p>
+                        </details>
                     </div>
                 </div>
             </section>
         </main>
 
         <footer>
-            <div class="footer-content">
-                <div>
-                    33,000+ lines of Rust. MIT licensed.<br/>
-                    <span style="font-size: 0.75rem; opacity: 0.7; margin-top: 0.5rem; display: inline-block;">
-                        Icon by <a href="https://vectordoodle.gumroad.com/l/FOCLd?ref=svgrepo.com" target="_blank" style="color: #666; text-decoration: underline;">Vectordoodle</a> in CC Attribution License via <a href="https://www.svgrepo.com/" target="_blank" style="color: #666; text-decoration: underline;">SVG Repo</a>
-                    </span>
-                </div>
+            <div class="container">
+                <div>Bookokrat is open source. Built for focused technical reading.</div>
                 <div class="footer-links">
-                    <a href="https://github.com/bugzmanov/bookokrat">github</a>
-                    <a
-                        href="https://github.com/bugzmanov/bookokrat/blob/main/LICENSE"
-                        >license</a
-                    >
+                    <a href="https://github.com/bugzmanov/bookokrat">GitHub</a>
+                    <a href="https://github.com/bugzmanov/bookokrat/releases">Releases</a>
+                    <a href="https://crates.io/crates/bookokrat">Crates.io</a>
                 </div>
             </div>
         </footer>
-
         <script>
-            function copyText(text, btn) {
-                navigator.clipboard.writeText(text);
-                btn.textContent = "copied!";
-                setTimeout(() => {
-                    btn.textContent = "copy";
-                }, 2000);
-            }
+            (function () {
+                const slider = document.querySelector(".hero-slider");
+                if (!slider) return;
 
-            // Slideshow functionality
-            let currentSlide = 0;
-            const container = document.querySelector(".screenshots-container");
-            const dots = document.querySelectorAll(".carousel-dot");
-            const totalSlides =
-                document.querySelectorAll(".hero-screenshot").length;
+                const slides = Array.from(slider.querySelectorAll(".hero-slide"));
+                const prev = slider.querySelector(".hero-slider-prev");
+                const next = slider.querySelector(".hero-slider-next");
+                let current = 0;
 
-            function updateSlideshow() {
-                container.style.transform = `translateX(-${currentSlide * 740}px)`;
-                dots.forEach((dot, index) => {
-                    dot.classList.toggle("active", index === currentSlide);
+                const setActive = (index) => {
+                    slides[current].classList.remove("active");
+                    current = (index + slides.length) % slides.length;
+                    slides[current].classList.add("active");
+                };
+
+                prev.addEventListener("click", () => setActive(current - 1));
+                next.addEventListener("click", () => setActive(current + 1));
+            })();
+
+            (function () {
+                const demos = document.querySelectorAll(".media-frame.video-demo");
+                demos.forEach((demo) => {
+                    const play = demo.querySelector(".demo-play");
+                    const video = demo.querySelector(".demo-video");
+                    if (!play || !video) return;
+
+                    const label = play.getAttribute("aria-label") || "Play demo";
+                    const showPlay = (text) => {
+                        play.style.display = "flex";
+                        play.setAttribute("aria-label", text);
+                        play.querySelector("span").textContent = "▶";
+                    };
+
+                    play.addEventListener("click", () => {
+                        play.style.display = "none";
+                        video.currentTime = 0;
+                        video.play();
+                    });
+
+                    video.addEventListener("ended", () => {
+                        showPlay(label.replace("Play", "Replay"));
+                    });
                 });
-            }
+            })();
 
-            function nextSlide() {
-                currentSlide = (currentSlide + 1) % totalSlides;
-                updateSlideshow();
-            }
-
-            function prevSlide() {
-                currentSlide = (currentSlide - 1 + totalSlides) % totalSlides;
-                updateSlideshow();
-            }
-
-            function goToSlide(index) {
-                currentSlide = index;
-                updateSlideshow();
-            }
-
-            // Keyboard navigation
-            document.addEventListener("keydown", (e) => {
-                if (e.key === "ArrowLeft") prevSlide();
-                if (e.key === "ArrowRight") nextSlide();
-            });
+            (function () {
+                const buttons = document.querySelectorAll(".install .copy-btn");
+                buttons.forEach((btn) => {
+                    btn.addEventListener("click", (event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        const text = btn.dataset.copy;
+                        if (!text) return;
+                        navigator.clipboard.writeText(text).then(() => {
+                            const original = btn.textContent;
+                            btn.textContent = "Copied";
+                            setTimeout(() => {
+                                btn.textContent = original;
+                            }, 1200);
+                        });
+                    });
+                });
+            })();
         </script>
     </body>
 </html>

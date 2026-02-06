@@ -396,7 +396,7 @@ pub fn render_page(
         (base_dpi_y as f32 * spec.mag) as i32,
     );
 
-    let line_bounds = extract_line_bounds(&page, spec.mag);
+    let line_bounds = extract_line_bounds_merged(&page, spec.mag);
     let link_rects = extract_link_rects(&page, spec.mag);
 
     let pixels = pixmap_to_rgb(&pixmap)?;
@@ -603,6 +603,129 @@ pub(crate) fn extract_line_bounds(page: &Page, scale_factor: f32) -> Vec<LineBou
             bounds
         })
         .unwrap_or_default()
+}
+
+/// Extract line bounds and merge lines that are on the same visual row.
+/// This is useful for TOC extraction and text yanking where PDF text objects
+/// are split across multiple lines but should be treated as a single row.
+pub(crate) fn extract_line_bounds_merged(page: &Page, scale_factor: f32) -> Vec<LineBounds> {
+    let raw_lines = extract_line_bounds(page, scale_factor);
+    merge_same_row_lines(raw_lines)
+}
+
+/// Merge lines that have overlapping Y ranges into single visual rows.
+fn merge_same_row_lines(lines: Vec<LineBounds>) -> Vec<LineBounds> {
+    if lines.len() <= 1 {
+        return lines;
+    }
+
+    // Sort by block_id first (reading order - left column before right),
+    // then by Y position within each block
+    let mut sorted = lines;
+    sorted.sort_by(|a, b| {
+        a.block_id
+            .cmp(&b.block_id)
+            .then_with(|| a.y0.partial_cmp(&b.y0).unwrap_or(std::cmp::Ordering::Equal))
+    });
+
+    let mut result = Vec::new();
+    let mut current_group: Vec<LineBounds> = vec![sorted.remove(0)];
+
+    for line in sorted {
+        // Check if this line overlaps with the current group's Y range
+        let group_y0 = current_group.iter().map(|l| l.y0).fold(f32::MAX, f32::min);
+        let group_y1 = current_group.iter().map(|l| l.y1).fold(f32::MIN, f32::max);
+
+        // Also check if line is from the same block (MuPDF uses blocks for columns)
+        let same_block = current_group.iter().any(|l| l.block_id == line.block_id);
+
+        if y_ranges_overlap(line.y0, line.y1, group_y0, group_y1) && same_block {
+            current_group.push(line);
+        } else {
+            // Merge current group and start new one
+            result.push(merge_line_group(current_group));
+            current_group = vec![line];
+        }
+    }
+
+    // Don't forget the last group
+    if !current_group.is_empty() {
+        result.push(merge_line_group(current_group));
+    }
+
+    result
+}
+
+/// Check if two Y ranges overlap significantly (at least 50% of smaller line's height).
+/// This prevents merging consecutive lines that only barely touch.
+fn y_ranges_overlap(y0_a: f32, y1_a: f32, y0_b: f32, y1_b: f32) -> bool {
+    // Calculate overlap amount
+    let overlap_start = y0_a.max(y0_b);
+    let overlap_end = y1_a.min(y1_b);
+    let overlap = (overlap_end - overlap_start).max(0.0);
+
+    // Calculate heights
+    let height_a = (y1_a - y0_a).max(0.1);
+    let height_b = (y1_b - y0_b).max(0.1);
+    let min_height = height_a.min(height_b);
+
+    // Require at least 50% overlap relative to the smaller line
+    overlap >= min_height * 0.5
+}
+
+/// Merge a group of lines on the same visual row into a single LineBounds.
+fn merge_line_group(mut group: Vec<LineBounds>) -> LineBounds {
+    if group.len() == 1 {
+        return group.remove(0);
+    }
+
+    // Sort by X position (left to right)
+    group.sort_by(|a, b| a.x0.partial_cmp(&b.x0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Compute merged bounding box
+    let x0 = group.iter().map(|l| l.x0).fold(f32::MAX, f32::min);
+    let y0 = group.iter().map(|l| l.y0).fold(f32::MAX, f32::min);
+    let x1 = group.iter().map(|l| l.x1).fold(f32::MIN, f32::max);
+    let y1 = group.iter().map(|l| l.y1).fold(f32::MIN, f32::max);
+
+    // Merge characters, inserting spaces for gaps
+    let mut chars = Vec::new();
+    let mut last_x1: Option<f32> = None;
+
+    for line in group {
+        if let Some(prev_x1) = last_x1 {
+            // Check gap between previous line's end and this line's start
+            let gap = line.x0 - prev_x1;
+            // If gap is significant, insert a space
+            let avg_char_width = estimate_char_width(&line);
+            if gap > avg_char_width * 0.5 {
+                // Insert space at the gap position
+                chars.push(CharInfo {
+                    x: prev_x1 + gap / 2.0,
+                    c: ' ',
+                });
+            }
+        }
+        chars.extend(line.chars);
+        last_x1 = Some(line.x1);
+    }
+
+    LineBounds {
+        x0,
+        y0,
+        x1,
+        y1,
+        chars,
+        block_id: 0, // Merged lines don't have a single block_id
+    }
+}
+
+/// Estimate average character width for a line
+fn estimate_char_width(line: &LineBounds) -> f32 {
+    if line.chars.len() < 2 {
+        return 10.0; // Default fallback
+    }
+    (line.x1 - line.x0) / line.chars.len() as f32
 }
 
 pub(crate) fn extract_link_rects(page: &Page, scale_factor: f32) -> Vec<LinkRect> {

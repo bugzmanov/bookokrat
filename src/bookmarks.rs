@@ -23,6 +23,9 @@ pub struct Bookmark {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf_zoom: Option<f32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pdf_pan: Option<u16>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -164,6 +167,7 @@ impl Bookmarks {
         total_chapters: Option<usize>,
         pdf_page: Option<usize>,
         pdf_zoom: Option<f32>,
+        pdf_pan: Option<u16>,
     ) {
         let key = self
             .resolve_existing_key(path)
@@ -178,6 +182,7 @@ impl Bookmarks {
                 total_chapters,
                 pdf_page,
                 pdf_zoom,
+                pdf_pan,
             },
         );
 

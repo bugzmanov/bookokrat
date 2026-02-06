@@ -26,6 +26,7 @@ use crate::pdf::kittyv2::{DisplayLocation, ImageState};
 use crate::pdf::{CellSize, ConvertedImage};
 use crate::pdf::{Command, ConversionCommand, RenderResponse, RenderedFrame, WorkerFault};
 use crate::settings::{PdfRenderMode, get_pdf_render_mode};
+use crate::terminal_overlay;
 use crate::theme::{Base16Palette, current_theme};
 use crate::{bookmarks::Bookmarks, navigation_panel::TableOfContents};
 
@@ -1506,6 +1507,24 @@ impl PdfReaderState {
             Vec::new()
         };
 
+        // iTerm2/Sixel images are terminal overlays. For Konsole hack mode, only
+        // clear via Kitty delete when layout/zoom changes (not during plain scroll).
+        let zoom_changed =
+            (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
+        let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
+        if terminal_overlay::konsole_kitty_delete_hack_enabled() && (zoom_changed || area_changed) {
+            terminal_overlay::emit_kitty_delete_all();
+        }
+        if terminal_overlay::overlay_force_clear_enabled() {
+            terminal_overlay::clear_rect_direct(img_area);
+        }
+        self.last_nonkitty_cleanup_area = Some(img_area);
+        self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg_color)),
+            img_area,
+        );
+
         // Single page display (no side-by-side)
         let mut page_sizes = Vec::new();
         if let Some(page) = self.rendered.get(self.page) {
@@ -1525,11 +1544,6 @@ impl PdfReaderState {
             self.last_render.img_area = img_area;
             self.last_render.pages_shown = 1;
             self.last_render.unused_width = 0;
-
-            if self.is_iterm && self.rendered.iter().any(|page| page.img.is_some()) {
-                log::debug!("No pages ready to render - keeping previous frame (iTerm2)");
-                return DisplayBatch::NoChange;
-            }
 
             log::debug!("No pages ready to render - showing loading");
             Self::render_loading_in(frame, img_area, &self.palette);
