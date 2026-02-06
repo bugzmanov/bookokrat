@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Bookokrat - Terminal EPUB + PDF Reader</title>
+        <meta
+            name="description"
+            content="Bookokrat is a terminal EPUB + PDF reader built for technical books: real HTML rendering, images, MathML, and fast navigation."
+        />
+        <meta name="theme-color" content="#f7f2e8" />
+        <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+        <style>
+            @import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap");
+
+            :root {
+                --bg: #f7f2e8;
+                --bg-2: #efe6d6;
+                --ink: #1c1b16;
+                --muted: #5c564d;
+                --accent: #e65d2f;
+                --accent-2: #2e5bff;
+                --card: #ffffff;
+                --stroke: #e4d7c5;
+                --shadow: 0 10px 30px rgba(34, 30, 23, 0.12);
+            }
+
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+
+            body {
+                font-family: "Space Grotesk", system-ui, sans-serif;
+                background: radial-gradient(1200px 800px at 10% 0%, #fff6e6 0%, var(--bg) 45%, var(--bg-2) 100%);
+                color: var(--ink);
+                line-height: 1.6;
+            }
+
+            .container {
+                max-width: 1200px;
+                margin: 0 auto;
+                padding: 0 2rem;
+            }
+
+            header {
+                position: sticky;
+                top: 0;
+                background: rgba(247, 242, 232, 0.85);
+                backdrop-filter: blur(8px);
+                border-bottom: 1px solid var(--stroke);
+                z-index: 20;
+            }
+
+            nav {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 1.25rem 0;
+            }
+
+            .logo {
+                font-family: "Fraunces", serif;
+                font-size: 1.25rem;
+                letter-spacing: 0.02em;
+            }
+
+            .nav-links {
+                display: flex;
+                gap: 1.5rem;
+                list-style: none;
+                font-size: 0.95rem;
+            }
+
+            .nav-links a {
+                color: var(--ink);
+                text-decoration: none;
+            }
+
+            .nav-links a:hover {
+                color: var(--accent);
+            }
+
+            .hero {
+                padding: 5rem 0 3rem;
+                position: relative;
+                overflow: hidden;
+            }
+
+            .hero-grid {
+                display: grid;
+                grid-template-columns: 1.1fr 0.9fr;
+                gap: 3rem;
+                align-items: center;
+            }
+
+            .hero h1 {
+                font-family: "Fraunces", serif;
+                font-size: clamp(2.5rem, 4.5vw, 4rem);
+                line-height: 1.1;
+                margin-bottom: 1.5rem;
+            }
+
+            .hero p {
+                color: var(--muted);
+                font-size: 1.05rem;
+                margin-bottom: 2rem;
+            }
+
+            .badge-row {
+                display: flex;
+                gap: 0.75rem;
+                flex-wrap: wrap;
+                margin-bottom: 1.5rem;
+            }
+
+            .badge {
+                border: 1px solid var(--stroke);
+                padding: 0.4rem 0.8rem;
+                border-radius: 999px;
+                font-size: 0.85rem;
+                background: #fff;
+            }
+
+            .cta-row {
+                display: flex;
+                gap: 1rem;
+                align-items: center;
+                flex-wrap: wrap;
+            }
+
+            .cta {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                padding: 0.9rem 1.5rem;
+                border-radius: 10px;
+                font-weight: 600;
+                text-decoration: none;
+                border: 1px solid var(--ink);
+                color: var(--ink);
+                background: #fff;
+                box-shadow: var(--shadow);
+                transition: transform 0.2s ease;
+            }
+
+            .cta.primary {
+                background: var(--accent);
+                border-color: var(--accent);
+                color: #fff;
+            }
+
+            .cta:hover {
+                transform: translateY(-2px);
+            }
+
+            .hero-card {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 16px;
+                padding: 1.5rem;
+                box-shadow: var(--shadow);
+            }
+
+            .hero-card h3 {
+                font-size: 1rem;
+                margin-bottom: 0.75rem;
+            }
+
+            .hero-card ul {
+                list-style: none;
+                display: grid;
+                gap: 0.6rem;
+                color: var(--muted);
+                font-size: 0.95rem;
+            }
+
+            .section {
+                padding: 4rem 0;
+            }
+
+            .section-header {
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                gap: 2rem;
+                margin-bottom: 2rem;
+            }
+
+            .section-title {
+                font-family: "Fraunces", serif;
+                font-size: clamp(1.75rem, 3vw, 2.5rem);
+            }
+
+            .section-desc {
+                color: var(--muted);
+                max-width: 520px;
+            }
+
+            .media-grid {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 2rem;
+            }
+
+            .media-card {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 18px;
+                padding: 1.5rem;
+                box-shadow: var(--shadow);
+            }
+
+            .media-card h3 {
+                margin-bottom: 0.75rem;
+            }
+
+            .media-frame {
+                border-radius: 12px;
+                border: 1px solid var(--stroke);
+                overflow: hidden;
+                background: #0f0f10;
+            }
+
+            .media-frame video,
+            .media-frame img {
+                width: 100%;
+                display: block;
+            }
+
+            .feature-grid {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 1.5rem;
+            }
+
+            .feature-card {
+                background: var(--card);
+                border: 1px solid var(--stroke);
+                border-radius: 14px;
+                padding: 1.5rem;
+                min-height: 180px;
+            }
+
+            .feature-card h4 {
+                margin-bottom: 0.75rem;
+            }
+
+            .feature-card p {
+                color: var(--muted);
+                font-size: 0.95rem;
+            }
+
+            .split {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 2rem;
+            }
+
+            .terminal-note {
+                background: #fff;
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 1.5rem;
+                font-size: 0.95rem;
+                color: var(--muted);
+            }
+
+            .install {
+                background: #fff;
+                border: 1px solid var(--stroke);
+                border-radius: 16px;
+                padding: 2rem;
+                box-shadow: var(--shadow);
+            }
+
+            .install-row {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 1rem;
+                padding: 0.75rem 0;
+                border-bottom: 1px solid var(--stroke);
+                font-family: "IBM Plex Mono", ui-monospace, monospace;
+            }
+
+            .install-row:last-child {
+                border-bottom: none;
+            }
+
+            .faq {
+                display: grid;
+                gap: 1rem;
+            }
+
+            .faq details {
+                background: #fff;
+                border: 1px solid var(--stroke);
+                border-radius: 12px;
+                padding: 1rem 1.25rem;
+            }
+
+            footer {
+                padding: 3rem 0 4rem;
+                color: var(--muted);
+                border-top: 1px solid var(--stroke);
+            }
+
+            .footer-links {
+                display: flex;
+                gap: 1.5rem;
+                flex-wrap: wrap;
+                margin-top: 1rem;
+            }
+
+            .footer-links a {
+                color: var(--muted);
+                text-decoration: none;
+            }
+
+            .footer-links a:hover {
+                color: var(--accent);
+            }
+
+            @media (max-width: 980px) {
+                .hero-grid,
+                .media-grid,
+                .feature-grid,
+                .split {
+                    grid-template-columns: 1fr;
+                }
+
+                .nav-links {
+                    display: none;
+                }
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="container">
+                <nav>
+                    <div class="logo">Bookokrat</div>
+                    <ul class="nav-links">
+                        <li><a href="#demos">Demos</a></li>
+                        <li><a href="#features">Features</a></li>
+                        <li><a href="#install">Install</a></li>
+                        <li><a href="https://github.com/bugzmanov/bookokrat">GitHub</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </header>
+
+        <main>
+            <section class="hero">
+                <div class="container hero-grid">
+                    <div>
+                        <div class="badge-row">
+                            <span class="badge">EPUB + HTML Rendering</span>
+                            <span class="badge">PDF Mode</span>
+                            <span class="badge">Images + MathML</span>
+                            <span class="badge">Vim Keys + Mouse</span>
+                        </div>
+                        <h1>Terminal reading for real technical books.</h1>
+                        <p>
+                            Bookokrat renders EPUB and PDF content the way it was meant to be read: tables,
+                            code blocks, math, and images all inside your terminal.
+                        </p>
+                        <div class="cta-row">
+                            <a class="cta primary" href="#install">Install</a>
+                            <a class="cta" href="#demos">Watch demos</a>
+                        </div>
+                    </div>
+                    <div class="hero-card">
+                        <h3>Why it feels different</h3>
+                        <ul>
+                            <li>Proper HTML layout with MathML and images</li>
+                            <li>Dedicated PDF modes: page + scroll</li>
+                            <li>Fast search, annotations, export to Markdown</li>
+                            <li>Works with Kitty, Sixel, iTerm2, and Unicode graphics</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="demos">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Two focused demos</h2>
+                        <p class="section-desc">
+                            Keep EPUB and PDF stories separate so each feature set shines.
+                        </p>
+                    </div>
+                    <div class="media-grid">
+                        <div class="media-card">
+                            <h3>EPUB / HTML demo</h3>
+                            <div class="media-frame">
+                                <video
+                                    src="epub-demo.mp4"
+                                    autoplay
+                                    muted
+                                    loop
+                                    playsinline
+                                    poster="3.png"
+                                ></video>
+                            </div>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Tables, code blocks, MathML, and images rendered inline.
+                            </p>
+                        </div>
+                        <div class="media-card">
+                            <h3>PDF demo</h3>
+                            <div class="media-frame">
+                                <video
+                                    src="pdf-demo.mp4"
+                                    autoplay
+                                    muted
+                                    loop
+                                    playsinline
+                                    poster="2.png"
+                                ></video>
+                            </div>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Page/scroll modes, PDF outline, search, and annotations.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="features">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Built for the way you read</h2>
+                        <p class="section-desc">
+                            Balanced features for both deep technical reading and quick reference.
+                        </p>
+                    </div>
+                    <div class="feature-grid">
+                        <div class="feature-card">
+                            <h4>EPUB + HTML</h4>
+                            <p>Tables, lists, inline images, blockquotes, and syntax-highlighted code.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>PDF modes</h4>
+                            <p>Dedicated PDF renderer with page and scroll views plus outline support.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>MathML support</h4>
+                            <p>Readable math for technical books directly in the terminal.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>Research workflow</h4>
+                            <p>Annotate selections, export to Markdown, and keep history.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>Fast navigation</h4>
+                            <p>Vim motions, jump list, bookmarks, and full-text search.</p>
+                        </div>
+                        <div class="feature-card">
+                            <h4>Terminal graphics</h4>
+                            <p>Kitty, Sixel, iTerm2, and Unicode halfblocks for images.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="container split">
+                    <div>
+                        <h2 class="section-title">Workflow, not just reading</h2>
+                        <p class="section-desc">
+                            Bookokrat is a reading environment: annotate, search, and export insights without
+                            leaving your terminal.
+                        </p>
+                    </div>
+                    <div class="terminal-note">
+                        <strong>PDF note:</strong> PDF rendering requires a graphics-capable terminal.
+                        If images render, PDF pages will too. EPUB works everywhere.
+                    </div>
+                </div>
+            </section>
+
+            <section class="section" id="install">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">Install in minutes</h2>
+                        <p class="section-desc">Pick your platform and get reading.</p>
+                    </div>
+                    <div class="install">
+                        <div class="install-row">
+                            <span>Homebrew (macOS)</span>
+                            <span>brew install bookokrat</span>
+                        </div>
+                        <div class="install-row">
+                            <span>Linux binary</span>
+                            <span>GitHub Releases (musl)</span>
+                        </div>
+                        <div class="install-row">
+                            <span>Cargo (all platforms)</span>
+                            <span>cargo install bookokrat</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="section">
+                <div class="container">
+                    <div class="section-header">
+                        <h2 class="section-title">FAQ</h2>
+                        <p class="section-desc">Short answers for common setup questions.</p>
+                    </div>
+                    <div class="faq">
+                        <details>
+                            <summary>Is PDF support enabled by default?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Yes. To build without PDF support use <code>--no-default-features</code>.
+                            </p>
+                        </details>
+                        <details>
+                            <summary>What do I need to build from source?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                A C compiler and standard build tools. For PDF builds on Linux, install
+                                <code>pkg-config</code>, <code>libfontconfig1-dev</code>, and <code>libclang-dev</code>.
+                            </p>
+                        </details>
+                        <details>
+                            <summary>Does it work on Windows?</summary>
+                            <p class="section-desc" style="margin-top: 0.75rem;">
+                                Yes, via Cargo. Install the Visual Studio Build Tools with C++ workload.
+                            </p>
+                        </details>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <div class="container">
+                <div>Bookokrat is open source. Built for focused technical reading.</div>
+                <div class="footer-links">
+                    <a href="https://github.com/bugzmanov/bookokrat">GitHub</a>
+                    <a href="https://github.com/bugzmanov/bookokrat/releases">Releases</a>
+                    <a href="https://crates.io/crates/bookokrat">Crates.io</a>
+                </div>
+            </div>
+        </footer>
+    </body>
+</html>
