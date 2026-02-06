@@ -86,12 +86,22 @@ SCRIPT
     # --maximize=true: Open window maximized (fixes small window issue)
     # --window-save-state=never: Prevent restoring previous session
     # --confirm-close-surface=false: Don't prompt when closing
-    open -na Ghostty --args \
-        --maximize=true \
-        --window-save-state=never \
-        --confirm-close-surface=false \
-        --title="$title" \
-        -e "$GHOSTTY_TEMP_SCRIPT"
+    local ghostty_app="${GHOSTTY_APP:-Ghostty}"
+    if [[ "$ghostty_app" == /* || "$ghostty_app" == *.app ]]; then
+        open -na "$ghostty_app" --args \
+            --maximize=true \
+            --window-save-state=never \
+            --confirm-close-surface=false \
+            --title="$title" \
+            -e "$GHOSTTY_TEMP_SCRIPT"
+    else
+        open -na "$ghostty_app" --args \
+            --maximize=true \
+            --window-save-state=never \
+            --confirm-close-surface=false \
+            --title="$title" \
+            -e "$GHOSTTY_TEMP_SCRIPT"
+    fi
 
     # Wait for window to appear
     sleep 3

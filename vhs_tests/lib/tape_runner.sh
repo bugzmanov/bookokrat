@@ -198,7 +198,8 @@ term_close() {
     esac
 }
 
-# Global: PDF file override from tape
+# Global: file override from tape (EPUB/PDF)
+TAPE_FILE=""
 TAPE_PDF_FILE=""
 
 # Parse and execute a single tape command
@@ -216,6 +217,16 @@ execute_command() {
             fi
             TAPE_PDF_FILE="$arg"
             log_verbose "PDF file: $arg"
+            return 0
+            ;;
+        file)
+            # Set any file to use (EPUB/PDF)
+            if [ -z "$arg" ]; then
+                log_error "file requires a file path"
+                return 1
+            fi
+            TAPE_FILE="$arg"
+            log_verbose "File: $arg"
             return 0
             ;;
         screenshot)
@@ -329,6 +340,7 @@ run_tape() {
 
     TAPE_SCREENSHOTS=()
     TAPE_ERRORS=()
+    TAPE_FILE=""
     TAPE_PDF_FILE=""
     CURRENT_TAPE=$(basename "$tape_file" .tape)
 
@@ -352,6 +364,13 @@ run_tape() {
         return 1
     fi
 
+    # Extract file directive if present (before other commands)
+    local file_line=$(echo "$commands" | grep "^file|" | head -1)
+    if [ -n "$file_line" ]; then
+        TAPE_FILE=$(echo "$file_line" | cut -d'|' -f2)
+        log_info "File from tape: $TAPE_FILE"
+    fi
+
     # Extract pdf directive if present (before other commands)
     local pdf_line=$(echo "$commands" | grep "^pdf|" | head -1)
     if [ -n "$pdf_line" ]; then
@@ -359,8 +378,8 @@ run_tape() {
         log_info "PDF from tape: $TAPE_PDF_FILE"
     fi
 
-    # Use tape's PDF or fallback to default
-    local test_file="${TAPE_PDF_FILE:-$default_test_file}"
+    # Use tape's file override, else PDF, else default
+    local test_file="${TAPE_FILE:-${TAPE_PDF_FILE:-$default_test_file}}"
     # Resolve relative to project root
     if [[ ! "$test_file" = /* ]]; then
         test_file="$PROJECT_ROOT/$test_file"
@@ -372,7 +391,12 @@ run_tape() {
     # Launch the app with --test-mode for reproducible state (no bookmarks/settings)
     log_info "🚀 Launching $TERMINAL_TYPE..."
     WINDOW_TITLE="VHS_TEST_${CURRENT_TAPE}"
-    local window_id=$(term_launch "$WINDOW_TITLE" "$binary" "$test_file --test-mode")
+    # Quote args to handle spaces in file paths
+    local quoted_args=""
+    for arg in "$test_file" "--test-mode"; do
+        quoted_args+=" $(printf %q "$arg")"
+    done
+    local window_id=$(term_launch "$WINDOW_TITLE" "$binary" "$quoted_args")
 
     if [ -z "$window_id" ]; then
         log_error "Failed to launch $TERMINAL_TYPE"

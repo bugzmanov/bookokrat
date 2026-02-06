@@ -7,6 +7,7 @@ PDF issue:
  [ ] DO not invert image colors mode
  [ ] links jumping with jump back is super unstable: after 1-2 successfull jumps back it looses capability of jumping (pdf links)
  [ ] MAYBE: copy the whole book: pdf & epub. 
+ [ ]  bug in AI engineering chpater 1: /Users/rafaelbagmanov/Library/Application\ Support/CleanShot/media/media_aQ49qlXVaL/CleanShot\ 2026-02-06\ at\ 05.39.18@2x.png
 
 Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
