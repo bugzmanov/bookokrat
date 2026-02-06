@@ -15,6 +15,7 @@ categories = ["command-line-interface"]
 exclude = [
   "vhs_tests/**",
   "vhs_test.pdf",
+  "docs/**",
   "target/**",
   "tmp/**",
   "tmp-release/**",
