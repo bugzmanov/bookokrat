@@ -28,9 +28,9 @@
 //! will be covered by the image and skip drawing over the image.
 //!
 //! # Quick start
-//! ```rust
+//! ```rust,no_run
 //! use ratatui::{backend::TestBackend, Terminal, Frame};
-//! use ratatui_image::{picker::Picker, StatefulImage, protocol::StatefulProtocol};
+//! use bookokrat::ratatui_image::{picker::Picker, StatefulImage, protocol::StatefulProtocol};
 //!
 //! struct App {
 //!     // We need to hold the render state.
@@ -151,7 +151,7 @@ pub type FontSize = (u16, u16);
 ///
 /// ```rust
 /// # use ratatui::Frame;
-/// # use ratatui_image::{Resize, Image, protocol::Protocol};
+/// # use bookokrat::ratatui_image::{Resize, Image, protocol::Protocol};
 /// struct App {
 ///     image_static: Protocol,
 /// }
@@ -211,7 +211,7 @@ pub trait ResizeEncodeRender {
 ///
 /// ```rust
 /// # use ratatui::Frame;
-/// # use ratatui_image::{Resize, StatefulImage, protocol::{StatefulProtocol}};
+/// # use bookokrat::ratatui_image::{Resize, StatefulImage, protocol::{StatefulProtocol}};
 /// struct App {
 ///     image_state: StatefulProtocol,
 /// }

@@ -61,7 +61,7 @@ impl Default for Key {
 /// When `crossterm`, `termion`, `termwiz` features are enabled, converting respective key input types into this
 /// `Input` type is defined.
 /// ```no_run
-/// use tui_textarea::{TextArea, Input, Key};
+/// use bookokrat::vendored::tui_textarea::{TextArea, Input, Key};
 /// use crossterm::event::{Event, read};
 ///
 /// let event = read().unwrap();
@@ -79,7 +79,7 @@ impl Default for Key {
 /// Creating `Input` instance directly can cause backend-agnostic input as follows.
 ///
 /// ```
-/// use tui_textarea::{TextArea, Input, Key};
+/// use bookokrat::vendored::tui_textarea::{TextArea, Input, Key};
 ///
 /// let mut textarea = TextArea::default();
 ///

@@ -17,7 +17,7 @@ pub enum Scrolling {
     /// # use ratatui::buffer::Buffer;
     /// # use ratatui::layout::Rect;
     /// # use ratatui::widgets::Widget as _;
-    /// use tui_textarea::{TextArea, Scrolling};
+    /// use bookokrat::vendored::tui_textarea::{TextArea, Scrolling};
     ///
     /// // Let's say terminal height is 8.
     ///
@@ -43,7 +43,7 @@ pub enum Scrolling {
     /// # use ratatui::buffer::Buffer;
     /// # use ratatui::layout::Rect;
     /// # use ratatui::widgets::Widget as _;
-    /// use tui_textarea::{TextArea, Scrolling};
+    /// use bookokrat::vendored::tui_textarea::{TextArea, Scrolling};
     ///
     /// // Let's say terminal height is 8.
     ///
@@ -69,7 +69,7 @@ pub enum Scrolling {
     /// # use ratatui::buffer::Buffer;
     /// # use ratatui::layout::Rect;
     /// # use ratatui::widgets::Widget as _;
-    /// use tui_textarea::{TextArea, Scrolling, CursorMove};
+    /// use bookokrat::vendored::tui_textarea::{TextArea, Scrolling, CursorMove};
     ///
     /// // Let's say terminal height is 8.
     ///
@@ -99,7 +99,7 @@ pub enum Scrolling {
     /// # use ratatui::buffer::Buffer;
     /// # use ratatui::layout::Rect;
     /// # use ratatui::widgets::Widget as _;
-    /// use tui_textarea::{TextArea, Scrolling};
+    /// use bookokrat::vendored::tui_textarea::{TextArea, Scrolling};
     ///
     /// // Let's say terminal height is 8.
     ///
@@ -125,7 +125,7 @@ pub enum Scrolling {
     /// # use ratatui::buffer::Buffer;
     /// # use ratatui::layout::Rect;
     /// # use ratatui::widgets::Widget as _;
-    /// use tui_textarea::{TextArea, Scrolling, CursorMove};
+    /// use bookokrat::vendored::tui_textarea::{TextArea, Scrolling, CursorMove};
     ///
     /// // Let's say terminal height is 8.
     ///
