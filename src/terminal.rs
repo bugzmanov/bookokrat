@@ -362,6 +362,17 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
     Some(crate::pdf::kittyv2::probe_delete_range_support())
 }
 
+#[cfg(feature = "pdf")]
+pub fn enable_tmux_passthrough() {
+    let _ = std::process::Command::new("tmux")
+        .args(["set", "-p", "allow-passthrough", "on"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut child| child.wait());
+}
+
 pub fn protocol_override_from_env() -> Option<ProtocolType> {
     let value = env::var("BOOKOKRAT_PROTOCOL").ok()?;
     match value.to_ascii_lowercase().as_str() {
