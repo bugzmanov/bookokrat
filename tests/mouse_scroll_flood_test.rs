@@ -62,7 +62,7 @@ impl bookokrat::event_source::EventSource for FloodEventSource {
 fn test_horizontal_scroll_flood_performance() {
     // Create test app
     let mut app = App::new_with_config(
-        Some("tests/fixtures"),
+        Some("tests/testdata"),
         Some("test_bookmarks.json"),
         false,
         None,
@@ -103,7 +103,7 @@ fn test_horizontal_scroll_flood_performance() {
 fn test_mixed_scroll_events_performance() {
     // Create test app
     let mut app = App::new_with_config(
-        Some("tests/fixtures"),
+        Some("tests/testdata"),
         Some("test_bookmarks.json"),
         false,
         None,
