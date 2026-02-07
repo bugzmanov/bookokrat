@@ -41,6 +41,20 @@ or
 paru -S bookokrat-bin
 ```
 
+### Nix/NixOS (via Flakes)
+
+If you have [Nix](https://nixos.org/download.html) with Flakes enabled, you can run Bookokrat directly:
+
+```bash
+nix run github:bugzmanov/bookokrat
+```
+
+To install it into your Nix profile:
+
+```bash
+nix profile install github:bugzmanov/bookokrat
+```
+
 ### Pre-built Binaries (Linux)
 
 Download from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases):
