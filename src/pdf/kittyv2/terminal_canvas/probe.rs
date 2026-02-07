@@ -35,9 +35,11 @@ fn probe_shared_memory() -> io::Result<bool> {
     region.close_fd();
 
     let mut stdout = io::stdout();
-    QueryCommand::new()
-        .image_id(PROBE_IMAGE_ID)
-        .write_to(&mut stdout, &shm_path)?;
+    QueryCommand::new().image_id(PROBE_IMAGE_ID).write_to(
+        &mut stdout,
+        &shm_path,
+        crate::pdf::kittyv2::is_tmux_mode(),
+    )?;
     stdout.flush()?;
 
     let response = read_response_with_timeout(PROBE_TIMEOUT)?;

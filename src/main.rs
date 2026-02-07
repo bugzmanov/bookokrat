@@ -91,6 +91,10 @@ fn main() -> Result<()> {
     #[cfg(feature = "pdf")]
     {
         let caps = terminal::detect_terminal();
+        if caps.env.tmux {
+            bookokrat::pdf::kittyv2::set_tmux(true);
+            terminal::enable_tmux_passthrough();
+        }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
     }
