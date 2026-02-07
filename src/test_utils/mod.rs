@@ -121,6 +121,15 @@ pub mod test_helpers {
 
     /// Create a test terminal for snapshot testing
     pub fn create_test_terminal(width: u16, height: u16) -> Terminal<TestBackend> {
+        // Force truecolor for deterministic SVG snapshots
+        static ENV_INIT: std::sync::Once = std::sync::Once::new();
+        ENV_INIT.call_once(|| {
+            // SAFETY: Tests run in a controlled process; we set a stable value once.
+            unsafe {
+                std::env::set_var("COLORTERM", "truecolor");
+            }
+        });
+
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         // Hide cursor for test terminals to prevent it from appearing in SVG snapshots

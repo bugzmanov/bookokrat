@@ -313,7 +313,7 @@ impl ResizeEncodeRender for StatefulProtocol {
 /// # Examples
 /// ```text
 /// use image::{DynamicImage, ImageBuffer, Rgb};
-/// use ratatui_image::ImageSource;
+/// use bookokrat::ratatui_image::ImageSource;
 ///
 /// let image: ImageBuffer::from_pixel(300, 200, Rgb::<u8>([255, 0, 0])).into();
 /// let source = ImageSource::new(image, "filename.png", (7, 14));

@@ -85,7 +85,7 @@ impl Picker {
     ///
     /// # Example
     /// ```rust
-    /// use ratatui_image::picker::Picker;
+    /// use bookokrat::ratatui_image::picker::Picker;
     /// let mut picker = Picker::from_query_stdio();
     /// ```
     ///
@@ -159,7 +159,7 @@ impl Picker {
     ///
     /// # Example
     /// ```rust
-    /// use ratatui_image::picker::Picker;
+    /// use bookokrat::ratatui_image::picker::Picker;
     ///
     /// let user_fontsize = (7, 14);
     ///

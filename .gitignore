@@ -15,5 +15,7 @@ tmp/
 logo.inspirations/
 flamegraph.svg
 *.pdf
+!tests/testdata/di_book_toc_test.pdf
+!tests/testdata/vhs_test.pdf
 .claude/
 .agentastic/
