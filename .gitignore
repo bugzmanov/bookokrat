@@ -19,3 +19,4 @@ flamegraph.svg
 !tests/testdata/vhs_test.pdf
 .claude/
 .agentastic/
+result/
