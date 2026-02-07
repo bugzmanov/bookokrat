@@ -84,7 +84,7 @@ fn test_book_list_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, palette, &book_manager);
+            nav_panel.render(f, area, true, palette, &book_manager);
         })
         .unwrap();
 
@@ -123,7 +123,7 @@ fn test_book_list_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, palette, &book_manager);
+            nav_panel.render(f, area, true, palette, &book_manager);
         })
         .unwrap();
 
@@ -173,6 +173,7 @@ fn test_navigation_panel_vim_motion_g() {
 
     let book_manager = create_test_book_manager();
     let mut nav_panel = NavigationPanel::new(&book_manager);
+    nav_panel.current_book_path = Some("book1.epub".to_string());
 
     // Switch to TOC mode with our test book
     let book_info = create_test_book_info_with_toc();
@@ -185,7 +186,7 @@ fn test_navigation_panel_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, palette, &book_manager);
+            nav_panel.render(f, area, true, palette, &book_manager);
         })
         .unwrap();
 
@@ -213,6 +214,7 @@ fn test_navigation_panel_vim_motion_gg() {
 
     let book_manager = create_test_book_manager();
     let mut nav_panel = NavigationPanel::new(&book_manager);
+    nav_panel.current_book_path = Some("book1.epub".to_string());
 
     // Switch to TOC mode with our test book
     let book_info = create_test_book_info_with_toc();
@@ -230,7 +232,7 @@ fn test_navigation_panel_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            nav_panel.render(f, area, false, palette, &book_manager);
+            nav_panel.render(f, area, true, palette, &book_manager);
         })
         .unwrap();
 
@@ -261,12 +263,23 @@ fn test_text_reader_vim_motion_g() {
     // Create test content with many lines
     let test_content = (0..=100)
         .map(|i| {
-            format!("This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
+            format!(
+                "<p>This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
-    text_reader.set_content_from_string(&test_content, None);
+    text_reader.set_content_from_string(&test_content, Some("Chapter 1".to_string()));
+
+    // First draw to initialize viewport dimensions
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let palette = get_test_palette();
+            text_reader.render(f, area, 2, 5, palette, true, false, false);
+        })
+        .unwrap();
 
     // Test G (go to bottom)
     text_reader.handle_upper_g();
@@ -275,7 +288,7 @@ fn test_text_reader_vim_motion_g() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, palette, true, false, false);
+            text_reader.render(f, area, 2, 5, palette, true, false, false);
         })
         .unwrap();
 
@@ -306,13 +319,24 @@ fn test_text_reader_vim_motion_gg() {
     // Create test content
     let test_content = (0..=100)
         .map(|i| {
-            format!("This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.")
+            format!(
+                "<p>This is line {i}. Lorem ipsum dolor sit amet, consectetur adipiscing elit.</p>"
+            )
         })
         .collect::<Vec<_>>()
         .join("\n");
 
     // Update wrapped lines
-    text_reader.set_content_from_string(&test_content, None);
+    text_reader.set_content_from_string(&test_content, Some("Chapter 1".to_string()));
+
+    // First draw to initialize viewport dimensions
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let palette = get_test_palette();
+            text_reader.render(f, area, 2, 5, palette, true, false, false);
+        })
+        .unwrap();
 
     // Scroll down first
     text_reader.scroll_down();
@@ -325,7 +349,7 @@ fn test_text_reader_vim_motion_gg() {
         .draw(|f| {
             let area = f.area();
             let palette = get_test_palette();
-            text_reader.render(f, area, 1, 5, palette, true, false, false);
+            text_reader.render(f, area, 2, 5, palette, true, false, false);
         })
         .unwrap();
 

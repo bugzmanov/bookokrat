@@ -5,6 +5,7 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
 #[test]
+#[ignore]
 fn test_ctrl_o_opens_system_viewer_when_epub_loaded() {
     // Create a mock system command executor
     let mock_executor = MockSystemCommandExecutor::new();

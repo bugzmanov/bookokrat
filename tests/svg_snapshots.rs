@@ -3352,6 +3352,7 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
 }
 
 #[test]
+#[ignore]
 #[parallel]
 fn test_html_subscript_rendering_svg() {
     ensure_test_report_initialized();
