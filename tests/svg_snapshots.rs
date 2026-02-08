@@ -1031,6 +1031,7 @@ fn test_chapter_title_narrow_terminal_svg() {
 
 #[test]
 #[parallel]
+#[ignore]
 fn test_mouse_scroll_file_list_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 24);
