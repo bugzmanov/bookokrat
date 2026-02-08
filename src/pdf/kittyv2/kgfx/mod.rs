@@ -10,7 +10,8 @@ pub(crate) use metrics::{record_shm_create, record_shm_unlink_error, record_shm_
 pub use pool::{RegionPool, pool};
 pub use protocol::{
     CHUNK_LIMIT, Compression, DeleteCommand, DeleteMode, DestCells, DirectTransmit, DisplayCommand,
-    Format, QueryCommand, Quiet, Response, SourceRect, TransmitCommand, parse_response,
+    Format, QueryCommand, Quiet, Response, SourceRect, TransmitCommand, is_tmux, parse_response,
+    set_tmux_mode,
 };
 pub use region::MemoryRegion;
 pub use tracker::{LifecycleTracker, tracker};

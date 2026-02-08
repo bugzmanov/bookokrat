@@ -225,6 +225,7 @@ fn guess_protocol_from_env(env: &TerminalEnv, kind: TerminalKind) -> Option<Grap
                 None
             }
         }
+        TerminalKind::Tmux => detect_outer_terminal_protocol_in_tmux(),
         _ => {
             if env.kitty_window || env.kitty_pid || env.term.contains("kitty") {
                 Some(GraphicsProtocol::Kitty)
@@ -233,6 +234,19 @@ fn guess_protocol_from_env(env: &TerminalEnv, kind: TerminalKind) -> Option<Grap
             }
         }
     }
+}
+
+/// Detect the graphics protocol of the outer terminal when running inside tmux.
+fn detect_outer_terminal_protocol_in_tmux() -> Option<GraphicsProtocol> {
+    // Ghostty sets GHOSTTY_RESOURCES_DIR which is inherited by tmux
+    if env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
+        return Some(GraphicsProtocol::Kitty);
+    }
+    // Kitty sets KITTY_WINDOW_ID
+    if env::var("KITTY_WINDOW_ID").is_ok() {
+        return Some(GraphicsProtocol::Kitty);
+    }
+    None
 }
 
 fn protocol_supports_graphics(protocol: Option<GraphicsProtocol>) -> bool {
@@ -320,8 +334,10 @@ fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
         caps.protocol,
         Some(GraphicsProtocol::Kitty) | Some(GraphicsProtocol::Iterm2)
     );
-    let supports_scroll_mode = matches!(caps.kind, TerminalKind::Kitty | TerminalKind::Ghostty)
-        && matches!(caps.protocol, Some(GraphicsProtocol::Kitty));
+    let supports_scroll_mode = matches!(
+        caps.kind,
+        TerminalKind::Kitty | TerminalKind::Ghostty | TerminalKind::Tmux
+    ) && matches!(caps.protocol, Some(GraphicsProtocol::Kitty));
     let supports_normal_mode = caps.kind != TerminalKind::ITerm;
 
     PdfCapabilities {
@@ -338,6 +354,10 @@ fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
 #[cfg(feature = "pdf")]
 pub fn probe_kitty_shm_support(caps: &TerminalCapabilities) -> Option<bool> {
     if env::var("BOOKOKRAT_DISABLE_KITTY_SHM").is_ok() {
+        return Some(false);
+    }
+    // SHM doesn't work through tmux DCS passthrough
+    if caps.kind == TerminalKind::Tmux {
         return Some(false);
     }
     if !matches!(caps.protocol, Some(GraphicsProtocol::Kitty)) {
@@ -358,6 +378,10 @@ pub fn probe_kitty_shm_support(caps: &TerminalCapabilities) -> Option<bool> {
 pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<bool> {
     if !matches!(caps.protocol, Some(GraphicsProtocol::Kitty)) {
         return None;
+    }
+    // Probe sends/reads raw sequences that don't work through tmux DCS passthrough
+    if caps.kind == TerminalKind::Tmux {
+        return Some(false);
     }
     Some(crate::pdf::kittyv2::probe_delete_range_support())
 }

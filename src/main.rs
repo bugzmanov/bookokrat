@@ -91,6 +91,22 @@ fn main() -> Result<()> {
     #[cfg(feature = "pdf")]
     {
         let caps = terminal::detect_terminal();
+
+        // Enable tmux DCS passthrough if we're in tmux with a supported outer terminal
+        if caps.kind == terminal::TerminalKind::Tmux
+            && matches!(caps.protocol, Some(terminal::GraphicsProtocol::Kitty))
+        {
+            bookokrat::pdf::kittyv2::kgfx::set_tmux_mode(true);
+            // Enable allow-passthrough for the current pane
+            let _ = std::process::Command::new("tmux")
+                .args(["set", "-p", "allow-passthrough", "on"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .and_then(|mut child| child.wait());
+        }
+
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
     }

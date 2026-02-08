@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -7,6 +8,42 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 const ESC: u8 = 0x1B;
 const APC_START: &[u8] = &[ESC, b'_', b'G'];
 const APC_END: &[u8] = &[ESC, b'\\'];
+
+// Tmux DCS passthrough state and sequences.
+static IS_TMUX: AtomicBool = AtomicBool::new(false);
+
+/// Enable tmux DCS passthrough wrapping for all Kitty graphics commands.
+pub fn set_tmux_mode(tmux: bool) {
+    IS_TMUX.store(tmux, Ordering::Relaxed);
+}
+
+/// Returns true if tmux DCS wrapping is active.
+pub fn is_tmux() -> bool {
+    IS_TMUX.load(Ordering::Relaxed)
+}
+
+const DCS_START: &[u8] = b"\x1bPtmux;";
+const DCS_END: &[u8] = b"\x1b\\";
+const TMUX_APC_START: &[u8] = &[ESC, ESC, b'_', b'G'];
+const TMUX_APC_END: &[u8] = &[ESC, ESC, b'\\'];
+
+fn write_apc_start<W: Write>(writer: &mut W) -> io::Result<()> {
+    if is_tmux() {
+        writer.write_all(DCS_START)?;
+        writer.write_all(TMUX_APC_START)
+    } else {
+        writer.write_all(APC_START)
+    }
+}
+
+fn write_apc_end<W: Write>(writer: &mut W) -> io::Result<()> {
+    if is_tmux() {
+        writer.write_all(TMUX_APC_END)?;
+        writer.write_all(DCS_END)
+    } else {
+        writer.write_all(APC_END)
+    }
+}
 
 /// Pixel format for image data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,11 +256,11 @@ impl TransmitCommand {
         let payload = BASE64.encode(shm_path.as_bytes());
 
         // Write: ESC_G<params>;<payload>ESC\
-        writer.write_all(APC_START)?;
+        write_apc_start(writer)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
         writer.write_all(payload.as_bytes())?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer)?;
 
         Ok(())
     }
@@ -407,7 +444,7 @@ impl DirectTransmit {
             let is_first = i == 0;
             let is_last = i == total_chunks - 1;
 
-            writer.write_all(APC_START)?;
+            write_apc_start(writer)?;
 
             if is_first {
                 // First chunk: all params
@@ -425,17 +462,17 @@ impl DirectTransmit {
 
             writer.write_all(b";")?;
             writer.write_all(chunk)?;
-            writer.write_all(APC_END)?;
+            write_apc_end(writer)?;
 
             chunks_written += 1;
         }
 
         // Handle empty data case
         if chunks_written == 0 {
-            writer.write_all(APC_START)?;
+            write_apc_start(writer)?;
             writer.write_all(first_params.as_bytes())?;
             writer.write_all(b";")?;
-            writer.write_all(APC_END)?;
+            write_apc_end(writer)?;
             chunks_written = 1;
         }
 
@@ -572,10 +609,10 @@ impl DeleteCommand {
             }
         }
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer)?;
 
         Ok(())
     }
@@ -618,11 +655,11 @@ impl QueryCommand {
 
         let payload = BASE64.encode(shm_path.as_bytes());
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
         writer.write_all(payload.as_bytes())?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer)?;
 
         Ok(())
     }
@@ -725,10 +762,10 @@ impl DisplayCommand {
             params.push_str(",C=1");
         }
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer)?;
 
         Ok(())
     }
