@@ -169,8 +169,12 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
             let image_id = image.id.id.get();
             let new_id = ImageId::new(image.id.id);
 
-            match &image.transmission {
-                Transmission::SharedMemory { path, size } => {
+            match &mut image.transmission {
+                Transmission::SharedMemory {
+                    path,
+                    size,
+                    cleanup_on_drop,
+                } => {
                     let mut cmd = TransmitCommand::new(dims.width, dims.height)
                         .format(Format::Rgb)
                         .image_id(image_id)
@@ -187,12 +191,15 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
                     }
 
-                    cmd.write_to(stdout, path, tmux)?;
-                    tracker().lock().unwrap().register(
-                        path.to_string(),
-                        *size,
-                        request.page as i64,
-                    );
+                    let shm_path = path.to_string();
+                    let shm_size = *size;
+                    cmd.write_to(stdout, &shm_path, tmux)?;
+                    // Disarm unlink-on-drop now that the terminal has the SHM path.
+                    *cleanup_on_drop = false;
+                    tracker()
+                        .lock()
+                        .unwrap()
+                        .register(shm_path, shm_size, request.page as i64);
                 }
                 Transmission::Direct { data, .. } => {
                     let mut cmd = DirectTransmit::new(dims.width, dims.height)

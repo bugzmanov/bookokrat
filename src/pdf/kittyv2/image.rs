@@ -4,6 +4,7 @@
 //! the Kitty graphics protocol.
 
 use std::borrow::Cow;
+use std::ffi::CString;
 use std::num::NonZeroU32;
 
 use image::DynamicImage;
@@ -26,6 +27,8 @@ pub enum Transmission<'a> {
         path: String,
         /// Shared memory size in bytes.
         size: usize,
+        /// Whether to unlink on drop if never sent.
+        cleanup_on_drop: bool,
     },
     /// Direct (inline) transmission (`t=d`).
     Direct {
@@ -129,7 +132,11 @@ impl Image<'_> {
             Image {
                 id,
                 dimensions: Dimensions { width, height },
-                transmission: Transmission::SharedMemory { path, size },
+                transmission: Transmission::SharedMemory {
+                    path,
+                    size,
+                    cleanup_on_drop: true,
+                },
             },
             size,
         ))
@@ -138,6 +145,39 @@ impl Image<'_> {
     /// Get the image dimensions.
     pub fn dimensions(&self) -> Dimensions {
         self.dimensions
+    }
+
+    /// Disable SHM unlink-on-drop once the image has been transmitted.
+    pub fn disarm_shm_cleanup(&mut self) {
+        if let Transmission::SharedMemory {
+            cleanup_on_drop, ..
+        } = &mut self.transmission
+        {
+            *cleanup_on_drop = false;
+        }
+    }
+}
+
+impl Drop for Image<'_> {
+    fn drop(&mut self) {
+        let Transmission::SharedMemory {
+            path,
+            cleanup_on_drop,
+            ..
+        } = &self.transmission
+        else {
+            return;
+        };
+
+        if !*cleanup_on_drop {
+            return;
+        }
+
+        if let Ok(c_path) = CString::new(path.as_str()) {
+            unsafe {
+                libc::shm_unlink(c_path.as_ptr());
+            }
+        }
     }
 }
 

@@ -234,7 +234,7 @@ pub(crate) fn apply_render_responses(
         }
     }
 
-    // For Kitty: clear Uploaded states for pages far from current viewport.
+    // For Kitty: clear Uploaded/Queued states for pages far from current viewport.
     // Kitty has a limited image cache and may evict old images. If we try to
     // display an evicted image with a stale ID, it silently fails. By clearing
     // Uploaded states for distant pages, we force re-conversion when they
@@ -248,6 +248,12 @@ pub(crate) fn apply_render_responses(
                     if img.is_uploaded() {
                         log::trace!(
                             "Clearing stale Uploaded state for distant page {idx} (current={current_page})"
+                        );
+                        info.img = None;
+                        cleared_pages.push(idx);
+                    } else if matches!(img, crate::pdf::kittyv2::ImageState::Queued(_)) {
+                        log::trace!(
+                            "Dropping queued Kitty image for distant page {idx} (current={current_page})"
                         );
                         info.img = None;
                         cleared_pages.push(idx);
