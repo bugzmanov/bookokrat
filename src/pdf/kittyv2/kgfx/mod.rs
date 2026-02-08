@@ -1,3 +1,4 @@
+mod metrics;
 mod pool;
 mod protocol;
 mod region;
@@ -10,6 +11,7 @@ pub use protocol::{
 };
 pub use region::MemoryRegion;
 pub use tracker::{LifecycleTracker, tracker};
+pub(crate) use metrics::{record_shm_create, record_shm_unlink_error, record_shm_unlink_success};
 
 /// Cleans up all shared memory resources.
 ///
