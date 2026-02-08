@@ -5,11 +5,13 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
+use super::{record_shm_unlink_error, record_shm_unlink_success};
+
 /// Soft limit for queue size - cleanup starts when exceeded.
 const SOFT_LIMIT: usize = 20;
 
 /// Hard maximum queue size - forced cleanup regardless of protection.
-const HARD_LIMIT: usize = 40;
+pub(crate) const HARD_LIMIT: usize = 40;
 
 /// Minimum age before normal cleanup (protects recently-used regions).
 const MIN_AGE: Duration = Duration::from_secs(1);
@@ -260,10 +262,14 @@ fn unlink_path(path: &str) {
             if result < 0 {
                 let err = std::io::Error::last_os_error();
                 debug!("failed to unlink {path}: {err}");
+                record_shm_unlink_error();
+            } else {
+                record_shm_unlink_success();
             }
         }
         Err(e) => {
             warn!("invalid path for unlink: {e}");
+            record_shm_unlink_error();
         }
     }
 }

@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 
 use image::DynamicImage;
 
-use super::kgfx::MemoryRegion;
+use super::kgfx::{MemoryRegion, record_shm_create};
 
 /// Image dimensions in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +124,7 @@ impl Image<'_> {
         // Close FD but keep the SHM file for terminal to read
         region.close_fd();
         drop(region);
+        record_shm_create();
 
         Ok((
             Image {
