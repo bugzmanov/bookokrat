@@ -261,8 +261,14 @@ fn unlink_path(path: &str) {
             let result = unsafe { libc::shm_unlink(c_path.as_ptr()) };
             if result < 0 {
                 let err = std::io::Error::last_os_error();
-                debug!("failed to unlink {path}: {err}");
-                record_shm_unlink_error();
+                // ENOENT is acceptable here: another owner may have already unlinked.
+                if err.raw_os_error() == Some(libc::ENOENT) {
+                    debug!("already unlinked {path}");
+                    record_shm_unlink_success();
+                } else {
+                    debug!("failed to unlink {path}: {err}");
+                    record_shm_unlink_error();
+                }
             } else {
                 record_shm_unlink_success();
             }

@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 
 use image::DynamicImage;
 
-use super::kgfx::{MemoryRegion, record_shm_create};
+use super::kgfx::{MemoryRegion, ShmLease};
 
 /// Image dimensions in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,10 +22,8 @@ pub struct Dimensions {
 pub enum Transmission<'a> {
     /// Shared memory transmission (`t=s`).
     SharedMemory {
-        /// POSIX shared memory name (e.g., "/kgfx_12345").
-        path: String,
-        /// Shared memory size in bytes.
-        size: usize,
+        /// Owned SHM lease until transmission handoff.
+        shm: Option<ShmLease>,
     },
     /// Direct (inline) transmission (`t=d`).
     Direct {
@@ -124,13 +122,13 @@ impl Image<'_> {
         // Close FD but keep the SHM file for terminal to read
         region.close_fd();
         drop(region);
-        record_shm_create();
-
         Ok((
             Image {
                 id,
                 dimensions: Dimensions { width, height },
-                transmission: Transmission::SharedMemory { path, size },
+                transmission: Transmission::SharedMemory {
+                    shm: Some(ShmLease::new(path, size)),
+                },
             },
             size,
         ))
@@ -172,5 +170,116 @@ impl ImageState {
     #[must_use]
     pub fn is_uploaded(&self) -> bool {
         matches!(self, Self::Uploaded(_))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_shm_path(tag: &str) -> String {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        // Keep SHM names short for platforms with tight NAME_MAX limits.
+        format!("/bk_{tag}_{:x}", id)
+    }
+
+    fn should_skip_shm_test(err: &std::io::Error) -> bool {
+        matches!(
+            err.kind(),
+            std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::Unsupported
+        )
+    }
+
+    struct ShmCleanup {
+        path: String,
+    }
+
+    impl ShmCleanup {
+        fn new(path: String) -> Self {
+            Self { path }
+        }
+    }
+
+    impl Drop for ShmCleanup {
+        fn drop(&mut self) {
+            if let Ok(c_path) = CString::new(self.path.as_str()) {
+                unsafe {
+                    libc::shm_unlink(c_path.as_ptr());
+                }
+            }
+        }
+    }
+
+    fn shm_exists(path: &str) -> bool {
+        let Ok(c_path) = CString::new(path) else {
+            return false;
+        };
+
+        let fd = unsafe { libc::shm_open(c_path.as_ptr(), libc::O_RDONLY, 0) };
+        if fd < 0 {
+            return false;
+        }
+
+        unsafe {
+            libc::close(fd);
+        }
+        true
+    }
+
+    #[test]
+    fn queued_image_drop_unlinks_shm() {
+        let path = unique_shm_path("queued-drop");
+        let data = [255u8, 0, 0];
+        let id = ImageId::new(NonZeroU32::new(1).unwrap());
+
+        let (img, _) = match Image::create_shm_from_rgb(&data, 1, 1, &path, id) {
+            Ok(v) => v,
+            Err(e) if should_skip_shm_test(&e) => return,
+            Err(e) => panic!("create SHM: {e}"),
+        };
+        assert!(shm_exists(&path), "SHM should exist before drop: {path}");
+
+        let state = ImageState::Queued(img);
+        drop(state);
+
+        assert!(
+            !shm_exists(&path),
+            "queued image drop should unlink SHM: {path}"
+        );
+    }
+
+    #[test]
+    fn handed_off_lease_keeps_shm_until_tracker_unlinks() {
+        let path = unique_shm_path("handoff");
+        let _cleanup = ShmCleanup::new(path.clone());
+        let data = [0u8, 255, 0];
+        let id = ImageId::new(NonZeroU32::new(2).unwrap());
+
+        let (mut img, _) = match Image::create_shm_from_rgb(&data, 1, 1, &path, id) {
+            Ok(v) => v,
+            Err(e) if should_skip_shm_test(&e) => return,
+            Err(e) => panic!("create SHM: {e}"),
+        };
+        assert!(shm_exists(&path), "SHM should exist before handoff: {path}");
+
+        let mut local_tracker = crate::pdf::kittyv2::kgfx::LifecycleTracker::new();
+        if let Transmission::SharedMemory { shm } = &mut img.transmission {
+            let lease = shm.take().expect("expected SHM lease");
+            lease.handoff_to_tracker(0, &mut local_tracker);
+        } else {
+            panic!("expected shared memory transmission");
+        }
+        drop(img);
+
+        assert!(
+            shm_exists(&path),
+            "handed-off lease should not unlink SHM (tracker owns cleanup): {path}"
+        );
+
+        local_tracker.cleanup_all();
     }
 }

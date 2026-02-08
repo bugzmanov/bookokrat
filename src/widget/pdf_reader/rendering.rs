@@ -234,7 +234,7 @@ pub(crate) fn apply_render_responses(
         }
     }
 
-    // For Kitty: clear Uploaded states for pages far from current viewport.
+    // For Kitty: clear Uploaded/Queued states for pages far from current viewport.
     // Kitty has a limited image cache and may evict old images. If we try to
     // display an evicted image with a stale ID, it silently fails. By clearing
     // Uploaded states for distant pages, we force re-conversion when they
@@ -248,6 +248,12 @@ pub(crate) fn apply_render_responses(
                     if img.is_uploaded() {
                         log::trace!(
                             "Clearing stale Uploaded state for distant page {idx} (current={current_page})"
+                        );
+                        info.img = None;
+                        cleared_pages.push(idx);
+                    } else if matches!(img, crate::pdf::kittyv2::ImageState::Queued(_)) {
+                        log::trace!(
+                            "Dropping queued Kitty image for distant page {idx} (current={current_page})"
                         );
                         info.img = None;
                         cleared_pages.push(idx);
@@ -268,6 +274,69 @@ pub(crate) fn apply_render_responses(
     RenderUpdateResult {
         updated,
         converted_frame_page,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pdf::kittyv2::{Image, ImageId};
+    use std::num::NonZeroU32;
+
+    #[test]
+    fn clears_distant_queued_kitty_image() {
+        let mut pdf_reader = PdfReaderState::new(
+            "test.pdf".to_string(),
+            true,
+            false,
+            0,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            crate::theme::current_theme_index(),
+            false,
+            false,
+            None,
+            "test-doc".to_string(),
+        );
+
+        // Current page is 0, so index 11 is beyond KITTY_CACHE_RADIUS (10)
+        // and should be dropped by apply_render_responses.
+        pdf_reader.rendered.resize_with(12, RenderedInfo::default);
+        let distant_id = ImageId::new(NonZeroU32::new(100).unwrap());
+        let distant_img = Image::from_rgb_bytes(vec![0, 0, 0], 1, 1, distant_id);
+        pdf_reader.rendered[11].img = Some(ConvertedImage::Kitty {
+            img: ImageState::Queued(distant_img),
+            cell_size: CellSize::new(1, 1),
+        });
+
+        // Control: index 10 is on the boundary and should be retained.
+        let boundary_id = ImageId::new(NonZeroU32::new(101).unwrap());
+        let boundary_img = Image::from_rgb_bytes(vec![0, 0, 0], 1, 1, boundary_id);
+        pdf_reader.rendered[10].img = Some(ConvertedImage::Kitty {
+            img: ImageState::Queued(boundary_img),
+            cell_size: CellSize::new(1, 1),
+        });
+
+        let mut notifications = NotificationManager::new();
+        let _ = apply_render_responses(
+            &mut pdf_reader,
+            Vec::new(),
+            None,
+            None,
+            None,
+            &mut notifications,
+        );
+
+        assert!(
+            pdf_reader.rendered[11].img.is_none(),
+            "distant queued kitty image should be dropped"
+        );
+        assert!(
+            pdf_reader.rendered[10].img.is_some(),
+            "boundary queued kitty image should be retained"
+        );
     }
 }
 
