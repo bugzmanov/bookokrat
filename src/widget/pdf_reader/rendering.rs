@@ -906,9 +906,6 @@ impl PdfReaderState {
 
         let mut cumulative_y: u32 = 0;
         let mut visible_info: Vec<VisiblePageInfo> = Vec::new();
-        #[cfg(feature = "pdf")]
-        let mut viewport_log = String::new();
-
         for (idx, rendered_page) in rendered.iter().enumerate() {
             let cell_size = rendered_page
                 .img
@@ -969,18 +966,6 @@ impl PdfReaderState {
                     });
                 }
             }
-            #[cfg(feature = "pdf")]
-            {
-                if !viewport_log.is_empty() {
-                    viewport_log.push_str(" | ");
-                }
-                let overlap = page_end > viewport_start && page_start < viewport_end;
-                let log_entry = format!(
-                    "{idx}:{page_start}-{page_end} overlap={overlap} dest_h={dest_h} clip_top_px={img_clip_top_px}"
-                );
-                viewport_log.push_str(&log_entry);
-            }
-
             cumulative_y = page_end + u32::from(separator_height);
             if page_start > viewport_end {
                 break;
@@ -1018,14 +1003,6 @@ impl PdfReaderState {
                 Some(best_page)
             }
         };
-        #[cfg(feature = "pdf")]
-        {
-            let visible_pages: Vec<usize> = visible_info.iter().map(|info| info.page_idx).collect();
-            log::info!(
-                "kitty viewport: scroll_offset={scroll_offset} viewport_h={viewport_height} current_hint={current_page_hint} current={current_page:?} visible={visible_pages:?} pages={{ {viewport_log} }}"
-            );
-        }
-
         if visible_info.is_empty() {
             Self::render_loading_in(frame, img_area, palette);
             return (DisplayBatch::Clear, current_page, Vec::new());
