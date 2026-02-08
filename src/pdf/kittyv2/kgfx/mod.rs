@@ -1,8 +1,12 @@
+mod lease;
+mod metrics;
 mod pool;
 mod protocol;
 mod region;
 mod tracker;
 
+pub use lease::ShmLease;
+pub(crate) use metrics::{record_shm_create, record_shm_unlink_error, record_shm_unlink_success};
 pub use pool::{RegionPool, pool};
 pub use protocol::{
     CHUNK_LIMIT, Compression, DeleteCommand, DeleteMode, DestCells, DirectTransmit, DisplayCommand,

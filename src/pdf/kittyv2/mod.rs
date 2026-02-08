@@ -117,8 +117,11 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
             let image_id = image.id.id.get();
             let new_id = ImageId::new(image.id.id);
 
-            match &image.transmission {
-                Transmission::SharedMemory { path, size } => {
+            match &mut image.transmission {
+                Transmission::SharedMemory { shm } => {
+                    let lease = shm.as_ref().ok_or_else(|| {
+                        io::Error::other("missing SHM lease for queued image")
+                    })?;
                     let mut cmd = TransmitCommand::new(dims.width, dims.height)
                         .format(Format::Rgb)
                         .image_id(image_id)
@@ -134,12 +137,11 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
                     }
 
-                    cmd.write_to(stdout, path)?;
-                    tracker().lock().unwrap().register(
-                        path.to_string(),
-                        *size,
-                        request.page as i64,
-                    );
+                    cmd.write_to(stdout, lease.path())?;
+                    let lease = shm
+                        .take()
+                        .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
+                    lease.handoff_to_tracker(request.page as i64, &mut tracker().lock().unwrap());
                 }
                 Transmission::Direct { data, .. } => {
                     let mut cmd = DirectTransmit::new(dims.width, dims.height)

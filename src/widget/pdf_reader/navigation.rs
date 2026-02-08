@@ -223,7 +223,6 @@ impl PdfReaderState {
     }
 
     pub fn handle_event(&mut self, ev: &Event) -> InputResponse {
-        log::info!("PDF handle_event: ev={ev:?}");
         match ev {
             Event::Key(key) => self.handle_key_event(*key),
             Event::Mouse(mouse) => InputResponse::handled(self.handle_mouse_event(*mouse)),
