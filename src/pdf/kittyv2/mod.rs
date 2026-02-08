@@ -171,9 +171,9 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
 
             match &mut image.transmission {
                 Transmission::SharedMemory { shm } => {
-                    let lease = shm.as_ref().ok_or_else(|| {
-                        io::Error::other("missing SHM lease for queued image")
-                    })?;
+                    let lease = shm
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
                     let mut cmd = TransmitCommand::new(dims.width, dims.height)
                         .format(Format::Rgb)
                         .image_id(image_id)

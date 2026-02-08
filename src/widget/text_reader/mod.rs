@@ -160,19 +160,20 @@ impl MarkdownTextReader {
                     .iter()
                     .any(|c| matches!(c, Capability::Sixel));
 
+                // Use shared terminal detection (tmux-aware).
+                let caps = crate::terminal::detect_terminal();
+
                 // Detect if we're in WezTerm.
                 // WezTerm's Kitty graphics implementation is buggy - it maps images to terminal
                 // cells differently than Kitty, causing artifacts when text overwrites images.
                 // iTerm2 protocol works best in WezTerm.
                 // See: https://github.com/wezterm/wezterm/issues/986
-                let is_wezterm = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("WezTerm"));
+                let is_wezterm = caps.kind == crate::terminal::TerminalKind::WezTerm;
 
                 // Detect if we're in iTerm2.
                 // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
-                let is_iterm2 = std::env::var("TERM_PROGRAM").is_ok_and(|v| v.contains("iTerm"));
-                let is_konsole = std::env::var("KONSOLE_VERSION").is_ok()
-                    || std::env::var("TERM_PROGRAM")
-                        .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"));
+                let is_iterm2 = caps.kind == crate::terminal::TerminalKind::ITerm;
+                let is_konsole = caps.kind == crate::terminal::TerminalKind::Konsole;
 
                 // Check for user override via BOOKOKRAT_PROTOCOL env var
                 let chosen_protocol =
@@ -202,6 +203,10 @@ impl MarkdownTextReader {
                     };
 
                 picker.set_protocol_type(chosen_protocol);
+                info!(
+                    "EPUB picker terminal kind: {:?}, tmux: {}",
+                    caps.kind, caps.env.tmux
+                );
                 info!("Final protocol type: {:?}", picker.protocol_type());
 
                 // Check if protocol requires true color but terminal doesn't support it

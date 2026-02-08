@@ -1,11 +1,10 @@
 use std::env;
 
-#[cfg(feature = "pdf")]
 use log::warn;
 
 use crate::vendored::ratatui_image::picker::{Picker, ProtocolType};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalKind {
     Kitty,
     Ghostty,
@@ -15,6 +14,7 @@ pub enum TerminalKind {
     AppleTerminal,
     VsCode,
     Tmux,
+    Other(String),
     Unknown,
 }
 
@@ -114,7 +114,7 @@ pub fn supports_true_color() -> bool {
 pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
     let kind = detect_kind(&env);
     let supports_true_color = supports_true_color_env(&env);
-    let protocol = guess_protocol_from_env(&env, kind);
+    let protocol = guess_protocol_from_env(&env, &kind);
     let supports_graphics = supports_graphics_from_env(&env);
     let mut caps = TerminalCapabilities {
         env,
@@ -141,6 +141,15 @@ pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
 }
 
 fn detect_kind(env: &TerminalEnv) -> TerminalKind {
+    // Inside tmux, determine terminal kind from the active client. Inherited
+    // env vars are often stale and can point to a previous terminal.
+    if env.tmux {
+        if let Some(kind) = detect_tmux_outer_terminal() {
+            return kind;
+        }
+        return TerminalKind::Tmux;
+    }
+
     if env.term_program == "kitty" {
         return TerminalKind::Kitty;
     }
@@ -150,7 +159,7 @@ fn detect_kind(env: &TerminalEnv) -> TerminalKind {
     if env.term_program == "konsole" || env::var("KONSOLE_VERSION").is_ok() {
         return TerminalKind::Konsole;
     }
-    if env.term_program == "wezterm" {
+    if env.term_program == "wezterm" || env.wezterm_executable {
         return TerminalKind::WezTerm;
     }
     if env.term_program == "iterm.app" || env.iterm_session {
@@ -162,9 +171,6 @@ fn detect_kind(env: &TerminalEnv) -> TerminalKind {
     if env.term_program == "vscode" {
         return TerminalKind::VsCode;
     }
-    if env.tmux {
-        return TerminalKind::Tmux;
-    }
     if env.kitty_window || env.kitty_pid {
         return TerminalKind::Kitty;
     }
@@ -175,6 +181,111 @@ fn detect_kind(env: &TerminalEnv) -> TerminalKind {
         return TerminalKind::Ghostty;
     }
     TerminalKind::Unknown
+}
+
+fn detect_tmux_outer_terminal() -> Option<TerminalKind> {
+    fn map_term(value: &str) -> TerminalKind {
+        if value.contains("kitty") {
+            TerminalKind::Kitty
+        } else if value.contains("ghostty") {
+            TerminalKind::Ghostty
+        } else if value.contains("wezterm") {
+            TerminalKind::WezTerm
+        } else if value.contains("iterm") {
+            TerminalKind::ITerm
+        } else if value.contains("konsole") {
+            TerminalKind::Konsole
+        } else {
+            TerminalKind::Other(value.to_string())
+        }
+    }
+
+    if let Some(termtype) = query_tmux_display("#{client_termtype}") {
+        return Some(map_term(&termtype));
+    }
+
+    query_tmux_display("#{client_termname}").map(|name| map_term(&name))
+}
+
+fn query_tmux_display(format: &str) -> Option<String> {
+    let output = std::process::Command::new("tmux")
+        .args(["display-message", "-p", format])
+        .output()
+        .ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let text = text.trim().to_ascii_lowercase();
+    if text.is_empty() { None } else { Some(text) }
+}
+
+fn tmux_outer_iterm_descriptor() -> Option<String> {
+    let termtype = query_tmux_display("#{client_termtype}")?;
+    if termtype.contains("iterm") {
+        return Some(termtype);
+    }
+    let termname = query_tmux_display("#{client_termname}")?;
+    if termname.contains("iterm") {
+        return Some(termname);
+    }
+    None
+}
+
+fn detect_tmux_outer_iterm_version() -> Option<(u32, u32)> {
+    let descriptor = tmux_outer_iterm_descriptor()?;
+    parse_version_major_minor_from_text(&descriptor)
+}
+
+fn parse_version_major_minor_from_text(text: &str) -> Option<(u32, u32)> {
+    for token in text.split_whitespace().rev() {
+        let cleaned = token.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+        if cleaned.is_empty() {
+            continue;
+        }
+        let version = parse_version_major_minor(cleaned);
+        if version.0 > 0 {
+            return Some(version);
+        }
+    }
+    None
+}
+
+fn picker_protocol_for_graphics(protocol: GraphicsProtocol) -> ProtocolType {
+    match protocol {
+        GraphicsProtocol::Kitty => ProtocolType::Kitty,
+        GraphicsProtocol::Iterm2 => ProtocolType::Iterm2,
+        GraphicsProtocol::Sixel => ProtocolType::Sixel,
+        GraphicsProtocol::Halfblocks => ProtocolType::Halfblocks,
+    }
+}
+
+fn forced_protocol_for_kind(kind: &TerminalKind, env: &TerminalEnv) -> Option<GraphicsProtocol> {
+    match kind {
+        TerminalKind::Kitty | TerminalKind::Ghostty => Some(GraphicsProtocol::Kitty),
+        TerminalKind::Konsole | TerminalKind::WezTerm => Some(GraphicsProtocol::Iterm2),
+        TerminalKind::ITerm => {
+            if iterm_supports_kitty(env) {
+                Some(GraphicsProtocol::Kitty)
+            } else {
+                None
+            }
+        }
+        TerminalKind::Other(name) => {
+            let name = name.to_ascii_lowercase();
+            if name.contains("wezterm") || name.contains("konsole") {
+                Some(GraphicsProtocol::Iterm2)
+            } else if name.contains("kitty") || name.contains("ghostty") {
+                Some(GraphicsProtocol::Kitty)
+            } else if name.contains("iterm") {
+                if iterm_supports_kitty(env) {
+                    Some(GraphicsProtocol::Kitty)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
 }
 
 fn supports_true_color_env(env: &TerminalEnv) -> bool {
@@ -213,7 +324,7 @@ fn supports_graphics_from_env(env: &TerminalEnv) -> bool {
     env.term.contains("kitty") || env.term.contains("ghostty")
 }
 
-fn guess_protocol_from_env(env: &TerminalEnv, kind: TerminalKind) -> Option<GraphicsProtocol> {
+fn guess_protocol_from_env(env: &TerminalEnv, kind: &TerminalKind) -> Option<GraphicsProtocol> {
     match kind {
         TerminalKind::Kitty | TerminalKind::Ghostty => Some(GraphicsProtocol::Kitty),
         TerminalKind::Konsole => Some(GraphicsProtocol::Iterm2),
@@ -226,7 +337,11 @@ fn guess_protocol_from_env(env: &TerminalEnv, kind: TerminalKind) -> Option<Grap
             }
         }
         _ => {
-            if env.kitty_window || env.kitty_pid || env.term.contains("kitty") {
+            if env.kitty_window
+                || env.kitty_pid
+                || env.term.contains("kitty")
+                || env.term.contains("ghostty")
+            {
                 Some(GraphicsProtocol::Kitty)
             } else {
                 None
@@ -245,9 +360,19 @@ fn protocol_supports_graphics(protocol: Option<GraphicsProtocol>) -> bool {
 }
 
 fn iterm_supports_kitty(env: &TerminalEnv) -> bool {
+    if env.tmux {
+        if let Some((major, minor)) = detect_tmux_outer_iterm_version() {
+            return major > 3 || (major == 3 && minor >= 6);
+        }
+        // In tmux, env vars can be stale. If version can't be queried, default
+        // to enabled and rely on runtime protocol probing/fallbacks.
+        return true;
+    }
+
     if env.term_program != "iterm.app" && !env.iterm_session {
         return false;
     }
+
     let (major, minor) = parse_version_major_minor(&env.term_program_version);
     major > 3 || (major == 3 && minor >= 6)
 }
@@ -261,30 +386,16 @@ fn parse_version_major_minor(version: &str) -> (u32, u32) {
 }
 
 fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut Picker>) {
-    let mut protocol = caps.protocol;
-
-    if caps.kind == TerminalKind::ITerm {
-        if iterm_supports_kitty(&caps.env) {
-            protocol = Some(GraphicsProtocol::Kitty);
-        }
-    } else if caps.kind == TerminalKind::Konsole {
-        protocol = Some(GraphicsProtocol::Iterm2);
-    } else if caps.kind == TerminalKind::WezTerm {
-        protocol = Some(GraphicsProtocol::Iterm2);
-    }
+    // Priority:
+    // 1) Known terminal policy (work around terminal-specific bugs)
+    // 2) Env-based guess
+    // 3) Picker capability result
+    let forced = forced_protocol_for_kind(&caps.kind, &caps.env);
+    let mut protocol = forced.or(caps.protocol);
 
     if let Some(picker) = picker {
-        match caps.kind {
-            TerminalKind::ITerm if iterm_supports_kitty(&caps.env) => {
-                picker.set_protocol_type(ProtocolType::Kitty);
-            }
-            TerminalKind::WezTerm => {
-                picker.set_protocol_type(ProtocolType::Iterm2);
-            }
-            TerminalKind::Konsole => {
-                picker.set_protocol_type(ProtocolType::Iterm2);
-            }
-            _ => {}
+        if let Some(forced) = forced {
+            picker.set_protocol_type(picker_protocol_for_graphics(forced));
         }
 
         let picker_protocol = match picker.protocol_type() {
@@ -293,7 +404,7 @@ fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut
             ProtocolType::Sixel => Some(GraphicsProtocol::Sixel),
             ProtocolType::Halfblocks => Some(GraphicsProtocol::Halfblocks),
         };
-        protocol = picker_protocol.or(protocol);
+        protocol = protocol.or(picker_protocol);
     }
 
     caps.protocol = protocol;
@@ -305,7 +416,11 @@ fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
 
     if caps.kind == TerminalKind::ITerm && !iterm_supports_kitty(&caps.env) {
         supported = false;
-        let iterm_version = &caps.env.term_program_version;
+        let iterm_version = if caps.env.tmux {
+            tmux_outer_iterm_descriptor().unwrap_or_else(|| "unknown".to_string())
+        } else {
+            caps.env.term_program_version.clone()
+        };
         blocked_reason = Some(format!(
             "PDF requires iTerm 3.6+. Current version: {}",
             if iterm_version.is_empty() {

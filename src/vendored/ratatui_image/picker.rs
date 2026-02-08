@@ -267,10 +267,10 @@ impl Picker {
 }
 
 fn detect_tmux_and_outer_protocol_from_env() -> (bool, Option<ProtocolType>) {
-    // Check if we're inside tmux.
-    if !env::var("TERM").is_ok_and(|term| term.starts_with("tmux"))
-        && !env::var("TERM_PROGRAM").is_ok_and(|term_program| term_program == "tmux")
-    {
+    // TMUX is the reliable signal that we are inside tmux.
+    // TERM/TERM_PROGRAM checks are weak and fail for common values such as
+    // screen-256color.
+    if !env::var("TMUX").is_ok_and(|tmux| !tmux.is_empty()) {
         return (false, None);
     }
 
@@ -282,20 +282,8 @@ fn detect_tmux_and_outer_protocol_from_env() -> (bool, Option<ProtocolType>) {
         .spawn()
         .and_then(|mut child| child.wait()); // wait(), for check_device_attrs.
 
-    // Crude guess based on the *existence* of some magic program specific env vars.
-    // Produces false positives, for example xterm started from kitty inherits KITTY_WINDOW_ID.
-    // Furthermore, tmux shares env vars from the first session, for example tmux started in xterm
-    // after a previous tmux session started in kitty, inherits KITTY_WINDOW_ID.
-    const OUTER_TERM_HINTS: [(&str, ProtocolType); 3] = [
-        ("KITTY_WINDOW_ID", ProtocolType::Kitty), // TODO: query should work inside tmux, remove?
-        ("ITERM_SESSION_ID", ProtocolType::Iterm2),
-        ("WEZTERM_EXECUTABLE", ProtocolType::Iterm2),
-    ];
-    for (hint, proto) in OUTER_TERM_HINTS {
-        if env::var(hint).is_ok_and(|s| !s.is_empty()) {
-            return (true, Some(proto));
-        }
-    }
+    // Do not force a protocol from inherited environment variables in tmux.
+    // Those variables often come from a previous client and are stale.
     (true, None)
 }
 

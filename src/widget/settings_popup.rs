@@ -76,8 +76,14 @@ impl SettingsPopup {
 
     pub fn new_with_tab(tab: SettingsTab) -> Self {
         let caps = terminal::detect_terminal();
-        let supports_graphics = caps.supports_graphics;
-        let supports_scroll_mode = caps.pdf.supports_scroll_mode;
+        Self::new_with_caps(tab, caps.supports_graphics, caps.pdf.supports_scroll_mode)
+    }
+
+    pub fn new_with_caps(
+        tab: SettingsTab,
+        supports_graphics: bool,
+        supports_scroll_mode: bool,
+    ) -> Self {
         let pdf_selected_idx = if supports_graphics { 0 } else { 2 };
         let current_tab = if cfg!(feature = "pdf") {
             tab

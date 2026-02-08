@@ -91,6 +91,18 @@ fn main() -> Result<()> {
     #[cfg(feature = "pdf")]
     {
         let caps = terminal::detect_terminal();
+        info!(
+            "Terminal: {:?}, tmux: {}, protocol: {:?}, TERM_PROGRAM: {:?}, TERM: {:?}, \
+             kitty_window: {}, kitty_pid: {}, wezterm_executable: {}",
+            caps.kind,
+            caps.env.tmux,
+            caps.protocol,
+            caps.env.term_program,
+            caps.env.term,
+            caps.env.kitty_window,
+            caps.env.kitty_pid,
+            caps.env.wezterm_executable,
+        );
         if caps.env.tmux {
             bookokrat::pdf::kittyv2::set_tmux(true);
             terminal::enable_tmux_passthrough();
