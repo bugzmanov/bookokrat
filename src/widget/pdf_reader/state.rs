@@ -287,9 +287,8 @@ pub struct PdfReaderState {
     pub notifications: NotificationManager,
     /// Last viewport update sent to converter (non-Kitty)
     pub last_sent_viewport: Option<ViewportUpdate>,
-    /// Last non-Kitty image area that triggered Konsole cleanup hack
+    /// Last overlay cleanup state to detect when clearing is needed (Konsole)
     pub last_nonkitty_cleanup_area: Option<Rect>,
-    /// Last non-Kitty zoom factor that triggered Konsole cleanup hack
     pub last_nonkitty_cleanup_zoom: f32,
     /// Last Kitty cache window (page indices) used to bound terminal cache
     pub last_kitty_cache_window: Option<(usize, usize)>,

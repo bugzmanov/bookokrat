@@ -8,6 +8,41 @@ const ESC: u8 = 0x1B;
 const APC_START: &[u8] = &[ESC, b'_', b'G'];
 const APC_END: &[u8] = &[ESC, b'\\'];
 
+/// Writes the APC start sequence, wrapping in tmux DCS passthrough if needed.
+/// When `cursor` is Some, a CUP (cursor position) escape is emitted inside the
+/// same DCS passthrough so the outer terminal receives cursor move + graphics
+/// command atomically. Coordinates are absolute 1-based screen positions.
+fn write_apc_start<W: Write>(
+    writer: &mut W,
+    is_tmux: bool,
+    cursor: Option<(u32, u32)>,
+) -> io::Result<()> {
+    if is_tmux {
+        writer.write_all(b"\x1bPtmux;")?;
+        if let Some((row, col)) = cursor {
+            write!(writer, "\x1b\x1b[{};{}H", row, col)?;
+        }
+        writer.write_all(&[ESC, ESC, b'_', b'G'])?;
+    } else {
+        if let Some((row, col)) = cursor {
+            write!(writer, "\x1b[{};{}H", row, col)?;
+        }
+        writer.write_all(APC_START)?;
+    }
+    Ok(())
+}
+
+/// Writes the APC end sequence, wrapping in tmux DCS passthrough if needed.
+fn write_apc_end<W: Write>(writer: &mut W, is_tmux: bool) -> io::Result<()> {
+    if is_tmux {
+        writer.write_all(&[ESC, ESC, b'\\'])?;
+        writer.write_all(b"\x1b\\")?;
+    } else {
+        writer.write_all(APC_END)?;
+    }
+    Ok(())
+}
+
 /// Pixel format for image data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Format {
@@ -104,6 +139,7 @@ pub struct TransmitCommand {
     no_cursor_move: bool,
     source_rect: Option<SourceRect>,
     dest_cells: Option<DestCells>,
+    cursor_at: Option<(u32, u32)>,
 }
 
 impl TransmitCommand {
@@ -119,6 +155,7 @@ impl TransmitCommand {
             no_cursor_move: true,
             source_rect: None,
             dest_cells: None,
+            cursor_at: None,
         }
     }
 
@@ -173,11 +210,24 @@ impl TransmitCommand {
         self
     }
 
+    /// Sets the cursor position (1-based, absolute screen coordinates).
+    /// The cursor move is emitted inside the same DCS passthrough as the
+    /// graphics command, ensuring atomicity under tmux.
+    pub fn cursor_at(mut self, row: u32, col: u32) -> Self {
+        self.cursor_at = Some((row, col));
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
     ///
     /// The `shm_path` is the POSIX shared memory path (e.g., `/kgfx_12345`).
     /// It will be base64 encoded in the payload section.
-    pub fn write_to<W: Write>(&self, writer: &mut W, shm_path: &str) -> io::Result<()> {
+    pub fn write_to<W: Write>(
+        &self,
+        writer: &mut W,
+        shm_path: &str,
+        is_tmux: bool,
+    ) -> io::Result<()> {
         // Build params string
         let mut params = format!(
             "a=T,t=s,f={},s={},v={}",
@@ -219,11 +269,11 @@ impl TransmitCommand {
         let payload = BASE64.encode(shm_path.as_bytes());
 
         // Write: ESC_G<params>;<payload>ESC\
-        writer.write_all(APC_START)?;
+        write_apc_start(writer, is_tmux, self.cursor_at)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
         writer.write_all(payload.as_bytes())?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer, is_tmux)?;
 
         Ok(())
     }
@@ -257,6 +307,7 @@ pub struct DirectTransmit {
     source_rect: Option<SourceRect>,
     dest_cells: Option<DestCells>,
     chunk_limit: usize,
+    cursor_at: Option<(u32, u32)>,
 }
 
 impl DirectTransmit {
@@ -274,6 +325,7 @@ impl DirectTransmit {
             source_rect: None,
             dest_cells: None,
             chunk_limit: CHUNK_LIMIT,
+            cursor_at: None,
         }
     }
 
@@ -330,6 +382,12 @@ impl DirectTransmit {
         self
     }
 
+    /// Sets the cursor position (1-based, absolute screen coordinates).
+    pub fn cursor_at(mut self, row: u32, col: u32) -> Self {
+        self.cursor_at = Some((row, col));
+        self
+    }
+
     /// Sets maximum chunk size in base64 characters.
     ///
     /// Will be clamped to [4, CHUNK_LIMIT] and aligned down to multiple of 4.
@@ -341,15 +399,20 @@ impl DirectTransmit {
     /// Transmits pixel data to the writer.
     ///
     /// Returns the number of chunks written.
-    pub fn send<W: Write>(self, writer: &mut W, pixels: &[u8]) -> io::Result<usize> {
+    pub fn send<W: Write>(self, writer: &mut W, pixels: &[u8], is_tmux: bool) -> io::Result<usize> {
         let encoded = BASE64.encode(pixels);
-        self.send_encoded(writer, encoded.as_bytes())
+        self.send_encoded(writer, encoded.as_bytes(), is_tmux)
     }
 
     /// Transmits pre-encoded base64 payload to the writer.
     ///
     /// The caller is responsible for any compression before encoding.
-    pub fn send_encoded<W: Write>(self, writer: &mut W, encoded: &[u8]) -> io::Result<usize> {
+    pub fn send_encoded<W: Write>(
+        self,
+        writer: &mut W,
+        encoded: &[u8],
+        is_tmux: bool,
+    ) -> io::Result<usize> {
         // Clamp and align chunk limit
         let limit = self.chunk_limit.clamp(4, CHUNK_LIMIT);
         let limit = limit - (limit % 4);
@@ -407,7 +470,8 @@ impl DirectTransmit {
             let is_first = i == 0;
             let is_last = i == total_chunks - 1;
 
-            writer.write_all(APC_START)?;
+            let cursor = if is_first { self.cursor_at } else { None };
+            write_apc_start(writer, is_tmux, cursor)?;
 
             if is_first {
                 // First chunk: all params
@@ -425,17 +489,17 @@ impl DirectTransmit {
 
             writer.write_all(b";")?;
             writer.write_all(chunk)?;
-            writer.write_all(APC_END)?;
+            write_apc_end(writer, is_tmux)?;
 
             chunks_written += 1;
         }
 
         // Handle empty data case
         if chunks_written == 0 {
-            writer.write_all(APC_START)?;
+            write_apc_start(writer, is_tmux, self.cursor_at)?;
             writer.write_all(first_params.as_bytes())?;
             writer.write_all(b";")?;
-            writer.write_all(APC_END)?;
+            write_apc_end(writer, is_tmux)?;
             chunks_written = 1;
         }
 
@@ -537,7 +601,7 @@ impl DeleteCommand {
     }
 
     /// Writes the escape sequence to the given writer.
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub fn write_to<W: Write>(&self, writer: &mut W, is_tmux: bool) -> io::Result<()> {
         let mode_char = match (&self.target, &self.mode) {
             (DeleteTarget::All, DeleteMode::Clear) => 'a',
             (DeleteTarget::All, DeleteMode::Delete) => 'A',
@@ -572,10 +636,10 @@ impl DeleteCommand {
             }
         }
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer, is_tmux, None)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer, is_tmux)?;
 
         Ok(())
     }
@@ -609,7 +673,12 @@ impl QueryCommand {
     ///
     /// The `shm_path` should point to a region containing at least 3 bytes
     /// (one RGB pixel). The caller is responsible for creating this region.
-    pub fn write_to<W: Write>(&self, writer: &mut W, shm_path: &str) -> io::Result<()> {
+    pub fn write_to<W: Write>(
+        &self,
+        writer: &mut W,
+        shm_path: &str,
+        is_tmux: bool,
+    ) -> io::Result<()> {
         let mut params = String::from("a=q,t=s,f=24,s=1,v=1");
 
         if let Some(id) = self.image_id {
@@ -618,11 +687,11 @@ impl QueryCommand {
 
         let payload = BASE64.encode(shm_path.as_bytes());
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer, is_tmux, None)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
         writer.write_all(payload.as_bytes())?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer, is_tmux)?;
 
         Ok(())
     }
@@ -648,6 +717,7 @@ pub struct DisplayCommand {
     source_rect: Option<SourceRect>,
     dest_cells: Option<DestCells>,
     no_cursor_move: bool,
+    cursor_at: Option<(u32, u32)>,
 }
 
 impl DisplayCommand {
@@ -660,6 +730,7 @@ impl DisplayCommand {
             source_rect: None,
             dest_cells: None,
             no_cursor_move: true,
+            cursor_at: None,
         }
     }
 
@@ -698,8 +769,14 @@ impl DisplayCommand {
         self
     }
 
+    /// Sets the cursor position (1-based, absolute screen coordinates).
+    pub fn cursor_at(mut self, row: u32, col: u32) -> Self {
+        self.cursor_at = Some((row, col));
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
-    pub fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+    pub fn write_to<W: Write>(&self, writer: &mut W, is_tmux: bool) -> io::Result<()> {
         let mut params = format!("a=p,i={}", self.image_id);
 
         if let Some(id) = self.placement_id {
@@ -725,10 +802,10 @@ impl DisplayCommand {
             params.push_str(",C=1");
         }
 
-        writer.write_all(APC_START)?;
+        write_apc_start(writer, is_tmux, self.cursor_at)?;
         writer.write_all(params.as_bytes())?;
         writer.write_all(b";")?;
-        writer.write_all(APC_END)?;
+        write_apc_end(writer, is_tmux)?;
 
         Ok(())
     }
@@ -816,7 +893,7 @@ mod tests {
         let cmd = TransmitCommand::new(100, 50).format(Format::Rgb);
 
         let mut output = Vec::new();
-        cmd.write_to(&mut output, "/kgfx_test").unwrap();
+        cmd.write_to(&mut output, "/kgfx_test", false).unwrap();
 
         let output_str = String::from_utf8_lossy(&output);
 
@@ -836,7 +913,10 @@ mod tests {
     #[test]
     fn test_delete_all() {
         let mut output = Vec::new();
-        DeleteCommand::all().delete().write_to(&mut output).unwrap();
+        DeleteCommand::all()
+            .delete()
+            .write_to(&mut output, false)
+            .unwrap();
 
         let output_str = String::from_utf8_lossy(&output);
         assert!(output_str.contains("a=d"));

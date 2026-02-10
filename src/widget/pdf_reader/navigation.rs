@@ -560,8 +560,12 @@ impl PdfReaderState {
                     'i' => Some(InputAction::ToggleInvertImages),
                     'p' => Some(InputAction::ToggleProfiling),
                     'x' => Some(InputAction::DumpDebugState),
+                    'a' => self.start_comment_input(),
                     'z' if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.reset_zoom_to_fit()
+                    }
+                    'Z' if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.reset_zoom_to_fit_width()
                     }
                     '=' | '+' => self.zoom_in(),
                     '-' | '_' => self.zoom_out(),
@@ -572,7 +576,9 @@ impl PdfReaderState {
                     'u' if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_half_screen(ScrollDirection::Up)
                     }
-                    'c' if key.modifiers.contains(KeyModifiers::CONTROL) => self.copy_selection(),
+                    'c' | 'C' if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.copy_selection()
+                    }
                     _ => None,
                 }
             }
@@ -863,6 +869,7 @@ impl PdfReaderState {
                 cell_pan_from_left: 0,
                 global_scroll_offset: 0,
             });
+            self.set_zoom_hud(fit_factor);
             self.last_render.rect = Rect::default();
             crate::settings::set_pdf_scale(fit_factor);
             crate::settings::set_pdf_pan_shift(0);
@@ -871,6 +878,33 @@ impl PdfReaderState {
             let fit_factor = self.fit_to_height_zoom_factor();
             self.non_kitty_zoom_factor = fit_factor;
             self.non_kitty_scroll_offset = 0;
+            self.set_zoom_hud(fit_factor);
+            self.clear_pending_scroll();
+            self.last_render.rect = Rect::default();
+            crate::settings::set_pdf_scale(fit_factor);
+            crate::settings::set_pdf_pan_shift(0);
+            self.make_render_scale_action(fit_factor)
+        }
+    }
+
+    fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
+        if self.is_kitty {
+            let fit_factor = self.fit_to_width_zoom_factor();
+            self.zoom = Some(Zoom {
+                factor: fit_factor,
+                cell_pan_from_left: 0,
+                global_scroll_offset: 0,
+            });
+            self.set_zoom_hud(fit_factor);
+            self.last_render.rect = Rect::default();
+            crate::settings::set_pdf_scale(fit_factor);
+            crate::settings::set_pdf_pan_shift(0);
+            Some(InputAction::Redraw)
+        } else {
+            let fit_factor = self.fit_to_width_zoom_factor();
+            self.non_kitty_zoom_factor = fit_factor;
+            self.non_kitty_scroll_offset = 0;
+            self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
             crate::settings::set_pdf_scale(fit_factor);
@@ -1438,6 +1472,23 @@ impl PdfReaderState {
         }
 
         let zoom_factor = f32::from(area_h) / f32::from(page_cell_h);
+        Zoom::clamp_factor(zoom_factor)
+    }
+
+    fn fit_to_width_zoom_factor(&self) -> f32 {
+        let page_cell_w = self
+            .rendered
+            .get(self.page)
+            .and_then(|r| r.full_cell_size.map(|size| size.width))
+            .unwrap_or(0);
+
+        let area_w = self.last_render.img_area_width;
+
+        if page_cell_w == 0 || area_w == 0 {
+            return 1.0;
+        }
+
+        let zoom_factor = f32::from(area_w) / f32::from(page_cell_w);
         Zoom::clamp_factor(zoom_factor)
     }
 
@@ -3962,7 +4013,14 @@ impl PdfReaderState {
                 send_conversion(crate::pdf::ConversionCommand::UpdateCursor(cursor_rect));
                 send_conversion(crate::pdf::ConversionCommand::UpdateVisual(vec![]));
             }
-            InputAction::CopySelection(_request) => {}
+            InputAction::CopySelection(request) => {
+                if let Some(service) = service {
+                    service.extract_text(request.bounds);
+                    notifications.info("Extracting selected text...");
+                } else {
+                    log::warn!("Cannot extract PDF selection text: render service unavailable");
+                }
+            }
             InputAction::ToggleProfiling => {
                 toggle_profiling(profiler);
             }

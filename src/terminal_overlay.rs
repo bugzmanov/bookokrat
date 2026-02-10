@@ -12,23 +12,22 @@ pub fn overlay_force_clear_enabled() -> bool {
     })
 }
 
-pub fn konsole_kitty_delete_hack_enabled() -> bool {
+pub fn kitty_delete_overlay_hack_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var("KONSOLE_VERSION").is_ok()
             || std::env::var("TERM_PROGRAM")
                 .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
+            || crate::terminal::is_warp_terminal()
     })
 }
 
 pub fn emit_kitty_delete_all() {
-    let mut out = stdout();
-    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-    let _ = out.flush();
+    let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
 }
 
-pub fn clear_konsole_images_if_needed() {
-    if konsole_kitty_delete_hack_enabled() {
+pub fn clear_overlay_images_if_needed() {
+    if kitty_delete_overlay_hack_enabled() {
         emit_kitty_delete_all();
     }
 }

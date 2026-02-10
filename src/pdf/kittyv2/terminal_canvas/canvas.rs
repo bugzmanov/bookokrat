@@ -18,16 +18,18 @@ pub struct TerminalCanvas {
     response_mode: ResponseMode,
     next_image_id: u32,
     stdout: io::Stdout,
+    is_tmux: bool,
 }
 
 impl TerminalCanvas {
-    pub fn new(mode: TransferMode, response_mode: ResponseMode) -> Self {
+    pub fn new(mode: TransferMode, response_mode: ResponseMode, is_tmux: bool) -> Self {
         Self {
             mode,
             registry: FrameRegistry::new(),
             response_mode,
             next_image_id: 2,
             stdout: io::stdout(),
+            is_tmux,
         }
     }
 
@@ -48,8 +50,7 @@ impl TerminalCanvas {
             page: frame.page,
         };
 
-        self.write_cursor_move(placement)
-            .map_err(SubmissionError::IoFailure)?;
+        let cursor = self.cursor_position(placement);
 
         match self.mode {
             TransferMode::SharedMemory => {
@@ -71,6 +72,7 @@ impl TerminalCanvas {
                     .placement_id(image_id)
                     .quiet(self.quiet_mode())
                     .no_cursor_move(true)
+                    .cursor_at(cursor.0, cursor.1)
                     .dest_cells(placement.cell_width, placement.cell_height);
 
                 if placement.has_source_rect() {
@@ -82,7 +84,7 @@ impl TerminalCanvas {
                     );
                 }
 
-                cmd.write_to(&mut self.stdout, &shm_path)
+                cmd.write_to(&mut self.stdout, &shm_path, self.is_tmux)
                     .map_err(SubmissionError::IoFailure)?;
                 self.stdout.flush().map_err(SubmissionError::IoFailure)?;
 
@@ -101,6 +103,7 @@ impl TerminalCanvas {
                     .placement_id(image_id)
                     .quiet(self.quiet_mode())
                     .no_cursor_move(true)
+                    .cursor_at(cursor.0, cursor.1)
                     .compression(Compression::Zlib)
                     .dest_cells(placement.cell_width, placement.cell_height);
 
@@ -113,7 +116,7 @@ impl TerminalCanvas {
                     );
                 }
 
-                cmd.send_encoded(&mut self.stdout, &encoded)
+                cmd.send_encoded(&mut self.stdout, &encoded, self.is_tmux)
                     .map_err(SubmissionError::IoFailure)?;
                 self.stdout.flush().map_err(SubmissionError::IoFailure)?;
             }
@@ -136,11 +139,12 @@ impl TerminalCanvas {
             ));
         }
 
-        self.write_cursor_move(placement)?;
+        let cursor = self.cursor_position(placement);
 
         let mut cmd = DisplayCommand::new(handle.image_id)
             .placement_id(handle.image_id)
             .quiet(self.quiet_mode())
+            .cursor_at(cursor.0, cursor.1)
             .dest_cells(placement.cell_width, placement.cell_height)
             .no_cursor_move(true);
 
@@ -153,7 +157,7 @@ impl TerminalCanvas {
             );
         }
 
-        cmd.write_to(&mut self.stdout)?;
+        cmd.write_to(&mut self.stdout, self.is_tmux)?;
         self.stdout.flush()
     }
 
@@ -199,12 +203,18 @@ impl TerminalCanvas {
         tracker().lock().unwrap().cleanup_all();
     }
 
-    fn write_cursor_move(&mut self, placement: ScreenPlacement) -> io::Result<()> {
-        write!(
-            &mut self.stdout,
-            "\x1b[{};{}H",
-            placement.row, placement.column
-        )
+    /// Returns absolute 1-based CUP coordinates for the placement.
+    /// In tmux mode, adds pane offset for screen-absolute positioning.
+    fn cursor_position(&self, placement: ScreenPlacement) -> (u32, u32) {
+        if self.is_tmux {
+            let (pane_top, pane_left) = crate::pdf::kittyv2::pane_offset();
+            (
+                pane_top as u32 + placement.row as u32,
+                pane_left as u32 + placement.column as u32,
+            )
+        } else {
+            (placement.row as u32, placement.column as u32)
+        }
     }
 
     fn quiet_mode(&self) -> Quiet {
@@ -235,7 +245,7 @@ impl TerminalCanvas {
                     DeleteMode::Delete => cmd.delete(),
                 };
                 cmd = cmd.quiet(self.quiet_mode());
-                cmd.write_to(&mut self.stdout)?;
+                cmd.write_to(&mut self.stdout, self.is_tmux)?;
                 self.stdout.flush()?;
                 if invalidate_registry {
                     self.registry.clear();
@@ -248,7 +258,7 @@ impl TerminalCanvas {
                     DeleteMode::Delete => cmd.delete(),
                 };
                 cmd = cmd.quiet(self.quiet_mode());
-                cmd.write_to(&mut self.stdout)?;
+                cmd.write_to(&mut self.stdout, self.is_tmux)?;
                 self.stdout.flush()?;
                 if invalidate_registry {
                     self.registry.invalidate(handle.page);
@@ -264,7 +274,7 @@ impl TerminalCanvas {
                         DeleteMode::Delete => cmd.delete(),
                     };
                     cmd = cmd.quiet(self.quiet_mode());
-                    cmd.write_to(&mut self.stdout)?;
+                    cmd.write_to(&mut self.stdout, self.is_tmux)?;
                     self.stdout.flush()?;
                     if invalidate_registry {
                         self.registry.invalidate(page);

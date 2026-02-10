@@ -168,6 +168,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `ss` - Toggle raw HTML view
 - `Space+c` - Copy entire chapter (EPUB) / extract current page text (PDF)
 - `Space+z` - Copy debug transcript
+- `z` (PDF) - Zoom to fit height
+- `Z` (PDF) - Zoom to fit width
 - `c` or `Ctrl+C` - Copy selection
 - `p` - Toggle profiler overlay
 - `n` - Toggle normal mode (Vim motions, visual selection, yanking)

@@ -91,6 +91,28 @@ fn main() -> Result<()> {
     #[cfg(feature = "pdf")]
     {
         let caps = terminal::detect_terminal();
+        info!(
+            "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
+             protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \
+             TERM_PROGRAM={:?}, TERM={:?}, kitty_window={}, kitty_pid={}, wezterm_executable={}",
+            caps.kind,
+            caps.env.tmux,
+            caps.supports_true_color,
+            caps.supports_graphics,
+            caps.protocol,
+            caps.pdf.supported,
+            caps.pdf.supports_scroll_mode,
+            caps.pdf.supports_comments,
+            caps.env.term_program,
+            caps.env.term,
+            caps.env.kitty_window,
+            caps.env.kitty_pid,
+            caps.env.wezterm_executable,
+        );
+        if caps.env.tmux {
+            bookokrat::pdf::kittyv2::set_tmux(true);
+            terminal::enable_tmux_passthrough();
+        }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
     }

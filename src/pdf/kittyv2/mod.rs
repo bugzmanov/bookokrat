@@ -11,12 +11,52 @@ pub mod terminal_canvas;
 
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use crossterm::{cursor::MoveTo, execute};
 use ratatui::layout::Position;
 use std::os::unix::io::AsRawFd;
+
+static IS_TMUX: OnceLock<bool> = OnceLock::new();
+static PANE_TOP: AtomicU16 = AtomicU16::new(0);
+static PANE_LEFT: AtomicU16 = AtomicU16::new(0);
+
+pub fn set_tmux(value: bool) {
+    IS_TMUX.set(value).ok();
+    if value {
+        refresh_pane_offset();
+    }
+}
+
+pub fn is_tmux_mode() -> bool {
+    *IS_TMUX.get().unwrap_or(&false)
+}
+
+pub fn refresh_pane_offset() {
+    if let Ok(output) = std::process::Command::new("tmux")
+        .args(["display-message", "-p", "-F", "#{pane_top}:#{pane_left}"])
+        .output()
+    {
+        if let Ok(text) = String::from_utf8(output.stdout) {
+            let parts: Vec<&str> = text.trim().split(':').collect();
+            if parts.len() == 2 {
+                if let (Ok(top), Ok(left)) = (parts[0].parse::<u16>(), parts[1].parse::<u16>()) {
+                    PANE_TOP.store(top, Ordering::Relaxed);
+                    PANE_LEFT.store(left, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) fn pane_offset() -> (u16, u16) {
+    (
+        PANE_TOP.load(Ordering::Relaxed),
+        PANE_LEFT.load(Ordering::Relaxed),
+    )
+}
 
 pub use image::{Dimensions, Image, ImageId, ImageState, Transmission};
 pub use kgfx::{
@@ -86,7 +126,7 @@ pub fn execute_display_batch_with_failures(batch: DisplayBatch) -> io::Result<Ve
             DeleteCommand::all()
                 .clear()
                 .quiet(Quiet::Silent)
-                .write_to(&mut stdout)?;
+                .write_to(&mut stdout, is_tmux_mode())?;
             stdout.flush()?;
             Ok(failed_pages)
         }
@@ -106,7 +146,19 @@ pub fn execute_display_batch_with_failures(batch: DisplayBatch) -> io::Result<Ve
 
 /// Display a single image using kittyv2 protocol.
 fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<()> {
-    execute!(stdout, MoveTo(request.position.x, request.position.y))?;
+    let tmux = is_tmux_mode();
+
+    // Compute cursor position (1-based CUP coordinates).
+    // In tmux mode, convert to absolute screen coordinates so the cursor move
+    // can be emitted inside the same DCS passthrough as the graphics command.
+    let cursor = if tmux {
+        let (pane_top, pane_left) = pane_offset();
+        let row = pane_top as u32 + request.position.y as u32 + 1;
+        let col = pane_left as u32 + request.position.x as u32 + 1;
+        (row, col)
+    } else {
+        (request.position.y as u32 + 1, request.position.x as u32 + 1)
+    };
 
     let loc = &request.location;
     let has_source_rect = loc.x > 0 || loc.y > 0 || loc.width > 0 || loc.height > 0;
@@ -119,15 +171,16 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
 
             match &mut image.transmission {
                 Transmission::SharedMemory { shm } => {
-                    let lease = shm.as_ref().ok_or_else(|| {
-                        io::Error::other("missing SHM lease for queued image")
-                    })?;
+                    let lease = shm
+                        .as_ref()
+                        .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
                     let mut cmd = TransmitCommand::new(dims.width, dims.height)
                         .format(Format::Rgb)
                         .image_id(image_id)
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
-                        .no_cursor_move(true);
+                        .no_cursor_move(true)
+                        .cursor_at(cursor.0, cursor.1);
 
                     if loc.columns > 0 || loc.rows > 0 {
                         cmd = cmd.dest_cells(loc.columns, loc.rows);
@@ -137,7 +190,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
                     }
 
-                    cmd.write_to(stdout, lease.path())?;
+                    cmd.write_to(stdout, lease.path(), tmux)?;
                     let lease = shm
                         .take()
                         .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
@@ -149,7 +202,8 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         .image_id(image_id)
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
-                        .no_cursor_move(true);
+                        .no_cursor_move(true)
+                        .cursor_at(cursor.0, cursor.1);
 
                     if loc.columns > 0 || loc.rows > 0 {
                         cmd = cmd.dest_cells(loc.columns, loc.rows);
@@ -159,7 +213,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
                     }
 
-                    cmd.send(stdout, data)?;
+                    cmd.send(stdout, data, tmux)?;
                 }
             }
 
@@ -172,7 +226,8 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
             let mut cmd = DisplayCommand::new(image_id.id.get())
                 .placement_id(image_id.id.get())
                 .quiet(Quiet::ErrorsOnly)
-                .no_cursor_move(true);
+                .no_cursor_move(true)
+                .cursor_at(cursor.0, cursor.1);
 
             if loc.columns > 0 || loc.rows > 0 {
                 cmd = cmd.dest_cells(loc.columns, loc.rows);
@@ -182,7 +237,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                 cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
             }
 
-            cmd.write_to(stdout)?;
+            cmd.write_to(stdout, tmux)?;
         }
     }
 
@@ -192,51 +247,56 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
 /// Delete all images.
 pub fn delete_all_images() -> io::Result<()> {
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
     DeleteCommand::all()
         .delete()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout)?;
+        .write_to(&mut stdout, tmux)?;
     stdout.flush()
 }
 
 /// Delete a single image by ID.
 pub fn delete_image_by_id(id: NonZeroU32) -> io::Result<()> {
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
     DeleteCommand::by_id(id.get())
         .delete()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout)?;
+        .write_to(&mut stdout, tmux)?;
     stdout.flush()
 }
 
 /// Delete images in an ID range.
 pub fn delete_images_by_range(start: NonZeroU32, end: NonZeroU32) -> io::Result<()> {
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
     DeleteCommand::by_range(start.get(), end.get())
         .delete()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout)?;
+        .write_to(&mut stdout, tmux)?;
     stdout.flush()
 }
 
 /// Clear images in an ID range (hide but keep in memory).
 pub fn clear_images_by_range(start: NonZeroU32, end: NonZeroU32) -> io::Result<()> {
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
     DeleteCommand::by_range(start.get(), end.get())
         .clear()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout)?;
+        .write_to(&mut stdout, tmux)?;
     stdout.flush()
 }
 
 /// Clear placements for an image ID (hide but keep in memory).
 pub fn clear_placement(id: NonZeroU32) -> io::Result<()> {
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
     // Clear ALL placements for this image ID (not a specific placement)
     DeleteCommand::by_id(id.get())
         .clear()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout)?;
+        .write_to(&mut stdout, tmux)?;
     stdout.flush()
 }
 
@@ -265,6 +325,7 @@ pub fn probe_delete_range_support() -> bool {
     let id_b = NonZeroU32::new(90002).unwrap();
 
     let mut stdout = io::stdout();
+    let tmux = is_tmux_mode();
 
     // Transmit two tiny images so we can verify display after delete-range.
     let red = [255u8, 0, 0];
@@ -276,7 +337,7 @@ pub fn probe_delete_range_support() -> bool {
         .placement_id(id_a.get())
         .quiet(Quiet::ErrorsOnly)
         .no_cursor_move(true)
-        .send(&mut stdout, &red);
+        .send(&mut stdout, &red, tmux);
 
     let _ = DirectTransmit::new(1, 1)
         .format(Format::Rgb)
@@ -284,14 +345,14 @@ pub fn probe_delete_range_support() -> bool {
         .placement_id(id_b.get())
         .quiet(Quiet::ErrorsOnly)
         .no_cursor_move(true)
-        .send(&mut stdout, &blue);
+        .send(&mut stdout, &blue, tmux);
 
     let _ = stdout.flush();
 
     // Issue a delete-by-range; unsupported terminals will respond with an error.
     let _ = DeleteCommand::by_range(1, 13)
         .delete()
-        .write_to(&mut stdout);
+        .write_to(&mut stdout, tmux);
     let _ = stdout.flush();
 
     let ok_a = display_and_check(&mut stdout, id_a.get(), PROBE_TIMEOUT);
@@ -300,11 +361,11 @@ pub fn probe_delete_range_support() -> bool {
     let _ = DeleteCommand::by_id(id_a.get())
         .delete()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout);
+        .write_to(&mut stdout, tmux);
     let _ = DeleteCommand::by_id(id_b.get())
         .delete()
         .quiet(Quiet::Silent)
-        .write_to(&mut stdout);
+        .write_to(&mut stdout, tmux);
     let _ = stdout.flush();
 
     let _ = disable_raw_mode();
@@ -318,7 +379,7 @@ fn display_and_check(stdout: &mut io::Stdout, id: u32, timeout: Duration) -> boo
         .dest_cells(1, 1)
         .no_cursor_move(true);
 
-    if cmd.write_to(stdout).is_err() {
+    if cmd.write_to(stdout, is_tmux_mode()).is_err() {
         return false;
     }
     let _ = stdout.flush();

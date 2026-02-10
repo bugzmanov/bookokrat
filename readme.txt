@@ -88,6 +88,8 @@
 │  h / l         Previous / next chapter                                      │
 │  Ctrl+o        Jump backward in history                                     │
 │  Ctrl+i        Jump forward in history                                      │
+│  z (PDF)       Zoom to fit height                                           │
+│  Z (PDF)       Zoom to fit width                                            │
 │  n             Toggle normal mode                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -235,6 +237,7 @@ Review and manage notes efficiently:
 
 Comments are saved per-book and persist across sessions.
 PDF annotations require a graphics-capable terminal.
+For now, PDF comments can be added only in zen mode.
 
 ===============================================================================
 

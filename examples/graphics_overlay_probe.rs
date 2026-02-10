@@ -175,7 +175,7 @@ fn kitty_send(
         .quiet(Quiet::Silent)
         .no_cursor_move(true)
         .dest_cells(w_cells, h_cells)
-        .send(out, pixels)?;
+        .send(out, pixels, false)?;
     Ok(())
 }
 
@@ -258,7 +258,7 @@ fn main() -> std::io::Result<()> {
             DeleteCommand::all()
                 .clear()
                 .quiet(Quiet::Silent)
-                .write_to(&mut out)?;
+                .write_to(&mut out, false)?;
         }
 
         write!(out, "\x1b[{};{}H", y + 1, x + 1)?;

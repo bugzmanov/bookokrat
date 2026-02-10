@@ -180,6 +180,10 @@ pub struct App {
     /// Path to the currently opened PDF document (for search indexing)
     #[cfg(feature = "pdf")]
     pdf_document_path: Option<PathBuf>,
+    #[cfg(feature = "pdf")]
+    pdf_supports_graphics: bool,
+    #[cfg(feature = "pdf")]
+    pdf_supports_scroll_mode: bool,
 }
 
 #[cfg(feature = "pdf")]
@@ -471,6 +475,10 @@ impl App {
             pdf_waiting_for_viewport: false,
             #[cfg(feature = "pdf")]
             pdf_document_path: None,
+            #[cfg(feature = "pdf")]
+            pdf_supports_graphics: false,
+            #[cfg(feature = "pdf")]
+            pdf_supports_scroll_mode: false,
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
@@ -502,7 +510,7 @@ impl App {
             && crate::terminal::detect_terminal().supports_graphics
         {
             app.previous_main_panel = MainPanel::NavigationList;
-            app.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::PdfSupport));
+            app.settings_popup = Some(app.make_settings_popup(SettingsTab::PdfSupport));
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             // Mark as configured so we don't show again
             crate::settings::set_pdf_settings_configured(true);
@@ -554,10 +562,11 @@ impl App {
     /// Clear PDF graphics from terminal when switching away from PDF mode
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
-        if is_kitty || crate::terminal_overlay::konsole_kitty_delete_hack_enabled() {
+        if is_kitty || crate::terminal_overlay::kitty_delete_overlay_hack_enabled() {
             crate::terminal_overlay::emit_kitty_delete_all();
+            // Called outside draw(), so we need an explicit flush
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         }
-        // For iTerm2/Sixel, images are inline and will be overwritten by new content
     }
 
     /// Open a book for reading by index - delegates to path-based opening
@@ -816,16 +825,12 @@ impl App {
 
         // Detect terminal protocol and capabilities
         let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
-        // Apply user protocol override if set
-        if let Some(forced) = crate::terminal::protocol_override_from_env() {
-            if let Some(ref mut p) = picker {
-                p.set_protocol_type(forced);
-            }
-        }
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal(),
         };
+        self.pdf_supports_graphics = caps.supports_graphics;
+        self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
 
         if let Some(reason) = caps.pdf.blocked_reason.as_ref() {
             warn!("{reason}");
@@ -2585,9 +2590,7 @@ impl App {
                     height: area.height.saturating_sub(2),
                 };
                 f.render_widget(crate::widget::pdf_reader::DimOverlay, inner);
-                // Konsole uses iTerm2 protocol but images are overlays that leak through.
-                // Emit Kitty delete-all to hide them when popup is shown.
-                crate::terminal_overlay::clear_konsole_images_if_needed();
+                crate::terminal_overlay::clear_overlay_images_if_needed();
             }
         }
 
@@ -2857,7 +2860,7 @@ impl App {
             if let FocusedPanel::Main(panel) = self.focused_panel {
                 self.previous_main_panel = panel;
             }
-            self.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::Themes));
+            self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
             self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             return true;
         }
@@ -3095,8 +3098,23 @@ impl App {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
         }
-        self.settings_popup = Some(SettingsPopup::new());
+        self.settings_popup = Some(self.make_settings_popup(SettingsTab::PdfSupport));
         self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+    }
+
+    fn make_settings_popup(&self, tab: SettingsTab) -> SettingsPopup {
+        #[cfg(feature = "pdf")]
+        {
+            SettingsPopup::new_with_caps(
+                tab,
+                self.pdf_supports_graphics,
+                self.pdf_supports_scroll_mode,
+            )
+        }
+        #[cfg(not(feature = "pdf"))]
+        {
+            SettingsPopup::new_with_tab(tab)
+        }
     }
 
     #[cfg(feature = "pdf")]
@@ -3364,7 +3382,7 @@ impl App {
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
-                    self.settings_popup = Some(SettingsPopup::new_with_tab(SettingsTab::Themes));
+                    self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
                 }
                 self.key_sequence.clear();
