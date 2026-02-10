@@ -572,7 +572,9 @@ impl PdfReaderState {
                     'u' if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_half_screen(ScrollDirection::Up)
                     }
-                    'c' if key.modifiers.contains(KeyModifiers::CONTROL) => self.copy_selection(),
+                    'c' | 'C' if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.copy_selection()
+                    }
                     _ => None,
                 }
             }
@@ -3962,7 +3964,14 @@ impl PdfReaderState {
                 send_conversion(crate::pdf::ConversionCommand::UpdateCursor(cursor_rect));
                 send_conversion(crate::pdf::ConversionCommand::UpdateVisual(vec![]));
             }
-            InputAction::CopySelection(_request) => {}
+            InputAction::CopySelection(request) => {
+                if let Some(service) = service {
+                    service.extract_text(request.bounds);
+                    notifications.info("Extracting selected text...");
+                } else {
+                    log::warn!("Cannot extract PDF selection text: render service unavailable");
+                }
+            }
             InputAction::ToggleProfiling => {
                 toggle_profiling(profiler);
             }
