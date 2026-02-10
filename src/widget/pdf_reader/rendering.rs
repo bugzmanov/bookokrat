@@ -1553,12 +1553,19 @@ impl PdfReaderState {
             Vec::new()
         };
 
-        // iTerm2/Sixel images are terminal overlays. For Konsole hack mode, only
-        // clear via Kitty delete when layout/zoom changes (not during plain scroll).
+        // iTerm2/Sixel images are terminal overlays that persist until explicitly cleared.
+        // Konsole only needs clearing on layout/zoom changes.
+        // Warp needs clearing whenever content changes — last_render.rect is reset to
+        // default on any content change (zoom, scroll, page, new image tile), so comparing
+        // it with the current size reliably detects all changes without false positives
+        // from no-op redraws (mouse hover, timer ticks).
         let zoom_changed =
             (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
         let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
-        if terminal_overlay::konsole_kitty_delete_hack_enabled() && (zoom_changed || area_changed) {
+        let warp_content_changed =
+            crate::terminal::is_warp_terminal() && self.last_render.rect != size;
+        let needs_clear = zoom_changed || area_changed || warp_content_changed;
+        if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
             terminal_overlay::emit_kitty_delete_all();
         }
         if terminal_overlay::overlay_force_clear_enabled() {

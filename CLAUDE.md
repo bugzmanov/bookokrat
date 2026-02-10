@@ -336,10 +336,15 @@ Bookokrat is a terminal user interface (TUI) document reader written in Rust (ve
     - Affects image protocol selection (Kitty/Sixel/Halfblocks)
 
 23. **terminal.rs** - Terminal capability detection and protocol selection (src/terminal.rs)
+    - `TerminalKind` enum: Kitty, Ghostty, Konsole, WezTerm, ITerm, Warp, AppleTerminal, VsCode, Tmux, Other, Unknown
     - `TerminalCapabilities`: Unified terminal kind/protocol/capability model
     - `detect_terminal()` / `detect_terminal_with_picker()`: Centralized detection and protocol overrides
+    - `detect_kind()`: Maps env vars (`TERM_PROGRAM`, `KONSOLE_VERSION`, etc.) to `TerminalKind`
+    - `forced_protocol_for_kind()`: Terminal-specific protocol overrides (e.g., Warp/Konsole/WezTerm → iTerm2)
+    - `is_warp_terminal()`: Cached public helper for Warp-specific workarounds (used by `terminal_overlay.rs`)
     - `PdfCapabilities`: Derived PDF feature gating (scroll mode, comments, normal mode, iTerm version blocks)
     - Kitty SHM and delete-range probes for PDF rendering
+    - When adding support for a new terminal, update: `TerminalKind` enum, `detect_kind()`, `forced_protocol_for_kind()`, `guess_protocol_from_env()`, and `detect_tmux_outer_terminal()`
 
 ### Type Definitions and Utilities
 

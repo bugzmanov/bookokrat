@@ -6,20 +6,19 @@ use ratatui::layout::Rect;
 pub fn overlay_force_clear_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        if std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR").is_ok_and(|v| v != "0") {
-            return true;
-        }
-        // Warp's iTerm2 implementation doesn't clear image pixels when cells are overwritten
-        crate::terminal::is_warp_terminal()
+        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
+            .map(|v| v != "0")
+            .unwrap_or(false)
     })
 }
 
-pub fn konsole_kitty_delete_hack_enabled() -> bool {
+pub fn kitty_delete_overlay_hack_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var("KONSOLE_VERSION").is_ok()
             || std::env::var("TERM_PROGRAM")
                 .is_ok_and(|v| v.to_ascii_lowercase().contains("konsole"))
+            || crate::terminal::is_warp_terminal()
     })
 }
 
@@ -29,8 +28,8 @@ pub fn emit_kitty_delete_all() {
     let _ = out.flush();
 }
 
-pub fn clear_konsole_images_if_needed() {
-    if konsole_kitty_delete_hack_enabled() {
+pub fn clear_overlay_images_if_needed() {
+    if kitty_delete_overlay_hack_enabled() {
         emit_kitty_delete_all();
     }
 }

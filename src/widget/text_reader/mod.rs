@@ -76,7 +76,7 @@ pub struct MarkdownTextReader {
     image_picker: Option<Picker>,
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
     last_rendered_image_rects: HashMap<String, Rect>,
-    last_konsole_cleanup_key: Option<(usize, u64, u64, Rect)>,
+    last_overlay_cleanup_key: Option<(usize, u64, u64, Rect)>,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -144,7 +144,6 @@ impl MarkdownTextReader {
     pub fn new() -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                // Check capabilities to see what's actually supported
                 use crate::ratatui_image::picker::{Capability, ProtocolType};
                 let has_kitty = picker
                     .capabilities()
@@ -155,51 +154,9 @@ impl MarkdownTextReader {
                     .iter()
                     .any(|c| matches!(c, Capability::Sixel));
 
-                // Use shared terminal detection (tmux-aware).
-                let caps = crate::terminal::detect_terminal();
-
-                // Detect if we're in WezTerm.
-                // WezTerm's Kitty graphics implementation is buggy - it maps images to terminal
-                // cells differently than Kitty, causing artifacts when text overwrites images.
-                // iTerm2 protocol works best in WezTerm.
-                // See: https://github.com/wezterm/wezterm/issues/986
-                let is_wezterm = caps.kind == crate::terminal::TerminalKind::WezTerm;
-
-                // Detect if we're in iTerm2.
-                // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
-                let is_iterm2 = caps.kind == crate::terminal::TerminalKind::ITerm;
-                let is_konsole = caps.kind == crate::terminal::TerminalKind::Konsole;
-                let is_warp = caps.kind == crate::terminal::TerminalKind::Warp;
-
-                // Check for user override via BOOKOKRAT_PROTOCOL env var
-                let chosen_protocol =
-                    if let Some(forced) = crate::terminal::protocol_override_from_env() {
-                        forced
-                    } else if is_warp {
-                        info!("Warp detected. Using iTerm2 protocol.");
-                        ProtocolType::Iterm2
-                    } else if is_konsole {
-                        info!("Konsole detected. Using iTerm2 protocol.");
-                        ProtocolType::Iterm2
-                    } else if is_iterm2 {
-                        // Prefer: Kitty > Sixel > iTerm > Halfblocks
-                        // For WezTerm: Force iTerm2 protocol
-                        // For iTerm2: Try Sixel
-                        info!("iTerm2 detected. Using Sixel protocol.");
-                        ProtocolType::Sixel
-                    } else if is_wezterm {
-                        info!("WezTerm detected. Using iTerm2 protocol.");
-                        ProtocolType::Iterm2
-                    } else if has_kitty {
-                        info!("Kitty protocol detected, using Kitty");
-                        ProtocolType::Kitty
-                    } else if has_sixel {
-                        info!("Sixel protocol detected, using Sixel");
-                        ProtocolType::Sixel
-                    } else {
-                        // Keep whatever was detected (iTerm or Halfblocks)
-                        picker.protocol_type()
-                    };
+                // Terminal + protocol policy is centralized in terminal.rs.
+                let caps = crate::terminal::detect_terminal_with_picker(&mut picker);
+                let chosen_protocol = crate::terminal::choose_epub_protocol(&picker, &caps);
 
                 picker.set_protocol_type(chosen_protocol);
                 info!(
@@ -269,7 +226,7 @@ impl MarkdownTextReader {
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
             last_rendered_image_rects: HashMap::new(),
-            last_konsole_cleanup_key: None,
+            last_overlay_cleanup_key: None,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             raw_html_content: None,
@@ -547,8 +504,8 @@ impl MarkdownTextReader {
                 self.rendered_content.generation,
                 inner_area,
             );
-            let content_moved = self.last_konsole_cleanup_key != Some(cleanup_key);
-            if terminal_overlay::konsole_kitty_delete_hack_enabled() && content_moved {
+            let content_moved = self.last_overlay_cleanup_key != Some(cleanup_key);
+            if terminal_overlay::kitty_delete_overlay_hack_enabled() && content_moved {
                 terminal_overlay::emit_kitty_delete_all();
             }
             if terminal_overlay::overlay_force_clear_enabled() {
@@ -559,7 +516,7 @@ impl MarkdownTextReader {
             for rect in self.last_rendered_image_rects.values() {
                 frame.render_widget(Block::default().style(image_clear_style), *rect);
             }
-            self.last_konsole_cleanup_key = Some(cleanup_key);
+            self.last_overlay_cleanup_key = Some(cleanup_key);
         }
 
         // First pass: render text lines (no images yet)
@@ -682,7 +639,7 @@ impl MarkdownTextReader {
 
         // Clear overlay images when suppressing (e.g., popup is shown)
         if suppress_images {
-            if terminal_overlay::konsole_kitty_delete_hack_enabled() {
+            if terminal_overlay::kitty_delete_overlay_hack_enabled() {
                 terminal_overlay::emit_kitty_delete_all();
             }
             if terminal_overlay::overlay_force_clear_enabled() {
@@ -1120,7 +1077,7 @@ impl MarkdownTextReader {
         };
         self.embedded_images.borrow_mut().clear();
         self.last_rendered_image_rects.clear();
-        self.last_konsole_cleanup_key = None;
+        self.last_overlay_cleanup_key = None;
     }
 
     pub fn set_raw_html(&mut self, html: String) {
@@ -1170,7 +1127,7 @@ impl MarkdownTextReader {
     }
 
     pub fn request_overlay_cleanup_on_next_frame(&mut self) {
-        self.last_konsole_cleanup_key = None;
+        self.last_overlay_cleanup_key = None;
     }
 }
 

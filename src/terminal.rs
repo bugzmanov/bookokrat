@@ -2,7 +2,7 @@ use std::env;
 
 use log::warn;
 
-use crate::vendored::ratatui_image::picker::{Picker, ProtocolType};
+use crate::vendored::ratatui_image::picker::{Capability, Picker, ProtocolType};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalKind {
@@ -396,9 +396,19 @@ fn parse_version_major_minor(version: &str) -> (u32, u32) {
 
 fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut Picker>) {
     // Priority:
-    // 1) Known terminal policy (work around terminal-specific bugs)
-    // 2) Env-based guess
-    // 3) Picker capability result
+    // 1) Explicit env override
+    // 2) Known terminal policy (work around terminal-specific bugs)
+    // 3) Env-based guess
+    // 4) Picker capability result
+    let override_protocol = protocol_override_graphics_from_env();
+    if let Some(forced) = override_protocol {
+        caps.protocol = Some(forced);
+        if let Some(picker) = picker {
+            picker.set_protocol_type(picker_protocol_for_graphics(forced));
+        }
+        return;
+    }
+
     let forced = forced_protocol_for_kind(&caps.kind, &caps.env);
     let mut protocol = forced.or(caps.protocol);
 
@@ -417,6 +427,47 @@ fn apply_protocol_overrides(caps: &mut TerminalCapabilities, picker: Option<&mut
     }
 
     caps.protocol = protocol;
+}
+
+fn protocol_override_graphics_from_env() -> Option<GraphicsProtocol> {
+    let value = env::var("BOOKOKRAT_PROTOCOL").ok()?;
+    match value.to_ascii_lowercase().as_str() {
+        "halfblocks" | "half" | "blocks" => Some(GraphicsProtocol::Halfblocks),
+        "sixel" => Some(GraphicsProtocol::Sixel),
+        "kitty" => Some(GraphicsProtocol::Kitty),
+        "iterm" | "iterm2" => Some(GraphicsProtocol::Iterm2),
+        _ => None,
+    }
+}
+
+pub fn choose_epub_protocol(picker: &Picker, caps: &TerminalCapabilities) -> ProtocolType {
+    if let Some(overridden) = protocol_override_from_env() {
+        return overridden;
+    }
+
+    match caps.kind {
+        TerminalKind::Warp | TerminalKind::Konsole => ProtocolType::Iterm2,
+        TerminalKind::ITerm => ProtocolType::Sixel,
+        TerminalKind::Kitty | TerminalKind::Ghostty => ProtocolType::Kitty,
+        TerminalKind::WezTerm => ProtocolType::Iterm2,
+        _ => {
+            let has_kitty = picker
+                .capabilities()
+                .iter()
+                .any(|c| matches!(c, Capability::Kitty));
+            let has_sixel = picker
+                .capabilities()
+                .iter()
+                .any(|c| matches!(c, Capability::Sixel));
+            if has_kitty {
+                ProtocolType::Kitty
+            } else if has_sixel {
+                ProtocolType::Sixel
+            } else {
+                picker.protocol_type()
+            }
+        }
+    }
 }
 
 fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
