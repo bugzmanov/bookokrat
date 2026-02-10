@@ -6,9 +6,11 @@ use ratatui::layout::Rect;
 pub fn overlay_force_clear_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR")
-            .map(|v| v != "0")
-            .unwrap_or(false)
+        if std::env::var("BOOKOKRAT_OVERLAY_FORCE_CLEAR").is_ok_and(|v| v != "0") {
+            return true;
+        }
+        // Warp's iTerm2 implementation doesn't clear image pixels when cells are overwritten
+        crate::terminal::is_warp_terminal()
     })
 }
 

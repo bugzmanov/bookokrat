@@ -11,6 +11,7 @@ pub enum TerminalKind {
     Konsole,
     WezTerm,
     ITerm,
+    Warp,
     AppleTerminal,
     VsCode,
     Tmux,
@@ -165,6 +166,9 @@ fn detect_kind(env: &TerminalEnv) -> TerminalKind {
     if env.term_program == "iterm.app" || env.iterm_session {
         return TerminalKind::ITerm;
     }
+    if env.term_program == "warpterminal" {
+        return TerminalKind::Warp;
+    }
     if env.term_program == "apple_terminal" {
         return TerminalKind::AppleTerminal;
     }
@@ -195,6 +199,8 @@ fn detect_tmux_outer_terminal() -> Option<TerminalKind> {
             TerminalKind::ITerm
         } else if value.contains("konsole") {
             TerminalKind::Konsole
+        } else if value.contains("warp") {
+            TerminalKind::Warp
         } else {
             TerminalKind::Other(value.to_string())
         }
@@ -260,7 +266,9 @@ fn picker_protocol_for_graphics(protocol: GraphicsProtocol) -> ProtocolType {
 fn forced_protocol_for_kind(kind: &TerminalKind, env: &TerminalEnv) -> Option<GraphicsProtocol> {
     match kind {
         TerminalKind::Kitty | TerminalKind::Ghostty => Some(GraphicsProtocol::Kitty),
-        TerminalKind::Konsole | TerminalKind::WezTerm => Some(GraphicsProtocol::Iterm2),
+        TerminalKind::Konsole | TerminalKind::WezTerm | TerminalKind::Warp => {
+            Some(GraphicsProtocol::Iterm2)
+        }
         TerminalKind::ITerm => {
             if iterm_supports_kitty(env) {
                 Some(GraphicsProtocol::Kitty)
@@ -270,7 +278,7 @@ fn forced_protocol_for_kind(kind: &TerminalKind, env: &TerminalEnv) -> Option<Gr
         }
         TerminalKind::Other(name) => {
             let name = name.to_ascii_lowercase();
-            if name.contains("wezterm") || name.contains("konsole") {
+            if name.contains("wezterm") || name.contains("konsole") || name.contains("warp") {
                 Some(GraphicsProtocol::Iterm2)
             } else if name.contains("kitty") || name.contains("ghostty") {
                 Some(GraphicsProtocol::Kitty)
@@ -327,8 +335,9 @@ fn supports_graphics_from_env(env: &TerminalEnv) -> bool {
 fn guess_protocol_from_env(env: &TerminalEnv, kind: &TerminalKind) -> Option<GraphicsProtocol> {
     match kind {
         TerminalKind::Kitty | TerminalKind::Ghostty => Some(GraphicsProtocol::Kitty),
-        TerminalKind::Konsole => Some(GraphicsProtocol::Iterm2),
-        TerminalKind::WezTerm => Some(GraphicsProtocol::Iterm2),
+        TerminalKind::Konsole | TerminalKind::WezTerm | TerminalKind::Warp => {
+            Some(GraphicsProtocol::Iterm2)
+        }
         TerminalKind::ITerm => {
             if iterm_supports_kitty(env) {
                 Some(GraphicsProtocol::Kitty)
@@ -486,6 +495,14 @@ pub fn enable_tmux_passthrough() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .and_then(|mut child| child.wait());
+}
+
+pub fn is_warp_terminal() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        env::var("TERM_PROGRAM").is_ok_and(|v| v.to_ascii_lowercase() == "warpterminal")
+    })
 }
 
 pub fn protocol_override_from_env() -> Option<ProtocolType> {

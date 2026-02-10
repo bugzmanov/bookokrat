@@ -92,11 +92,17 @@ fn main() -> Result<()> {
     {
         let caps = terminal::detect_terminal();
         info!(
-            "Terminal: {:?}, tmux: {}, protocol: {:?}, TERM_PROGRAM: {:?}, TERM: {:?}, \
-             kitty_window: {}, kitty_pid: {}, wezterm_executable: {}",
+            "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
+             protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \
+             TERM_PROGRAM={:?}, TERM={:?}, kitty_window={}, kitty_pid={}, wezterm_executable={}",
             caps.kind,
             caps.env.tmux,
+            caps.supports_true_color,
+            caps.supports_graphics,
             caps.protocol,
+            caps.pdf.supported,
+            caps.pdf.supports_scroll_mode,
+            caps.pdf.supports_comments,
             caps.env.term_program,
             caps.env.term,
             caps.env.kitty_window,

@@ -144,11 +144,6 @@ impl MarkdownTextReader {
     pub fn new() -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
-                info!(
-                    "Image picker initial protocol type: {:?}",
-                    picker.protocol_type()
-                );
-
                 // Check capabilities to see what's actually supported
                 use crate::ratatui_image::picker::{Capability, ProtocolType};
                 let has_kitty = picker
@@ -174,11 +169,15 @@ impl MarkdownTextReader {
                 // iTerm2 added Kitty protocol support in 3.6.0, but it's buggy. Trying Sixel.
                 let is_iterm2 = caps.kind == crate::terminal::TerminalKind::ITerm;
                 let is_konsole = caps.kind == crate::terminal::TerminalKind::Konsole;
+                let is_warp = caps.kind == crate::terminal::TerminalKind::Warp;
 
                 // Check for user override via BOOKOKRAT_PROTOCOL env var
                 let chosen_protocol =
                     if let Some(forced) = crate::terminal::protocol_override_from_env() {
                         forced
+                    } else if is_warp {
+                        info!("Warp detected. Using iTerm2 protocol.");
+                        ProtocolType::Iterm2
                     } else if is_konsole {
                         info!("Konsole detected. Using iTerm2 protocol.");
                         ProtocolType::Iterm2
@@ -204,10 +203,21 @@ impl MarkdownTextReader {
 
                 picker.set_protocol_type(chosen_protocol);
                 info!(
-                    "EPUB picker terminal kind: {:?}, tmux: {}",
-                    caps.kind, caps.env.tmux
+                    "Startup render caps: terminal={:?}, tmux={}, truecolor={}, graphics={}, \
+                     pdf_protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \
+                     epub_picker_caps(kitty={}, sixel={}), epub_protocol={:?}",
+                    caps.kind,
+                    caps.env.tmux,
+                    caps.supports_true_color,
+                    caps.supports_graphics,
+                    caps.protocol,
+                    caps.pdf.supported,
+                    caps.pdf.supports_scroll_mode,
+                    caps.pdf.supports_comments,
+                    has_kitty,
+                    has_sixel,
+                    picker.protocol_type(),
                 );
-                info!("Final protocol type: {:?}", picker.protocol_type());
 
                 // Check if protocol requires true color but terminal doesn't support it
                 let requires_true_color =
@@ -670,9 +680,16 @@ impl MarkdownTextReader {
 
         let mut current_image_rects = HashMap::new();
 
-        // Clear Konsole images when suppressing (e.g., popup is shown)
-        if suppress_images && terminal_overlay::konsole_kitty_delete_hack_enabled() {
-            terminal_overlay::emit_kitty_delete_all();
+        // Clear overlay images when suppressing (e.g., popup is shown)
+        if suppress_images {
+            if terminal_overlay::konsole_kitty_delete_hack_enabled() {
+                terminal_overlay::emit_kitty_delete_all();
+            }
+            if terminal_overlay::overlay_force_clear_enabled() {
+                terminal_overlay::clear_rects_direct(
+                    self.last_rendered_image_rects.values().copied(),
+                );
+            }
         }
 
         if !self.show_raw_html && !suppress_images {

@@ -304,8 +304,6 @@ fn generate_settings_yaml(settings: &Settings) -> String {
             content.push_str(&format!("    base0F: \"{}\"\n", theme.base0f));
             content.push('\n');
         }
-    } else {
-        content.push_str("custom_themes: []\n");
     }
 
     content
@@ -317,7 +315,9 @@ const CUSTOM_THEMES_TEMPLATE: &str = r#"# ======================================
 # Add your own themes below. Find Base16 themes at:
 # https://github.com/tinted-theming/schemes
 #
-# Example:
+# To add a theme, uncomment and edit the lines below:
+#
+# custom_themes:
 #   - scheme: "My Custom Theme"
 #     author: "Your Name"
 #     base00: "1F1F28"    # Main background
