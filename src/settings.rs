@@ -173,7 +173,11 @@ pub fn load_settings() {
             return;
         };
         info!("Settings file not found, creating with defaults at {path:?}");
-        if let Ok(settings) = SETTINGS.read() {
+        if let Ok(mut settings) = SETTINGS.write() {
+            let caps = crate::terminal::detect_terminal();
+            if caps.pdf.supports_scroll_mode {
+                settings.pdf_render_mode = PdfRenderMode::Scroll;
+            }
             save_settings_to_file(&settings, &path);
         }
     }
