@@ -564,8 +564,9 @@ impl App {
     fn clear_pdf_graphics(is_kitty: bool) {
         if is_kitty || crate::terminal_overlay::kitty_delete_overlay_hack_enabled() {
             crate::terminal_overlay::emit_kitty_delete_all();
+            // Called outside draw(), so we need an explicit flush
+            let _ = std::io::Write::flush(&mut std::io::stdout());
         }
-        // For iTerm2/Sixel, images are inline and will be overwritten by new content
     }
 
     /// Open a book for reading by index - delegates to path-based opening

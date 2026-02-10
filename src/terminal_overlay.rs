@@ -23,9 +23,7 @@ pub fn kitty_delete_overlay_hack_enabled() -> bool {
 }
 
 pub fn emit_kitty_delete_all() {
-    let mut out = stdout();
-    let _ = out.write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
-    let _ = out.flush();
+    let _ = stdout().write_all(b"\x1b_Ga=d,d=A,q=2\x1b\\");
 }
 
 pub fn clear_overlay_images_if_needed() {

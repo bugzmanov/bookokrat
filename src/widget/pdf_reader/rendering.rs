@@ -1565,14 +1565,6 @@ impl PdfReaderState {
         let warp_content_changed =
             crate::terminal::is_warp_terminal() && self.last_render.rect != size;
         let needs_clear = zoom_changed || area_changed || warp_content_changed;
-        if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
-            terminal_overlay::emit_kitty_delete_all();
-        }
-        if terminal_overlay::overlay_force_clear_enabled() {
-            terminal_overlay::clear_rect_direct(img_area);
-        }
-        self.last_nonkitty_cleanup_area = Some(img_area);
-        self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
         frame.render_widget(
             Block::default().style(Style::default().bg(bg_color)),
             img_area,
@@ -1628,6 +1620,14 @@ impl PdfReaderState {
             DisplayBatch::Clear
         } else {
             let _ = execute!(stdout(), BeginSynchronizedUpdate);
+            if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
+                terminal_overlay::emit_kitty_delete_all();
+            }
+            if terminal_overlay::overlay_force_clear_enabled() {
+                terminal_overlay::clear_rect_direct(img_area);
+            }
+            self.last_nonkitty_cleanup_area = Some(img_area);
+            self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
 
             let total_width = page_sizes.iter().map(|(_, w, _)| w).sum::<u16>();
             self.last_render.pages_shown = page_sizes.len();
