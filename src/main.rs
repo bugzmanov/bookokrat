@@ -86,6 +86,18 @@ fn main() -> Result<()> {
         File::create("bookokrat.log")?,
     )?;
 
+    // Validate file argument before entering TUI
+    if let Some(ref path) = args.file_path {
+        if !Path::new(path).exists() {
+            eprintln!("Error: file not found: {path}");
+            std::process::exit(1);
+        }
+        if bookokrat::book_manager::BookManager::detect_format(path).is_none() {
+            eprintln!("Error: unsupported file format: {path}");
+            std::process::exit(1);
+        }
+    }
+
     info!("Starting Bookokrat EPUB reader");
 
     #[cfg(feature = "pdf")]
@@ -167,9 +179,17 @@ fn main() -> Result<()> {
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
     if let Some(path) = args.file_path.as_deref() {
-        if let Err(err) = app.open_book_for_reading_by_path(path) {
+        // Normalize relative paths: "file.pdf" → "./file.pdf" to match BookManager's paths
+        let path = if !Path::new(path).is_absolute() && !path.starts_with("./") {
+            format!("./{path}")
+        } else {
+            path.to_string()
+        };
+        if let Err(err) = app.open_book_for_reading_by_path(&path) {
             error!("Failed to open requested book: {err}");
-            app.show_error(format!("Failed to open requested book: {err}"));
+            panic_handler::restore_terminal();
+            eprintln!("Error: failed to open {path}: {err}");
+            std::process::exit(1);
         }
     }
     #[cfg(feature = "pdf")]

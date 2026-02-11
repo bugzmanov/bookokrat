@@ -34,7 +34,7 @@ pub fn initialize_panic_handler() {
 /// - Disabling mouse capture (important for restoring mouse functionality)
 /// - Disabling keyboard enhancement flags
 /// - Showing the cursor
-fn restore_terminal() {
+pub fn restore_terminal() {
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     let _ = execute!(io::stderr(), crossterm::cursor::Show);
