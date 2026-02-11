@@ -420,6 +420,9 @@ impl App {
             Rect::new(0, 0, 80, 24)
         };
 
+        #[cfg(feature = "pdf")]
+        let startup_caps = crate::terminal::detect_terminal();
+
         let mut app = Self {
             book_manager,
             navigation_panel,
@@ -476,9 +479,9 @@ impl App {
             #[cfg(feature = "pdf")]
             pdf_document_path: None,
             #[cfg(feature = "pdf")]
-            pdf_supports_graphics: false,
+            pdf_supports_graphics: startup_caps.supports_graphics,
             #[cfg(feature = "pdf")]
-            pdf_supports_scroll_mode: false,
+            pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
@@ -507,7 +510,7 @@ impl App {
         #[cfg(feature = "pdf")]
         if !is_first_time_user
             && !crate::settings::is_pdf_settings_configured()
-            && crate::terminal::detect_terminal().supports_graphics
+            && app.pdf_supports_graphics
         {
             app.previous_main_panel = MainPanel::NavigationList;
             app.settings_popup = Some(app.make_settings_popup(SettingsTab::PdfSupport));
