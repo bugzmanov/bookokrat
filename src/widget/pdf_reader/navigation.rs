@@ -1471,7 +1471,16 @@ impl PdfReaderState {
             return 1.0;
         }
 
-        let zoom_factor = f32::from(area_h) / f32::from(page_cell_h);
+        // For non-Kitty: page_cell_h is at (base_mag * user_scale). Multiplying by
+        // user_scale normalises out user_scale so the result is a new user_scale.
+        // For Kitty: zoom is display-only, page_cell_h is at the worker's fixed scale,
+        // and user_scale is effectively 1.0 (no render-time zoom).
+        let user_scale = if self.is_kitty {
+            1.0
+        } else {
+            self.non_kitty_zoom_factor
+        };
+        let zoom_factor = f32::from(area_h) * user_scale / f32::from(page_cell_h);
         Zoom::clamp_factor(zoom_factor)
     }
 
@@ -1488,7 +1497,12 @@ impl PdfReaderState {
             return 1.0;
         }
 
-        let zoom_factor = f32::from(area_w) / f32::from(page_cell_w);
+        let user_scale = if self.is_kitty {
+            1.0
+        } else {
+            self.non_kitty_zoom_factor
+        };
+        let zoom_factor = f32::from(area_w) * user_scale / f32::from(page_cell_w);
         Zoom::clamp_factor(zoom_factor)
     }
 
@@ -3978,7 +3992,7 @@ impl PdfReaderState {
                 }
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
-            InputAction::RenderScale { factor, .. } => {
+            InputAction::RenderScale { factor, viewport } => {
                 for rendered_info in &mut self.rendered {
                     rendered_info.img = None;
                 }
@@ -3987,6 +4001,9 @@ impl PdfReaderState {
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                if let Some(vp) = viewport {
+                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(vp));
+                }
             }
             InputAction::ThemeChanged { black, white } => {
                 for rendered_info in &mut self.rendered {

@@ -179,13 +179,7 @@ fn main() -> Result<()> {
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
     if let Some(path) = args.file_path.as_deref() {
-        // Normalize relative paths: "file.pdf" → "./file.pdf" to match BookManager's paths
-        let path = if !Path::new(path).is_absolute() && !path.starts_with("./") {
-            format!("./{path}")
-        } else {
-            path.to_string()
-        };
-        if let Err(err) = app.open_book_for_reading_by_path(&path) {
+        if let Err(err) = app.open_book_for_reading_by_path(path) {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();
             eprintln!("Error: failed to open {path}: {err}");

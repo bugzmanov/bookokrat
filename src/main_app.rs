@@ -583,12 +583,8 @@ impl App {
     }
 
     pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
-        let book_info = self
-            .book_manager
-            .get_book_by_path(path)
-            .ok_or_else(|| anyhow::anyhow!("Book not found in manager: {}", path))?;
-
-        let format = book_info.format;
+        let format = BookManager::detect_format(path)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
         let path_owned = path.to_string();
 
         self.save_bookmark_with_throttle(true);

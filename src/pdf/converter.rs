@@ -1482,11 +1482,12 @@ fn crop_to_viewport(
     viewport: &ViewportUpdate,
     picker: &Picker,
 ) -> (DynamicImage, CellSize) {
-    let (_, char_height) = picker.font_size();
+    let (char_width, char_height) = picker.font_size();
     let y_px = viewport
         .y_offset_cells
         .saturating_mul(u32::from(char_height));
     let mut area_cell_height = cell_size.height;
+    let mut area_cell_width = cell_size.width;
 
     if y_px < img.height() {
         area_cell_height = viewport.viewport_height_cells;
@@ -1507,7 +1508,19 @@ fn crop_to_viewport(
         }
     }
 
-    (img, CellSize::new(cell_size.width, area_cell_height))
+    // Horizontal cropping for non-Kitty protocols (iTerm2 has no viewport clipping)
+    if picker.protocol_type() != ProtocolType::Kitty
+        && cell_size.width > viewport.viewport_width_cells
+    {
+        area_cell_width = viewport.viewport_width_cells;
+        let target_w_px =
+            u32::from(viewport.viewport_width_cells).saturating_mul(u32::from(char_width));
+        if target_w_px < img.width() {
+            img = img.crop_imm(0, 0, target_w_px, img.height());
+        }
+    }
+
+    (img, CellSize::new(area_cell_width, area_cell_height))
 }
 
 fn normalize_for_protocol(img: &mut DynamicImage, cell_size: CellSize, picker: &Picker) {
@@ -1610,14 +1623,12 @@ fn render_page_with_viewport(
     let mut dyn_img = DynamicImage::ImageRgb8(img);
 
     let mut area_cell_size = cached_cell_size(cached);
-    if picker.protocol_type() == ProtocolType::Kitty {
-        if let Some(viewport) = viewport {
-            if viewport.page == page_num {
-                let (cropped, cell_size) =
-                    crop_to_viewport(dyn_img, cached_cell_size(cached), viewport, picker);
-                dyn_img = cropped;
-                area_cell_size = cell_size;
-            }
+    if let Some(viewport) = viewport {
+        if viewport.page == page_num {
+            let (cropped, cell_size) =
+                crop_to_viewport(dyn_img, cached_cell_size(cached), viewport, picker);
+            dyn_img = cropped;
+            area_cell_size = cell_size;
         }
     }
 
@@ -1640,7 +1651,7 @@ fn render_viewport_tiles(
     picker: &Picker,
 ) -> Result<ConvertedImage, PipelineError> {
     let decoded = take_decoded(cached)?;
-    let (_char_width, char_height) = picker.font_size();
+    let (char_width, char_height) = picker.font_size();
     let tile_height_px = u32::from(char_height);
     let viewport_y_px = viewport
         .y_offset_cells
@@ -1650,6 +1661,14 @@ fn render_viewport_tiles(
     let image_height = decoded.height();
     let max_height = image_height.saturating_sub(viewport_y_px);
     let visible_h_px = viewport_h_px.min(max_height).max(1);
+
+    // Constrain tile width to viewport so iTerm2 images don't overflow
+    let tile_w_cells = cached
+        .data
+        .img_data
+        .width_cell
+        .min(viewport.viewport_width_cells);
+    let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
 
     let start_tile = viewport_y_px / tile_height_px;
     let end_tile = (viewport_y_px + visible_h_px).div_ceil(tile_height_px);
@@ -1680,7 +1699,7 @@ fn render_viewport_tiles(
         let tile_area = Rect {
             x: 0,
             y: 0,
-            width: cached.data.img_data.width_cell,
+            width: tile_w_cells,
             height: tile_h_cells,
         };
 
@@ -1691,13 +1710,11 @@ fn render_viewport_tiles(
                 Arc::clone(existing)
             } else {
                 encoded_count += 1;
-                let tile_img = decoded.crop_imm(0, tile_y_px, decoded.width(), tile_actual_h_px);
+                let crop_w = tile_w_px.min(decoded.width());
+                let tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
                 // Pad to exact cell boundaries so Resize::None can be used
-                let tile_img = pad_to_cell_bounds(
-                    tile_img,
-                    CellSize::new(cached.data.img_data.width_cell, tile_h_cells),
-                    picker,
-                );
+                let tile_img =
+                    pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
                 let new_protocol = picker.new_protocol(tile_img, tile_area, Resize::None).map_err(
                     |e| {
                         pipeline_error(format!(
@@ -1712,14 +1729,12 @@ fn render_viewport_tiles(
         } else {
             // This tile has overlays - must re-encode (don't cache overlay versions)
             dynamic_count += 1;
-            let mut tile_img = decoded.crop_imm(0, tile_y_px, decoded.width(), tile_actual_h_px);
+            let crop_w = tile_w_px.min(decoded.width());
+            let mut tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
             apply_overlays_dynamic(&mut tile_img, &local);
             // Pad to exact cell boundaries so Resize::None can be used
-            let tile_img = pad_to_cell_bounds(
-                tile_img,
-                CellSize::new(cached.data.img_data.width_cell, tile_h_cells),
-                picker,
-            );
+            let tile_img =
+                pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
             Arc::new(picker.new_protocol(tile_img, tile_area, Resize::None).map_err(|e| {
                 pipeline_error(format!(
                     "Image conversion failed; unable to render DynamicImage into a ratatui buffer: {e}"
@@ -1752,10 +1767,7 @@ fn render_viewport_tiles(
 
     Ok(ConvertedImage::Tiled {
         tiles,
-        cell_size: CellSize::new(
-            cached.data.img_data.width_cell,
-            viewport.viewport_height_cells,
-        ),
+        cell_size: CellSize::new(tile_w_cells, viewport.viewport_height_cells),
     })
 }
 
@@ -1767,11 +1779,15 @@ fn render_specific_tiles(
     overlays: &OverlaySet,
     picker: &Picker,
 ) -> Result<Vec<TiledProtocol>, PipelineError> {
-    let (_, char_height) = picker.font_size();
+    let (char_width, char_height) = picker.font_size();
     let tile_height_px = u32::from(char_height);
     let image_height = decoded.height();
     let viewport_y_cells = viewport.y_offset_cells as i32;
     let viewport_height_cells = i32::from(viewport.viewport_height_cells);
+
+    // Constrain tile width to viewport so iTerm2 images don't overflow
+    let tile_w_cells = cell_size.width.min(viewport.viewport_width_cells);
+    let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
 
     let mut tiles = Vec::new();
     for &tile_idx in tile_indices {
@@ -1789,20 +1805,18 @@ fn render_specific_tiles(
         let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
         let tile_h_cells = ((tile_actual_h_px as f32) / f32::from(char_height)).ceil() as u16;
 
-        let mut tile_img = decoded.crop_imm(0, tile_y_px, decoded.width(), tile_actual_h_px);
+        let crop_w = tile_w_px.min(decoded.width());
+        let mut tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
         let local = overlays.for_tile(tile_y_px, tile_actual_h_px);
         apply_overlays_dynamic(&mut tile_img, &local);
         // Pad to exact cell boundaries so Resize::None can be used
-        let tile_img = pad_to_cell_bounds(
-            tile_img,
-            CellSize::new(cell_size.width, tile_h_cells),
-            picker,
-        );
+        let tile_img =
+            pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
 
         let tile_area = Rect {
             x: 0,
             y: 0,
-            width: cell_size.width,
+            width: tile_w_cells,
             height: tile_h_cells,
         };
         let protocol = picker
