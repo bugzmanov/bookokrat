@@ -149,6 +149,20 @@ fn main() -> Result<()> {
     } else {
         Some("bookmarks.json")
     };
+    // Show loading indicator so the user knows the app isn't stuck
+    // (Calibre library scans can take a few seconds)
+    terminal.draw(|frame| {
+        let area = frame.area();
+        let y = area.height / 2;
+        let centered = ratatui::layout::Rect::new(0, y, area.width, 1);
+        frame.render_widget(
+            ratatui::widgets::Paragraph::new("Scanning library...")
+                .alignment(ratatui::layout::Alignment::Center)
+                .style(ratatui::style::Style::default().fg(ratatui::style::Color::DarkGray)),
+            centered,
+        );
+    })?;
+
     let mut app = App::new_with_config(book_directory, bookmark_file, auto_load_recent, None);
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);

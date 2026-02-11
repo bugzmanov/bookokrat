@@ -108,13 +108,32 @@ impl BookManager {
     }
 
     fn discover_books_in_calibre_library(dir: &str) -> Vec<BookInfo> {
+        let start = std::time::Instant::now();
         let mut books = Vec::new();
+        let mut files_visited: u64 = 0;
 
+        // Calibre structure is always: Author/Book Title (id)/file.epub — depth 3 max.
+        // Without a limit, WalkDir would descend into temp_images/, .git/, cloud-synced
+        // dirs, etc., which can stall or take minutes on large filesystems.
+        let mut last_log_time = start;
         for entry in WalkDir::new(dir)
+            .max_depth(3)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
         {
+            files_visited += 1;
+            let now = std::time::Instant::now();
+            if now.duration_since(last_log_time).as_secs() >= 5 {
+                info!(
+                    "Calibre scan in progress: {} books found so far, {} files visited ({:.1}s elapsed)",
+                    books.len(),
+                    files_visited,
+                    now.duration_since(start).as_secs_f64()
+                );
+                last_log_time = now;
+            }
+
             let path = entry.path();
             let path_str = match path.to_str() {
                 Some(s) => s.to_string(),
@@ -143,6 +162,13 @@ impl BookManager {
                 format,
             });
         }
+
+        info!(
+            "Calibre library scan: {} books found, {} files visited in {:.2}s",
+            books.len(),
+            files_visited,
+            start.elapsed().as_secs_f64()
+        );
 
         books
     }
