@@ -668,8 +668,13 @@ impl ConverterEngine {
                 // Clear these pages from sent_for_viewport so they can be re-sent.
                 // This handles the case where Kitty transmission failed (e.g., SHM
                 // was unlinked before Kitty read it).
+                if !pages.is_empty() {
+                    log::debug!(
+                        "Display failed for {} pages, clearing for retry",
+                        pages.len()
+                    );
+                }
                 for page in pages {
-                    log::debug!("Display failed for page {page}, clearing for retry");
                     self.sent_for_viewport.remove(&page);
                 }
             }
