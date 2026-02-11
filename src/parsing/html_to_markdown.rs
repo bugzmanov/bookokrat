@@ -614,14 +614,21 @@ impl HtmlToMarkdownConverter {
         &self,
         attrs: &std::cell::RefCell<Vec<html5ever::Attribute>>,
         node: &Rc<markup5ever_rcdom::Node>,
-    ) -> Node {
+    ) -> Option<Node> {
         let mut content = String::new();
         Self::collect_text_from_node(node, &mut content);
+        if content.trim().is_empty() {
+            return None;
+        }
 
         let id = self.get_attr_value(attrs, "id");
         let language = self.get_attr_value(attrs, "data-type");
 
-        Node::new_with_id(Block::CodeBlock { language, content }, 0..0, id)
+        Some(Node::new_with_id(
+            Block::CodeBlock { language, content },
+            0..0,
+            id,
+        ))
     }
 
     fn handle_pre(
@@ -631,8 +638,9 @@ impl HtmlToMarkdownConverter {
         document: &mut Document,
     ) {
         // TODO: In the future, we should handle inline formatting like <sub> within <pre>
-        let code_node = self.build_code_block_node(attrs, node);
-        document.blocks.push(code_node);
+        if let Some(code_node) = self.build_code_block_node(attrs, node) {
+            document.blocks.push(code_node);
+        }
     }
 
     fn collect_text_from_node(node: &Rc<markup5ever_rcdom::Node>, output: &mut String) {
@@ -1583,16 +1591,9 @@ impl HtmlToMarkdownConverter {
                         }
                         "pre" => {
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
-
-                            let mut code_content = String::new();
-                            Self::collect_text_from_node(child, &mut code_content);
-                            let language = self.get_attr_value(attrs, "data-type");
-
-                            let code_block = Block::CodeBlock {
-                                language,
-                                content: code_content,
-                            };
-                            content.push(Node::new(code_block, 0..0));
+                            if let Some(code_node) = self.build_code_block_node(attrs, child) {
+                                content.push(code_node);
+                            }
                         }
                         "table" => {
                             self.flush_text_as_paragraph(&mut current_text, &mut content);
@@ -1946,8 +1947,9 @@ impl HtmlToMarkdownConverter {
                             content.extend(temp_doc.blocks);
                         }
                         "pre" => {
-                            let code_node = self.build_code_block_node(attrs, child);
-                            content.push(code_node);
+                            if let Some(code_node) = self.build_code_block_node(attrs, child) {
+                                content.push(code_node);
+                            }
                         }
                         _ => {
                             let mut blocks = self.extract_formatted_content_as_blocks(child, false);
@@ -2363,8 +2365,9 @@ impl HtmlToMarkdownConverter {
                     *current_text = Text::default();
                 }
 
-                let code_node = self.build_code_block_node(attrs, node);
-                blocks.push(code_node);
+                if let Some(code_node) = self.build_code_block_node(attrs, node) {
+                    blocks.push(code_node);
+                }
             }
             _ => {
                 if let Some(id) = self.get_attr_value(attrs, "id") {
@@ -2422,8 +2425,9 @@ impl HtmlToMarkdownConverter {
                         }
 
                         encountered_block = true;
-                        let code_node = self.build_code_block_node(attrs, child);
-                        result.push(code_node);
+                        if let Some(code_node) = self.build_code_block_node(attrs, child) {
+                            result.push(code_node);
+                        }
                     } else if Self::is_heading_block_element(tag) {
                         if !heading_emitted && !heading_text.is_empty() {
                             result.push(Node::new_with_id(
