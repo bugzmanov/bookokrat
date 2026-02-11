@@ -98,6 +98,7 @@ impl std::fmt::Debug for PageData {
 pub struct ViewportUpdate {
     pub page: usize,
     pub y_offset_cells: u32,
+    pub x_offset_cells: u32,
     pub viewport_height_cells: u16,
     pub viewport_width_cells: u16,
 }

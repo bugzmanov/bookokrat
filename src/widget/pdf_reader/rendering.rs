@@ -801,6 +801,7 @@ pub(crate) fn update_non_kitty_viewport(
                 .map(|(area, _font_size)| crate::pdf::ViewportUpdate {
                     page: pdf_reader.page,
                     y_offset_cells: pdf_reader.non_kitty_scroll_offset,
+                    x_offset_cells: pdf_reader.non_kitty_pan_offset,
                     viewport_height_cells: area.height,
                     viewport_width_cells: area.width,
                 })

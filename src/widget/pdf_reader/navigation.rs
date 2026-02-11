@@ -878,6 +878,7 @@ impl PdfReaderState {
             let fit_factor = self.fit_to_height_zoom_factor();
             self.non_kitty_zoom_factor = fit_factor;
             self.non_kitty_scroll_offset = 0;
+            self.non_kitty_pan_offset = 0;
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
@@ -904,6 +905,7 @@ impl PdfReaderState {
             let fit_factor = self.fit_to_width_zoom_factor();
             self.non_kitty_zoom_factor = fit_factor;
             self.non_kitty_scroll_offset = 0;
+            self.non_kitty_pan_offset = 0;
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
@@ -927,6 +929,7 @@ impl PdfReaderState {
         Some(ViewportUpdate {
             page: self.page,
             y_offset_cells: self.non_kitty_scroll_offset,
+            x_offset_cells: self.non_kitty_pan_offset,
             viewport_height_cells: height,
             viewport_width_cells: width,
         })
@@ -991,6 +994,36 @@ impl PdfReaderState {
             .map(InputAction::ViewportChanged)
     }
 
+    fn non_kitty_pan_by(&mut self, direction: ScrollDirection, step: u32) -> Option<InputAction> {
+        let viewport_width = self.last_render.img_area_width;
+        if viewport_width == 0 {
+            return None;
+        }
+
+        let full_width = self
+            .rendered
+            .get(self.page)
+            .and_then(|r| r.full_cell_size.map(|size| size.width))
+            .unwrap_or(viewport_width);
+        let max_offset = u32::from(full_width.saturating_sub(viewport_width));
+
+        let old_offset = self.non_kitty_pan_offset;
+        let new_offset = match direction {
+            ScrollDirection::Right => (old_offset + step).min(max_offset),
+            ScrollDirection::Left => old_offset.saturating_sub(step),
+            _ => old_offset,
+        };
+
+        if new_offset == old_offset {
+            return None;
+        }
+        self.non_kitty_pan_offset = new_offset;
+        self.last_render.rect = Rect::default();
+        self.pending_scroll = None;
+        self.current_viewport_update()
+            .map(InputAction::ViewportChanged)
+    }
+
     // Unified scroll - one line at a time (j/k keys)
     fn scroll_line(&mut self, direction: ScrollDirection) -> Option<InputAction> {
         if self.is_kitty {
@@ -1011,8 +1044,8 @@ impl PdfReaderState {
             result
         } else {
             let factor = self.non_kitty_zoom_factor;
-            let step = (2.0_f32 / factor).max(1.0) as u32;
-            self.non_kitty_scroll_by(direction, step)
+            let step = (Zoom::BASE_PAN_STEP_X / factor).max(1.0) as u32;
+            self.non_kitty_pan_by(direction, step)
         }
     }
 
@@ -4203,8 +4236,16 @@ pub(crate) fn save_pdf_bookmark(
         .map(|z| z.global_scroll_offset as usize)
         .unwrap_or(0);
 
-    let zoom_factor = pdf_reader.zoom.as_ref().map(|z| z.factor);
-    let pan_position = pdf_reader.zoom.as_ref().map(|z| z.cell_pan_from_left);
+    let zoom_factor = pdf_reader
+        .zoom
+        .as_ref()
+        .map(|z| z.factor)
+        .or(Some(pdf_reader.non_kitty_zoom_factor));
+    let pan_position = pdf_reader
+        .zoom
+        .as_ref()
+        .map(|z| z.cell_pan_from_left)
+        .or(Some(pdf_reader.non_kitty_pan_offset as u16));
     bookmarks.update_bookmark(
         &pdf_reader.name,
         chapter_href,

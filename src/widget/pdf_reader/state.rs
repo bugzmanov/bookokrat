@@ -239,6 +239,8 @@ pub struct PdfReaderState {
     pub non_kitty_zoom_factor: f32,
     /// Non-Kitty scroll offset
     pub non_kitty_scroll_offset: u32,
+    /// Non-Kitty horizontal pan offset (cells from left edge)
+    pub non_kitty_pan_offset: u32,
     /// Whether terminal is iTerm2/WezTerm
     pub is_iterm: bool,
     /// Coordinate info for mouse mapping
@@ -348,6 +350,11 @@ impl PdfReaderState {
             normal_mode: NormalModeState::new(),
             non_kitty_zoom_factor: if is_kitty { 1.0 } else { zoom_factor },
             non_kitty_scroll_offset: 0,
+            non_kitty_pan_offset: if is_kitty {
+                0
+            } else {
+                u32::from(pan_from_left)
+            },
             is_iterm,
             coord_info: None,
             mouse_tracker: MouseTracker::new(),

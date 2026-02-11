@@ -543,6 +543,14 @@ impl ConverterEngine {
                 // Drop distant pixel buffers when viewport moves, even if render is skipped.
                 self.clear_distant_pixels(new_viewport.page, 5);
 
+                // Invalidate tile cache when horizontal offset changes (tiles are keyed by Y only)
+                if old_viewport.is_some_and(|old| old.x_offset_cells != new_viewport.x_offset_cells)
+                {
+                    if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
+                        cached.tile_cache.clear();
+                    }
+                }
+
                 if self.picker.protocol_type() != ProtocolType::Kitty {
                     let is_same_page =
                         old_viewport.is_some_and(|old| old.page == new_viewport.page);
@@ -1513,10 +1521,15 @@ fn crop_to_viewport(
         && cell_size.width > viewport.viewport_width_cells
     {
         area_cell_width = viewport.viewport_width_cells;
+        let x_px = viewport
+            .x_offset_cells
+            .saturating_mul(u32::from(char_width));
         let target_w_px =
             u32::from(viewport.viewport_width_cells).saturating_mul(u32::from(char_width));
         if target_w_px < img.width() {
-            img = img.crop_imm(0, 0, target_w_px, img.height());
+            let x_px = x_px.min(img.width().saturating_sub(1));
+            let available = img.width().saturating_sub(x_px);
+            img = img.crop_imm(x_px, 0, target_w_px.min(available), img.height());
         }
     }
 
@@ -1669,6 +1682,9 @@ fn render_viewport_tiles(
         .width_cell
         .min(viewport.viewport_width_cells);
     let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
+    let x_offset_px = viewport
+        .x_offset_cells
+        .saturating_mul(u32::from(char_width));
 
     let start_tile = viewport_y_px / tile_height_px;
     let end_tile = (viewport_y_px + visible_h_px).div_ceil(tile_height_px);
@@ -1703,6 +1719,9 @@ fn render_viewport_tiles(
             height: tile_h_cells,
         };
 
+        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
+        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
+
         let protocol = if !tile_has_overlay {
             // No overlays on this tile - can use cache
             if let Some(existing) = cached.tile_cache.get(&tile_idx) {
@@ -1710,8 +1729,7 @@ fn render_viewport_tiles(
                 Arc::clone(existing)
             } else {
                 encoded_count += 1;
-                let crop_w = tile_w_px.min(decoded.width());
-                let tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
+                let tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
                 // Pad to exact cell boundaries so Resize::None can be used
                 let tile_img =
                     pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
@@ -1729,8 +1747,7 @@ fn render_viewport_tiles(
         } else {
             // This tile has overlays - must re-encode (don't cache overlay versions)
             dynamic_count += 1;
-            let crop_w = tile_w_px.min(decoded.width());
-            let mut tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
+            let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
             apply_overlays_dynamic(&mut tile_img, &local);
             // Pad to exact cell boundaries so Resize::None can be used
             let tile_img =
@@ -1788,6 +1805,9 @@ fn render_specific_tiles(
     // Constrain tile width to viewport so iTerm2 images don't overflow
     let tile_w_cells = cell_size.width.min(viewport.viewport_width_cells);
     let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
+    let x_offset_px = viewport
+        .x_offset_cells
+        .saturating_mul(u32::from(char_width));
 
     let mut tiles = Vec::new();
     for &tile_idx in tile_indices {
@@ -1805,8 +1825,9 @@ fn render_specific_tiles(
         let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
         let tile_h_cells = ((tile_actual_h_px as f32) / f32::from(char_height)).ceil() as u16;
 
-        let crop_w = tile_w_px.min(decoded.width());
-        let mut tile_img = decoded.crop_imm(0, tile_y_px, crop_w, tile_actual_h_px);
+        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
+        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
+        let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
         let local = overlays.for_tile(tile_y_px, tile_actual_h_px);
         apply_overlays_dynamic(&mut tile_img, &local);
         // Pad to exact cell boundaries so Resize::None can be used
