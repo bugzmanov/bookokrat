@@ -236,15 +236,19 @@ impl OverlaySet {
             && self.cursor.is_none()
     }
 
-    fn for_tile(&self, tile_y: u32, tile_height: u32) -> Self {
+    fn for_tile(&self, tile_x: u32, tile_width: u32, tile_y: u32, tile_height: u32) -> Self {
+        let tile_x_end = tile_x.saturating_add(tile_width);
         let tile_end = tile_y.saturating_add(tile_height);
         let clip = |rects: &[PixelRect]| -> Vec<PixelRect> {
             rects
                 .iter()
+                .filter(|rect| !(rect.x1 <= tile_x || rect.x0 >= tile_x_end))
                 .filter(|rect| rect.intersects_y(tile_y, tile_end))
                 .filter_map(|rect| {
+                    let local_x0 = rect.x0.saturating_sub(tile_x);
+                    let local_x1 = rect.x1.saturating_sub(tile_x).min(tile_width);
                     let local = rect.offset_y(tile_y);
-                    PixelRect::new(local.x0, local.y0, local.x1, local.y1.min(tile_height))
+                    PixelRect::new(local_x0, local.y0, local_x1, local.y1.min(tile_height))
                 })
                 .collect()
         };
@@ -259,6 +263,9 @@ impl OverlaySet {
             rects
                 .iter()
                 .filter_map(|rect| {
+                    if rect.x1 <= tile_x || rect.x0 >= tile_x_end {
+                        return None;
+                    }
                     // Convert to underline coordinates (page-space)
                     let underline_y0 = rect.y1.saturating_add(UNDERLINE_OFFSET);
                     let underline_y1 = underline_y0.saturating_add(UNDERLINE_THICKNESS);
@@ -267,19 +274,22 @@ impl OverlaySet {
                         return None;
                     }
                     // Convert to tile-local coordinates
+                    let local_x0 = rect.x0.saturating_sub(tile_x);
+                    let local_x1 = rect.x1.saturating_sub(tile_x).min(tile_width);
                     let local_y0 = underline_y0.saturating_sub(tile_y);
                     let local_y1 = underline_y1.saturating_sub(tile_y).min(tile_height);
-                    PixelRect::new(rect.x0, local_y0, rect.x1, local_y1)
+                    PixelRect::new(local_x0, local_y0, local_x1, local_y1)
                 })
                 .collect()
         };
 
         let cursor = self.cursor.and_then(|rect| {
-            if rect.intersects_y(tile_y, tile_end) {
+            if rect.intersects_y(tile_y, tile_end) && !(rect.x1 <= tile_x || rect.x0 >= tile_x_end)
+            {
                 PixelRect::new(
-                    rect.x0,
+                    rect.x0.saturating_sub(tile_x),
                     rect.y0.saturating_sub(tile_y),
-                    rect.x1,
+                    rect.x1.saturating_sub(tile_x).min(tile_width),
                     rect.y1.saturating_sub(tile_y).min(tile_height),
                 )
             } else {
@@ -1708,8 +1718,11 @@ fn render_viewport_tiles(
             continue;
         }
 
+        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
+        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
+
         // Check overlays for THIS tile specifically, not the whole page
-        let local = overlays.for_tile(tile_y_px, tile_actual_h_px);
+        let local = overlays.for_tile(crop_x, crop_w, tile_y_px, tile_actual_h_px);
         let tile_has_overlay = !local.is_empty();
 
         let tile_area = Rect {
@@ -1718,9 +1731,6 @@ fn render_viewport_tiles(
             width: tile_w_cells,
             height: tile_h_cells,
         };
-
-        let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
-        let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
 
         let protocol = if !tile_has_overlay {
             // No overlays on this tile - can use cache
@@ -1828,7 +1838,7 @@ fn render_specific_tiles(
         let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
         let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
         let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
-        let local = overlays.for_tile(tile_y_px, tile_actual_h_px);
+        let local = overlays.for_tile(crop_x, crop_w, tile_y_px, tile_actual_h_px);
         apply_overlays_dynamic(&mut tile_img, &local);
         // Pad to exact cell boundaries so Resize::None can be used
         let tile_img =
