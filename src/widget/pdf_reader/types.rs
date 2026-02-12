@@ -60,6 +60,8 @@ pub struct VisiblePageUiInfo {
     pub dest_h: u16,
     /// Offset in destination cells (for partial page display)
     pub offset_dest_cells: u16,
+    /// Source clip offset from top of page in pixels
+    pub img_clip_top_px: u32,
 }
 
 /// Information about the last render pass

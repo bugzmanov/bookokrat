@@ -140,6 +140,7 @@ pub struct TransmitCommand {
     source_rect: Option<SourceRect>,
     dest_cells: Option<DestCells>,
     cursor_at: Option<(u32, u32)>,
+    z_index: Option<i32>,
 }
 
 impl TransmitCommand {
@@ -156,6 +157,7 @@ impl TransmitCommand {
             source_rect: None,
             dest_cells: None,
             cursor_at: None,
+            z_index: None,
         }
     }
 
@@ -218,6 +220,12 @@ impl TransmitCommand {
         self
     }
 
+    /// Sets the z-index for layering. Negative values draw under text.
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = Some(z);
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
     ///
     /// The `shm_path` is the POSIX shared memory path (e.g., `/kgfx_12345`).
@@ -265,6 +273,10 @@ impl TransmitCommand {
             params.push_str(&format!(",c={},r={}", cells.columns, cells.rows));
         }
 
+        if let Some(z) = self.z_index {
+            params.push_str(&format!(",z={z}"));
+        }
+
         // Base64 encode the path
         let payload = BASE64.encode(shm_path.as_bytes());
 
@@ -308,6 +320,7 @@ pub struct DirectTransmit {
     dest_cells: Option<DestCells>,
     chunk_limit: usize,
     cursor_at: Option<(u32, u32)>,
+    z_index: Option<i32>,
 }
 
 impl DirectTransmit {
@@ -326,6 +339,7 @@ impl DirectTransmit {
             dest_cells: None,
             chunk_limit: CHUNK_LIMIT,
             cursor_at: None,
+            z_index: None,
         }
     }
 
@@ -385,6 +399,12 @@ impl DirectTransmit {
     /// Sets the cursor position (1-based, absolute screen coordinates).
     pub fn cursor_at(mut self, row: u32, col: u32) -> Self {
         self.cursor_at = Some((row, col));
+        self
+    }
+
+    /// Sets the z-index for layering. Negative values draw under text.
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = Some(z);
         self
     }
 
@@ -461,6 +481,10 @@ impl DirectTransmit {
 
         if let Some(ref cells) = self.dest_cells {
             first_params.push_str(&format!(",c={},r={}", cells.columns, cells.rows));
+        }
+
+        if let Some(z) = self.z_index {
+            first_params.push_str(&format!(",z={z}"));
         }
 
         // Write chunks
@@ -718,6 +742,7 @@ pub struct DisplayCommand {
     dest_cells: Option<DestCells>,
     no_cursor_move: bool,
     cursor_at: Option<(u32, u32)>,
+    z_index: Option<i32>,
 }
 
 impl DisplayCommand {
@@ -731,6 +756,7 @@ impl DisplayCommand {
             dest_cells: None,
             no_cursor_move: true,
             cursor_at: None,
+            z_index: None,
         }
     }
 
@@ -775,6 +801,12 @@ impl DisplayCommand {
         self
     }
 
+    /// Sets the z-index for layering. Negative values draw under text.
+    pub fn z_index(mut self, z: i32) -> Self {
+        self.z_index = Some(z);
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
     pub fn write_to<W: Write>(&self, writer: &mut W, is_tmux: bool) -> io::Result<()> {
         let mut params = format!("a=p,i={}", self.image_id);
@@ -800,6 +832,10 @@ impl DisplayCommand {
 
         if self.no_cursor_move {
             params.push_str(",C=1");
+        }
+
+        if let Some(z) = self.z_index {
+            params.push_str(&format!(",z={z}"));
         }
 
         write_apc_start(writer, is_tmux, self.cursor_at)?;

@@ -916,7 +916,7 @@ impl App {
                 }
             };
             (
-                self.zen_mode, // UI interactions only in zen mode
+                supports_comments, // UI interactions available whenever protocol supports it
                 Some(std::sync::Arc::new(std::sync::Mutex::new(comments))),
             )
         } else {

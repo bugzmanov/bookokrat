@@ -271,6 +271,9 @@ pub struct PdfReaderState {
     pub comments_doc_id: String,
     /// Comment input state
     pub comment_input: CommentInputState,
+    /// When set, a solid-color Kitty image is placed over this area after PDF
+    /// images so the comment modal has an opaque background. (col, row, width, height)
+    pub comment_overlay_rect: Option<(u16, u16, u16, u16)>,
     /// Comment selection rectangles for overlay rendering
     pub comment_rects: Vec<SelectionRect>,
     /// Whether comment navigation is active
@@ -370,6 +373,7 @@ impl PdfReaderState {
             book_comments,
             comments_doc_id,
             comment_input: CommentInputState::default(),
+            comment_overlay_rect: None,
             comment_rects: Vec::new(),
             comment_nav_active: false,
             comment_nav_page: 0,

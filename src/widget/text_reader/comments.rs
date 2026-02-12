@@ -70,6 +70,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             self.comment_input.target_node_index.replace(node_index);
                         }
                         self.comment_input.target_line = Some(start_line);
+                        self.comment_input.target_start_line = Some(start_line);
+                        self.comment_input.target_end_line = Some(start_line);
                         self.comment_input.target = Some(comment.target.clone());
                         self.comment_input.edit_mode = Some(CommentEditMode::Editing {
                             comment_id: comment.id.clone(),
@@ -99,7 +101,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Some((start, end)) = self.text_selection.get_selection_range() {
                 let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
                 if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
-                    self.init_comment_textarea(target, norm_end.line);
+                    self.init_comment_textarea(target, norm_start.line, norm_end.line);
                     self.text_selection.clear_selection();
                     return true;
                 }
@@ -128,7 +130,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 };
                 let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
                 if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
-                    self.init_comment_textarea(target, norm_end.line);
+                    self.init_comment_textarea(target, norm_start.line, norm_end.line);
                     self.exit_visual_mode();
                     return true;
                 }
@@ -139,13 +141,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         false
     }
 
-    fn init_comment_textarea(&mut self, target: CommentTarget, end_line: usize) {
+    fn init_comment_textarea(&mut self, target: CommentTarget, start_line: usize, end_line: usize) {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("Type your comment here...");
 
         self.comment_input.textarea = Some(textarea);
         self.comment_input.target = Some(target.clone());
         self.comment_input.target_node_index = target.node_index();
+        self.comment_input.target_start_line = Some(start_line);
+        self.comment_input.target_end_line = Some(end_line);
         self.comment_input
             .target_line
             .replace(end_line.saturating_add(1));

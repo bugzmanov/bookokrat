@@ -21,7 +21,6 @@ use crate::pdf::{
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
 
-use super::rendering::MIN_COMMENT_TEXTAREA_WIDTH;
 use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
@@ -112,8 +111,8 @@ impl PdfReaderState {
         // Collect comment rects but don't send yet - must send AFTER InvalidatePageCache
         // to avoid reconvert_pages rendering with stale viewport dimensions.
         // Comments are supported in terminals with image protocols (Kitty, iTerm2).
-        // Underlines should be visible in both zen and ToC modes; only UI interactions are zen-only.
-        let comment_rects_to_send = if self.supports_comments && zen_mode {
+        // With z-index support, comments work in both zen and ToC modes.
+        let comment_rects_to_send = if self.supports_comments {
             if self.book_comments.is_none() {
                 // In test mode, use empty comments to avoid loading persistent state
                 let comments = if test_mode {
@@ -132,14 +131,8 @@ impl PdfReaderState {
                 };
                 self.book_comments = Some(std::sync::Arc::new(std::sync::Mutex::new(comments)));
                 self.comments_enabled = true;
-                log::info!("PDF comments enabled for zen mode");
-            } else {
-                self.comments_enabled = true;
+                log::info!("PDF comments enabled");
             }
-            Some(self.initial_comment_rects())
-        } else if self.supports_comments {
-            // Exiting zen mode: disable UI interactions but keep underlines visible
-            self.comments_enabled = false;
             Some(self.initial_comment_rects())
         } else {
             None
@@ -2498,18 +2491,11 @@ impl PdfReaderState {
 
     fn start_comment_input(&mut self) -> Option<InputAction> {
         if !self.comments_enabled {
-            self.set_error_hud("Comments are only available in zen mode for PDFs".to_string());
+            self.set_error_hud("Comments are not supported in this terminal".to_string());
             return Some(InputAction::Redraw);
         }
         if self.comment_input.is_active() {
             return None;
-        }
-
-        // Check if there's enough space for the comment textarea
-        let right_margin = self.last_render.unused_width / 2;
-        if right_margin < MIN_COMMENT_TEXTAREA_WIDTH {
-            self.set_error_hud("Not enough space for comment editor. Try zooming out.".to_string());
-            return Some(InputAction::Redraw);
         }
 
         let (target, quoted_text) = if self.normal_mode.is_visual_active() {
@@ -2595,6 +2581,7 @@ impl PdfReaderState {
 
         if comment_text.trim().is_empty() {
             self.comment_input.clear();
+            self.force_redraw();
             return None;
         }
 
@@ -2622,6 +2609,7 @@ impl PdfReaderState {
 
         self.refresh_comment_rects();
         self.comment_input.clear();
+        self.force_redraw();
         Some(self.comment_rects.clone())
     }
 
@@ -2849,13 +2837,6 @@ impl PdfReaderState {
         }
         if !self.comment_nav_active {
             return None;
-        }
-
-        // Check if there's enough space for the comment textarea
-        let right_margin = self.last_render.unused_width / 2;
-        if right_margin < MIN_COMMENT_TEXTAREA_WIDTH {
-            self.set_error_hud("Not enough space for comment editor. Try zooming out.".to_string());
-            return Some(InputAction::Redraw);
         }
 
         let comments = self.comments_for_page(self.comment_nav_page);

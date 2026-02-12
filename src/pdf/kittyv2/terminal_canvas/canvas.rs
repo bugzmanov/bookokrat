@@ -1,5 +1,6 @@
 use std::io::{self, Write};
 
+use crate::pdf::kittyv2::IMAGE_Z_INDEX;
 use crate::pdf::kittyv2::kgfx::{
     Compression, DeleteCommand, DeleteMode, DirectTransmit, DisplayCommand, Quiet, TransmitCommand,
     pool, tracker,
@@ -73,7 +74,8 @@ impl TerminalCanvas {
                     .quiet(self.quiet_mode())
                     .no_cursor_move(true)
                     .cursor_at(cursor.0, cursor.1)
-                    .dest_cells(placement.cell_width, placement.cell_height);
+                    .dest_cells(placement.cell_width, placement.cell_height)
+                    .z_index(IMAGE_Z_INDEX);
 
                 if placement.has_source_rect() {
                     cmd = cmd.source_rect(
@@ -105,7 +107,8 @@ impl TerminalCanvas {
                     .no_cursor_move(true)
                     .cursor_at(cursor.0, cursor.1)
                     .compression(Compression::Zlib)
-                    .dest_cells(placement.cell_width, placement.cell_height);
+                    .dest_cells(placement.cell_width, placement.cell_height)
+                    .z_index(IMAGE_Z_INDEX);
 
                 if placement.has_source_rect() {
                     cmd = cmd.source_rect(
@@ -146,7 +149,8 @@ impl TerminalCanvas {
             .quiet(self.quiet_mode())
             .cursor_at(cursor.0, cursor.1)
             .dest_cells(placement.cell_width, placement.cell_height)
-            .no_cursor_move(true);
+            .no_cursor_move(true)
+            .z_index(IMAGE_Z_INDEX);
 
         if placement.has_source_rect() {
             cmd = cmd.source_rect(
