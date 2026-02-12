@@ -1069,6 +1069,7 @@ impl App {
         let Some(mut pdf_reader) = self.pdf_reader.take() else {
             return;
         };
+        pdf_reader.zen_mode = self.zen_mode;
 
         let (text_color, border_color, _bg_color) =
             current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
@@ -4993,6 +4994,7 @@ impl App {
                 action: None,
             };
         };
+        pdf_reader.zen_mode = self.zen_mode;
         let response = pdf_reader.handle_event(event);
         if !response.handled {
             self.pdf_reader = Some(pdf_reader);

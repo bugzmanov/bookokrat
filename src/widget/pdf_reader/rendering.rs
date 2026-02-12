@@ -2233,9 +2233,13 @@ impl PdfReaderState {
 
         frame.render_widget(Clear, modal_area);
 
-        let title = match comment_input.edit_mode {
-            Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
-            _ => "Add Comment (Esc to save)",
+        let title = if comment_input.read_only {
+            "Comment (Read-only, j/k navigate, e edit)"
+        } else {
+            match comment_input.edit_mode {
+                Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
+                _ => "Add Comment (Esc to save)",
+            }
         };
         let block = Block::default()
             .title(Span::styled(

@@ -80,6 +80,8 @@ pub struct CommentInputState {
     pub target: Option<CommentTarget>,
     /// The selected/quoted text for the comment
     pub quoted_text: Option<String>,
+    /// Read-only preview mode used for comment navigation.
+    pub read_only: bool,
 }
 
 /// A search match on the current page
@@ -156,6 +158,7 @@ impl CommentInputState {
         self.edit_mode = None;
         self.target = None;
         self.quoted_text = None;
+        self.read_only = false;
     }
 
     pub fn is_active(&self) -> bool {
@@ -263,6 +266,8 @@ pub struct PdfReaderState {
     pub toc_entries: Vec<TocEntry>,
     /// Whether comments are enabled
     pub comments_enabled: bool,
+    /// Whether reader is currently in zen mode
+    pub zen_mode: bool,
     /// Whether terminal supports PDF comments (Kitty/iTerm2 protocols)
     pub supports_comments: bool,
     /// Book comments storage (unified with EPUB comments)
@@ -369,6 +374,7 @@ impl PdfReaderState {
             page_numbers: PageNumberTracker::new(),
             toc_entries: Vec::new(),
             comments_enabled,
+            zen_mode: false,
             supports_comments,
             book_comments,
             comments_doc_id,
