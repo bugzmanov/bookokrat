@@ -4247,6 +4247,76 @@ fn test_normal_mode_visual_selection_yank_svg() {
 
 #[test]
 #[parallel]
+fn test_comment_input_placement_from_visual_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(90, 16);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("comment_input_placement_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Comment Input Placement Test</title>
+</head>
+<body>
+    <p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega.</p>
+    <p>Second paragraph to ensure there is enough content below the selection for textarea placement.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('v'));
+    app.press_key(crossterm::event::KeyCode::Char('e'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_comment_input_placement_from_visual_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/comment_input_placement_from_visual_selection.svg"),
+        "test_comment_input_placement_from_visual_selection_svg",
+        create_test_failure_handler("test_comment_input_placement_from_visual_selection_svg"),
+    );
+}
+
+#[test]
+#[parallel]
 fn test_normal_mode_jump_to_bottom_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);

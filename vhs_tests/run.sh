@@ -89,6 +89,7 @@ OPEN_REPORT=false
 VERBOSE=false
 MEMORY_LEAK_LIMIT_MB=100  # Default: fail if memory leak > 100MB (includes ~80MB harness overhead)
 EXCLUDED_DEFAULT_TAPES=(
+    "demo_combined"
     "demo_epub"
     "demo_pdf"
     "docsite_epub"

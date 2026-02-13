@@ -857,12 +857,7 @@ impl MarkdownTextReader {
         if let (Some(layout), Some(textarea)) =
             (textarea_layout, self.comment_input.textarea.as_mut())
         {
-            let mut visual_position = layout.draw_start_line.saturating_sub(self.scroll_offset);
-            if let Some(insert_pos) = layout.insert_position {
-                if layout.draw_start_line >= insert_pos {
-                    visual_position += layout.lines_to_insert;
-                }
-            }
+            let visual_position = layout.draw_start_line.saturating_sub(self.scroll_offset);
             let textarea_y = inner_area.y + visual_position as u16;
 
             if textarea_y < inner_area.y + inner_area.height {
