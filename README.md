@@ -13,7 +13,7 @@ Bookokrat is a terminal-based EPUB and PDF reader with a split-view library and 
 - Search inside the current chapter or across the whole book, jump through a per-book history, and inspect reading statistics.
 - Highlight text, attach comments, export annotations to Markdown, copy snippets or entire chapters, and toggle the raw HTML source for debugging.
 - Read PDFs with a dedicated renderer (TOC navigation, page/scroll modes, bookmarks, and annotations) in graphics-capable terminals.
-- Open images in-place, follow internal anchors, launch external links in your browser, and hand off the EPUB to your system viewer.
+- Open images in-place, follow internal anchors, launch external links in your browser, and hand off the current document to your system viewer.
 - Customize with multiple color themes, adjustable margins, and zen mode; settings persist across sessions.
 - Enter a Vim-style normal mode in the reader for precise motions, visual selection, and yanking to clipboard.
 - Load EPUB bundles (exploded `.epub` directories, including Apple Books exports) without repackaging.
@@ -61,8 +61,13 @@ Download from [GitHub Releases](https://github.com/bugzmanov/bookokrat/releases)
 
 ```bash
 # x86_64 (Intel/AMD)
-curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz
-tar -xzf bookokrat-v0.2.2-x86_64-unknown-linux-musl.tar.gz
+curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.3.4-x86_64-unknown-linux-musl.tar.gz
+tar -xzf bookokrat-v0.3.4-x86_64-unknown-linux-musl.tar.gz
+sudo mv bookokrat /usr/local/bin/
+
+# arm64 (AArch64)
+curl -LO https://github.com/bugzmanov/bookokrat/releases/latest/download/bookokrat-v0.3.4-aarch64-unknown-linux-gnu.tar.gz
+tar -xzf bookokrat-v0.3.4-aarch64-unknown-linux-gnu.tar.gz
 sudo mv bookokrat /usr/local/bin/
 ```
 
@@ -170,6 +175,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+z` - Copy debug transcript
 - `z` (PDF) - Zoom to fit height
 - `Z` (PDF) - Zoom to fit width
+- `i` (PDF) - Toggle image inversion
 - `c` or `Ctrl+C` - Copy selection
 - `p` - Toggle profiler overlay
 - `n` - Toggle normal mode (Vim motions, visual selection, yanking)
@@ -185,7 +191,7 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+h` - Toggle reading history popup
 - `Space+d` - Show book statistics popup
 - `Space+a` - Open comments/annotations viewer
-- `Space+o` - Open current EPUB in OS viewer
+- `Space+o` - Open current document in OS viewer
 - `Enter` - Open image popup (when on image) or activate popup selection
 
 ### Popup Navigation

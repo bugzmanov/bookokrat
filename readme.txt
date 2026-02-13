@@ -60,7 +60,7 @@
 │  + / -         Increase / decrease content margins                          │
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
-│  Space+o       Open current book in system EPUB viewer                      │
+│  Space+o       Open current book in system viewer                           │
 │  Space+a       Open comments/annotations viewer                             │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -238,7 +238,6 @@ Review and manage notes efficiently:
 
 Comments are saved per-book and persist across sessions.
 PDF annotations require a graphics-capable terminal.
-For now, PDF comments can be added only in zen mode.
 
 ===============================================================================
 
@@ -250,7 +249,7 @@ For now, PDF comments can be added only in zen mode.
     like in vim.
 
   [EXTERNAL READER INTEGRATION]
-    Press Space+o to hand off the current book to your system's EPUB reader.
+    Press Space+o to hand off the current book to your system viewer.
     Bookokrat detects and supports:
       • macOS: Calibre, ClearView, Skim
       • Linux: Calibre, FBReader
