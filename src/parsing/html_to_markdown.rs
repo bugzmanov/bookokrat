@@ -17,14 +17,17 @@ static SELF_CLOSING_NON_VOID_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)<(title|p|div|span|a|li|ul|ol|table|tr|td|th|tbody|thead|h1|h2|h3|h4|h5|h6|iframe|textarea|script|style|canvas|object|video|audio|noscript|template|slot|select|option|optgroup|button|datalist|output|progress|meter|details|summary|dialog|menu|menuitem)(\s[^>]*)?\s*/>").unwrap()
 });
 
-fn fix_self_closing_tags(html: &str) -> String {
-    SELF_CLOSING_NON_VOID_RE
-        .replace_all(html, |caps: &regex::Captures| {
-            let tag = &caps[1];
-            let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            format!("<{tag}{attrs}></{tag}>")
-        })
-        .into_owned()
+// html5ever treats `</\nfoo>` as a parse error (not a closing tag).
+// Some EPUB sources line-wrap mid-tag, producing `</\nmrow>` etc.
+static BROKEN_END_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</\s+(\w)").unwrap());
+
+fn fix_html_for_parser(html: &str) -> String {
+    let fixed = SELF_CLOSING_NON_VOID_RE.replace_all(html, |caps: &regex::Captures| {
+        let tag = &caps[1];
+        let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+        format!("<{tag}{attrs}></{tag}>")
+    });
+    BROKEN_END_TAG_RE.replace_all(&fixed, "</$1").into_owned()
 }
 
 /// Strategy for content collection mode
@@ -325,7 +328,7 @@ impl HtmlToMarkdownConverter {
     }
 
     pub fn convert(&mut self, html: &str) -> Document {
-        let preprocessed = fix_self_closing_tags(html);
+        let preprocessed = fix_html_for_parser(html);
         let dom = parse_document(RcDom::default(), Default::default())
             .from_utf8()
             .read_from(&mut preprocessed.as_bytes())
