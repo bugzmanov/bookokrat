@@ -39,25 +39,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
                 vec
             }
-            Table { header, rows, .. } => {
+            MarkdownBlock::DefinitionList { items } => {
                 let mut vec = Vec::new();
-                // Extract images from header row
-                if let Some(header_row) = header {
-                    for cell in &header_row.cells {
-                        vec.append(
-                            &mut self.extract_images_from_cell_content(&cell.content, book_images),
-                        );
-                    }
-                }
-                // Extract images from data rows
-                for row in rows {
-                    for cell in &row.cells {
-                        vec.append(
-                            &mut self.extract_images_from_cell_content(&cell.content, book_images),
-                        );
+                for item in items {
+                    // Term images render as [view image] links, not overlays — skip preloading.
+                    // Definition body nodes go through render_node → render_paragraph which
+                    // calls render_image_placeholder, so those need preloading.
+                    for def_nodes in &item.definitions {
+                        for node in def_nodes {
+                            vec.append(&mut self.extract_images_from_node(node, book_images));
+                        }
                     }
                 }
                 vec
+            }
+            Table { .. } => {
+                // Table images are handled as [view image] clickable links,
+                // not as inline overlays. Skip preloading to avoid ghost images at position 0.
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -124,24 +123,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             })
             .collect()
-    }
-
-    fn extract_images_from_cell_content(
-        &mut self,
-        content: &crate::markdown::TableCellContent,
-        book_images: &BookImages,
-    ) -> Vec<(String, u16)> {
-        use crate::markdown::TableCellContent;
-        match content {
-            TableCellContent::Simple(text) => self.extract_images_from_text(text, book_images),
-            TableCellContent::Rich(nodes) => {
-                let mut vec = Vec::new();
-                for node in nodes {
-                    vec.append(&mut self.extract_images_from_node(node, book_images));
-                }
-                vec
-            }
-        }
     }
 
     pub fn preload_image_dimensions(&mut self, book_images: &BookImages) {
@@ -252,6 +233,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 ImageLoadState::Loaded { image, .. } => Some(image.clone()),
                 _ => None,
             })
+    }
+
+    pub fn is_embedded_image(&self, url: &str) -> bool {
+        self.embedded_images.borrow().contains_key(url)
     }
 
     /// Check if a screen click position has a link (for linked images)

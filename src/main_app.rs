@@ -1825,6 +1825,16 @@ impl App {
     }
 
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
+        if self.text_reader.is_embedded_image(&link_info.url)
+            || self
+                .book_images
+                .get_image_size_with_context(&link_info.url, None)
+                .is_some()
+        {
+            self.handle_image_click(&link_info.url, self.terminal_size);
+            return Ok(true);
+        }
+
         if link_info.link_type != crate::markdown::LinkType::External
             && let Some(book) = &self.current_book
         {

@@ -55,6 +55,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         None
     }
 
+    fn content_has_image(content: &MarkdownText) -> bool {
+        content.iter().any(|item| match item {
+            TextOrInline::Inline(Inline::Image { .. }) => true,
+            TextOrInline::Inline(Inline::Link { text, .. }) => {
+                Self::extract_image_from_text(text).is_some()
+            }
+            _ => false,
+        })
+    }
+
     pub fn render_document_to_lines(
         &mut self,
         doc: &Document,
@@ -490,10 +500,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             url: url.clone(),
                         });
                     }
-                    Inline::Image { alt_text, .. } => result.push(crate::table::InlineSpan::Text {
-                        text: alt_text.clone(),
-                        style: crate::table::InlineStyle::default(),
-                    }),
+                    Inline::Image { url, .. } => {
+                        result.push(crate::table::InlineSpan::Link {
+                            text: vec![crate::table::InlineSpan::Text {
+                                text: "[view image]".to_string(),
+                                style: crate::table::InlineStyle::default(),
+                            }],
+                            url: url.clone(),
+                        });
+                    }
                     Inline::Anchor { .. } => {}
                     Inline::LineBreak => {
                         trim_trailing_space_in_spans(&mut result);
@@ -1260,8 +1275,30 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         });
                     }
 
-                    Inline::Image { alt_text, .. } => {
-                        rich_spans.push(RichSpan::Text(Span::raw(format!("[image: {alt_text}]"))));
+                    Inline::Image { url, .. } => {
+                        let link_info = LinkInfo {
+                            text: "[view image]".to_string(),
+                            url: url.clone(),
+                            line: 0,
+                            start_col: 0,
+                            end_col: 0,
+                            link_type: crate::markdown::LinkType::External,
+                            target_chapter: None,
+                            target_anchor: None,
+                        };
+                        rich_spans.push(RichSpan::Link {
+                            span: Span::styled(
+                                "[view image]",
+                                RatatuiStyle::default()
+                                    .fg(if is_focused {
+                                        palette.base_0c
+                                    } else {
+                                        palette.base_03
+                                    })
+                                    .add_modifier(Modifier::UNDERLINED),
+                            ),
+                            info: link_info,
+                        });
                     }
 
                     Inline::Anchor { .. } => {
@@ -1965,6 +2002,45 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 if block_idx == 0 {
                     // First block gets the bullet/number prefix
                     match &block_node.block {
+                        MarkdownBlock::Paragraph { content }
+                            if Self::content_has_image(content) =>
+                        {
+                            let canonical_len = Self::text_to_string(content).chars().count();
+                            let lines_before = lines.len();
+                            let canon_offset = if list_path.is_empty() {
+                                Some(*global_char_pos)
+                            } else {
+                                Some(item_char_pos)
+                            };
+                            self.render_content_with_images(
+                                content,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                Some(&prefix),
+                                indent,
+                                node_index,
+                                canon_offset,
+                            );
+                            first_block_line_count = lines.len() - lines_before;
+                            for line in lines[lines_before..].iter_mut() {
+                                if !matches!(line.line_type, LineType::ImagePlaceholder { .. }) {
+                                    line.line_type = LineType::ListItem {
+                                        kind: kind.clone(),
+                                        indent,
+                                        item_index: idx,
+                                        list_path: item_line_path.clone(),
+                                    };
+                                }
+                                line.node_index = node_index;
+                            }
+                            if !list_path.is_empty() {
+                                item_char_pos += canonical_len;
+                            }
+                            *global_char_pos += canonical_len;
+                        }
                         MarkdownBlock::Paragraph { content } => {
                             let canonical_len = Self::text_to_string(content).chars().count();
                             let mut content_rich_spans = Vec::new();
@@ -2062,6 +2138,44 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
                 } else {
                     match &block_node.block {
+                        MarkdownBlock::Paragraph { content }
+                            if Self::content_has_image(content) =>
+                        {
+                            let canonical_len = Self::text_to_string(content).chars().count();
+                            let lines_before = lines.len();
+                            let canon_offset = if list_path.is_empty() {
+                                Some(*global_char_pos)
+                            } else {
+                                Some(item_char_pos)
+                            };
+                            self.render_content_with_images(
+                                content,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                None,
+                                indent + 1,
+                                node_index,
+                                canon_offset,
+                            );
+                            for line in lines[lines_before..].iter_mut() {
+                                if !matches!(line.line_type, LineType::ImagePlaceholder { .. }) {
+                                    line.line_type = LineType::ListItem {
+                                        kind: kind.clone(),
+                                        indent,
+                                        item_index: idx,
+                                        list_path: item_line_path.clone(),
+                                    };
+                                }
+                                line.node_index = node_index;
+                            }
+                            if !list_path.is_empty() {
+                                item_char_pos += canonical_len;
+                            }
+                            *global_char_pos += canonical_len;
+                        }
                         MarkdownBlock::Paragraph { content } => {
                             let canonical_len = Self::text_to_string(content).chars().count();
                             let mut content_rich_spans = Vec::new();
@@ -2253,6 +2367,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             })
             .collect();
 
+        // Collect image URLs from [view image] links before moving cells into table widget
+        let mut image_urls: Vec<String> = Vec::new();
+        fn collect_view_image_urls(inlines: &[crate::table::InlineSpan], urls: &mut Vec<String>) {
+            for inline in inlines {
+                if let crate::table::InlineSpan::Link { text, url } = inline {
+                    let is_view_image = text.iter().any(|s| {
+                        matches!(s, crate::table::InlineSpan::Text { text, .. } if text == "[view image]")
+                    });
+                    if is_view_image {
+                        urls.push(url.clone());
+                    }
+                }
+            }
+        }
+        for cell in &table_headers {
+            collect_view_image_urls(&cell.content, &mut image_urls);
+        }
+        for row in &table_rows {
+            for cell in row {
+                collect_view_image_urls(&cell.content, &mut image_urls);
+            }
+        }
+
         // Create the table widget with colspan support
         let mut custom_table = crate::table::Table::new_with_colspans(table_rows)
             .constraints(constraints)
@@ -2277,7 +2414,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let rendered_line = RenderedLine {
                 spans: line.spans,
                 raw_text: raw_text.clone(),
-                line_type: LineType::Text, // Table widget handles its own styling
+                line_type: LineType::Text,
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index,
@@ -2292,9 +2429,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             *total_height += 1;
         }
 
-        // Extract and store links from the table
-        let table_links = custom_table.get_links();
-        self.links.extend(table_links.clone());
+        // Scan rendered lines for [view image] text and create LinkInfo entries
+        {
+            let mut url_iter = image_urls.into_iter();
+            for (offset, line) in lines[table_start_line..].iter_mut().enumerate() {
+                let raw = line.raw_text.clone();
+                let mut search_start = 0;
+                while let Some(pos) = raw[search_start..].find("[view image]") {
+                    let byte_start = search_start + pos;
+                    let col_start = raw[..byte_start].chars().count();
+                    let col_end = col_start + "[view image]".len() - 1;
+                    if let Some(url) = url_iter.next() {
+                        line.link_nodes.push(LinkInfo {
+                            text: "[view image]".to_string(),
+                            url,
+                            line: table_start_line + offset,
+                            start_col: col_start,
+                            end_col: col_end,
+                            link_type: crate::markdown::LinkType::External,
+                            target_chapter: None,
+                            target_anchor: None,
+                        });
+                    }
+                    search_start = byte_start + "[view image]".len();
+                }
+            }
+        }
 
         // Store table info for click detection
         let table_height = *total_height - table_start_line;
@@ -2511,6 +2671,47 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Render quote content with "> " prefix
         for node in content {
             match &node.block {
+                MarkdownBlock::Paragraph {
+                    content: para_content,
+                } if Self::content_has_image(para_content) => {
+                    let canonical_len = Self::text_to_string(para_content).chars().count();
+                    let lines_before_para = lines.len();
+                    let current_para_idx = quote_para_idx;
+                    quote_para_idx += 1;
+
+                    self.render_content_with_images(
+                        para_content,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        is_focused,
+                        Some("> "),
+                        indent,
+                        node_index,
+                        Some(cumulative_char_pos),
+                    );
+
+                    let quote_color = if is_focused {
+                        palette.base_03
+                    } else {
+                        palette.base_02
+                    };
+                    for line in lines[lines_before_para..].iter_mut() {
+                        line.node_index = node_index;
+                        if !matches!(line.line_type, LineType::ImagePlaceholder { .. }) {
+                            line.line_type = LineType::QuoteParagraph {
+                                paragraph_index: current_para_idx,
+                            };
+                            for span in &mut line.spans {
+                                let new_style =
+                                    span.style.fg(quote_color).add_modifier(Modifier::ITALIC);
+                                *span = Span::styled(span.content.clone(), new_style);
+                            }
+                        }
+                    }
+                    cumulative_char_pos += canonical_len;
+                }
                 MarkdownBlock::Paragraph {
                     content: para_content,
                 } => {
@@ -2957,6 +3158,131 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         lines.push(RenderedLine::empty());
         self.raw_text_lines.push(String::new());
         *total_height += 1;
+    }
+
+    /// Render paragraph content that may contain images, splitting at image boundaries.
+    /// Used by render_list and render_quote to handle images inside containers.
+    #[allow(clippy::too_many_arguments)]
+    fn render_content_with_images(
+        &mut self,
+        content: &MarkdownText,
+        lines: &mut Vec<RenderedLine>,
+        total_height: &mut usize,
+        width: usize,
+        palette: &Base16Palette,
+        is_focused: bool,
+        first_prefix: Option<&str>,
+        indent: usize,
+        node_index: Option<usize>,
+        canonical_offset: Option<usize>,
+    ) {
+        let mut current_rich_spans: Vec<RichSpan> = Vec::new();
+        let mut current_chunk_items: Vec<&TextOrInline> = Vec::new();
+        let mut is_first_chunk = true;
+        let mut para_canonical_offset: usize = canonical_offset.unwrap_or(0);
+
+        for item in content.iter() {
+            match item {
+                TextOrInline::Inline(Inline::Image { url, .. }) => {
+                    // Flush accumulated text before image
+                    if !current_rich_spans.is_empty() {
+                        let chunk_canonical_len = current_chunk_items
+                            .iter()
+                            .map(|i| Self::text_or_inline_canonical_len(i))
+                            .sum::<usize>();
+                        let prefix = if is_first_chunk { first_prefix } else { None };
+                        self.render_text_spans(
+                            &current_rich_spans,
+                            prefix,
+                            lines,
+                            total_height,
+                            width,
+                            indent,
+                            false,
+                            node_index,
+                            Some(para_canonical_offset),
+                        );
+                        para_canonical_offset += chunk_canonical_len;
+                        current_rich_spans = Vec::new();
+                        current_chunk_items.clear();
+                        is_first_chunk = false;
+                    }
+                    self.render_image_placeholder(url, lines, total_height, width, palette);
+                }
+                TextOrInline::Inline(Inline::Link {
+                    text: link_text,
+                    url,
+                    link_type,
+                    target_chapter,
+                    target_anchor,
+                    ..
+                }) if Self::extract_image_from_text(link_text).is_some() => {
+                    // Flush accumulated text before image link
+                    if !current_rich_spans.is_empty() {
+                        let chunk_canonical_len = current_chunk_items
+                            .iter()
+                            .map(|i| Self::text_or_inline_canonical_len(i))
+                            .sum::<usize>();
+                        let prefix = if is_first_chunk { first_prefix } else { None };
+                        self.render_text_spans(
+                            &current_rich_spans,
+                            prefix,
+                            lines,
+                            total_height,
+                            width,
+                            indent,
+                            false,
+                            node_index,
+                            Some(para_canonical_offset),
+                        );
+                        para_canonical_offset += chunk_canonical_len;
+                        current_rich_spans = Vec::new();
+                        current_chunk_items.clear();
+                        is_first_chunk = false;
+                    }
+                    let image_url = Self::extract_image_from_text(link_text).unwrap();
+                    let link_info = LinkInfo {
+                        text: String::new(),
+                        url: url.clone(),
+                        line: 0,
+                        start_col: 0,
+                        end_col: 0,
+                        link_type: link_type.clone(),
+                        target_chapter: target_chapter.clone(),
+                        target_anchor: target_anchor.clone(),
+                    };
+                    self.render_image_placeholder_with_link(
+                        &image_url,
+                        lines,
+                        total_height,
+                        width,
+                        palette,
+                        Some(link_info),
+                    );
+                }
+                _ => {
+                    let rich_spans = self.render_text_or_inline(item, palette, is_focused);
+                    current_rich_spans.extend(rich_spans);
+                    current_chunk_items.push(item);
+                }
+            }
+        }
+
+        // Flush remaining text
+        if !current_rich_spans.is_empty() {
+            let prefix = if is_first_chunk { first_prefix } else { None };
+            self.render_text_spans(
+                &current_rich_spans,
+                prefix,
+                lines,
+                total_height,
+                width,
+                indent,
+                false,
+                node_index,
+                Some(para_canonical_offset),
+            );
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
