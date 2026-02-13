@@ -108,7 +108,7 @@ wait 300
 # Add comment
 key a
 wait 400
-type this is comment
+type Demo: this is a comment!
 wait 800
 
 # Save comment (Esc saves textarea)
