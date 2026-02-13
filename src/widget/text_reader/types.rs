@@ -245,6 +245,8 @@ pub struct CommentInputState {
     pub textarea: Option<TextArea<'static>>,
     pub target_node_index: Option<usize>,
     pub target_line: Option<usize>,
+    pub target_start_line: Option<usize>,
+    pub target_end_line: Option<usize>,
     pub edit_mode: Option<CommentEditMode>,
     pub target: Option<CommentTarget>,
 }
@@ -254,6 +256,8 @@ impl CommentInputState {
         self.textarea = None;
         self.target_node_index = None;
         self.target_line = None;
+        self.target_start_line = None;
+        self.target_end_line = None;
         self.edit_mode = None;
         self.target = None;
     }

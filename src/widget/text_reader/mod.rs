@@ -40,6 +40,20 @@ use std::time::{Duration, Instant};
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CommentTextareaPlacement {
+    Below,
+    Above,
+    Overlay,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CommentTextareaLayout {
+    insert_position: Option<usize>,
+    lines_to_insert: usize,
+    draw_start_line: usize,
+}
+
 pub struct MarkdownTextReader {
     markdown_document: Option<Arc<Document>>,
     rendered_content: RenderedContent,
@@ -312,6 +326,101 @@ impl MarkdownTextReader {
 }
 
 impl MarkdownTextReader {
+    fn compute_comment_textarea_layout(
+        &self,
+        viewport_start: usize,
+        viewport_end: usize,
+    ) -> Option<CommentTextareaLayout> {
+        if !self.comment_input.is_active() || viewport_start >= viewport_end {
+            return None;
+        }
+
+        let textarea = self.comment_input.textarea.as_ref()?;
+        let mut anchor_start = self
+            .comment_input
+            .target_start_line
+            .or(self.comment_input.target_line)?;
+        let mut anchor_end = self
+            .comment_input
+            .target_end_line
+            .or(self.comment_input.target_line)?;
+
+        if anchor_start > anchor_end {
+            std::mem::swap(&mut anchor_start, &mut anchor_end);
+        }
+
+        if self.rendered_content.lines.is_empty() {
+            return None;
+        }
+
+        let max_line = self.rendered_content.lines.len().saturating_sub(1);
+        anchor_start = anchor_start.min(max_line);
+        anchor_end = anchor_end.min(max_line);
+
+        if anchor_end < viewport_start || anchor_start >= viewport_end {
+            return None;
+        }
+
+        let anchor_visible_start = anchor_start.max(viewport_start);
+        let anchor_visible_end = anchor_end.min(viewport_end.saturating_sub(1));
+
+        let content_lines = textarea.lines().len().max(3);
+        let desired_height = content_lines + 2;
+        // One empty line before and one after textarea.
+        let reserve_lines = desired_height + 2;
+
+        let space_above = anchor_visible_start.saturating_sub(viewport_start);
+        let space_below = viewport_end.saturating_sub(anchor_visible_end.saturating_add(1));
+        let can_fit_below = space_below >= reserve_lines;
+        let can_fit_above = space_above >= reserve_lines;
+
+        let placement = if can_fit_below {
+            CommentTextareaPlacement::Below
+        } else if can_fit_above {
+            CommentTextareaPlacement::Above
+        } else {
+            CommentTextareaPlacement::Overlay
+        };
+
+        match placement {
+            CommentTextareaPlacement::Below => {
+                let insert_position = anchor_visible_end.saturating_add(1);
+                Some(CommentTextareaLayout {
+                    insert_position: Some(insert_position),
+                    lines_to_insert: reserve_lines,
+                    draw_start_line: insert_position.saturating_add(1),
+                })
+            }
+            CommentTextareaPlacement::Above => {
+                let insert_position = anchor_visible_start.saturating_sub(reserve_lines);
+                Some(CommentTextareaLayout {
+                    insert_position: Some(insert_position),
+                    lines_to_insert: reserve_lines,
+                    draw_start_line: insert_position.saturating_add(1),
+                })
+            }
+            CommentTextareaPlacement::Overlay => {
+                let prefer_above = space_above > space_below;
+                let max_start = viewport_end.saturating_sub(desired_height);
+                let preferred_start = if prefer_above {
+                    anchor_visible_start.saturating_sub(desired_height.saturating_sub(1))
+                } else {
+                    anchor_visible_end.saturating_add(1)
+                };
+                let draw_start_line = if max_start < viewport_start {
+                    viewport_start
+                } else {
+                    preferred_start.clamp(viewport_start, max_start)
+                };
+                Some(CommentTextareaLayout {
+                    insert_position: None,
+                    lines_to_insert: 0,
+                    draw_start_line,
+                })
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
@@ -531,28 +640,15 @@ impl MarkdownTextReader {
             palette.base_01
         };
 
-        // Reserve empty lines where the comment textarea will be drawn
-        let mut textarea_lines_to_insert = 0;
-        let mut textarea_insert_position = None;
-
-        if self.comment_input.is_active() {
-            if let Some(target_line) = self.comment_input.target_line {
-                if target_line >= self.scroll_offset && target_line < end_offset {
-                    textarea_insert_position = Some(target_line);
-
-                    let content_lines = if let Some(ref textarea) = self.comment_input.textarea {
-                        textarea.lines().len()
-                    } else {
-                        0
-                    };
-
-                    let min_lines = 3;
-                    let actual_content_lines = content_lines.max(min_lines);
-                    // +2 for border, +1 for empty line before, +1 for empty line after
-                    textarea_lines_to_insert = actual_content_lines + 4;
-                }
-            }
-        }
+        // Reserve empty lines where the comment textarea will be drawn.
+        let textarea_layout = self.compute_comment_textarea_layout(self.scroll_offset, end_offset);
+        let textarea_lines_to_insert = textarea_layout
+            .as_ref()
+            .map(|layout| layout.lines_to_insert)
+            .unwrap_or(0);
+        let textarea_insert_position = textarea_layout
+            .as_ref()
+            .and_then(|layout| layout.insert_position);
 
         for line_idx in self.scroll_offset..end_offset {
             if let Some(insert_pos) = textarea_insert_position {
@@ -760,74 +856,71 @@ impl MarkdownTextReader {
 
         self.last_rendered_image_rects = current_image_rects;
 
-        if self.comment_input.is_active() {
-            if let Some(ref mut textarea) = self.comment_input.textarea {
-                if let Some(target_line) = self.comment_input.target_line {
-                    if target_line >= self.scroll_offset
-                        && target_line < self.scroll_offset + self.visible_height
-                    {
-                        // +1 to leave an empty line before the textarea
-                        let visual_position = target_line - self.scroll_offset + 1;
-
-                        let textarea_y = inner_area.y + visual_position as u16;
-
-                        if textarea_y < inner_area.y + inner_area.height {
-                            // Compute minimum height so borders never collapse
-                            let content_lines = textarea.lines().len();
-                            let min_lines = 3;
-                            let actual_content_lines = content_lines.max(min_lines);
-                            let desired_height = (actual_content_lines + 2) as u16;
-
-                            // Constrain height to the remaining view
-                            let textarea_height =
-                                desired_height.min(inner_area.y + inner_area.height - textarea_y);
-
-                            // Shift left to align with paragraph text (inner_area.x already has padding)
-                            let left_adjust = 2;
-
-                            let textarea_rect = Rect {
-                                x: inner_area.x.saturating_sub(left_adjust),
-                                y: textarea_y,
-                                width: inner_area.width + left_adjust,
-                                height: textarea_height,
-                            };
-
-                            let clear_block = Block::default()
-                                .style(RatatuiStyle::default().bg(theme_background()));
-                            frame.render_widget(clear_block, textarea_rect);
-
-                            let padded_rect = Rect {
-                                x: textarea_rect.x + 2,
-                                y: textarea_y,
-                                width: textarea_rect.width.saturating_sub(4),
-                                height: textarea_height,
-                            };
-
-                            textarea.set_style(
-                                RatatuiStyle::default()
-                                    .fg(palette.base_05)
-                                    .bg(theme_background()),
-                            );
-                            textarea.set_cursor_style(
-                                RatatuiStyle::default()
-                                    .fg(palette.base_00)
-                                    .bg(palette.base_05),
-                            );
-
-                            let block = Block::default()
-                                .borders(Borders::ALL)
-                                .title(" Add Note ")
-                                .style(
-                                    RatatuiStyle::default()
-                                        .fg(palette.base_04)
-                                        .bg(theme_background()),
-                                );
-                            textarea.set_block(block);
-
-                            frame.render_widget(&*textarea, padded_rect);
-                        }
-                    }
+        if let (Some(layout), Some(textarea)) =
+            (textarea_layout, self.comment_input.textarea.as_mut())
+        {
+            let mut visual_position = layout.draw_start_line.saturating_sub(self.scroll_offset);
+            if let Some(insert_pos) = layout.insert_position {
+                if layout.draw_start_line >= insert_pos {
+                    visual_position += layout.lines_to_insert;
                 }
+            }
+            let textarea_y = inner_area.y + visual_position as u16;
+
+            if textarea_y < inner_area.y + inner_area.height {
+                // Compute minimum height so borders never collapse.
+                let content_lines = textarea.lines().len();
+                let min_lines = 3;
+                let actual_content_lines = content_lines.max(min_lines);
+                let desired_height = (actual_content_lines + 2) as u16;
+
+                // Constrain height to the remaining view.
+                let textarea_height =
+                    desired_height.min(inner_area.y + inner_area.height - textarea_y);
+
+                // Shift left to align with paragraph text (inner_area.x already has padding).
+                let left_adjust = 2;
+
+                let textarea_rect = Rect {
+                    x: inner_area.x.saturating_sub(left_adjust),
+                    y: textarea_y,
+                    width: inner_area.width + left_adjust,
+                    height: textarea_height,
+                };
+
+                let clear_block =
+                    Block::default().style(RatatuiStyle::default().bg(theme_background()));
+                frame.render_widget(clear_block, textarea_rect);
+
+                let padded_rect = Rect {
+                    x: textarea_rect.x + 2,
+                    y: textarea_y,
+                    width: textarea_rect.width.saturating_sub(4),
+                    height: textarea_height,
+                };
+
+                textarea.set_style(
+                    RatatuiStyle::default()
+                        .fg(palette.base_05)
+                        .bg(theme_background()),
+                );
+                textarea.set_cursor_style(
+                    RatatuiStyle::default()
+                        .fg(palette.base_00)
+                        .bg(palette.base_05),
+                );
+
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Add Note ")
+                    .style(
+                        RatatuiStyle::default()
+                            .fg(palette.base_04)
+                            .bg(theme_background()),
+                    );
+                textarea.set_block(block);
+
+                frame.render_widget(&*textarea, padded_rect);
             }
         }
     }

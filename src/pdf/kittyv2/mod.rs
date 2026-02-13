@@ -68,6 +68,11 @@ pub use terminal_canvas::{
     TransferMode, probe_capabilities,
 };
 
+/// Z-index for PDF images. Negative values draw images below text but
+/// above the terminal background, allowing ratatui overlays (comments, HUD)
+/// to appear on top. Must be > -(2^30) to stay above cell backgrounds.
+pub const IMAGE_Z_INDEX: i32 = -1;
+
 /// Display location configuration for an image.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DisplayLocation {
@@ -180,7 +185,8 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
                         .no_cursor_move(true)
-                        .cursor_at(cursor.0, cursor.1);
+                        .cursor_at(cursor.0, cursor.1)
+                        .z_index(IMAGE_Z_INDEX);
 
                     if loc.columns > 0 || loc.rows > 0 {
                         cmd = cmd.dest_cells(loc.columns, loc.rows);
@@ -203,7 +209,8 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
                         .no_cursor_move(true)
-                        .cursor_at(cursor.0, cursor.1);
+                        .cursor_at(cursor.0, cursor.1)
+                        .z_index(IMAGE_Z_INDEX);
 
                     if loc.columns > 0 || loc.rows > 0 {
                         cmd = cmd.dest_cells(loc.columns, loc.rows);
@@ -227,7 +234,8 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                 .placement_id(image_id.id.get())
                 .quiet(Quiet::ErrorsOnly)
                 .no_cursor_move(true)
-                .cursor_at(cursor.0, cursor.1);
+                .cursor_at(cursor.0, cursor.1)
+                .z_index(IMAGE_Z_INDEX);
 
             if loc.columns > 0 || loc.rows > 0 {
                 cmd = cmd.dest_cells(loc.columns, loc.rows);

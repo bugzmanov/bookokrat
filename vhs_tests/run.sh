@@ -88,6 +88,22 @@ LIST_TAPES=false
 OPEN_REPORT=false
 VERBOSE=false
 MEMORY_LEAK_LIMIT_MB=100  # Default: fail if memory leak > 100MB (includes ~80MB harness overhead)
+EXCLUDED_DEFAULT_TAPES=(
+    "demo_epub"
+    "demo_pdf"
+    "docsite_epub"
+    "docsite_pdf"
+)
+
+is_default_excluded_tape() {
+    local tape_name="$1"
+    for excluded in "${EXCLUDED_DEFAULT_TAPES[@]}"; do
+        if [ "$tape_name" = "$excluded" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
 
 print_usage() {
     echo "VHS Terminal Screenshot Test Harness"
@@ -216,7 +232,11 @@ if $LIST_TAPES; then
             # Count commands
             cmd_count=$(grep -v '^#' "$tape" | grep -v '^$' | wc -l | tr -d ' ')
             screenshot_count=$(grep -c '^screenshot' "$tape" || echo "0")
-            echo "  $name ($screenshot_count screenshots, $cmd_count commands)"
+            excluded_label=""
+            if is_default_excluded_tape "$name"; then
+                excluded_label=" [excluded by default]"
+            fi
+            echo "  $name ($screenshot_count screenshots, $cmd_count commands)$excluded_label"
         fi
     done
     exit 0
@@ -283,7 +303,10 @@ if [ -n "$SPECIFIC_TAPE" ]; then
 else
     for tape in "$TAPES_DIR"/*.tape; do
         if [ -f "$tape" ]; then
-            tapes_to_run+=("$tape")
+            tape_name=$(basename "$tape" .tape)
+            if ! is_default_excluded_tape "$tape_name"; then
+                tapes_to_run+=("$tape")
+            fi
         fi
     done
 fi

@@ -80,6 +80,8 @@ pub struct CommentInputState {
     pub target: Option<CommentTarget>,
     /// The selected/quoted text for the comment
     pub quoted_text: Option<String>,
+    /// Read-only preview mode used for comment navigation.
+    pub read_only: bool,
 }
 
 /// A search match on the current page
@@ -156,6 +158,7 @@ impl CommentInputState {
         self.edit_mode = None;
         self.target = None;
         self.quoted_text = None;
+        self.read_only = false;
     }
 
     pub fn is_active(&self) -> bool {
@@ -239,6 +242,8 @@ pub struct PdfReaderState {
     pub non_kitty_zoom_factor: f32,
     /// Non-Kitty scroll offset
     pub non_kitty_scroll_offset: u32,
+    /// Non-Kitty horizontal pan offset (cells from left edge)
+    pub non_kitty_pan_offset: u32,
     /// Whether terminal is iTerm2/WezTerm
     pub is_iterm: bool,
     /// Coordinate info for mouse mapping
@@ -261,6 +266,10 @@ pub struct PdfReaderState {
     pub toc_entries: Vec<TocEntry>,
     /// Whether comments are enabled
     pub comments_enabled: bool,
+    /// Whether PDF images are currently inverted
+    pub invert_images: bool,
+    /// Whether reader is currently in zen mode
+    pub zen_mode: bool,
     /// Whether terminal supports PDF comments (Kitty/iTerm2 protocols)
     pub supports_comments: bool,
     /// Book comments storage (unified with EPUB comments)
@@ -269,6 +278,9 @@ pub struct PdfReaderState {
     pub comments_doc_id: String,
     /// Comment input state
     pub comment_input: CommentInputState,
+    /// When set, a solid-color Kitty image is placed over this area after PDF
+    /// images so active PDF modals have an opaque background. (col, row, width, height)
+    pub modal_overlay_rect: Option<(u16, u16, u16, u16)>,
     /// Comment selection rectangles for overlay rendering
     pub comment_rects: Vec<SelectionRect>,
     /// Whether comment navigation is active
@@ -348,6 +360,11 @@ impl PdfReaderState {
             normal_mode: NormalModeState::new(),
             non_kitty_zoom_factor: if is_kitty { 1.0 } else { zoom_factor },
             non_kitty_scroll_offset: 0,
+            non_kitty_pan_offset: if is_kitty {
+                0
+            } else {
+                u32::from(pan_from_left)
+            },
             is_iterm,
             coord_info: None,
             mouse_tracker: MouseTracker::new(),
@@ -359,10 +376,13 @@ impl PdfReaderState {
             page_numbers: PageNumberTracker::new(),
             toc_entries: Vec::new(),
             comments_enabled,
+            invert_images: true,
+            zen_mode: false,
             supports_comments,
             book_comments,
             comments_doc_id,
             comment_input: CommentInputState::default(),
+            modal_overlay_rect: None,
             comment_rects: Vec::new(),
             comment_nav_active: false,
             comment_nav_page: 0,

@@ -342,6 +342,141 @@ mod tests {
 
 #[allow(clippy::too_many_arguments)]
 impl PdfReaderState {
+    fn comment_target_bounds(
+        target: Option<&crate::comments::CommentTarget>,
+    ) -> HashMap<usize, (u32, u32)> {
+        let mut bounds = HashMap::new();
+        let Some(crate::comments::CommentTarget::Pdf { rects, .. }) = target else {
+            return bounds;
+        };
+        for rect in rects {
+            bounds
+                .entry(rect.page)
+                .and_modify(|(top, bottom)| {
+                    *top = (*top).min(rect.topleft_y);
+                    *bottom = (*bottom).max(rect.bottomright_y);
+                })
+                .or_insert((rect.topleft_y, rect.bottomright_y));
+        }
+        bounds
+    }
+
+    fn compute_comment_rows_kitty_page(
+        target_bounds: &HashMap<usize, (u32, u32)>,
+        page: usize,
+        scale: f32,
+        cell_size: CellSize,
+        img_area: Rect,
+        font_size: FontSize,
+        zoom_factor: f32,
+        scroll_offset: u16,
+    ) -> Option<(u16, u16)> {
+        let (min_top, max_bottom) = *target_bounds.get(&page)?;
+        let font_h = f32::from(font_size.1).max(1.0);
+        let dest_h = ((f32::from(cell_size.height) * zoom_factor).ceil() as u16).max(1);
+        let source_y_px = if scroll_offset > 0 {
+            (f32::from(scroll_offset) / zoom_factor) * font_h
+        } else {
+            0.0
+        };
+        let display_y_offset = if dest_h < img_area.height {
+            (img_area.height - dest_h) / 2
+        } else {
+            0
+        };
+        let top_px = min_top as f32 * scale;
+        let bottom_px = max_bottom as f32 * scale;
+        let top_cells = ((top_px - source_y_px) * zoom_factor / font_h)
+            .floor()
+            .max(0.0) as u16;
+        let bottom_cells = ((bottom_px - source_y_px) * zoom_factor / font_h)
+            .ceil()
+            .max(0.0) as u16;
+        let top = img_area
+            .y
+            .saturating_add(display_y_offset)
+            .saturating_add(top_cells.min(img_area.height.saturating_sub(1)));
+        let mut bottom = img_area
+            .y
+            .saturating_add(display_y_offset)
+            .saturating_add(bottom_cells.min(img_area.height));
+        if bottom <= top {
+            bottom = top.saturating_add(1);
+        }
+        Some((top, bottom.min(img_area.y + img_area.height)))
+    }
+
+    fn compute_comment_rows_kitty_scroll(
+        target_bounds: &HashMap<usize, (u32, u32)>,
+        page_scales: &[f32],
+        img_area: Rect,
+        font_size: FontSize,
+        zoom_factor: f32,
+        visible_pages: &[VisiblePageUiInfo],
+    ) -> Option<(u16, u16)> {
+        let font_h = f32::from(font_size.1).max(1.0);
+        for info in visible_pages {
+            let (min_top, max_bottom) = match target_bounds.get(&info.page_idx) {
+                Some(bounds) => *bounds,
+                None => continue,
+            };
+            let scale = *page_scales.get(info.page_idx).unwrap_or(&1.0);
+            let top_px = min_top as f32 * scale;
+            let bottom_px = max_bottom as f32 * scale;
+            let clip_top_px = info.img_clip_top_px as f32;
+            let visible_h_px = (f32::from(info.display_rows) * font_h) / zoom_factor;
+            let clip_bottom_px = clip_top_px + visible_h_px;
+            if bottom_px <= clip_top_px || top_px >= clip_bottom_px {
+                continue;
+            }
+            let top_cells = ((top_px - clip_top_px) * zoom_factor / font_h)
+                .floor()
+                .max(0.0) as u16;
+            let bottom_cells = ((bottom_px - clip_top_px) * zoom_factor / font_h)
+                .ceil()
+                .max(0.0) as u16;
+            let top = img_area
+                .y
+                .saturating_add(info.screen_y_start)
+                .saturating_add(top_cells.min(info.display_rows.saturating_sub(1)));
+            let mut bottom = img_area
+                .y
+                .saturating_add(info.screen_y_start)
+                .saturating_add(bottom_cells.min(info.display_rows));
+            if bottom <= top {
+                bottom = top.saturating_add(1);
+            }
+            return Some((top, bottom.min(img_area.y + img_area.height)));
+        }
+        None
+    }
+
+    fn compute_comment_rows_non_kitty(
+        target_bounds: &HashMap<usize, (u32, u32)>,
+        page: usize,
+        scale: f32,
+        img_area: Rect,
+        font_size: FontSize,
+        scroll_offset_cells: u32,
+    ) -> Option<(u16, u16)> {
+        let (min_top, max_bottom) = *target_bounds.get(&page)?;
+        let font_h = f32::from(font_size.1).max(1.0);
+        let top_cells =
+            ((min_top as f32 * scale) / font_h).floor() as i64 - scroll_offset_cells as i64;
+        let bottom_cells =
+            ((max_bottom as f32 * scale) / font_h).ceil() as i64 - scroll_offset_cells as i64;
+        let top_cells = top_cells.max(0) as u16;
+        let bottom_cells = bottom_cells.max(0) as u16;
+        let top = img_area
+            .y
+            .saturating_add(top_cells.min(img_area.height.saturating_sub(1)));
+        let mut bottom = img_area.y.saturating_add(bottom_cells.min(img_area.height));
+        if bottom <= top {
+            bottom = top.saturating_add(1);
+        }
+        Some((top, bottom.min(img_area.y + img_area.height)))
+    }
+
     pub fn render_in_area(
         &mut self,
         f: &mut ratatui::Frame,
@@ -783,8 +918,70 @@ pub(crate) fn execute_display_plan(
         }
     }
 
+    // Place a solid-color Kitty overlay image over the active modal area.
+    // This covers the PDF image so the modal has an opaque background, while
+    // ratatui text (borders, title, content) renders on top via z-index layering.
+    emit_modal_overlay(pdf_reader);
+
     // Silence unused warnings
     let _ = conversion_tx;
+}
+
+const MODAL_OVERLAY_IMAGE_ID: u32 = u32::MAX - 1;
+
+fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
+    if !pdf_reader.is_kitty {
+        return;
+    }
+
+    let mut stdout = std::io::stdout();
+    let tmux = crate::pdf::kittyv2::is_tmux_mode();
+
+    // Always delete previous overlay
+    let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
+        .delete()
+        .quiet(crate::pdf::kittyv2::Quiet::Silent)
+        .write_to(&mut stdout, tmux);
+
+    let Some((col, row, width, height)) = pdf_reader.modal_overlay_rect else {
+        let _ = std::io::Write::flush(&mut stdout);
+        return;
+    };
+
+    if width == 0 || height == 0 {
+        let _ = std::io::Write::flush(&mut stdout);
+        return;
+    }
+
+    // Extract RGB from the panel background color
+    let (r, g, b) = match pdf_reader.palette.base_01 {
+        Color::Rgb(r, g, b) => (r, g, b),
+        _ => (0x34, 0x3D, 0x46), // fallback to Oceanic Next base_01
+    };
+
+    let cursor = if tmux {
+        let (pane_top, pane_left) = crate::pdf::kittyv2::pane_offset();
+        (
+            pane_top as u32 + row as u32 + 1,
+            pane_left as u32 + col as u32 + 1,
+        )
+    } else {
+        (row as u32 + 1, col as u32 + 1)
+    };
+
+    let pixel = [r, g, b];
+    let _ = crate::pdf::kittyv2::DirectTransmit::new(1, 1)
+        .format(crate::pdf::kittyv2::Format::Rgb)
+        .image_id(MODAL_OVERLAY_IMAGE_ID)
+        .placement_id(MODAL_OVERLAY_IMAGE_ID)
+        .quiet(crate::pdf::kittyv2::Quiet::Silent)
+        .no_cursor_move(true)
+        .cursor_at(cursor.0, cursor.1)
+        .dest_cells(width, height)
+        .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
+        .send(&mut stdout, &pixel, tmux);
+
+    let _ = std::io::Write::flush(&mut stdout);
 }
 
 pub(crate) fn update_non_kitty_viewport(
@@ -801,6 +998,7 @@ pub(crate) fn update_non_kitty_viewport(
                 .map(|(area, _font_size)| crate::pdf::ViewportUpdate {
                     page: pdf_reader.page,
                     y_offset_cells: pdf_reader.non_kitty_scroll_offset,
+                    x_offset_cells: pdf_reader.non_kitty_pan_offset,
                     viewport_height_cells: area.height,
                     viewport_width_cells: area.width,
                 })
@@ -1174,6 +1372,7 @@ impl PdfReaderState {
                 dest_w: info.dest_w,
                 dest_h: info.dest_h,
                 offset_dest_cells: info.offset_dest_cells,
+                img_clip_top_px: info.img_clip_top_px,
             })
             .collect();
 
@@ -1197,6 +1396,7 @@ impl PdfReaderState {
         full_layout: &RenderLayout,
         font_size: FontSize,
     ) -> DisplayBatch<'s> {
+        self.modal_overlay_rect = None;
         let modal_bg = self.bg_color();
         let modal_fg = self.fg_color();
         let modal_panel_bg = self.palette.base_01;
@@ -1206,13 +1406,17 @@ impl PdfReaderState {
             .go_to_page_input
             .map(|page| self.go_to_page_prompt_text(page));
         let comment_modal = self.comments_enabled && self.comment_input.is_active();
+        let comment_target_bounds = Self::comment_target_bounds(self.comment_input.target.as_ref());
+        let page_scales = self
+            .rendered
+            .iter()
+            .map(|info| info.scale_factor.unwrap_or(1.0))
+            .collect::<Vec<_>>();
         let input_active = modal_msg.is_some();
         let bg_color = modal_bg;
-        let mut fg_color = modal_fg;
         let mut muted_color = self.muted_color();
 
         if comment_modal {
-            fg_color = self.palette.base_04;
             muted_color = self.palette.base_03;
         }
 
@@ -1263,30 +1467,27 @@ impl PdfReaderState {
 
         // Kitty page mode (single page with zoom/scroll within page)
         if use_page_mode {
-            if input_active {
-                if let Some(ref msg) = modal_msg {
-                    Self::render_input_modal(
-                        frame,
-                        inner_area,
-                        msg.clone(),
-                        modal_bg,
-                        popup_border,
-                        fg_color,
-                    );
-                }
-                return DisplayBatch::Clear;
-            }
-
             let pdf_area = img_area;
 
             // Pre-fetch data before mutable borrow of self.rendered
             let zoom_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
+            let zoom_scroll = self
+                .zoom
+                .as_ref()
+                .map(|z| z.global_scroll_offset as u16)
+                .unwrap_or(0);
             let base_width = self
                 .rendered
                 .get(self.page)
                 .and_then(|page| page.img.as_ref())
                 .map(|img| img.cell_dimensions().as_tuple().0)
                 .unwrap_or(0);
+            let page_cell_size = self
+                .rendered
+                .get(self.page)
+                .and_then(|page| page.img.as_ref())
+                .map(|img| img.cell_dimensions());
+            let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
             let sidebar_comments = if self.comments_enabled && !comment_modal {
                 self.get_comments_for_sidebar(self.page)
             } else {
@@ -1328,13 +1529,29 @@ impl PdfReaderState {
             // Render comment sidebar in page mode
             if self.comments_enabled {
                 if comment_modal {
-                    let right_margin = self.last_render.unused_width / 2;
-                    Self::render_comment_modal(
+                    let selection_rows = page_cell_size.and_then(|cell_size| {
+                        let dest_h =
+                            ((f32::from(cell_size.height) * zoom_factor).ceil() as u16).max(1);
+                        let clamped_scroll =
+                            zoom_scroll.min(dest_h.saturating_sub(pdf_area.height));
+                        Self::compute_comment_rows_kitty_page(
+                            &comment_target_bounds,
+                            self.page,
+                            page_scale,
+                            cell_size,
+                            pdf_area,
+                            font_size,
+                            zoom_factor,
+                            clamped_scroll,
+                        )
+                    });
+                    self.modal_overlay_rect = Self::render_comment_modal(
                         &mut self.comment_input,
                         frame,
                         inner_area,
+                        Some(content_width),
+                        selection_rows,
                         modal_bg,
-                        right_margin,
                         modal_fg,
                         popup_border,
                         modal_panel_bg,
@@ -1363,26 +1580,23 @@ impl PdfReaderState {
                 }
             }
 
+            if let Some(ref msg) = modal_msg {
+                self.modal_overlay_rect = Self::render_input_modal(
+                    frame,
+                    inner_area,
+                    msg.clone(),
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                );
+            }
+
             return result;
         }
 
         // Kitty continuous scroll mode
         if use_scroll_mode {
-            // Check if go-to-page input modal is active (this needs to clear graphics)
-            if input_active {
-                if let Some(ref msg) = modal_msg {
-                    Self::render_input_modal(
-                        frame,
-                        inner_area,
-                        msg.clone(),
-                        modal_bg,
-                        popup_border,
-                        fg_color,
-                    );
-                }
-                return DisplayBatch::Clear;
-            }
-
             // PDF renders at its natural position - no shrinking
             let pdf_area = img_area;
 
@@ -1499,14 +1713,21 @@ impl PdfReaderState {
             // Render comment sidebar in natural margin
             if self.comments_enabled {
                 if comment_modal {
-                    // Comment input modal uses right margin
-                    let right_margin = self.last_render.unused_width / 2;
-                    Self::render_comment_modal(
+                    let selection_rows = Self::compute_comment_rows_kitty_scroll(
+                        &comment_target_bounds,
+                        &page_scales,
+                        pdf_area,
+                        font_size,
+                        zoom_factor,
+                        &visible_pages,
+                    );
+                    self.modal_overlay_rect = Self::render_comment_modal(
                         &mut self.comment_input,
                         frame,
                         inner_area,
+                        Some(content_width),
+                        selection_rows,
                         modal_bg,
-                        right_margin,
                         modal_fg,
                         popup_border,
                         modal_panel_bg,
@@ -1540,6 +1761,18 @@ impl PdfReaderState {
                         );
                     }
                 }
+            }
+
+            if let Some(ref msg) = modal_msg {
+                self.modal_overlay_rect = Self::render_input_modal(
+                    frame,
+                    inner_area,
+                    msg.clone(),
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                );
             }
 
             return result;
@@ -1594,23 +1827,33 @@ impl PdfReaderState {
             Self::render_loading_in(frame, img_area, &self.palette);
 
             if let Some(ref msg) = modal_msg {
-                Self::render_input_modal(
+                self.modal_overlay_rect = Self::render_input_modal(
                     frame,
                     inner_area,
                     msg.clone(),
-                    modal_bg,
+                    modal_fg,
                     popup_border,
-                    fg_color,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
                 );
             }
             if comment_modal {
-                let right_margin = self.last_render.unused_width / 2;
-                Self::render_comment_modal(
+                let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
+                let selection_rows = Self::compute_comment_rows_non_kitty(
+                    &comment_target_bounds,
+                    self.page,
+                    page_scale,
+                    img_area,
+                    font_size,
+                    self.non_kitty_scroll_offset,
+                );
+                self.modal_overlay_rect = Self::render_comment_modal(
                     &mut self.comment_input,
                     frame,
                     inner_area,
+                    Some(img_area.width),
+                    selection_rows,
                     modal_bg,
-                    right_margin,
                     modal_fg,
                     popup_border,
                     modal_panel_bg,
@@ -1643,6 +1886,15 @@ impl PdfReaderState {
             }
 
             let centered_img_area = img_area;
+            let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
+            let selection_rows_nonkitty = Self::compute_comment_rows_non_kitty(
+                &comment_target_bounds,
+                self.page,
+                page_scale,
+                centered_img_area,
+                font_size,
+                self.non_kitty_scroll_offset,
+            );
 
             let page_sizes = self.rendered[self.page..]
                 .iter_mut()
@@ -1708,34 +1960,30 @@ impl PdfReaderState {
             }
 
             if let Some(ref msg) = modal_msg {
-                Self::render_input_modal(
+                self.modal_overlay_rect = Self::render_input_modal(
                     frame,
                     inner_area,
                     msg.clone(),
-                    modal_bg,
-                    popup_border,
-                    fg_color,
-                );
-            }
-            if comment_modal {
-                let right_margin = unused_width / 2;
-                Self::render_comment_modal(
-                    &mut self.comment_input,
-                    frame,
-                    inner_area,
-                    modal_bg,
-                    right_margin,
                     modal_fg,
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
                 );
             }
-            // Clear Kitty graphics when modals are active so they're visible
-            if (input_active || comment_modal) && self.is_kitty {
-                return DisplayBatch::Clear;
+            if comment_modal {
+                self.modal_overlay_rect = Self::render_comment_modal(
+                    &mut self.comment_input,
+                    frame,
+                    inner_area,
+                    Some(total_width.min(centered_img_area.width)),
+                    selection_rows_nonkitty,
+                    modal_bg,
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                );
             }
-
             DisplayBatch::Display(to_display)
         }
     }
@@ -1870,10 +2118,11 @@ impl PdfReaderState {
         frame: &mut Frame<'_>,
         area: Rect,
         msg: Text<'static>,
-        bg_color: Color,
-        accent_color: Color,
         fg_color: Color,
-    ) {
+        accent_color: Color,
+        panel_bg: Color,
+        header_bg: Color,
+    ) -> Option<(u16, u16, u16, u16)> {
         let content_lines = msg.lines.len() as u16;
         let modal_width = 40u16.min(area.width.saturating_sub(4));
         let modal_height = (content_lines + 2)
@@ -1886,6 +2135,13 @@ impl PdfReaderState {
             height: modal_height,
         };
 
+        // Padded backing area for the Kitty overlay image
+        let pad = 1u16;
+        let backing_x = modal_area.x.saturating_sub(pad);
+        let backing_y = modal_area.y.saturating_sub(pad);
+        let backing_w = (modal_area.width + pad * 2).min(area.x + area.width - backing_x);
+        let backing_h = (modal_area.height + pad * 2).min(area.y + area.height - backing_y);
+
         frame.render_widget(Clear, modal_area);
         let modal = Paragraph::new(msg)
             .block(
@@ -1893,50 +2149,72 @@ impl PdfReaderState {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(accent_color))
                     .title(" Go to Page ")
-                    .title_style(Style::default().fg(accent_color))
-                    .style(Style::default().bg(bg_color)),
+                    .title_style(Style::default().fg(accent_color).bg(header_bg))
+                    .style(Style::default().bg(panel_bg)),
             )
-            .style(Style::default().fg(fg_color).bg(bg_color))
+            .style(Style::default().fg(fg_color).bg(panel_bg))
             .wrap(Wrap { trim: false });
         frame.render_widget(modal, modal_area);
+        Some((backing_x, backing_y, backing_w, backing_h))
     }
 
-    /// Renders the comment textarea modal. Returns `true` if rendered, `false` if not enough space.
-    /// When returning `false`, the textarea is closed and the caller should show an error.
+    /// Renders the comment textarea as a centered modal overlay on the PDF area.
     #[allow(clippy::too_many_arguments)]
+    /// Renders the comment input modal and returns the backing area rect
+    /// (col, row, width, height) for a Kitty overlay image.
     fn render_comment_modal(
         comment_input: &mut CommentInputState,
         frame: &mut Frame<'_>,
         area: Rect,
+        content_width_hint: Option<u16>,
+        selection_screen_rows: Option<(u16, u16)>,
         bg_color: Color,
-        right_margin: u16,
         fg_color: Color,
         accent_color: Color,
         panel_bg: Color,
         header_bg: Color,
-    ) -> bool {
+    ) -> Option<(u16, u16, u16, u16)> {
         let Some(textarea) = comment_input.textarea.as_mut() else {
-            return true;
+            return None;
         };
 
-        // Check if there's enough space for the comment textarea
-        if right_margin < MIN_COMMENT_TEXTAREA_WIDTH {
-            comment_input.clear();
-            return false;
-        }
+        // Make modal width track content width, but keep it viewport-safe.
+        // If content width is unavailable, use a proportional fallback.
+        let viewport_cap = area.width.saturating_sub(2);
+        let hard_cap = 110u16;
+        let max_width = viewport_cap.min(hard_cap).max(MIN_COMMENT_TEXTAREA_WIDTH);
+        let proportional =
+            ((f32::from(area.width) * 0.78).round() as u16).max(MIN_COMMENT_TEXTAREA_WIDTH);
+        let target_width = content_width_hint
+            .map(|w| w.saturating_add(6))
+            .unwrap_or(proportional);
+        let width = target_width.clamp(MIN_COMMENT_TEXTAREA_WIDTH, max_width);
+        let height = area.height.min(10).max(5).min(area.height);
+        let x = area.x + (area.width.saturating_sub(width)) / 2;
 
-        let width = right_margin
-            .clamp(MIN_COMMENT_TEXTAREA_WIDTH, 88)
-            .min(area.width);
-        let max_height = (area.height * 3 / 5).max(6);
-        let height = area
-            .height
-            .saturating_sub(4)
-            .min(max_height)
-            .max(6)
-            .min(area.height);
-        let x = area.x + area.width.saturating_sub(width);
-        let y = area.y + 2;
+        // Position near the selected text: prefer below, fall back to above,
+        // only overlap when neither side has enough room.
+        let y = if let Some((sel_top, sel_bot)) = selection_screen_rows {
+            let area_bottom = area.y + area.height;
+            let gap_below = 1u16;
+            let gap_above = 2u16;
+            let space_below = area_bottom
+                .saturating_sub(sel_bot)
+                .saturating_sub(gap_below);
+            let space_above = sel_top.saturating_sub(area.y).saturating_sub(gap_above);
+
+            if space_below >= height {
+                sel_bot + gap_below
+            } else if space_above >= height {
+                sel_top.saturating_sub(gap_above).saturating_sub(height)
+            } else if space_below >= space_above {
+                area_bottom.saturating_sub(height)
+            } else {
+                area.y
+            }
+        } else {
+            area.y + area.height.saturating_sub(height).saturating_sub(1)
+        };
 
         let modal_area = Rect {
             x,
@@ -1944,11 +2222,23 @@ impl PdfReaderState {
             width,
             height,
         };
+
+        // Padded backing area for the Kitty overlay image
+        let pad = 1u16;
+        let backing_x = modal_area.x.saturating_sub(pad);
+        let backing_y = modal_area.y.saturating_sub(pad);
+        let backing_w = (modal_area.width + pad * 2).min(area.x + area.width - backing_x);
+        let backing_h = (modal_area.height + pad * 2).min(area.y + area.height - backing_y);
+
         frame.render_widget(Clear, modal_area);
 
-        let title = match comment_input.edit_mode {
-            Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
-            _ => "Add Comment (Esc to save)",
+        let title = if comment_input.read_only {
+            "Comment (Read-only, j/k navigate, e edit)"
+        } else {
+            match comment_input.edit_mode {
+                Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
+                _ => "Add Comment (Esc to save)",
+            }
         };
         let block = Block::default()
             .title(Span::styled(
@@ -1968,7 +2258,8 @@ impl PdfReaderState {
         textarea.set_block(Block::default());
 
         frame.render_widget(&*textarea, inner);
-        true
+
+        Some((backing_x, backing_y, backing_w, backing_h))
     }
 
     fn go_to_page_prompt_text(&self, page: usize) -> Text<'static> {

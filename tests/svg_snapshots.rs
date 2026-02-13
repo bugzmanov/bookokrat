@@ -2745,6 +2745,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            pdf_invert_images: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2761,6 +2762,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            pdf_invert_images: None,
         };
         books_map.insert(book_path, bookmark);
     }

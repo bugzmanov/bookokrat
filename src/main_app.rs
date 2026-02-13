@@ -583,12 +583,8 @@ impl App {
     }
 
     pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
-        let book_info = self
-            .book_manager
-            .get_book_by_path(path)
-            .ok_or_else(|| anyhow::anyhow!("Book not found in manager: {}", path))?;
-
-        let format = book_info.format;
+        let format = BookManager::detect_format(path)
+            .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
         let path_owned = path.to_string();
 
         self.save_bookmark_with_throttle(true);
@@ -854,7 +850,7 @@ impl App {
             DEFAULT_CACHE_SIZE
         };
         let doc_path = std::path::PathBuf::from(path);
-        let service = RenderService::with_config(
+        let mut service = RenderService::with_config(
             doc_path.clone(),
             cell_size,
             black,
@@ -865,7 +861,7 @@ impl App {
         );
 
         // Get document info
-        let doc_info = service.document_info();
+        let doc_info = service.document_info().cloned();
         let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
         let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
         let toc_entries = doc_info
@@ -899,6 +895,7 @@ impl App {
         }
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
         let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
+        let bookmark_invert = bookmark.and_then(|b| b.pdf_invert_images);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -920,7 +917,7 @@ impl App {
                 }
             };
             (
-                self.zen_mode, // UI interactions only in zen mode
+                supports_comments, // UI interactions available whenever protocol supports it
                 Some(std::sync::Arc::new(std::sync::Mutex::new(comments))),
             )
         } else {
@@ -946,6 +943,12 @@ impl App {
             book_comments,
             path.to_string(),
         );
+        if let Some(inverted) = bookmark_invert {
+            pdf_reader.invert_images = inverted;
+            if !inverted {
+                service.apply_command(crate::pdf::Command::ToggleInvertImages);
+            }
+        }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
             pdf_reader.kitty_delete_range_supported = supported;
         }
@@ -1073,6 +1076,7 @@ impl App {
         let Some(mut pdf_reader) = self.pdf_reader.take() else {
             return;
         };
+        pdf_reader.zen_mode = self.zen_mode;
 
         let (text_color, border_color, _bg_color) =
             current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
@@ -2214,6 +2218,30 @@ impl App {
     }
 
     pub fn open_with_system_viewer(&mut self) {
+        #[cfg(feature = "pdf")]
+        if self.is_pdf_mode() {
+            if let Some(path) = self.pdf_document_path.as_ref() {
+                let path_str = path.to_string_lossy().to_string();
+                match self.system_command_executor.open_file(&path_str) {
+                    Ok(_) => {
+                        info!(
+                            "Successfully opened PDF with system viewer: {}",
+                            path.display()
+                        );
+                        self.show_info("Opened in external viewer");
+                    }
+                    Err(e) => {
+                        error!("Failed to open PDF with system viewer: {e}");
+                        self.show_error(format!("Failed to open in external viewer: {e}"));
+                    }
+                }
+            } else {
+                error!("No PDF file currently loaded");
+                self.show_error("No PDF file currently loaded");
+            }
+            return;
+        }
+
         if let Some(book) = &self.current_book {
             match self
                 .system_command_executor
@@ -4997,6 +5025,7 @@ impl App {
                 action: None,
             };
         };
+        pdf_reader.zen_mode = self.zen_mode;
         let response = pdf_reader.handle_event(event);
         if !response.handled {
             self.pdf_reader = Some(pdf_reader);
@@ -5352,6 +5381,14 @@ where
                             {
                                 should_quit = true;
                             }
+                            continue;
+                        }
+
+                        if !app.pdf_text_input_active()
+                            && app.key_sequence.current_sequence() == " "
+                            && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('o'))
+                            && app.handle_global_hotkeys(*key)
+                        {
                             continue;
                         }
 

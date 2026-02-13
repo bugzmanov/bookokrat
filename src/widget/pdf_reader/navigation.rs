@@ -21,7 +21,6 @@ use crate::pdf::{
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
 
-use super::rendering::MIN_COMMENT_TEXTAREA_WIDTH;
 use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
@@ -96,6 +95,12 @@ impl PdfReaderState {
         conversion_tx: Option<&flume::Sender<crate::pdf::ConversionCommand>>,
         service: Option<&mut crate::pdf::RenderService>,
     ) {
+        self.zen_mode = zen_mode;
+        if self.zen_mode && self.comment_input.read_only {
+            self.comment_input.clear();
+            self.comment_nav_active = false;
+        }
+
         // Exit normal/visual mode when toggling zen mode
         if self.normal_mode.active {
             self.normal_mode.exit_visual();
@@ -112,8 +117,8 @@ impl PdfReaderState {
         // Collect comment rects but don't send yet - must send AFTER InvalidatePageCache
         // to avoid reconvert_pages rendering with stale viewport dimensions.
         // Comments are supported in terminals with image protocols (Kitty, iTerm2).
-        // Underlines should be visible in both zen and ToC modes; only UI interactions are zen-only.
-        let comment_rects_to_send = if self.supports_comments && zen_mode {
+        // With z-index support, comments work in both zen and ToC modes.
+        let comment_rects_to_send = if self.supports_comments {
             if self.book_comments.is_none() {
                 // In test mode, use empty comments to avoid loading persistent state
                 let comments = if test_mode {
@@ -132,14 +137,8 @@ impl PdfReaderState {
                 };
                 self.book_comments = Some(std::sync::Arc::new(std::sync::Mutex::new(comments)));
                 self.comments_enabled = true;
-                log::info!("PDF comments enabled for zen mode");
-            } else {
-                self.comments_enabled = true;
+                log::info!("PDF comments enabled");
             }
-            Some(self.initial_comment_rects())
-        } else if self.supports_comments {
-            // Exiting zen mode: disable UI interactions but keep underlines visible
-            self.comments_enabled = false;
             Some(self.initial_comment_rects())
         } else {
             None
@@ -245,6 +244,8 @@ impl PdfReaderState {
 
         let mut response = if self.page_search.is_input_active() {
             InputResponse::handled(self.handle_page_search_input_key(key))
+        } else if self.comment_input.is_active() && self.comment_input.read_only {
+            InputResponse::handled(self.handle_comment_nav_key(key))
         } else if self.comment_input.is_active() {
             InputResponse::handled(self.handle_comment_input_key(key))
         } else if self.comment_nav_active {
@@ -588,7 +589,14 @@ impl PdfReaderState {
             KeyCode::Right => self.next_page(),
             KeyCode::Esc => self.handle_escape_key(),
             KeyCode::Enter => None,
-            KeyCode::Tab => None,
+            KeyCode::Tab => {
+                if !self.zen_mode && self.key_seq.matches(&[KeyCode::Char(' ')]) {
+                    self.key_seq.clear();
+                    self.start_comment_nav()
+                } else {
+                    None
+                }
+            }
             KeyCode::BackTab => self.start_comment_nav(),
             _ => None,
         }
@@ -700,6 +708,10 @@ impl PdfReaderState {
         if self.go_to_page_input.is_some() {
             self.clear_go_to_page_input();
             return Some(InputAction::Redraw);
+        }
+
+        if self.comment_nav_active {
+            return self.stop_comment_nav();
         }
 
         // Clear any search highlight (sent via UpdateSelection but not tracked in self.selection)
@@ -878,6 +890,7 @@ impl PdfReaderState {
             let fit_factor = self.fit_to_height_zoom_factor();
             self.non_kitty_zoom_factor = fit_factor;
             self.non_kitty_scroll_offset = 0;
+            self.non_kitty_pan_offset = 0;
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
@@ -904,6 +917,7 @@ impl PdfReaderState {
             let fit_factor = self.fit_to_width_zoom_factor();
             self.non_kitty_zoom_factor = fit_factor;
             self.non_kitty_scroll_offset = 0;
+            self.non_kitty_pan_offset = 0;
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
@@ -927,6 +941,7 @@ impl PdfReaderState {
         Some(ViewportUpdate {
             page: self.page,
             y_offset_cells: self.non_kitty_scroll_offset,
+            x_offset_cells: self.non_kitty_pan_offset,
             viewport_height_cells: height,
             viewport_width_cells: width,
         })
@@ -991,6 +1006,36 @@ impl PdfReaderState {
             .map(InputAction::ViewportChanged)
     }
 
+    fn non_kitty_pan_by(&mut self, direction: ScrollDirection, step: u32) -> Option<InputAction> {
+        let viewport_width = self.last_render.img_area_width;
+        if viewport_width == 0 {
+            return None;
+        }
+
+        let full_width = self
+            .rendered
+            .get(self.page)
+            .and_then(|r| r.full_cell_size.map(|size| size.width))
+            .unwrap_or(viewport_width);
+        let max_offset = u32::from(full_width.saturating_sub(viewport_width));
+
+        let old_offset = self.non_kitty_pan_offset;
+        let new_offset = match direction {
+            ScrollDirection::Right => (old_offset + step).min(max_offset),
+            ScrollDirection::Left => old_offset.saturating_sub(step),
+            _ => old_offset,
+        };
+
+        if new_offset == old_offset {
+            return None;
+        }
+        self.non_kitty_pan_offset = new_offset;
+        self.last_render.rect = Rect::default();
+        self.pending_scroll = None;
+        self.current_viewport_update()
+            .map(InputAction::ViewportChanged)
+    }
+
     // Unified scroll - one line at a time (j/k keys)
     fn scroll_line(&mut self, direction: ScrollDirection) -> Option<InputAction> {
         if self.is_kitty {
@@ -1011,8 +1056,8 @@ impl PdfReaderState {
             result
         } else {
             let factor = self.non_kitty_zoom_factor;
-            let step = (2.0_f32 / factor).max(1.0) as u32;
-            self.non_kitty_scroll_by(direction, step)
+            let step = (Zoom::BASE_PAN_STEP_X / factor).max(1.0) as u32;
+            self.non_kitty_pan_by(direction, step)
         }
     }
 
@@ -1471,7 +1516,16 @@ impl PdfReaderState {
             return 1.0;
         }
 
-        let zoom_factor = f32::from(area_h) / f32::from(page_cell_h);
+        // For non-Kitty: page_cell_h is at (base_mag * user_scale). Multiplying by
+        // user_scale normalises out user_scale so the result is a new user_scale.
+        // For Kitty: zoom is display-only, page_cell_h is at the worker's fixed scale,
+        // and user_scale is effectively 1.0 (no render-time zoom).
+        let user_scale = if self.is_kitty {
+            1.0
+        } else {
+            self.non_kitty_zoom_factor
+        };
+        let zoom_factor = f32::from(area_h) * user_scale / f32::from(page_cell_h);
         Zoom::clamp_factor(zoom_factor)
     }
 
@@ -1488,7 +1542,12 @@ impl PdfReaderState {
             return 1.0;
         }
 
-        let zoom_factor = f32::from(area_w) / f32::from(page_cell_w);
+        let user_scale = if self.is_kitty {
+            1.0
+        } else {
+            self.non_kitty_zoom_factor
+        };
+        let zoom_factor = f32::from(area_w) * user_scale / f32::from(page_cell_w);
         Zoom::clamp_factor(zoom_factor)
     }
 
@@ -2449,20 +2508,39 @@ impl PdfReaderState {
 
     // Comment functionality
 
+    fn set_comment_preview_from_nav(&mut self) {
+        if !self.comment_nav_active {
+            return;
+        }
+        let comments = self.comments_for_page(self.comment_nav_page);
+        let Some(comment) = comments.get(self.comment_nav_index) else {
+            self.comment_input.clear();
+            return;
+        };
+        let lines = comment
+            .content
+            .lines()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>();
+        let mut textarea = TextArea::new(lines);
+        textarea.set_placeholder_text("Type your comment here...");
+        textarea.set_placeholder_style(Style::default().fg(self.palette.base_04));
+        self.comment_input.textarea = Some(textarea);
+        self.comment_input.target = Some(comment.target.clone());
+        self.comment_input.edit_mode = Some(CommentEditMode::Editing {
+            comment_id: comment.id.clone(),
+        });
+        self.comment_input.quoted_text = comment.quoted_text.clone();
+        self.comment_input.read_only = true;
+    }
+
     fn start_comment_input(&mut self) -> Option<InputAction> {
         if !self.comments_enabled {
-            self.set_error_hud("Comments are only available in zen mode for PDFs".to_string());
+            self.set_error_hud("Comments are not supported in this terminal".to_string());
             return Some(InputAction::Redraw);
         }
         if self.comment_input.is_active() {
             return None;
-        }
-
-        // Check if there's enough space for the comment textarea
-        let right_margin = self.last_render.unused_width / 2;
-        if right_margin < MIN_COMMENT_TEXTAREA_WIDTH {
-            self.set_error_hud("Not enough space for comment editor. Try zooming out.".to_string());
-            return Some(InputAction::Redraw);
         }
 
         let (target, quoted_text) = if self.normal_mode.is_visual_active() {
@@ -2487,6 +2565,7 @@ impl PdfReaderState {
         self.comment_input.target = Some(target);
         self.comment_input.edit_mode = Some(CommentEditMode::Creating);
         self.comment_input.quoted_text = quoted_text;
+        self.comment_input.read_only = false;
 
         Some(InputAction::Redraw)
     }
@@ -2548,6 +2627,7 @@ impl PdfReaderState {
 
         if comment_text.trim().is_empty() {
             self.comment_input.clear();
+            self.force_redraw();
             return None;
         }
 
@@ -2575,6 +2655,7 @@ impl PdfReaderState {
 
         self.refresh_comment_rects();
         self.comment_input.clear();
+        self.force_redraw();
         Some(self.comment_rects.clone())
     }
 
@@ -2655,6 +2736,9 @@ impl PdfReaderState {
         self.comment_nav_active = true;
         self.comment_nav_page = self.page;
         self.comment_nav_index = self.comment_nav_index.min(count.saturating_sub(1));
+        if !self.zen_mode {
+            self.set_comment_preview_from_nav();
+        }
         self.last_render.rect = Rect::default();
         Some(InputAction::SelectionChanged(
             self.current_comment_selection_rects(),
@@ -2666,6 +2750,9 @@ impl PdfReaderState {
             return None;
         }
         self.comment_nav_active = false;
+        if self.comment_input.read_only {
+            self.comment_input.clear();
+        }
         self.last_render.rect = Rect::default();
         Some(InputAction::SelectionChanged(vec![]))
     }
@@ -2704,15 +2791,31 @@ impl PdfReaderState {
                     .last()
                     .map(|c| Self::comment_selection_rects(c, scale_factor))
                     .unwrap_or_default();
+                if !self.zen_mode {
+                    self.set_comment_preview_from_nav();
+                }
+                let viewport = if !self.zen_mode {
+                    self.ensure_comment_visible(&selection_rects)
+                } else {
+                    None
+                };
                 return Some(InputAction::CommentNavJump {
                     page: prev_page,
-                    viewport: self.current_viewport_update(),
+                    viewport,
                     selection_rects,
                 });
             }
-            return Some(InputAction::SelectionChanged(
-                self.current_comment_selection_rects(),
-            ));
+            let selection_rects = self.current_comment_selection_rects();
+            let viewport = if !self.zen_mode {
+                self.ensure_comment_visible(&selection_rects)
+            } else {
+                None
+            };
+            return Some(InputAction::CommentNavJump {
+                page: self.comment_nav_page,
+                viewport,
+                selection_rects,
+            });
         }
 
         if delta.is_positive() && self.comment_nav_index == max_idx {
@@ -2733,15 +2836,31 @@ impl PdfReaderState {
                     .first()
                     .map(|c| Self::comment_selection_rects(c, scale_factor))
                     .unwrap_or_default();
+                if !self.zen_mode {
+                    self.set_comment_preview_from_nav();
+                }
+                let viewport = if !self.zen_mode {
+                    self.ensure_comment_visible(&selection_rects)
+                } else {
+                    None
+                };
                 return Some(InputAction::CommentNavJump {
                     page: next_page,
-                    viewport: self.current_viewport_update(),
+                    viewport,
                     selection_rects,
                 });
             }
-            return Some(InputAction::SelectionChanged(
-                self.current_comment_selection_rects(),
-            ));
+            let selection_rects = self.current_comment_selection_rects();
+            let viewport = if !self.zen_mode {
+                self.ensure_comment_visible(&selection_rects)
+            } else {
+                None
+            };
+            return Some(InputAction::CommentNavJump {
+                page: self.comment_nav_page,
+                viewport,
+                selection_rects,
+            });
         }
 
         let next = if delta.is_negative() {
@@ -2752,11 +2871,120 @@ impl PdfReaderState {
         .min(max_idx);
         if next != self.comment_nav_index {
             self.comment_nav_index = next;
+            if !self.zen_mode {
+                self.set_comment_preview_from_nav();
+            }
             self.last_render.rect = Rect::default();
         }
-        Some(InputAction::SelectionChanged(
-            self.current_comment_selection_rects(),
-        ))
+        let selection_rects = self.current_comment_selection_rects();
+        let viewport = if !self.zen_mode {
+            self.ensure_comment_visible(&selection_rects)
+        } else {
+            None
+        };
+        Some(InputAction::CommentNavJump {
+            page: self.comment_nav_page,
+            viewport,
+            selection_rects,
+        })
+    }
+
+    fn ensure_comment_visible(
+        &mut self,
+        selection_rects: &[crate::pdf::SelectionRect],
+    ) -> Option<ViewportUpdate> {
+        let target_page = selection_rects
+            .iter()
+            .find(|r| r.page == self.comment_nav_page)
+            .map(|r| r.page)
+            .or_else(|| selection_rects.first().map(|r| r.page))?;
+
+        let (_, font_size) = self.coord_info?;
+        let font_h = u32::from(font_size.1).max(1);
+        let viewport_h = u32::from(self.last_render.img_area_height.max(1));
+        let margin = (viewport_h / 12).max(2);
+
+        let mut min_top = u32::MAX;
+        let mut max_bottom = 0u32;
+        for rect in selection_rects.iter().filter(|r| r.page == target_page) {
+            let top = rect.topleft_y / font_h;
+            let bottom = rect.bottomright_y.div_ceil(font_h).max(top + 1);
+            min_top = min_top.min(top);
+            max_bottom = max_bottom.max(bottom);
+        }
+        if min_top == u32::MAX {
+            return None;
+        }
+        let wanted_top = min_top.saturating_sub(margin);
+        let wanted_bottom = max_bottom.saturating_add(margin);
+        let wanted_span = wanted_bottom.saturating_sub(wanted_top);
+
+        if self.is_kitty {
+            let zoom_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
+            let top_scaled = (wanted_top as f32 * zoom_factor).floor() as u32;
+            let bottom_scaled = (wanted_bottom as f32 * zoom_factor).ceil() as u32;
+            let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+
+            let global_offset = if is_page_mode {
+                0
+            } else {
+                let heights = self.page_heights_scaled(zoom_factor);
+                heights
+                    .iter()
+                    .take(target_page)
+                    .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
+                    .sum()
+            };
+
+            let global_top = global_offset.saturating_add(top_scaled);
+            let global_bottom = global_offset.saturating_add(bottom_scaled.max(top_scaled + 1));
+
+            let Some(zoom) = self.zoom.as_mut() else {
+                return None;
+            };
+            let old = zoom.global_scroll_offset;
+            let mut new = old;
+            if global_bottom.saturating_sub(global_top) > viewport_h {
+                // Large comment block: anchor to top with a small leading context.
+                new = global_top;
+            } else if global_top < old {
+                new = global_top;
+            } else if global_bottom > old.saturating_add(viewport_h) {
+                new = global_bottom.saturating_sub(viewport_h);
+            }
+            if new != old {
+                zoom.global_scroll_offset = new;
+                self.clamp_kitty_scroll_offset();
+                self.last_render.rect = Rect::default();
+            }
+            None
+        } else {
+            let old = self.non_kitty_scroll_offset;
+            let mut new = old;
+            if wanted_span > viewport_h {
+                new = wanted_top;
+            } else if wanted_top < old {
+                new = wanted_top;
+            } else if wanted_bottom > old.saturating_add(viewport_h) {
+                new = wanted_bottom.saturating_sub(viewport_h);
+            }
+
+            let full_height = self
+                .rendered
+                .get(target_page)
+                .and_then(|r| r.full_cell_size.map(|size| size.height))
+                .unwrap_or(self.last_render.img_area_height);
+            let max_offset =
+                u32::from(full_height.saturating_sub(self.last_render.img_area_height));
+            new = new.min(max_offset);
+
+            if new != old {
+                self.non_kitty_scroll_offset = new;
+                self.pending_scroll = None;
+                self.last_render.rect = Rect::default();
+            }
+            self.current_viewport_update()
+        }
     }
 
     fn delete_current_comment(&mut self) -> Option<InputAction> {
@@ -2783,11 +3011,17 @@ impl PdfReaderState {
         let count = self.comment_count_for_page(self.comment_nav_page);
         if count > 0 {
             self.comment_nav_index = self.comment_nav_index.min(count.saturating_sub(1));
+            if !self.zen_mode {
+                self.set_comment_preview_from_nav();
+            }
             selection_rects = self.current_comment_selection_rects();
         } else {
             // No more comments - exit comment nav mode and clear any selection
             self.comment_nav_active = false;
             self.selection.clear();
+            if self.comment_input.read_only {
+                self.comment_input.clear();
+            }
         }
 
         Some(InputAction::CommentDeleted {
@@ -2797,18 +3031,17 @@ impl PdfReaderState {
     }
 
     fn start_comment_edit(&mut self) -> Option<InputAction> {
-        if !self.comments_enabled || self.comment_input.is_active() {
+        if !self.comments_enabled {
+            return None;
+        }
+        if self.comment_input.is_active() && !self.comment_input.read_only {
             return None;
         }
         if !self.comment_nav_active {
             return None;
         }
-
-        // Check if there's enough space for the comment textarea
-        let right_margin = self.last_render.unused_width / 2;
-        if right_margin < MIN_COMMENT_TEXTAREA_WIDTH {
-            self.set_error_hud("Not enough space for comment editor. Try zooming out.".to_string());
-            return Some(InputAction::Redraw);
+        if self.comment_input.read_only {
+            self.comment_input.clear();
         }
 
         let comments = self.comments_for_page(self.comment_nav_page);
@@ -2826,6 +3059,7 @@ impl PdfReaderState {
         self.comment_input.edit_mode = Some(CommentEditMode::Editing {
             comment_id: comment.id.clone(),
         });
+        self.comment_input.read_only = false;
         self.last_render.rect = Rect::default();
         Some(InputAction::Redraw)
     }
@@ -3978,7 +4212,7 @@ impl PdfReaderState {
                 }
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
-            InputAction::RenderScale { factor, .. } => {
+            InputAction::RenderScale { factor, viewport } => {
                 for rendered_info in &mut self.rendered {
                     rendered_info.img = None;
                 }
@@ -3987,6 +4221,9 @@ impl PdfReaderState {
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                if let Some(vp) = viewport {
+                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(vp));
+                }
             }
             InputAction::ThemeChanged { black, white } => {
                 for rendered_info in &mut self.rendered {
@@ -4028,11 +4265,15 @@ impl PdfReaderState {
                 for rendered_info in &mut self.rendered {
                     rendered_info.img = None;
                 }
+                self.invert_images = !self.invert_images;
+                let mode = if self.invert_images { "ON" } else { "OFF" };
+                notifications.info(format!("Image inversion {mode}"));
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::ToggleInvertImages);
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::SelectionChanged(rects) => {
                 if !self.is_kitty {
@@ -4186,9 +4427,17 @@ pub(crate) fn save_pdf_bookmark(
         .map(|z| z.global_scroll_offset as usize)
         .unwrap_or(0);
 
-    let zoom_factor = pdf_reader.zoom.as_ref().map(|z| z.factor);
-    let pan_position = pdf_reader.zoom.as_ref().map(|z| z.cell_pan_from_left);
-    bookmarks.update_bookmark(
+    let zoom_factor = pdf_reader
+        .zoom
+        .as_ref()
+        .map(|z| z.factor)
+        .or(Some(pdf_reader.non_kitty_zoom_factor));
+    let pan_position = pdf_reader
+        .zoom
+        .as_ref()
+        .map(|z| z.cell_pan_from_left)
+        .or(Some(pdf_reader.non_kitty_pan_offset as u16));
+    bookmarks.update_bookmark_pdf(
         &pdf_reader.name,
         chapter_href,
         Some(scroll_position),
@@ -4197,6 +4446,7 @@ pub(crate) fn save_pdf_bookmark(
         Some(page),
         zoom_factor,
         pan_position,
+        Some(pdf_reader.invert_images),
     );
 
     let now = std::time::Instant::now();
