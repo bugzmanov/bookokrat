@@ -69,6 +69,8 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  j / k         Move down / up                                               │
 │  Ctrl+d / u    Scroll half page down / up                                   │
+│  Ctrl+f / b    Scroll full page down / up                                   │
+│  PgDn / PgUp   Scroll full page down / up                                   │
 │  gg            Jump to top                                                  │
 │  G             Jump to bottom                                               │
 │  /             Start search/filter                                          │
@@ -83,6 +85,8 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  j / k         Scroll down / up by line                                     │
 │  Ctrl+d / u    Scroll half screen down / up                                 │
+│  Ctrl+f / b    Scroll full screen down / up                                 │
+│  PgDn / PgUp   Scroll full screen down / up                                 │
 │  gg            Jump to top of chapter                                       │
 │  G             Jump to bottom of chapter                                    │
 │  h / l         Previous / next chapter                                      │
@@ -109,6 +113,7 @@
 │  h/j/k/l       Move cursor                                                  │
 │  w/W/b/e       Word motions (small/Big)                                     │
 │  0/^/$         Line start / first non-space / end                           │
+│  Ctrl+d/u/f/b  Half / full page scroll                                      │
 │  gg / G        Top / bottom of document                                     │
 │  f/F/t/T ;     Find/till char and repeat                                    │
 │  v / V         Visual selection (char/line)                                 │
@@ -273,6 +278,7 @@ PDF annotations require a graphics-capable terminal.
   ▸ PDF settings: Press Space+s (or Ctrl+s) to toggle support and render mode
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
+  ▸ Full-page jumps: Use Ctrl+f / Ctrl+b or PgDn / PgUp
   ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
   ▸ Adjust margins: Press + or - to widen or narrow content
   ▸ Theme switching: Press Space+t to browse and apply color themes

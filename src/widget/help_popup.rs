@@ -228,6 +228,42 @@ impl HelpPopup {
                 self.scroll_page_up(page_size);
                 None
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page_size = if let Some(area) = self.last_popup_area {
+                    (area.height as usize).max(1)
+                } else {
+                    20
+                };
+                self.scroll_page_down(page_size);
+                None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let page_size = if let Some(area) = self.last_popup_area {
+                    (area.height as usize).max(1)
+                } else {
+                    20
+                };
+                self.scroll_page_up(page_size);
+                None
+            }
+            KeyCode::PageDown => {
+                let page_size = if let Some(area) = self.last_popup_area {
+                    (area.height as usize).max(1)
+                } else {
+                    20
+                };
+                self.scroll_page_down(page_size);
+                None
+            }
+            KeyCode::PageUp => {
+                let page_size = if let Some(area) = self.last_popup_area {
+                    (area.height as usize).max(1)
+                } else {
+                    20
+                };
+                self.scroll_page_up(page_size);
+                None
+            }
             KeyCode::Esc | KeyCode::Char('?') => Some(HelpPopupAction::Close),
             _ => None,
         }

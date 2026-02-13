@@ -583,6 +583,33 @@ impl MarkdownTextReader {
         self.clamp_column_to_line_length();
     }
 
+    pub fn normal_mode_full_page_down(&mut self, screen_height: usize) {
+        if !self.normal_mode.active {
+            return;
+        }
+        let max_line = self.raw_text_lines.len().saturating_sub(1);
+
+        let mut new_line = (self.normal_mode.cursor.line + screen_height).min(max_line);
+        new_line = self.find_next_valid_line(new_line, 1);
+        self.normal_mode.cursor.line = new_line;
+        self.scroll_offset = (self.scroll_offset + screen_height).min(self.get_max_scroll_offset());
+
+        self.clamp_column_to_line_length();
+    }
+
+    pub fn normal_mode_full_page_up(&mut self, screen_height: usize) {
+        if !self.normal_mode.active {
+            return;
+        }
+
+        let mut new_line = self.normal_mode.cursor.line.saturating_sub(screen_height);
+        new_line = self.find_next_valid_line(new_line, -1);
+        self.normal_mode.cursor.line = new_line;
+        self.scroll_offset = self.scroll_offset.saturating_sub(screen_height);
+
+        self.clamp_column_to_line_length();
+    }
+
     fn get_line_char_count(&self, line: usize) -> usize {
         self.raw_text_lines
             .get(line)

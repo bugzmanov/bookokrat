@@ -208,6 +208,8 @@ pub trait VimNavMotions {
     fn handle_l(&mut self);
     fn handle_ctrl_d(&mut self);
     fn handle_ctrl_u(&mut self);
+    fn handle_ctrl_f(&mut self);
+    fn handle_ctrl_b(&mut self);
     fn handle_gg(&mut self);
     fn handle_upper_g(&mut self);
 }
@@ -1403,7 +1405,19 @@ impl App {
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state(); // This will update active section
+        self.update_toc_state();
+    }
+
+    fn scroll_full_screen_down(&mut self, screen_height: usize) {
+        self.text_reader.scroll_full_screen_down(screen_height);
+        self.save_bookmark();
+        self.update_toc_state();
+    }
+
+    fn scroll_full_screen_up(&mut self, screen_height: usize) {
+        self.text_reader.scroll_full_screen_up(screen_height);
+        self.save_bookmark();
+        self.update_toc_state();
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -3529,6 +3543,13 @@ impl App {
                 }
                 true
             }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_up(h);
+                }
+                true
+            }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
@@ -3590,6 +3611,27 @@ impl App {
                 self.text_reader.clear_count();
                 if let Some(h) = screen_height {
                     self.text_reader.normal_mode_half_page_up(h);
+                }
+                true
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_down(h);
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_down(h);
+                }
+                true
+            }
+            KeyCode::PageUp => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_up(h);
                 }
                 true
             }
@@ -4409,6 +4451,11 @@ impl App {
                     self.text_reader.toggle_normal_mode();
                 }
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_down(visible_height);
+                }
+            }
             KeyCode::Char('f') => if self.handle_key_sequence('f') {},
             KeyCode::Char('F') => if self.handle_key_sequence('F') {},
             KeyCode::Char('s') => if self.handle_key_sequence('s') {},
@@ -4486,6 +4533,16 @@ impl App {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(visible_height) = screen_height {
                     self.scroll_half_screen_up(visible_height);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_down(visible_height);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_up(visible_height);
                 }
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {

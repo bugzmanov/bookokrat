@@ -262,6 +262,24 @@ impl BookSearch {
                     self.update_scroll();
                 }
             }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_d();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_u();
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_f();
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_b();
+            }
+            KeyCode::PageDown => {
+                self.handle_ctrl_f();
+            }
+            KeyCode::PageUp => {
+                self.handle_ctrl_b();
+            }
             _ => {}
         }
         None
@@ -707,6 +725,18 @@ impl VimNavMotions for BookSearch {
         // Move half page up
         let half = self.visible_results / 2;
         for _ in 0..half {
+            self.move_selection_up();
+        }
+    }
+
+    fn handle_ctrl_f(&mut self) {
+        for _ in 0..self.visible_results {
+            self.move_selection_down();
+        }
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        for _ in 0..self.visible_results {
             self.move_selection_up();
         }
     }

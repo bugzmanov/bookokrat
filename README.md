@@ -153,6 +153,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `j/k` - Move down/up (works in all lists and reader)
 - `h/l` - Collapse/expand in TOC; previous/next chapter in reader
 - `Ctrl+d` / `Ctrl+u` - Scroll half-page down/up
+- `Ctrl+f` / `Ctrl+b` - Scroll full-page down/up
+- `PgDn` / `PgUp` - Scroll full-page down/up
 - `gg` - Jump to top
 - `G` - Jump to bottom
 - `Ctrl+o` / `Ctrl+i` - Jump backward/forward in history
@@ -198,6 +200,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 All popups (search results, reading history, book stats) support:
 - `j/k` - Move up/down
 - `Ctrl+d` / `Ctrl+u` - Half-page scroll
+- `Ctrl+f` / `Ctrl+b` - Full-page scroll
+- `PgDn` / `PgUp` - Full-page scroll
 - `gg` / `G` - Jump to top/bottom
 - `Enter` - Activate selection
 - `Esc` - Close popup

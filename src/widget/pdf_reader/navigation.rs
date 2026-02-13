@@ -459,6 +459,16 @@ impl PdfReaderState {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 InputResponse::handled(self.scroll_half_screen(ScrollDirection::Up))
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                InputResponse::handled(self.scroll_full_screen(ScrollDirection::Down))
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                InputResponse::handled(self.scroll_full_screen(ScrollDirection::Up))
+            }
+            KeyCode::PageDown => {
+                InputResponse::handled(self.scroll_full_screen(ScrollDirection::Down))
+            }
+            KeyCode::PageUp => InputResponse::handled(self.scroll_full_screen(ScrollDirection::Up)),
             KeyCode::Up => {
                 let action = self.handle_normal_mode_key('k');
                 if action.is_some() {
@@ -577,6 +587,12 @@ impl PdfReaderState {
                     'u' if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.scroll_half_screen(ScrollDirection::Up)
                     }
+                    'f' if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_full_screen(ScrollDirection::Down)
+                    }
+                    'b' if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.scroll_full_screen(ScrollDirection::Up)
+                    }
                     'c' | 'C' if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.copy_selection()
                     }
@@ -587,6 +603,8 @@ impl PdfReaderState {
             KeyCode::Down => self.scroll_line(ScrollDirection::Down),
             KeyCode::Left => self.prev_page(),
             KeyCode::Right => self.next_page(),
+            KeyCode::PageDown => self.scroll_full_screen(ScrollDirection::Down),
+            KeyCode::PageUp => self.scroll_full_screen(ScrollDirection::Up),
             KeyCode::Esc => self.handle_escape_key(),
             KeyCode::Enter => None,
             KeyCode::Tab => {
@@ -1331,6 +1349,99 @@ impl PdfReaderState {
 
         if self.normal_mode.active {
             let lines_to_move = (half / 2).max(1) as usize;
+
+            match direction {
+                ScrollDirection::Up => {
+                    for _ in 0..lines_to_move {
+                        let line_bounds = self
+                            .rendered
+                            .get(self.normal_mode.cursor.page)
+                            .map(|r| r.line_bounds.clone())
+                            .unwrap_or_default();
+                        let result = self.normal_mode.move_up(&line_bounds);
+                        if result == MoveResult::WantsPrevPage && self.normal_mode.cursor.page > 0 {
+                            let prev_page = self.normal_mode.cursor.page - 1;
+                            let prev_line_bounds = self
+                                .rendered
+                                .get(prev_page)
+                                .map(|r| r.line_bounds.clone())
+                                .unwrap_or_default();
+                            if !prev_line_bounds.is_empty() {
+                                self.normal_mode
+                                    .move_to_page_end(prev_page, &prev_line_bounds);
+                            }
+                        }
+                    }
+                }
+                ScrollDirection::Down => {
+                    for _ in 0..lines_to_move {
+                        let line_bounds = self
+                            .rendered
+                            .get(self.normal_mode.cursor.page)
+                            .map(|r| r.line_bounds.clone())
+                            .unwrap_or_default();
+                        let result = self.normal_mode.move_down(&line_bounds);
+                        if result == MoveResult::WantsNextPage {
+                            let next_page = self.normal_mode.cursor.page + 1;
+                            if next_page < self.rendered.len() {
+                                let next_line_bounds = self
+                                    .rendered
+                                    .get(next_page)
+                                    .map(|r| r.line_bounds.clone())
+                                    .unwrap_or_default();
+                                if !next_line_bounds.is_empty() {
+                                    self.normal_mode
+                                        .move_to_page_start(next_page, &next_line_bounds);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            let viewport_changed = self.ensure_cursor_visible();
+            let viewport = if viewport_changed && !self.is_kitty {
+                self.current_viewport_update()
+            } else {
+                None
+            };
+
+            if self.normal_mode.is_visual_active() {
+                let all_line_bounds = self.collect_all_line_bounds();
+                return Some(InputAction::VisualChanged(
+                    self.normal_mode.get_visual_rects_multi(&all_line_bounds),
+                    viewport,
+                ));
+            }
+            return Some(InputAction::CursorChanged(self.get_cursor_rect(), viewport));
+        }
+
+        Some(InputAction::Redraw)
+    }
+
+    fn scroll_full_screen(&mut self, direction: ScrollDirection) -> Option<InputAction> {
+        let full = self.last_render.img_area_height;
+
+        if !self.is_kitty {
+            return self.non_kitty_scroll_by(direction, u32::from(full));
+        }
+
+        if let Some(z) = &mut self.zoom {
+            match direction {
+                ScrollDirection::Up => {
+                    z.global_scroll_offset = z.global_scroll_offset.saturating_sub(u32::from(full));
+                }
+                ScrollDirection::Down => {
+                    z.global_scroll_offset = z.global_scroll_offset.saturating_add(u32::from(full));
+                }
+                _ => {}
+            }
+        }
+        self.last_render.rect = Rect::default();
+
+        if self.normal_mode.active {
+            let lines_to_move = (full / 2).max(1) as usize;
 
             match direction {
                 ScrollDirection::Up => {
