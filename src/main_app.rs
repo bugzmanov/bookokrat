@@ -1338,7 +1338,6 @@ impl App {
                 None,
                 None,
                 None,
-                None,
             );
 
             // Only save to disk if enough time has passed or if forced

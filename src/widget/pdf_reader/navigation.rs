@@ -4437,7 +4437,7 @@ pub(crate) fn save_pdf_bookmark(
         .as_ref()
         .map(|z| z.cell_pan_from_left)
         .or(Some(pdf_reader.non_kitty_pan_offset as u16));
-    bookmarks.update_bookmark(
+    bookmarks.update_bookmark_pdf(
         &pdf_reader.name,
         chapter_href,
         Some(scroll_position),

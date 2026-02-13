@@ -27,6 +27,7 @@ pub struct Bookmark {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_pan: Option<u16>,
 
+    #[cfg(feature = "pdf")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_invert_images: Option<bool>,
 }
@@ -171,7 +172,60 @@ impl Bookmarks {
         pdf_page: Option<usize>,
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
+    ) {
+        self.update_bookmark_internal(
+            path,
+            chapter_href,
+            node_index,
+            chapter_index,
+            total_chapters,
+            pdf_page,
+            pdf_zoom,
+            pdf_pan,
+            None,
+        );
+    }
+
+    #[cfg(feature = "pdf")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_bookmark_pdf(
+        &mut self,
+        path: &str,
+        chapter_href: String,
+        node_index: Option<usize>,
+        chapter_index: Option<usize>,
+        total_chapters: Option<usize>,
+        pdf_page: Option<usize>,
+        pdf_zoom: Option<f32>,
+        pdf_pan: Option<u16>,
         pdf_invert_images: Option<bool>,
+    ) {
+        self.update_bookmark_internal(
+            path,
+            chapter_href,
+            node_index,
+            chapter_index,
+            total_chapters,
+            pdf_page,
+            pdf_zoom,
+            pdf_pan,
+            pdf_invert_images,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn update_bookmark_internal(
+        &mut self,
+        path: &str,
+        chapter_href: String,
+        node_index: Option<usize>,
+        chapter_index: Option<usize>,
+        total_chapters: Option<usize>,
+        pdf_page: Option<usize>,
+        pdf_zoom: Option<f32>,
+        pdf_pan: Option<u16>,
+        #[cfg(feature = "pdf")] pdf_invert_images: Option<bool>,
+        #[cfg(not(feature = "pdf"))] _pdf_invert_images: Option<bool>,
     ) {
         let key = self
             .resolve_existing_key(path)
@@ -187,6 +241,7 @@ impl Bookmarks {
                 pdf_page,
                 pdf_zoom,
                 pdf_pan,
+                #[cfg(feature = "pdf")]
                 pdf_invert_images,
             },
         );
