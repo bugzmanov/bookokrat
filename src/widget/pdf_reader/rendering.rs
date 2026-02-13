@@ -918,18 +918,18 @@ pub(crate) fn execute_display_plan(
         }
     }
 
-    // Place a solid-color Kitty overlay image over the comment modal area.
+    // Place a solid-color Kitty overlay image over the active modal area.
     // This covers the PDF image so the modal has an opaque background, while
     // ratatui text (borders, title, content) renders on top via z-index layering.
-    emit_comment_overlay(pdf_reader);
+    emit_modal_overlay(pdf_reader);
 
     // Silence unused warnings
     let _ = conversion_tx;
 }
 
-const COMMENT_OVERLAY_IMAGE_ID: u32 = u32::MAX - 1;
+const MODAL_OVERLAY_IMAGE_ID: u32 = u32::MAX - 1;
 
-fn emit_comment_overlay(pdf_reader: &mut PdfReaderState) {
+fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     if !pdf_reader.is_kitty {
         return;
     }
@@ -938,12 +938,12 @@ fn emit_comment_overlay(pdf_reader: &mut PdfReaderState) {
     let tmux = crate::pdf::kittyv2::is_tmux_mode();
 
     // Always delete previous overlay
-    let _ = crate::pdf::kittyv2::DeleteCommand::by_id(COMMENT_OVERLAY_IMAGE_ID)
+    let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
         .delete()
         .quiet(crate::pdf::kittyv2::Quiet::Silent)
         .write_to(&mut stdout, tmux);
 
-    let Some((col, row, width, height)) = pdf_reader.comment_overlay_rect else {
+    let Some((col, row, width, height)) = pdf_reader.modal_overlay_rect else {
         let _ = std::io::Write::flush(&mut stdout);
         return;
     };
@@ -972,8 +972,8 @@ fn emit_comment_overlay(pdf_reader: &mut PdfReaderState) {
     let pixel = [r, g, b];
     let _ = crate::pdf::kittyv2::DirectTransmit::new(1, 1)
         .format(crate::pdf::kittyv2::Format::Rgb)
-        .image_id(COMMENT_OVERLAY_IMAGE_ID)
-        .placement_id(COMMENT_OVERLAY_IMAGE_ID)
+        .image_id(MODAL_OVERLAY_IMAGE_ID)
+        .placement_id(MODAL_OVERLAY_IMAGE_ID)
         .quiet(crate::pdf::kittyv2::Quiet::Silent)
         .no_cursor_move(true)
         .cursor_at(cursor.0, cursor.1)
@@ -1396,7 +1396,7 @@ impl PdfReaderState {
         full_layout: &RenderLayout,
         font_size: FontSize,
     ) -> DisplayBatch<'s> {
-        self.comment_overlay_rect = None;
+        self.modal_overlay_rect = None;
         let modal_bg = self.bg_color();
         let modal_fg = self.fg_color();
         let modal_panel_bg = self.palette.base_01;
@@ -1414,11 +1414,9 @@ impl PdfReaderState {
             .collect::<Vec<_>>();
         let input_active = modal_msg.is_some();
         let bg_color = modal_bg;
-        let mut fg_color = modal_fg;
         let mut muted_color = self.muted_color();
 
         if comment_modal {
-            fg_color = self.palette.base_04;
             muted_color = self.palette.base_03;
         }
 
@@ -1469,20 +1467,6 @@ impl PdfReaderState {
 
         // Kitty page mode (single page with zoom/scroll within page)
         if use_page_mode {
-            if input_active {
-                if let Some(ref msg) = modal_msg {
-                    Self::render_input_modal(
-                        frame,
-                        inner_area,
-                        msg.clone(),
-                        modal_bg,
-                        popup_border,
-                        fg_color,
-                    );
-                }
-                return DisplayBatch::Clear;
-            }
-
             let pdf_area = img_area;
 
             // Pre-fetch data before mutable borrow of self.rendered
@@ -1561,7 +1545,7 @@ impl PdfReaderState {
                             clamped_scroll,
                         )
                     });
-                    self.comment_overlay_rect = Self::render_comment_modal(
+                    self.modal_overlay_rect = Self::render_comment_modal(
                         &mut self.comment_input,
                         frame,
                         inner_area,
@@ -1596,26 +1580,23 @@ impl PdfReaderState {
                 }
             }
 
+            if let Some(ref msg) = modal_msg {
+                self.modal_overlay_rect = Self::render_input_modal(
+                    frame,
+                    inner_area,
+                    msg.clone(),
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                );
+            }
+
             return result;
         }
 
         // Kitty continuous scroll mode
         if use_scroll_mode {
-            // Check if go-to-page input modal is active (this needs to clear graphics)
-            if input_active {
-                if let Some(ref msg) = modal_msg {
-                    Self::render_input_modal(
-                        frame,
-                        inner_area,
-                        msg.clone(),
-                        modal_bg,
-                        popup_border,
-                        fg_color,
-                    );
-                }
-                return DisplayBatch::Clear;
-            }
-
             // PDF renders at its natural position - no shrinking
             let pdf_area = img_area;
 
@@ -1740,7 +1721,7 @@ impl PdfReaderState {
                         zoom_factor,
                         &visible_pages,
                     );
-                    self.comment_overlay_rect = Self::render_comment_modal(
+                    self.modal_overlay_rect = Self::render_comment_modal(
                         &mut self.comment_input,
                         frame,
                         inner_area,
@@ -1780,6 +1761,18 @@ impl PdfReaderState {
                         );
                     }
                 }
+            }
+
+            if let Some(ref msg) = modal_msg {
+                self.modal_overlay_rect = Self::render_input_modal(
+                    frame,
+                    inner_area,
+                    msg.clone(),
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                );
             }
 
             return result;
@@ -1834,13 +1827,14 @@ impl PdfReaderState {
             Self::render_loading_in(frame, img_area, &self.palette);
 
             if let Some(ref msg) = modal_msg {
-                Self::render_input_modal(
+                self.modal_overlay_rect = Self::render_input_modal(
                     frame,
                     inner_area,
                     msg.clone(),
-                    modal_bg,
+                    modal_fg,
                     popup_border,
-                    fg_color,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
                 );
             }
             if comment_modal {
@@ -1853,7 +1847,7 @@ impl PdfReaderState {
                     font_size,
                     self.non_kitty_scroll_offset,
                 );
-                self.comment_overlay_rect = Self::render_comment_modal(
+                self.modal_overlay_rect = Self::render_comment_modal(
                     &mut self.comment_input,
                     frame,
                     inner_area,
@@ -1966,17 +1960,18 @@ impl PdfReaderState {
             }
 
             if let Some(ref msg) = modal_msg {
-                Self::render_input_modal(
+                self.modal_overlay_rect = Self::render_input_modal(
                     frame,
                     inner_area,
                     msg.clone(),
-                    modal_bg,
+                    modal_fg,
                     popup_border,
-                    fg_color,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
                 );
             }
             if comment_modal {
-                self.comment_overlay_rect = Self::render_comment_modal(
+                self.modal_overlay_rect = Self::render_comment_modal(
                     &mut self.comment_input,
                     frame,
                     inner_area,
@@ -1989,11 +1984,6 @@ impl PdfReaderState {
                     modal_panel_header_bg,
                 );
             }
-            // Clear Kitty graphics when go-to-page input is active so it's visible
-            if input_active && self.is_kitty {
-                return DisplayBatch::Clear;
-            }
-
             DisplayBatch::Display(to_display)
         }
     }
@@ -2128,10 +2118,11 @@ impl PdfReaderState {
         frame: &mut Frame<'_>,
         area: Rect,
         msg: Text<'static>,
-        bg_color: Color,
-        accent_color: Color,
         fg_color: Color,
-    ) {
+        accent_color: Color,
+        panel_bg: Color,
+        header_bg: Color,
+    ) -> Option<(u16, u16, u16, u16)> {
         let content_lines = msg.lines.len() as u16;
         let modal_width = 40u16.min(area.width.saturating_sub(4));
         let modal_height = (content_lines + 2)
@@ -2144,6 +2135,13 @@ impl PdfReaderState {
             height: modal_height,
         };
 
+        // Padded backing area for the Kitty overlay image
+        let pad = 1u16;
+        let backing_x = modal_area.x.saturating_sub(pad);
+        let backing_y = modal_area.y.saturating_sub(pad);
+        let backing_w = (modal_area.width + pad * 2).min(area.x + area.width - backing_x);
+        let backing_h = (modal_area.height + pad * 2).min(area.y + area.height - backing_y);
+
         frame.render_widget(Clear, modal_area);
         let modal = Paragraph::new(msg)
             .block(
@@ -2151,12 +2149,13 @@ impl PdfReaderState {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(accent_color))
                     .title(" Go to Page ")
-                    .title_style(Style::default().fg(accent_color))
-                    .style(Style::default().bg(bg_color)),
+                    .title_style(Style::default().fg(accent_color).bg(header_bg))
+                    .style(Style::default().bg(panel_bg)),
             )
-            .style(Style::default().fg(fg_color).bg(bg_color))
+            .style(Style::default().fg(fg_color).bg(panel_bg))
             .wrap(Wrap { trim: false });
         frame.render_widget(modal, modal_area);
+        Some((backing_x, backing_y, backing_w, backing_h))
     }
 
     /// Renders the comment textarea as a centered modal overlay on the PDF area.
