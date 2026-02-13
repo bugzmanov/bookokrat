@@ -728,8 +728,6 @@ impl MarkdownTextReader {
 
         // Second pass: draw inline images over the text block
         let scroll_offset = self.scroll_offset;
-        let textarea_insert_position = textarea_insert_position;
-        let textarea_lines_to_insert = textarea_lines_to_insert;
 
         let mut current_image_rects = HashMap::new();
 

@@ -77,5 +77,5 @@ pub fn find_word_start_backward(line: &str, start_col: usize) -> Option<usize> {
         }
         cur = next;
     }
-    (cur != CharKind::Space).then(|| 0)
+    (cur != CharKind::Space).then_some(0)
 }

@@ -2939,9 +2939,7 @@ impl PdfReaderState {
             let global_top = global_offset.saturating_add(top_scaled);
             let global_bottom = global_offset.saturating_add(bottom_scaled.max(top_scaled + 1));
 
-            let Some(zoom) = self.zoom.as_mut() else {
-                return None;
-            };
+            let zoom = self.zoom.as_mut()?;
             let old = zoom.global_scroll_offset;
             let mut new = old;
             if global_bottom.saturating_sub(global_top) > viewport_h {
@@ -2961,9 +2959,7 @@ impl PdfReaderState {
         } else {
             let old = self.non_kitty_scroll_offset;
             let mut new = old;
-            if wanted_span > viewport_h {
-                new = wanted_top;
-            } else if wanted_top < old {
+            if wanted_span > viewport_h || wanted_top < old {
                 new = wanted_top;
             } else if wanted_bottom > old.saturating_add(viewport_h) {
                 new = wanted_bottom.saturating_sub(viewport_h);

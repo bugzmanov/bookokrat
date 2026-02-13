@@ -552,7 +552,7 @@ pub fn is_warp_terminal() -> bool {
     use std::sync::OnceLock;
     static DETECTED: OnceLock<bool> = OnceLock::new();
     *DETECTED.get_or_init(|| {
-        env::var("TERM_PROGRAM").is_ok_and(|v| v.to_ascii_lowercase() == "warpterminal")
+        env::var("TERM_PROGRAM").is_ok_and(|v| v.eq_ignore_ascii_case("warpterminal"))
     })
 }
 

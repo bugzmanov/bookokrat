@@ -2196,7 +2196,6 @@ impl<'a> TextArea<'a> {
     /// // Invalid search pattern
     /// assert!(textarea.set_search_pattern("(hello").is_err());
     /// ```
-
     pub fn set_search_pattern(&mut self, query: impl AsRef<str>) -> Result<(), regex::Error> {
         self.search.set_pattern(query.as_ref())
     }
@@ -2214,7 +2213,6 @@ impl<'a> TextArea<'a> {
     /// assert!(textarea.search_pattern().is_some());
     /// assert_eq!(textarea.search_pattern().unwrap().as_str(), "hello+");
     /// ```
-
     pub fn search_pattern(&self) -> Option<&regex::Regex> {
         self.search.pat.as_ref()
     }
@@ -2256,7 +2254,6 @@ impl<'a> TextArea<'a> {
     /// let match_found = textarea.search_forward(false);
     /// assert!(!match_found);
     /// ```
-
     pub fn search_forward(&mut self, match_cursor: bool) -> bool {
         if let Some(cursor) = self.search.forward(&self.lines, self.cursor, match_cursor) {
             self.cursor = cursor;
@@ -2299,7 +2296,6 @@ impl<'a> TextArea<'a> {
     /// let match_found = textarea.search_back(false);
     /// assert!(!match_found);
     /// ```
-
     pub fn search_back(&mut self, match_cursor: bool) -> bool {
         if let Some(cursor) = self.search.back(&self.lines, self.cursor, match_cursor) {
             self.cursor = cursor;
@@ -2319,7 +2315,6 @@ impl<'a> TextArea<'a> {
     ///
     /// assert_eq!(textarea.search_style(), Style::default().bg(Color::Blue));
     /// ```
-
     pub fn search_style(&self) -> Style {
         self.search.style
     }
@@ -2337,7 +2332,6 @@ impl<'a> TextArea<'a> {
     ///
     /// assert_eq!(textarea.search_style(), red_bg);
     /// ```
-
     pub fn set_search_style(&mut self, style: Style) {
         self.search.style = style;
     }

@@ -3,7 +3,6 @@ use super::ratatui::text::{Line, Span};
 use super::util::{num_digits, spaces};
 use std::borrow::Cow;
 use std::cmp::Ordering;
-use std::iter;
 use unicode_width::UnicodeWidthChar as _;
 
 enum Boundary {
@@ -57,7 +56,7 @@ impl DisplayTextBuilder {
     fn build<'s>(&mut self, s: &'s str) -> Cow<'s, str> {
         if let Some(ch) = self.mask {
             // Note: We don't need to track width on masking text since width of tab character is fixed
-            let masked = iter::repeat(ch).take(s.chars().count()).collect();
+            let masked = std::iter::repeat_n(ch, s.chars().count()).collect();
             return Cow::Owned(masked);
         }
 

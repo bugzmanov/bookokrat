@@ -5086,7 +5086,7 @@ impl App {
     /// Copy pages for the selected TOC item in PDF
     #[cfg(feature = "pdf")]
     fn copy_pdf_toc_selection(&mut self) {
-        use crate::navigation_panel::{SelectedTocItem, TocItem};
+        use crate::navigation_panel::SelectedTocItem;
 
         let Some(pdf_reader) = self.pdf_reader.as_ref() else {
             return;

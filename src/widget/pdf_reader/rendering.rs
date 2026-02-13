@@ -278,6 +278,7 @@ pub(crate) fn apply_render_responses(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::pdf::kittyv2::{Image, ImageId};
@@ -1193,14 +1194,13 @@ impl PdfReaderState {
             let viewport_start = scroll_offset;
             let viewport_end = scroll_offset + viewport_height;
 
-            let mut img_clip_top_px = 0u32;
             if page_end > viewport_start && page_start < viewport_end {
                 let screen_y_start = if page_start >= scroll_offset {
                     (page_start - scroll_offset) as u16
                 } else {
                     0
                 };
-                img_clip_top_px = if scroll_offset > page_start {
+                let mut img_clip_top_px = if scroll_offset > page_start {
                     let offset_dest = (scroll_offset - page_start) as f32;
                     let source_y_px = (offset_dest / zoom_factor) * f32::from(font_size.1);
                     source_y_px.floor().max(0.0) as u32
@@ -2174,9 +2174,7 @@ impl PdfReaderState {
         panel_bg: Color,
         header_bg: Color,
     ) -> Option<(u16, u16, u16, u16)> {
-        let Some(textarea) = comment_input.textarea.as_mut() else {
-            return None;
-        };
+        let textarea = comment_input.textarea.as_mut()?;
 
         // Make modal width track content width, but keep it viewport-safe.
         // If content width is unavailable, use a proportional fallback.
@@ -2189,7 +2187,7 @@ impl PdfReaderState {
             .map(|w| w.saturating_add(6))
             .unwrap_or(proportional);
         let width = target_width.clamp(MIN_COMMENT_TEXTAREA_WIDTH, max_width);
-        let height = area.height.min(10).max(5).min(area.height);
+        let height = area.height.clamp(5, 10);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
 
         // Position near the selected text: prefer below, fall back to above,

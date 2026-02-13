@@ -4,7 +4,7 @@ mod crossterm;
 ///
 /// This type is marked as `#[non_exhaustive]` since more keys may be supported in the future.
 #[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Hash, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Hash, Eq)]
 pub enum Key {
     /// Normal letter key input
     Char(char),
@@ -47,13 +47,8 @@ pub enum Key {
     /// Virtual key to scroll up by mouse
     MouseScrollUp,
     /// An invalid key input (this key is always ignored by [`TextArea`](crate::TextArea))
+    #[default]
     Null,
-}
-
-impl Default for Key {
-    fn default() -> Self {
-        Key::Null
-    }
 }
 
 /// Backend-agnostic key input type.
