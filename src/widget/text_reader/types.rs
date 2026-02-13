@@ -35,6 +35,11 @@ pub struct RenderedLine {
     pub node_index: Option<usize>, // Index of the node in the document this line belongs to
     pub code_line: Option<CodeLineMetadata>,
     pub inline_code_comments: Vec<InlineCodeCommentFragment>,
+    /// Canonical char position of this line's content start within the block's text_to_string() output.
+    /// None for non-annotatable lines (Empty, HorizontalRule, Comment, ImagePlaceholder).
+    pub canonical_content_start: Option<usize>,
+    /// Number of visual columns before actual text content (indent + prefix like "• " or "> ").
+    pub content_column_start: usize,
 }
 
 impl RenderedLine {
@@ -48,6 +53,8 @@ impl RenderedLine {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         }
     }
 }

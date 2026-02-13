@@ -345,6 +345,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         result
     }
 
+    fn text_or_inline_canonical_len(item: &TextOrInline) -> usize {
+        match item {
+            TextOrInline::Text(t) => t.content.chars().count(),
+            TextOrInline::Inline(inline) => match inline {
+                Inline::Link { text, .. } => Self::text_to_string(text).chars().count(),
+                Inline::Image { alt_text, .. } => alt_text.chars().count(),
+                Inline::Anchor { .. } => 0,
+                Inline::LineBreak => 1,
+                Inline::SoftBreak => 1,
+            },
+        }
+    }
+
     /// Convert MarkdownText to structured inline spans
     pub fn text_to_inline_spans(text: &MarkdownText) -> Vec<crate::table::InlineSpan> {
         let mut result = Vec::new();
@@ -873,6 +886,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: if line_idx == 0 { node_index } else { None },
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             });
 
             self.raw_text_lines.push(wrapped_line.to_string());
@@ -902,6 +917,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             });
 
             self.raw_text_lines.push(decoration);
@@ -939,6 +956,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -978,9 +997,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let underline_color = palette.base_0e; // Purple
 
         let mut current_rich_spans = Vec::new();
+        let mut current_chunk_items: Vec<&TextOrInline> = Vec::new();
         let mut has_content = false;
         let mut has_visible_text = false;
         let mut has_anchor = false;
+        let mut para_canonical_offset: usize = 0;
 
         for item in content.iter() {
             match item {
@@ -990,10 +1011,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
                     let rich_spans = self.render_text_or_inline(item, palette, is_focused);
                     current_rich_spans.extend(rich_spans);
+                    current_chunk_items.push(item);
                 }
                 TextOrInline::Inline(Inline::Image { url, .. }) => {
                     // If we have accumulated text before the image, render it first
                     if !current_rich_spans.is_empty() {
+                        let chunk_canonical_len = current_chunk_items
+                            .iter()
+                            .map(|i| Self::text_or_inline_canonical_len(i))
+                            .sum::<usize>();
                         let styled_spans = Self::apply_annotation_underlines(
                             current_rich_spans,
                             &annotation_ranges,
@@ -1008,8 +1034,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             indent,
                             false, // don't add empty line after
                             node_index,
+                            Some(para_canonical_offset),
                         );
+                        para_canonical_offset += chunk_canonical_len;
                         current_rich_spans = Vec::new();
+                        current_chunk_items.clear();
                     }
 
                     // Render the image as a separate block
@@ -1030,6 +1059,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }) if Self::extract_image_from_text(link_text).is_some() => {
                     // If we have accumulated text before the image link, render it first
                     if !current_rich_spans.is_empty() {
+                        let chunk_canonical_len = current_chunk_items
+                            .iter()
+                            .map(|i| Self::text_or_inline_canonical_len(i))
+                            .sum::<usize>();
                         let styled_spans = Self::apply_annotation_underlines(
                             current_rich_spans,
                             &annotation_ranges,
@@ -1044,8 +1077,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             indent,
                             false,
                             node_index,
+                            Some(para_canonical_offset),
                         );
+                        para_canonical_offset += chunk_canonical_len;
                         current_rich_spans = Vec::new();
+                        current_chunk_items.clear();
                     }
 
                     // Extract the image URL from the link text
@@ -1083,6 +1119,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     // Accumulate non-image content
                     let rich_spans = self.render_text_or_inline(item, palette, is_focused);
                     current_rich_spans.extend(rich_spans);
+                    current_chunk_items.push(item);
                 }
             }
         }
@@ -1104,6 +1141,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 indent,
                 add_empty_line,
                 node_index,
+                Some(para_canonical_offset),
             );
         } else if !has_content {
             let has_anchor_only = has_anchor && !has_visible_text;
@@ -1120,6 +1158,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -1771,6 +1811,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         total_lines: total_code_lines,
                     }),
                     inline_code_comments: inline_fragments,
+                    canonical_content_start: None,
+                    content_column_start: 0,
                 };
 
                 lines.push(rendered_line);
@@ -1859,6 +1901,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 link_nodes: vec![],
                 node_anchor: None,
                 node_index: None,
+                canonical_content_start: None,
+                content_column_start: 0,
                 code_line: None,
                 inline_code_comments: Vec::new(),
             });
@@ -1912,7 +1956,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     format!("{num}. ")
                 }
             };
-            let indent_char_len = "  ".repeat(indent).chars().count();
 
             let mut first_block_line_count = 0;
 
@@ -1923,36 +1966,36 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     // First block gets the bullet/number prefix
                     match &block_node.block {
                         MarkdownBlock::Paragraph { content } => {
+                            let canonical_len = Self::text_to_string(content).chars().count();
                             let mut content_rich_spans = Vec::new();
                             for item in content.iter() {
                                 content_rich_spans
                                     .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
 
-                            // Apply annotation underlines with cumulative offset
-                            // Note: cumulative_char_pos tracks raw_text lengths (including prefix)
-                            // to match how compute_paragraph_word_range works.
-                            // We add prefix length because content spans don't include the prefix,
-                            // but annotation positions are calculated from raw_text which does.
-                            let prefix_char_len = prefix.chars().count();
                             let (styled_spans, _) = if list_path.is_empty() {
                                 Self::apply_annotation_underlines_with_offset(
                                     content_rich_spans,
                                     &annotation_ranges,
                                     underline_color,
-                                    *global_char_pos + indent_char_len + prefix_char_len,
+                                    *global_char_pos,
                                 )
                             } else {
                                 Self::apply_annotation_underlines_with_offset(
                                     content_rich_spans,
                                     &item_annotation_ranges,
                                     underline_color,
-                                    item_char_pos + indent_char_len + prefix_char_len,
+                                    item_char_pos,
                                 )
                             };
 
                             let lines_before = lines.len();
 
+                            let canon_offset = if list_path.is_empty() {
+                                Some(*global_char_pos)
+                            } else {
+                                Some(item_char_pos)
+                            };
                             self.render_text_spans(
                                 &styled_spans,
                                 Some(&prefix),
@@ -1962,12 +2005,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 indent,
                                 false,
                                 None,
+                                canon_offset,
                             );
 
                             first_block_line_count = lines.len() - lines_before;
 
-                            // Assign node_index to ALL list item lines for annotation support
-                            // Also update cumulative_char_pos based on raw_text (which includes prefix)
                             for line in lines[lines_before..].iter_mut() {
                                 line.line_type = LineType::ListItem {
                                     kind: kind.clone(),
@@ -1976,12 +2018,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     list_path: item_line_path.clone(),
                                 };
                                 line.node_index = node_index;
-                                let line_len = line.raw_text.chars().count();
-                                if !list_path.is_empty() {
-                                    item_char_pos += line_len;
-                                }
-                                *global_char_pos += line_len;
                             }
+                            if !list_path.is_empty() {
+                                item_char_pos += canonical_len;
+                            }
+                            *global_char_pos += canonical_len;
                         }
                         MarkdownBlock::List {
                             kind: nested_kind,
@@ -2022,29 +2063,33 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 } else {
                     match &block_node.block {
                         MarkdownBlock::Paragraph { content } => {
+                            let canonical_len = Self::text_to_string(content).chars().count();
                             let mut content_rich_spans = Vec::new();
                             for item in content.iter() {
                                 content_rich_spans
                                     .extend(self.render_text_or_inline(item, palette, is_focused));
                             }
-
-                            let indent_char_len = "  ".repeat(indent + 1).chars().count();
                             let (styled_spans, _) = if list_path.is_empty() {
                                 Self::apply_annotation_underlines_with_offset(
                                     content_rich_spans,
                                     &annotation_ranges,
                                     underline_color,
-                                    *global_char_pos + indent_char_len,
+                                    *global_char_pos,
                                 )
                             } else {
                                 Self::apply_annotation_underlines_with_offset(
                                     content_rich_spans,
                                     &item_annotation_ranges,
                                     underline_color,
-                                    item_char_pos + indent_char_len,
+                                    item_char_pos,
                                 )
                             };
 
+                            let canon_offset = if list_path.is_empty() {
+                                Some(*global_char_pos)
+                            } else {
+                                Some(item_char_pos)
+                            };
                             let lines_before = lines.len();
                             self.render_text_spans(
                                 &styled_spans,
@@ -2055,6 +2100,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 indent + 1,
                                 false,
                                 None,
+                                canon_offset,
                             );
 
                             for line in lines[lines_before..].iter_mut() {
@@ -2065,12 +2111,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     list_path: item_line_path.clone(),
                                 };
                                 line.node_index = node_index;
-                                let line_len = line.raw_text.chars().count();
-                                if !list_path.is_empty() {
-                                    item_char_pos += line_len;
-                                }
-                                *global_char_pos += line_len;
                             }
+                            if !list_path.is_empty() {
+                                item_char_pos += canonical_len;
+                            }
+                            *global_char_pos += canonical_len;
                         }
                         MarkdownBlock::List {
                             kind: nested_kind,
@@ -2238,6 +2283,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             };
 
             lines.push(rendered_line);
@@ -2291,6 +2338,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2465,6 +2514,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 MarkdownBlock::Paragraph {
                     content: para_content,
                 } => {
+                    let canonical_len = Self::text_to_string(para_content).chars().count();
                     let lines_before_para = lines.len();
                     let current_para_idx = quote_para_idx;
                     quote_para_idx += 1;
@@ -2500,35 +2550,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         })
                         .collect();
 
-                    // Apply annotation underlines with offset for "> " prefix
-                    let prefix = "> ";
-                    let prefix_char_len = prefix.chars().count();
                     let (underlined_spans, _) = Self::apply_annotation_underlines_with_offset(
                         styled_rich_spans,
                         &annotation_ranges,
                         underline_color,
-                        cumulative_char_pos + prefix_char_len,
+                        cumulative_char_pos,
                     );
 
                     self.render_text_spans(
                         &underlined_spans,
-                        Some(prefix),
+                        Some("> "),
                         lines,
                         total_height,
                         width,
                         indent,
                         false, // don't add empty line after
                         node_index,
+                        Some(cumulative_char_pos),
                     );
 
-                    // Update cumulative position and set line type for rendered lines
                     for line in lines[lines_before_para..].iter_mut() {
                         line.node_index = node_index;
                         line.line_type = LineType::QuoteParagraph {
                             paragraph_index: current_para_idx,
                         };
-                        cumulative_char_pos += line.raw_text.chars().count();
                     }
+                    cumulative_char_pos += canonical_len;
                 }
                 _ => {
                     let lines_before_block = lines.len();
@@ -2613,6 +2660,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
 
         self.raw_text_lines.push(hr_line);
@@ -2687,6 +2736,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             let lines_before_term = lines.len();
 
+            let canonical_len = Self::text_to_string(&item.term).chars().count();
+
             self.render_text_spans(
                 &final_term_spans,
                 None, // no prefix for terms
@@ -2696,17 +2747,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 0,     // no indentation for terms
                 false, // don't add empty line after
                 None,
+                Some(cumulative_char_pos),
             );
 
-            // Assign node_index, line_type, and update cumulative position for terms
             for line in lines[lines_before_term..].iter_mut() {
                 line.node_index = node_index;
                 line.line_type = LineType::DefinitionListItem {
                     item_index: idx,
                     is_term: true,
                 };
-                cumulative_char_pos += line.raw_text.chars().count();
             }
+            cumulative_char_pos += canonical_len;
 
             // Render each definition (dd) - as blocks with indentation
             for definition_blocks in &item.definitions {
@@ -2732,7 +2783,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             item_index: idx,
                             is_term: false,
                         };
-                        // Apply annotation underlines to the rendered spans
+                        // Align canonical_content_start with the underline coordinate space
+                        // (apply_underlines_to_line_spans counts all chars including indent)
+                        line.canonical_content_start =
+                            Some(cumulative_char_pos + line.content_column_start);
                         cumulative_char_pos = Self::apply_underlines_to_line_spans(
                             &mut line.spans,
                             &annotation_ranges,
@@ -2809,6 +2863,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
@@ -2891,6 +2947,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -2912,6 +2970,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         indent: usize,
         add_empty_line_after: bool,
         node_index: Option<usize>,
+        canonical_base_offset: Option<usize>,
     ) {
         let prefix_text = prefix.unwrap_or("");
         let prefix_width = prefix_text.chars().count();
@@ -2943,8 +3002,20 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Wrap the text
         let wrapped = textwrap::wrap(&plain_text, available_width);
 
+        let plain_chars: Vec<char> = plain_text.chars().collect();
+        let mut plain_idx: usize = 0;
+
         // Create lines from wrapped text
         for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
+            let wl_chars_count = wrapped_line.chars().count();
+
+            // Skip whitespace consumed by wrapping between lines
+            if line_idx > 0 {
+                while plain_idx < plain_chars.len() && plain_chars[plain_idx] == ' ' {
+                    plain_idx += 1;
+                }
+            }
+
             let mut line_spans = Vec::new();
             let mut line_links = Vec::new();
 
@@ -3016,6 +3087,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
             final_raw_text.push_str(wrapped_line.as_ref());
 
+            let content_col_start = indent_width_chars + prefix_width;
+
             lines.push(RenderedLine {
                 spans: line_spans,
                 raw_text: final_raw_text.clone(),
@@ -3025,10 +3098,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: canonical_base_offset.map(|base| base + plain_idx),
+                content_column_start: content_col_start,
             });
 
             self.raw_text_lines.push(final_raw_text);
             *total_height += 1;
+
+            plain_idx += wl_chars_count;
         }
 
         // Add empty line after if requested
@@ -3278,6 +3355,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync

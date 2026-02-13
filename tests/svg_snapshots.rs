@@ -10,6 +10,7 @@ use bookokrat::theme::set_theme_by_index;
 use bookokrat::{App, FocusedPanel, MainPanel};
 use chrono::{TimeZone, Utc};
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use ratatui::style::Modifier;
 use serial_test::{parallel, serial};
 use std::sync::Once;
 use tempfile::TempDir;
@@ -4548,5 +4549,235 @@ fn test_image_inside_anchor_link_svg() {
         std::path::Path::new("tests/snapshots/image_inside_anchor_link.svg"),
         "test_image_inside_anchor_link_svg",
         create_test_failure_handler("test_image_inside_anchor_link_svg"),
+    );
+}
+
+fn count_underlined_chars_in_needle(
+    lines: &[bookokrat::markdown_text_reader::RenderedLine],
+    needle: &str,
+) -> usize {
+    for line in lines {
+        if let Some(byte_idx) = line.raw_text.find(needle) {
+            let needle_start = line.raw_text[..byte_idx].chars().count();
+            let needle_end = needle_start + needle.chars().count();
+
+            let mut current_col = 0usize;
+            let mut underlined = 0usize;
+            for span in &line.spans {
+                let span_len = span.content.chars().count();
+                let span_start = current_col;
+                let span_end = span_start + span_len;
+                let overlap_start = span_start.max(needle_start);
+                let overlap_end = span_end.min(needle_end);
+                if overlap_start < overlap_end
+                    && span.style.add_modifier.contains(Modifier::UNDERLINED)
+                {
+                    underlined += overlap_end - overlap_start;
+                }
+                current_col = span_end;
+            }
+
+            return underlined;
+        }
+    }
+
+    panic!("could not find needle in rendered lines: {needle}");
+}
+
+#[test]
+#[parallel]
+fn test_visual_mode_comment_selection_includes_cursor_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(90, 18);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir
+        .path()
+        .join("visual_comment_cursor_inclusive_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Visual Comment Cursor Inclusive Test</title>
+</head>
+<body>
+    <p>alpha beta gamma</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('v'));
+    for _ in 0..4 {
+        app.press_key(crossterm::event::KeyCode::Char('l'));
+    }
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+    app.press_key(crossterm::event::KeyCode::Char('x'));
+    app.press_key(crossterm::event::KeyCode::Esc);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    let underlined_alpha = count_underlined_chars_in_needle(app.testing_rendered_lines(), "alpha");
+    assert_eq!(
+        underlined_alpha, 5,
+        "visual mode comment selection should include cursor character"
+    );
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_visual_mode_comment_selection_includes_cursor.svg",
+        &svg_output,
+    )
+    .unwrap();
+    assert!(
+        svg_output.contains("underline-rgb-C594C5") || svg_output.contains("underline"),
+        "expected underline styling to be present in SVG output"
+    );
+}
+
+#[test]
+#[parallel]
+fn test_list_comment_target_stable_in_zen_margin_svg() {
+    ensure_test_report_initialized();
+    // 80-col terminal → content area ~50 cols with sidebar → text wraps 4-6 times.
+    //
+    // The bug: word_range is computed from post-wrap cumulative line lengths,
+    // but annotation underlines are applied to pre-wrap spans (at offset 0).
+    // Each wrap point consumes one space that the post-wrap path doesn't count,
+    // so the underline drifts LEFT by (number of wrap points before the anchor).
+    //
+    // With ~5 wraps before each anchor the underline shifts ~5 chars left,
+    // clearly underlining the WRONG characters in the snapshot.
+    let mut terminal = create_test_terminal(80, 55);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("target_stability_test.html");
+    // Each block is ~250-300 chars with the anchor word near the END,
+    // maximizing accumulated drift from wrap-consumed whitespace.
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Target Stability</title></head>
+<body>
+    <p>The rendering engine processes text wrapping across varying terminal widths and viewport settings and when annotations are applied to selected word ranges within paragraph content the underline decorations must track the correct characters accurately through many line wrapping points to correctly highlight anchorpara at the end.</p>
+    <ul>
+        <li>Short first item</li>
+        <li>This second bullet item has enough body text flowing across several wrapped lines in the terminal display requiring accurate cumulative offset tracking through every wrap boundary to properly position annotation underlines on the intended characters reaching anchorbullet near the very end.</li>
+    </ul>
+    <blockquote>
+        <p>Short intro.</p>
+        <p>This longer quoted passage runs across many wrapped lines in the terminal output with the quote prefix reducing available text width and forcing earlier line breaks through the body text before finally reaching the target word anchorquote placed near the very end.</p>
+    </blockquote>
+    <dl>
+        <dt>Term Alpha</dt>
+        <dd>This definition body spans several wrapped lines with the indentation prefix reducing available text width and causing additional line breaks through the content body before finally arriving at the annotation target anchordef placed near the end of this definition text.</dd>
+    </dl>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    // Initial render to get line positions
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let needles = [
+        ("anchorpara", "paragraph"),
+        ("anchorbullet", "unordered list"),
+        ("anchorquote", "blockquote"),
+        ("anchordef", "definition list"),
+    ];
+
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "target_stability_test.html".to_string());
+    let base_time = Utc.with_ymd_and_hms(2024, 2, 13, 10, 40, 0).unwrap();
+
+    // Select each anchor word and create a comment from the selection.
+    // With old code the word_range drifts by the number of wrap points;
+    // with new canonical offsets the word_range is exact.
+    for (i, (needle, label)) in needles.iter().enumerate() {
+        let (sl, sc, el, ec) = {
+            let rendered_lines = app.testing_rendered_lines();
+            selection_for_text(rendered_lines, needle, needle.chars().count())
+        };
+        let target = app
+            .testing_comment_target_for_selection(sl, sc, el, ec)
+            .unwrap_or_else(|| panic!("missing {label} target"));
+
+        app.testing_add_comment(Comment {
+            id: format!("stability-{i}"),
+            chapter_href: chapter_href.clone(),
+            target,
+            content: format!("Comment on {needle}"),
+            updated_at: base_time,
+            quoted_text: None,
+        });
+    }
+
+    // Re-render with comments visible.
+    // With old code the underlines are shifted left by ~5 chars (wrong text underlined).
+    // With fixed code the underlines land exactly on the anchor words.
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_list_comment_target_stable_in_zen_margin.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/list_comment_target_stable_in_zen_margin.svg"),
+        "test_list_comment_target_stable_in_zen_margin_svg",
+        create_test_failure_handler("test_list_comment_target_stable_in_zen_margin_svg"),
     );
 }

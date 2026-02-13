@@ -126,7 +126,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 };
                 let end = SelectionPoint {
                     line: end_line,
-                    column: end_col.saturating_sub(1),
+                    column: end_col,
                 };
                 let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
                 if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
@@ -214,10 +214,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        let word_range = node_idx.and_then(|found_node_idx| {
-            self.compute_paragraph_word_range(found_node_idx, start, end)
-        });
-
         // Check if selection is within a list item and extract the item index + path
         let list_item_info = (start.line..=end.line).find_map(|idx| {
             self.rendered_content.lines.get(idx).and_then(|line| {
@@ -251,9 +247,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             })?;
 
             let list_word_range = if list_path.is_empty() {
-                word_range
+                self.compute_canonical_word_range(node_idx, start, end, |l| {
+                    matches!(
+                        &l.line_type,
+                        LineType::ListItem {
+                            list_path,
+                            item_index: li_idx,
+                            ..
+                        } if list_path.is_empty() && *li_idx == item_index
+                    )
+                })
             } else {
-                self.compute_list_item_word_range(node_idx, &list_path, start, end)
+                self.compute_canonical_word_range(node_idx, start, end, |l| {
+                    matches!(
+                        &l.line_type,
+                        LineType::ListItem {
+                            list_path: lp,
+                            ..
+                        } if lp.as_slice() == list_path.as_slice()
+                    )
+                })
             };
             if list_path.is_empty() {
                 return Some(CommentTarget::list_item(
@@ -286,6 +299,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         if let Some((item_index, is_term)) = definition_item_info {
             let node_idx = node_idx?;
+            let word_range = self.compute_canonical_word_range(node_idx, start, end, |l| {
+                matches!(
+                    &l.line_type,
+                    LineType::DefinitionListItem {
+                        item_index: di,
+                        is_term: it,
+                    } if *di == item_index && *it == is_term
+                )
+            });
             return Some(CommentTarget::definition_item(
                 node_idx, item_index, is_term, word_range,
             ));
@@ -304,6 +326,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         if let Some(paragraph_index) = quote_paragraph_info {
             let node_idx = node_idx?;
+            let word_range = self.compute_canonical_word_range(node_idx, start, end, |l| {
+                matches!(
+                    &l.line_type,
+                    LineType::QuoteParagraph {
+                        paragraph_index: pi,
+                    } if *pi == paragraph_index
+                )
+            });
             return Some(CommentTarget::quote_paragraph(
                 node_idx,
                 paragraph_index,
@@ -312,6 +342,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         let node_idx = node_idx?;
+        let word_range = self.compute_canonical_word_range(node_idx, start, end, |_| true);
         Some(CommentTarget::paragraph(node_idx, word_range))
     }
 
@@ -410,7 +441,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 };
                 let end = SelectionPoint {
                     line: end_line,
-                    column: end_col.saturating_sub(1),
+                    column: end_col,
                 };
                 if let Some(result) = self.find_comment_in_range(start_line, end_line, &start, &end)
                 {
@@ -455,7 +486,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 };
                 let end = SelectionPoint {
                     line: end_line,
-                    column: end_col.saturating_sub(1),
+                    column: end_col,
                 };
                 return self.find_comments_in_range(start_line, end_line, &start, &end);
             }
@@ -865,6 +896,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(comment_header);
         *total_height += 1;
@@ -892,6 +925,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                canonical_content_start: None,
+                content_column_start: 0,
             });
             self.raw_text_lines.push(quoted_line);
             *total_height += 1;
@@ -911,6 +946,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             node_index: None,
             code_line: None,
             inline_code_comments: Vec::new(),
+            canonical_content_start: None,
+            content_column_start: 0,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -959,103 +996,56 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or(0)
     }
 
-    fn compute_paragraph_word_range(
+    fn compute_canonical_word_range(
         &self,
         node_idx: usize,
         start: &SelectionPoint,
         end: &SelectionPoint,
+        line_filter: impl Fn(&RenderedLine) -> bool,
     ) -> Option<(usize, usize)> {
-        let mut offsets = Vec::new();
-        let mut cumulative = 0;
-
-        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
-            if line.node_index == Some(node_idx) {
-                let len = line.raw_text.chars().count();
-                offsets.push((idx, cumulative, len));
-                cumulative += len;
-            }
-        }
-
-        if offsets.is_empty() {
-            return None;
-        }
-
-        let total_len = cumulative;
-
-        let start_offset = offsets
+        let relevant: Vec<(usize, usize, usize)> = self
+            .rendered_content
+            .lines
             .iter()
-            .find(|(line_idx, _, _)| *line_idx == start.line)
-            .map(|(_, base, len)| base + start.column.min(*len))?;
+            .enumerate()
+            .filter(|(_, line)| line.node_index == Some(node_idx) && line_filter(line))
+            .filter_map(|(idx, line)| {
+                line.canonical_content_start
+                    .map(|cs| (idx, cs, line.content_column_start))
+            })
+            .collect();
 
-        let end_offset = offsets
-            .iter()
-            .find(|(line_idx, _, _)| *line_idx == end.line)
-            .map(|(_, base, len)| base + end.column.min(*len))
-            .unwrap_or(total_len);
-
-        if start_offset >= end_offset {
+        if relevant.is_empty() {
             return None;
         }
 
-        if start_offset == 0 && end_offset >= total_len {
+        let total_len = {
+            let (last_idx, last_cs, last_ccs) = relevant.last().unwrap();
+            let last_line = &self.rendered_content.lines[*last_idx];
+            let content_len = last_line.raw_text.chars().count().saturating_sub(*last_ccs);
+            last_cs + content_len
+        };
+
+        let map_point = |point: &SelectionPoint| -> Option<usize> {
+            relevant.iter().find(|(idx, _, _)| *idx == point.line).map(
+                |(idx, canon_start, col_start)| {
+                    let line = &self.rendered_content.lines[*idx];
+                    let content_len = line.raw_text.chars().count().saturating_sub(*col_start);
+                    let rel = point.column.saturating_sub(*col_start).min(content_len);
+                    canon_start + rel
+                },
+            )
+        };
+
+        let s = map_point(start)?;
+        let e = map_point(end).unwrap_or(total_len);
+        if s >= e {
             return None;
         }
-
-        Some((start_offset, end_offset.min(total_len)))
-    }
-
-    fn compute_list_item_word_range(
-        &self,
-        node_idx: usize,
-        list_path: &[usize],
-        start: &SelectionPoint,
-        end: &SelectionPoint,
-    ) -> Option<(usize, usize)> {
-        let mut offsets = Vec::new();
-        let mut cumulative = 0;
-
-        for (idx, line) in self.rendered_content.lines.iter().enumerate() {
-            if line.node_index == Some(node_idx) {
-                if let LineType::ListItem {
-                    list_path: line_path,
-                    ..
-                } = &line.line_type
-                {
-                    if line_path.as_slice() == list_path {
-                        let len = line.raw_text.chars().count();
-                        offsets.push((idx, cumulative, len));
-                        cumulative += len;
-                    }
-                }
-            }
-        }
-
-        if offsets.is_empty() {
+        if s == 0 && e >= total_len {
             return None;
         }
-
-        let total_len = cumulative;
-
-        let start_offset = offsets
-            .iter()
-            .find(|(line_idx, _, _)| *line_idx == start.line)
-            .map(|(_, base, len)| base + start.column.min(*len))?;
-
-        let end_offset = offsets
-            .iter()
-            .find(|(line_idx, _, _)| *line_idx == end.line)
-            .map(|(_, base, len)| base + end.column.min(*len))
-            .unwrap_or(total_len);
-
-        if start_offset >= end_offset {
-            return None;
-        }
-
-        if start_offset == 0 && end_offset >= total_len {
-            return None;
-        }
-
-        Some((start_offset, end_offset.min(total_len)))
+        Some((s, e.min(total_len)))
     }
 
     #[doc(hidden)]
