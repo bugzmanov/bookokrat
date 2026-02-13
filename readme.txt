@@ -90,6 +90,7 @@
 │  Ctrl+i        Jump forward in history                                      │
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
+│  i (PDF)       Toggle image inversion                                       │
 │  n             Toggle normal mode                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 

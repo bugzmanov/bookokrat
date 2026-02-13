@@ -850,7 +850,7 @@ impl App {
             DEFAULT_CACHE_SIZE
         };
         let doc_path = std::path::PathBuf::from(path);
-        let service = RenderService::with_config(
+        let mut service = RenderService::with_config(
             doc_path.clone(),
             cell_size,
             black,
@@ -861,7 +861,7 @@ impl App {
         );
 
         // Get document info
-        let doc_info = service.document_info();
+        let doc_info = service.document_info().cloned();
         let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
         let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
         let toc_entries = doc_info
@@ -895,6 +895,7 @@ impl App {
         }
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
         let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
+        let bookmark_invert = bookmark.and_then(|b| b.pdf_invert_images);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -942,6 +943,12 @@ impl App {
             book_comments,
             path.to_string(),
         );
+        if let Some(inverted) = bookmark_invert {
+            pdf_reader.invert_images = inverted;
+            if !inverted {
+                service.apply_command(crate::pdf::Command::ToggleInvertImages);
+            }
+        }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
             pdf_reader.kitty_delete_range_supported = supported;
         }
@@ -1328,6 +1335,7 @@ impl App {
                 Some(self.text_reader.get_current_node_index()),
                 Some(book.current_chapter()),
                 Some(book.total_chapters()),
+                None,
                 None,
                 None,
                 None,

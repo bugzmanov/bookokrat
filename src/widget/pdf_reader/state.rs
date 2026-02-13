@@ -266,6 +266,8 @@ pub struct PdfReaderState {
     pub toc_entries: Vec<TocEntry>,
     /// Whether comments are enabled
     pub comments_enabled: bool,
+    /// Whether PDF images are currently inverted
+    pub invert_images: bool,
     /// Whether reader is currently in zen mode
     pub zen_mode: bool,
     /// Whether terminal supports PDF comments (Kitty/iTerm2 protocols)
@@ -374,6 +376,7 @@ impl PdfReaderState {
             page_numbers: PageNumberTracker::new(),
             toc_entries: Vec::new(),
             comments_enabled,
+            invert_images: true,
             zen_mode: false,
             supports_comments,
             book_comments,

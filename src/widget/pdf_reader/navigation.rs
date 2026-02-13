@@ -4265,11 +4265,15 @@ impl PdfReaderState {
                 for rendered_info in &mut self.rendered {
                     rendered_info.img = None;
                 }
+                self.invert_images = !self.invert_images;
+                let mode = if self.invert_images { "ON" } else { "OFF" };
+                notifications.info(format!("Image inversion {mode}"));
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::ToggleInvertImages);
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::SelectionChanged(rects) => {
                 if !self.is_kitty {
@@ -4442,6 +4446,7 @@ pub(crate) fn save_pdf_bookmark(
         Some(page),
         zoom_factor,
         pan_position,
+        Some(pdf_reader.invert_images),
     );
 
     let now = std::time::Instant::now();
