@@ -2219,6 +2219,30 @@ impl App {
     }
 
     pub fn open_with_system_viewer(&mut self) {
+        #[cfg(feature = "pdf")]
+        if self.is_pdf_mode() {
+            if let Some(path) = self.pdf_document_path.as_ref() {
+                let path_str = path.to_string_lossy().to_string();
+                match self.system_command_executor.open_file(&path_str) {
+                    Ok(_) => {
+                        info!(
+                            "Successfully opened PDF with system viewer: {}",
+                            path.display()
+                        );
+                        self.show_info("Opened in external viewer");
+                    }
+                    Err(e) => {
+                        error!("Failed to open PDF with system viewer: {e}");
+                        self.show_error(format!("Failed to open in external viewer: {e}"));
+                    }
+                }
+            } else {
+                error!("No PDF file currently loaded");
+                self.show_error("No PDF file currently loaded");
+            }
+            return;
+        }
+
         if let Some(book) = &self.current_book {
             match self
                 .system_command_executor
@@ -5358,6 +5382,14 @@ where
                             {
                                 should_quit = true;
                             }
+                            continue;
+                        }
+
+                        if !app.pdf_text_input_active()
+                            && app.key_sequence.current_sequence() == " "
+                            && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('o'))
+                            && app.handle_global_hotkeys(*key)
+                        {
                             continue;
                         }
 
