@@ -4787,6 +4787,53 @@ fn test_list_comment_target_stable_in_zen_margin_svg() {
 /// leaking as plain 'l' into chapter navigation).
 #[test]
 #[parallel]
+fn test_help_popup_search_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Open help popup with '?'
+    app.press_key(crossterm::event::KeyCode::Char('?'));
+
+    // Start search with '/'
+    app.press_key(crossterm::event::KeyCode::Char('/'));
+
+    // Type "toggle"
+    for ch in "toggle".chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+
+    // Confirm search with Enter
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps);
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_help_popup_search.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output,
+        std::path::Path::new("tests/snapshots/help_popup_search.svg"),
+        "test_help_popup_search_svg",
+        create_test_failure_handler("test_help_popup_search_svg"),
+    );
+}
+
+#[test]
+#[parallel]
 fn test_ctrl_l_force_redraw_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(100, 30);
@@ -4811,9 +4858,7 @@ fn test_ctrl_l_force_redraw_svg() {
         .draw(|f| {
             let area = f.area();
             let garbage_lines: Vec<ratatui::text::Line> = (0..area.height)
-                .map(|_| {
-                    ratatui::text::Line::from("XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX")
-                })
+                .map(|_| ratatui::text::Line::from("XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX"))
                 .collect();
             let garbage = ratatui::widgets::Paragraph::new(garbage_lines);
             f.render_widget(garbage, area);
