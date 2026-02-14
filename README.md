@@ -148,6 +148,8 @@ Bookokrat follows Vim-style keybindings throughout the interface for consistent,
 - `Space+t` - Open theme selector
 - `Space+s` / `Ctrl+s` - Open settings (PDF support + render mode)
 - `+` / `-` - Increase/decrease content margins
+- `Ctrl+l` - Force full screen redraw
+- `Ctrl+q` - Suspend process (unix only, resume with `fg`)
 
 ### Navigation (Vim-style)
 - `j/k` - Move down/up (works in all lists and reader)

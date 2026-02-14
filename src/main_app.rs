@@ -149,6 +149,9 @@ pub struct App {
     zen_mode: bool,
     test_mode: bool,
     comments_dir: Option<PathBuf>,
+    pub pending_force_redraw: bool,
+    #[cfg(unix)]
+    pub pending_suspend: bool,
     // PDF support (feature-gated)
     #[cfg(feature = "pdf")]
     pdf_service: Option<RenderService>,
@@ -453,6 +456,9 @@ impl App {
             zen_mode: false,
             test_mode: false,
             comments_dir: comments_dir.map(|p| p.to_path_buf()),
+            pending_force_redraw: false,
+            #[cfg(unix)]
+            pending_suspend: false,
             #[cfg(feature = "pdf")]
             pdf_service: None,
             #[cfg(feature = "pdf")]
@@ -1211,6 +1217,34 @@ impl App {
             // Force a redraw to trigger re-render
             if let Some(reader) = self.pdf_reader.as_mut() {
                 reader.force_redraw();
+            }
+        }
+    }
+
+    /// Invalidate all Kitty images and re-enqueue them for conversion.
+    /// Used after `delete_all_images()` to rebuild terminal graphics state.
+    #[cfg(feature = "pdf")]
+    fn re_enqueue_pdf_images(&mut self) {
+        use crate::pdf::ConversionCommand;
+        use std::sync::Arc;
+
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+        let invalidated = pdf_reader.invalidate_kitty_images();
+        if invalidated.is_empty() {
+            return;
+        }
+        if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+            let _ = tx.send(ConversionCommand::DisplayFailed(invalidated.clone()));
+        }
+        if let (Some(service), Some(tx)) =
+            (self.pdf_service.as_ref(), self.pdf_conversion_tx.as_ref())
+        {
+            for &page in &invalidated {
+                if let Some(cached) = service.get_cached_page(page) {
+                    let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&cached)));
+                }
             }
         }
     }
@@ -3139,6 +3173,15 @@ impl App {
                 self.toggle_zen_mode();
                 true
             }
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_force_redraw = true;
+                true
+            }
+            #[cfg(unix)]
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_suspend = true;
+                true
+            }
             #[cfg(feature = "pdf")]
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_settings_popup();
@@ -4410,6 +4453,10 @@ impl App {
             }
         }
 
+        if self.handle_global_hotkeys(key) {
+            return None;
+        }
+
         match key.code {
             KeyCode::Char('/') => {
                 if self.is_main_panel(MainPanel::Content) {
@@ -5459,6 +5506,16 @@ where
                             continue;
                         }
 
+                        // Intercept Ctrl+l / Ctrl+q before PDF handler (which would
+                        // consume plain 'l' / 'q' as next-page / quit).
+                        if !app.pdf_text_input_active()
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('q'))
+                            && app.handle_global_hotkeys(*key)
+                        {
+                            continue;
+                        }
+
                         let result = app.handle_pdf_event(&event);
                         if result.action == Some(AppAction::Quit) {
                             should_quit = true;
@@ -5574,6 +5631,46 @@ where
         }
 
         let mut needs_redraw = events_processed > 0;
+
+        if app.pending_force_redraw {
+            app.pending_force_redraw = false;
+            #[cfg(feature = "pdf")]
+            {
+                let _ = crate::pdf::kittyv2::delete_all_images();
+                app.re_enqueue_pdf_images();
+            }
+            terminal.clear()?;
+            needs_redraw = true;
+        }
+
+        #[cfg(unix)]
+        if app.pending_suspend {
+            app.pending_suspend = false;
+            #[cfg(feature = "pdf")]
+            let _ = crate::pdf::kittyv2::delete_all_images();
+            crossterm::terminal::disable_raw_mode()?;
+            execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture,
+                crossterm::cursor::Show
+            )?;
+            // SIGTSTP suspends the process; execution resumes here after `fg`
+            unsafe {
+                libc::raise(libc::SIGTSTP);
+            }
+            execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture,
+                crossterm::cursor::Hide
+            )?;
+            crossterm::terminal::enable_raw_mode()?;
+            terminal.clear()?;
+            #[cfg(feature = "pdf")]
+            app.re_enqueue_pdf_images();
+            needs_redraw = true;
+        }
 
         if first_render {
             needs_redraw = true;

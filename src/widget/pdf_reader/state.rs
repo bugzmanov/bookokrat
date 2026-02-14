@@ -466,6 +466,22 @@ impl PdfReaderState {
         self.last_render.rect = Rect::default();
     }
 
+    /// Force redraw and invalidate all uploaded Kitty images so they get re-transmitted.
+    /// Call this after `delete_all_images()` or when terminal graphics state is lost.
+    /// Returns page indices that had uploaded images (need re-conversion).
+    pub fn invalidate_kitty_images(&mut self) -> Vec<usize> {
+        self.last_render.rect = Rect::default();
+        self.last_kitty_cache_window = None;
+        let mut invalidated = Vec::new();
+        for (i, info) in self.rendered.iter_mut().enumerate() {
+            if info.img.is_some() {
+                info.img = None;
+                invalidated.push(i);
+            }
+        }
+        invalidated
+    }
+
     pub fn bg_color(&self) -> Color {
         theme_background()
     }

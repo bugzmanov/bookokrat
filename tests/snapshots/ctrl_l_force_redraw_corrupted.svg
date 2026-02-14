@@ -1,0 +1,81 @@
+<svg width="860px" height="560px" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .fg { fill: #AAAAAA }
+    .bg { background: #000000 }
+    .container {
+      padding: 0 10px;
+      line-height: 18px;
+    }
+    tspan {
+      font: 14px SFMono-Regular, Consolas, Liberation Mono, Menlo, monospace;
+      white-space: pre;
+      line-height: 18px;
+    }
+  </style>
+
+  <rect width="100%" height="100%" y="0" rx="4.5" class="bg" />
+
+  <text xml:space="preserve" class="container fg">
+    <tspan x="10px" y="28px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="46px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="64px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="82px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="100px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="118px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="136px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="154px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="172px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="190px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="208px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="226px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="244px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="262px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="280px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="298px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="316px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="334px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="352px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="370px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="388px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="406px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="424px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="442px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="460px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="478px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="496px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="514px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="532px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+    <tspan x="10px" y="550px"><tspan>XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX                                                       </tspan>
+</tspan>
+  </text>
+
+</svg>

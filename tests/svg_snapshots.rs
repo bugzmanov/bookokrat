@@ -4781,3 +4781,94 @@ fn test_list_comment_target_stable_in_zen_margin_svg() {
         create_test_failure_handler("test_list_comment_target_stable_in_zen_margin_svg"),
     );
 }
+
+/// Test that Ctrl+l (force redraw) recovers a clean screen after corruption
+/// and does NOT navigate to the next chapter (regression test for Ctrl+l
+/// leaking as plain 'l' into chapter navigation).
+#[test]
+#[parallel]
+fn test_ctrl_l_force_redraw_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    // Navigate to chapter 2 so we can verify Ctrl+l doesn't advance to chapter 3
+    app.press_key(crossterm::event::KeyCode::Char('l'));
+
+    // Draw the clean state
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps);
+        })
+        .unwrap();
+
+    // Corrupt the display by rendering garbage over it
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let garbage_lines: Vec<ratatui::text::Line> = (0..area.height)
+                .map(|_| {
+                    ratatui::text::Line::from("XXXXXXXXX CORRUPTED GARBAGE DISPLAY XXXXXXXXX")
+                })
+                .collect();
+            let garbage = ratatui::widgets::Paragraph::new(garbage_lines);
+            f.render_widget(garbage, area);
+        })
+        .unwrap();
+
+    // Snapshot the corrupted state to prove corruption happened
+    let corrupted_svg = terminal_to_svg(&terminal);
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_ctrl_l_force_redraw_corrupted.svg",
+        &corrupted_svg,
+    )
+    .unwrap();
+    assert_svg_snapshot(
+        corrupted_svg,
+        std::path::Path::new("tests/snapshots/ctrl_l_force_redraw_corrupted.svg"),
+        "test_ctrl_l_force_redraw_svg_corrupted",
+        create_test_failure_handler("test_ctrl_l_force_redraw_svg_corrupted"),
+    );
+
+    // Press Ctrl+l — should set pending_force_redraw, NOT navigate chapters
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('l'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    assert!(
+        app.pending_force_redraw,
+        "Ctrl+l should set pending_force_redraw"
+    );
+
+    // Simulate what the event loop does: clear terminal then redraw
+    app.pending_force_redraw = false;
+    terminal.clear().unwrap();
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps);
+        })
+        .unwrap();
+    let recovered_svg = terminal_to_svg(&terminal);
+
+    std::fs::write(
+        "tests/snapshots/debug_ctrl_l_force_redraw_recovered.svg",
+        &recovered_svg,
+    )
+    .unwrap();
+
+    // The recovered state should show clean chapter 2 content,
+    // NOT chapter 3 (which would mean Ctrl+l leaked as plain 'l').
+    assert_svg_snapshot(
+        recovered_svg,
+        std::path::Path::new("tests/snapshots/ctrl_l_force_redraw_recovered.svg"),
+        "test_ctrl_l_force_redraw_svg_recovered",
+        create_test_failure_handler("test_ctrl_l_force_redraw_svg_recovered"),
+    );
+}

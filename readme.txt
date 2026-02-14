@@ -62,6 +62,8 @@
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
 │  Space+a       Open comments/annotations viewer                             │
+│  Ctrl+l        Force full screen redraw                                     │
+│  Ctrl+q        Suspend process (unix only, resume with fg)                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
