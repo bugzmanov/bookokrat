@@ -82,6 +82,8 @@ pub struct CommentInputState {
     pub quoted_text: Option<String>,
     /// Read-only preview mode used for comment navigation.
     pub read_only: bool,
+    /// Screen-space cursor position (col, row) computed during rendering.
+    pub computed_cursor_pos: Option<(u16, u16)>,
 }
 
 /// A search match on the current page
@@ -159,6 +161,7 @@ impl CommentInputState {
         self.target = None;
         self.quoted_text = None;
         self.read_only = false;
+        self.computed_cursor_pos = None;
     }
 
     pub fn is_active(&self) -> bool {

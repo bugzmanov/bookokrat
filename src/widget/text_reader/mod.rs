@@ -902,15 +902,17 @@ impl MarkdownTextReader {
                         .fg(palette.base_00)
                         .bg(palette.base_05),
                 );
+                textarea.set_cursor_line_style(RatatuiStyle::default());
 
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Add Note ")
-                    .style(
-                        RatatuiStyle::default()
-                            .fg(palette.base_04)
-                            .bg(theme_background()),
-                    );
+                let title = match self.comment_input.edit_mode {
+                    Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
+                    _ => "Add Comment (Esc to save)",
+                };
+                let block = Block::default().borders(Borders::ALL).title(title).style(
+                    RatatuiStyle::default()
+                        .fg(palette.base_04)
+                        .bg(theme_background()),
+                );
                 textarea.set_block(block);
 
                 frame.render_widget(&*textarea, padded_rect);
