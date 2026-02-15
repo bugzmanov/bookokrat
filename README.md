@@ -4,7 +4,7 @@ Bookokrat is a terminal-based EPUB and PDF reader with a split-view library and 
 
 ## Demo
 
-![CleanShot 2025-10-28 at 16 28 21](https://github.com/user-attachments/assets/a45d2e6a-4d2b-4f70-a77f-ed2f7cabc8d8)
+https://github.com/user-attachments/assets/0ebe61c6-4629-4bde-8bd4-50feb9a424a3
 
 
 ## What You Can Do
