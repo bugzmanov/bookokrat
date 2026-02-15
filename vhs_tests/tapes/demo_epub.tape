@@ -12,6 +12,14 @@ wait 1500
 key S
 wait 800
 
+# ── Search for book (don't open yet) ───────────────────────
+key /
+wait 500
+type AI Eng
+wait 500
+return
+wait 200
+
 # ── Help popup ─────────────────────────────────────────────
 key ?
 wait 10000
@@ -20,15 +28,7 @@ wait 10000
 escape
 wait 500
 
-# ── Search for book and open ───────────────────────────────
-key /
-wait 500
-type AI Eng
-wait 500
-
-# Confirm search, then open the book
-return
-wait 200
+# Open the book
 return
 wait 1200
 
