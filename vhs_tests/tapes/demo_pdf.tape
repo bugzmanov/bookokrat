@@ -24,6 +24,17 @@ wait 2000
 key i
 wait 500
 
+# ── Enable scroll mode via settings ──────────────────────
+ctrl s
+wait 400
+# Navigate to Scroll option (index 3, 3 down from default)
+repeat_key j 3 0.15
+wait 200
+return
+wait 200
+escape
+wait 600
+
 # ── Jump to PDF page 1 ──────────────────────────────────
 key space
 wait 150
@@ -35,18 +46,13 @@ wait 200
 type 1
 wait 200
 return
-wait 10000
+wait 1000
 
-# ── Enable scroll mode via settings ──────────────────────
-ctrl s
-wait 400
-# Navigate to Scroll option (index 3, 3 down from default)
-repeat_key j 3 0.15
-wait 200
-return
-wait 200
+# ── Open help popup briefly ─────────────────────────────
+key ?
+wait 10000
 escape
-wait 600
+wait 300
 
 # ── Quick scroll with j (30x) ───────────────────────────
 repeat_key j 30 0.06
@@ -88,8 +94,8 @@ wait 300
 key -
 wait 800
 
-# ── Scroll down: 10x ctrl+d ─────────────────────────────
-repeat_ctrl d 10 0.2
+# ── Scroll down: 15x ctrl+d ─────────────────────────────
+repeat_ctrl d 15 0.2
 wait 800
 
 # ── Normal mode: select & comment ────────────────────────

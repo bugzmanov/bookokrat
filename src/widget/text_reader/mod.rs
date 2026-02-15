@@ -499,12 +499,12 @@ impl MarkdownTextReader {
             let border_style = RatatuiStyle::default().fg(border_color);
             let mode_style = RatatuiStyle::default()
                 .fg(palette.base_07)
-                .bg(palette.base_0a)
+                .bg(palette.base_03)
                 .add_modifier(Modifier::BOLD);
             Some(
                 Line::from(vec![
                     Span::styled(line::HORIZONTAL, border_style),
-                    Span::styled(" Comment ", mode_style),
+                    Span::styled(" COMMENT ", mode_style),
                 ])
                 .left_aligned(),
             )

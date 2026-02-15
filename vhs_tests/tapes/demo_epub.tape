@@ -32,26 +32,32 @@ wait 200
 return
 wait 1200
 
-# ── Navigate to Chapter 3 via TOC ─────────────────────────
+# ── Navigate to "Exact Evaluation" -> "Introduction to Embeddings" ──
 # Tab to TOC panel
 tab
-wait 200
+wait 100
 
-# Navigate down to Ch3 (← Books List → Preface → Ch1 → Ch2 → Ch3)
+# Navigate down to "Exact Evaluation" (← Books List → Preface → Ch1 → Ch2 → Ch3)
 repeat_key j 4 0.15
-wait 200
+wait 100
 
-# Expand Chapter 3 subtree
+# Expand "Exact Evaluation" subtree
 key l
-wait 300
+wait 100
 
-# Open Chapter 3
+# Move within Chapter 3 subtree: 3j, l, 3j, enter
+repeat_key j 3 0.15
+wait 100
+key l
+wait 100
+repeat_key j 3 0.15
+wait 200
 return
 wait 800
 
-# Quick scroll with j (40x, 60ms between each in single osascript)
-repeat_key j 40 0.06
-wait 300
+# Quick scroll with j (60x, 60ms between each in single osascript)
+repeat_key j 60 0.06
+wait 800
 
 # ── Scroll down: 19x ctrl+d (single osascript, 100ms between each) ──
 repeat_ctrl d 19 0.2
@@ -79,17 +85,17 @@ wait 500
 repeat_key - 10 0.05
 wait 100
 
-# Scroll a bit in zen mode (3x ctrl+d, single osascript)
-repeat_ctrl d 3 0.2
+# Scroll a bit in zen mode (5x ctrl+d, single osascript)
+repeat_ctrl d 5 0.2
 wait 800
-
-# Reduce margins back: 10x = (50ms between each)
-repeat_key = 10 0.05
-wait 100
 
 # Exit zen mode
 ctrl z
 wait 600
+
+# Reduce margins back: 10x = (50ms between each)
+repeat_key = 10 0.05
+wait 100
 
 # ── Search for "LLM" in reader ────────────────────────────
 key /
@@ -127,7 +133,7 @@ wait 300
 # Add comment
 key a
 wait 400
-type THIS IS A COMMENT
+type Demo: this is a comment!
 wait 800
 
 # Save comment (Esc saves textarea)
