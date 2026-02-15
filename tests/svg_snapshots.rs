@@ -4818,11 +4818,7 @@ fn test_help_popup_search_svg() {
     let svg_output = terminal_to_svg(&terminal);
 
     std::fs::create_dir_all("tests/snapshots").unwrap();
-    std::fs::write(
-        "tests/snapshots/debug_help_popup_search.svg",
-        &svg_output,
-    )
-    .unwrap();
+    std::fs::write("tests/snapshots/debug_help_popup_search.svg", &svg_output).unwrap();
 
     assert_svg_snapshot(
         svg_output,

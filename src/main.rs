@@ -6,7 +6,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use log::{error, info};
+use log::{error, info, warn};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
@@ -15,6 +15,7 @@ use simplelog::{LevelFilter, WriteLogger};
 use bookokrat::event_source::KeyboardEventSource;
 #[cfg(feature = "pdf")]
 use bookokrat::inputs::UnifiedEventSource;
+use bookokrat::library;
 use bookokrat::main_app::{App, run_app_with_event_source};
 #[cfg(feature = "pdf")]
 use bookokrat::main_app::{
@@ -76,15 +77,44 @@ fn main() -> Result<()> {
 
     let args = parse_args()?;
 
+    // Resolve library directory from file argument or CWD
+    let library_dir = args
+        .file_path
+        .as_deref()
+        .and_then(|p| Path::new(p).parent())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    let lib_paths = library::resolve_library_paths(&library_dir);
+    let log_path = library::resolve_log_path();
+
+    // Run migration before logging is initialized (prints to stdout)
+    if !args.test_mode {
+        if let Ok(ref paths) = lib_paths {
+            if let Err(e) = library::migrate_if_needed(&library_dir, paths) {
+                eprintln!("Warning: migration failed: {e}");
+            }
+        }
+    }
+
     // Initialize logging with html5ever DEBUG logs filtered out
+    let log_file = match log_path {
+        Ok(ref p) => File::create(p)?,
+        Err(_) => File::create("bookokrat.log")?,
+    };
     WriteLogger::init(
         LevelFilter::Debug,
         simplelog::ConfigBuilder::new()
             .set_max_level(LevelFilter::Debug)
             .add_filter_ignore_str("html5ever")
             .build(),
-        File::create("bookokrat.log")?,
+        log_file,
     )?;
+
+    if let Err(ref e) = lib_paths {
+        warn!("Failed to resolve XDG library paths, falling back to CWD: {e}");
+    }
 
     // Validate file argument before entering TUI
     if let Some(ref path) = args.file_path {
@@ -156,10 +186,15 @@ fn main() -> Result<()> {
         });
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent = args.file_path.is_none() && !args.test_mode;
-    let bookmark_file = if args.test_mode {
-        None
+    let (bookmark_file, comments_dir) = if args.test_mode {
+        (None, None)
+    } else if let Ok(ref paths) = lib_paths {
+        (
+            Some(paths.bookmarks_file.to_string_lossy().into_owned()),
+            Some(paths.comments_dir.clone()),
+        )
     } else {
-        Some("bookmarks.json")
+        (Some("bookmarks.json".to_string()), None)
     };
     // Show loading indicator so the user knows the app isn't stuck
     // (Calibre library scans can take a few seconds)
@@ -175,9 +210,17 @@ fn main() -> Result<()> {
         );
     })?;
 
-    let mut app = App::new_with_config(book_directory, bookmark_file, auto_load_recent, None);
+    let mut app = App::new_with_config(
+        book_directory,
+        bookmark_file.as_deref(),
+        auto_load_recent,
+        comments_dir.as_deref(),
+    );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
+    if let Ok(ref paths) = lib_paths {
+        app.set_image_cache_dir(paths.image_cache_dir.clone());
+    }
     if let Some(path) = args.file_path.as_deref() {
         if let Err(err) = app.open_book_for_reading_by_path(path) {
             error!("Failed to open requested book: {err}");

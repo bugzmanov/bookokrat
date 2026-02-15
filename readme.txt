@@ -243,7 +243,8 @@ Review and manage notes efficiently:
   ▸ Enter or double-click jumps from a comment back into the reader
   ▸ dd deletes the highlighted comment directly from the viewer
 
-Comments are saved per-book and persist across sessions.
+Comments are saved per-book in your XDG data directory and persist across
+sessions. Your working directory stays clean.
 PDF annotations require a graphics-capable terminal.
 
 ===============================================================================
@@ -288,6 +289,24 @@ PDF annotations require a graphics-capable terminal.
 ===============================================================================
 
                                CUSTOMIZATION
+
+  [DATA STORAGE]
+    Bookokrat stores all application data in XDG-compliant directories,
+    keeping your working directories clean. Each directory where you run
+    bookokrat is treated as an isolated library:
+
+      • Bookmarks    <data_dir>/bookokrat/libraries/<library>/bookmarks.json
+      • Comments     <data_dir>/bookokrat/libraries/<library>/comments/
+      • Image cache  <cache_dir>/bookokrat/libraries/<library>/temp_images/
+      • Log file     <state_dir>/bookokrat/bookokrat.log
+
+    Typical <data_dir> paths:
+      • macOS:  ~/Library/Application Support
+      • Linux:  ~/.local/share
+
+    If old files (bookmarks.json, .bookokrat_comments/, temp_images/) are
+    found in your working directory, they are automatically migrated to
+    the new locations on startup.
 
   [SETTINGS FILE]
     Bookokrat saves your preferences to ~/.bookokrat_settings.yaml:

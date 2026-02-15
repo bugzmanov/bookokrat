@@ -3146,6 +3146,18 @@ impl App {
         self.test_mode = enabled;
     }
 
+    pub fn set_image_cache_dir(&mut self, dir: std::path::PathBuf) {
+        match ImageStorage::new(dir) {
+            Ok(storage) => {
+                let storage = Arc::new(storage);
+                self.book_images = BookImages::new(storage);
+            }
+            Err(e) => {
+                error!("Failed to set image cache dir: {e}");
+            }
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {

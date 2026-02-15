@@ -884,9 +884,11 @@ impl BookComments {
         let comments_dir = if let Ok(custom_dir) = std::env::var("BOOKOKRAT_COMMENTS_DIR") {
             PathBuf::from(custom_dir)
         } else {
-            std::env::current_dir()
-                .context("Could not determine current directory")?
-                .join(".bookokrat_comments")
+            let cwd = std::env::current_dir().context("Could not determine current directory")?;
+            match crate::library::resolve_library_paths(&cwd) {
+                Ok(paths) => paths.comments_dir,
+                Err(_) => cwd.join(".bookokrat_comments"),
+            }
         };
 
         if !comments_dir.exists() {

@@ -229,13 +229,31 @@ Bookokrat automatically selects the best image protocol for your terminal:
 
 **PDF viewing requires a graphics-capable terminal.** For the best PDF experience, **Kitty or Ghostty are strongly recommended**—they support SHM-based image transfer for smooth 60fps rendering. WezTerm and iTerm2 work but with reduced performance and some feature limitations. Use the settings popup (`Space+s` or `Ctrl+s`) to disable PDF mode if your terminal does not support graphics.
 
-If images look wrong, check `bookokrat.log` for the detected protocol. Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
+If images look wrong, check the log file for the detected protocol (see [Data Storage](#data-storage) for the log location). Experiencing issues not covered above? Just [open an issue](https://github.com/bugzmanov/bookokrat/issues) — happy to help!
 
 ## Mouse Support
 - Scroll with the wheel over either pane; Bookokrat batches rapid wheel events for smooth scrolling.
 - Single-click focuses a pane; double-click in the library opens the selection; double-click in the reader selects a word; triple-click selects the paragraph.
 - Click-and-drag to highlight text; release on a hyperlink to open it; drag past the viewport edges to auto-scroll.
 - Click images to open the zoom popup; click again or press any key to close; clicking history or stats entries activates them immediately.
+
+## Data Storage
+
+Bookokrat keeps your working directories clean by storing all application data in [XDG-compliant](https://specifications.freedesktop.org/basedir-spec/latest/) locations. Each directory where you run bookokrat is treated as an isolated **library**.
+
+| Data | Location |
+|------|----------|
+| Bookmarks | `<data_dir>/bookokrat/libraries/<library>/bookmarks.json` |
+| Comments | `<data_dir>/bookokrat/libraries/<library>/comments/` |
+| Image cache | `<cache_dir>/bookokrat/libraries/<library>/temp_images/` |
+| Log file | `<state_dir>/bookokrat/bookokrat.log` |
+| Settings | `~/.bookokrat_settings.yaml` (unchanged) |
+
+Typical platform paths for `<data_dir>`:
+- **macOS**: `~/Library/Application Support`
+- **Linux**: `~/.local/share`
+
+**Migration from older versions:** If bookokrat finds `bookmarks.json`, `.bookokrat_comments/`, or `temp_images/` in your working directory, it automatically moves them to the new XDG locations on startup and prints progress to the terminal.
 
 ## Attribution
 
