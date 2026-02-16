@@ -35,21 +35,21 @@ wait 1200
 # ── Navigate to "Exact Evaluation" -> "Introduction to Embeddings" ──
 # Tab to TOC panel
 tab
-wait 100
+wait 50
 
 # Navigate down to "Exact Evaluation" (← Books List → Preface → Ch1 → Ch2 → Ch3)
 repeat_key j 4 0.15
-wait 100
+wait 50
 
 # Expand "Exact Evaluation" subtree
 key l
-wait 100
+wait 50
 
 # Move within Chapter 3 subtree: 3j, l, 3j, enter
 repeat_key j 3 0.15
-wait 100
+wait 50
 key l
-wait 100
+wait 50
 repeat_key j 3 0.15
 wait 200
 return
@@ -65,17 +65,17 @@ wait 800
 
 # ── Change theme to Catppuccin Mocha ──────────────────────
 key space
-wait 150
+wait 80
 key t
-wait 400
+wait 150
 
 # Catppuccin Mocha is 1 down from Oceanic Next
 key j
-wait 200
+wait 120
 return
-wait 200
+wait 100
 escape
-wait 600
+wait 250
 
 # ── Zen mode + margins ────────────────────────────────────
 ctrl z
@@ -106,10 +106,6 @@ return
 wait 400
 
 # Jump through matches
-key n
-wait 400
-key n
-wait 400
 key n
 wait 800
 
