@@ -295,6 +295,22 @@ impl NavigationPanel {
                 self.handle_ctrl_u();
                 None
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_b();
+                None
+            }
+            KeyCode::PageDown => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::PageUp => {
+                self.handle_ctrl_b();
+                None
+            }
             KeyCode::Char('n') if self.is_searching() => {
                 let search_state = self.get_search_state();
                 if search_state.mode == SearchMode::NavigationMode {
@@ -375,14 +391,42 @@ impl VimNavMotions for NavigationPanel {
         // Page up - move selection up by half page
         match self.mode {
             NavigationMode::BookSelection => {
-                // Move up by multiple items (e.g., 10 items or half visible page)
                 for _ in 0..10 {
                     self.book_list.move_selection_up();
                 }
             }
             NavigationMode::TableOfContents => {
-                // Move up by multiple items in TOC
                 for _ in 0..10 {
+                    self.table_of_contents.move_selection_up();
+                }
+            }
+        }
+    }
+
+    fn handle_ctrl_f(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => {
+                for _ in 0..20 {
+                    self.book_list.move_selection_down();
+                }
+            }
+            NavigationMode::TableOfContents => {
+                for _ in 0..20 {
+                    self.table_of_contents.move_selection_down();
+                }
+            }
+        }
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        match self.mode {
+            NavigationMode::BookSelection => {
+                for _ in 0..20 {
+                    self.book_list.move_selection_up();
+                }
+            }
+            NavigationMode::TableOfContents => {
+                for _ in 0..20 {
                     self.table_of_contents.move_selection_up();
                 }
             }

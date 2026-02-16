@@ -149,6 +149,9 @@ pub struct App {
     zen_mode: bool,
     test_mode: bool,
     comments_dir: Option<PathBuf>,
+    pub pending_force_redraw: bool,
+    #[cfg(unix)]
+    pub pending_suspend: bool,
     // PDF support (feature-gated)
     #[cfg(feature = "pdf")]
     pdf_service: Option<RenderService>,
@@ -208,6 +211,8 @@ pub trait VimNavMotions {
     fn handle_l(&mut self);
     fn handle_ctrl_d(&mut self);
     fn handle_ctrl_u(&mut self);
+    fn handle_ctrl_f(&mut self);
+    fn handle_ctrl_b(&mut self);
     fn handle_gg(&mut self);
     fn handle_upper_g(&mut self);
 }
@@ -451,6 +456,9 @@ impl App {
             zen_mode: false,
             test_mode: false,
             comments_dir: comments_dir.map(|p| p.to_path_buf()),
+            pending_force_redraw: false,
+            #[cfg(unix)]
+            pending_suspend: false,
             #[cfg(feature = "pdf")]
             pdf_service: None,
             #[cfg(feature = "pdf")]
@@ -1213,6 +1221,34 @@ impl App {
         }
     }
 
+    /// Invalidate all Kitty images and re-enqueue them for conversion.
+    /// Used after `delete_all_images()` to rebuild terminal graphics state.
+    #[cfg(feature = "pdf")]
+    fn re_enqueue_pdf_images(&mut self) {
+        use crate::pdf::ConversionCommand;
+        use std::sync::Arc;
+
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+        let invalidated = pdf_reader.invalidate_kitty_images();
+        if invalidated.is_empty() {
+            return;
+        }
+        if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+            let _ = tx.send(ConversionCommand::DisplayFailed(invalidated.clone()));
+        }
+        if let (Some(service), Some(tx)) =
+            (self.pdf_service.as_ref(), self.pdf_conversion_tx.as_ref())
+        {
+            for &page in &invalidated {
+                if let Some(cached) = service.get_cached_page(page) {
+                    let _ = tx.send(ConversionCommand::EnqueuePage(Arc::clone(&cached)));
+                }
+            }
+        }
+    }
+
     /// Get the href/path for a chapter at a specific index using the EPUB spine
     fn get_chapter_href(
         doc: &EpubDoc<BufReader<std::fs::File>>,
@@ -1403,7 +1439,19 @@ impl App {
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state(); // This will update active section
+        self.update_toc_state();
+    }
+
+    fn scroll_full_screen_down(&mut self, screen_height: usize) {
+        self.text_reader.scroll_full_screen_down(screen_height);
+        self.save_bookmark();
+        self.update_toc_state();
+    }
+
+    fn scroll_full_screen_up(&mut self, screen_height: usize) {
+        self.text_reader.scroll_full_screen_up(screen_height);
+        self.save_bookmark();
+        self.update_toc_state();
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -1825,6 +1873,16 @@ impl App {
     }
 
     fn handle_link_click(&mut self, link_info: &LinkInfo) -> std::io::Result<bool> {
+        if self.text_reader.is_embedded_image(&link_info.url)
+            || self
+                .book_images
+                .get_image_size_with_context(&link_info.url, None)
+                .is_some()
+        {
+            self.handle_image_click(&link_info.url, self.terminal_size);
+            return Ok(true);
+        }
+
         if link_info.link_type != crate::markdown::LinkType::External
             && let Some(book) = &self.current_book
         {
@@ -3088,6 +3146,18 @@ impl App {
         self.test_mode = enabled;
     }
 
+    pub fn set_image_cache_dir(&mut self, dir: std::path::PathBuf) {
+        match ImageStorage::new(dir) {
+            Ok(storage) => {
+                let storage = Arc::new(storage);
+                self.book_images = BookImages::new(storage);
+            }
+            Err(e) => {
+                error!("Failed to set image cache dir: {e}");
+            }
+        }
+    }
+
     /// Check if a key is a global hotkey that should work regardless of focus
     /// Returns true if the key was handled as a global hotkey
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
@@ -3113,6 +3183,15 @@ impl App {
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_zen_mode();
+                true
+            }
+            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_force_redraw = true;
+                true
+            }
+            #[cfg(unix)]
+            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.pending_suspend = true;
                 true
             }
             #[cfg(feature = "pdf")]
@@ -3519,6 +3598,13 @@ impl App {
                 }
                 true
             }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_up(h);
+                }
+                true
+            }
             KeyCode::Char('b') | KeyCode::Char('B') => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
@@ -3580,6 +3666,27 @@ impl App {
                 self.text_reader.clear_count();
                 if let Some(h) = screen_height {
                     self.text_reader.normal_mode_half_page_up(h);
+                }
+                true
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_down(h);
+                }
+                true
+            }
+            KeyCode::PageDown => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_down(h);
+                }
+                true
+            }
+            KeyCode::PageUp => {
+                self.text_reader.clear_count();
+                if let Some(h) = screen_height {
+                    self.text_reader.normal_mode_full_page_up(h);
                 }
                 true
             }
@@ -4358,6 +4465,10 @@ impl App {
             }
         }
 
+        if self.handle_global_hotkeys(key) {
+            return None;
+        }
+
         match key.code {
             KeyCode::Char('/') => {
                 if self.is_main_panel(MainPanel::Content) {
@@ -4397,6 +4508,11 @@ impl App {
             KeyCode::Char('n') if !self.is_in_search_mode() => {
                 if self.is_main_panel(MainPanel::Content) {
                     self.text_reader.toggle_normal_mode();
+                }
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_down(visible_height);
                 }
             }
             KeyCode::Char('f') => if self.handle_key_sequence('f') {},
@@ -4476,6 +4592,16 @@ impl App {
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(visible_height) = screen_height {
                     self.scroll_half_screen_up(visible_height);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_down(visible_height);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_up(visible_height);
                 }
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -5392,6 +5518,16 @@ where
                             continue;
                         }
 
+                        // Intercept Ctrl+l / Ctrl+q before PDF handler (which would
+                        // consume plain 'l' / 'q' as next-page / quit).
+                        if !app.pdf_text_input_active()
+                            && key.modifiers.contains(KeyModifiers::CONTROL)
+                            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('q'))
+                            && app.handle_global_hotkeys(*key)
+                        {
+                            continue;
+                        }
+
                         let result = app.handle_pdf_event(&event);
                         if result.action == Some(AppAction::Quit) {
                             should_quit = true;
@@ -5507,6 +5643,46 @@ where
         }
 
         let mut needs_redraw = events_processed > 0;
+
+        if app.pending_force_redraw {
+            app.pending_force_redraw = false;
+            #[cfg(feature = "pdf")]
+            {
+                let _ = crate::pdf::kittyv2::delete_all_images();
+                app.re_enqueue_pdf_images();
+            }
+            terminal.clear()?;
+            needs_redraw = true;
+        }
+
+        #[cfg(unix)]
+        if app.pending_suspend {
+            app.pending_suspend = false;
+            #[cfg(feature = "pdf")]
+            let _ = crate::pdf::kittyv2::delete_all_images();
+            crossterm::terminal::disable_raw_mode()?;
+            execute!(
+                std::io::stdout(),
+                crossterm::terminal::LeaveAlternateScreen,
+                crossterm::event::DisableMouseCapture,
+                crossterm::cursor::Show
+            )?;
+            // SIGTSTP suspends the process; execution resumes here after `fg`
+            unsafe {
+                libc::raise(libc::SIGTSTP);
+            }
+            execute!(
+                std::io::stdout(),
+                crossterm::terminal::EnterAlternateScreen,
+                crossterm::event::EnableMouseCapture,
+                crossterm::cursor::Hide
+            )?;
+            crossterm::terminal::enable_raw_mode()?;
+            terminal.clear()?;
+            #[cfg(feature = "pdf")]
+            app.re_enqueue_pdf_images();
+            needs_redraw = true;
+        }
 
         if first_render {
             needs_redraw = true;

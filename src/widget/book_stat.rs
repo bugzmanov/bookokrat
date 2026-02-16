@@ -598,6 +598,22 @@ impl BookStat {
                 self.handle_ctrl_u();
                 None
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_b();
+                None
+            }
+            KeyCode::PageDown => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::PageUp => {
+                self.handle_ctrl_b();
+                None
+            }
             KeyCode::Esc => Some(BookStatAction::Close),
             KeyCode::Enter => Some(BookStatAction::JumpToChapter {
                 chapter_index: self.get_selected_chapter_index().unwrap_or(0),
@@ -704,6 +720,21 @@ impl VimNavMotions for BookStat {
         let half_height = 10; // Approximate half of popup height
         let current = self.list_state.selected().unwrap_or(0);
         let new_pos = current.saturating_sub(half_height);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_ctrl_f(&mut self) {
+        let full_height = 20;
+        let current = self.list_state.selected().unwrap_or(0);
+        let max_pos = self.chapter_stats.len().saturating_sub(1);
+        let new_pos = (current + full_height).min(max_pos);
+        self.list_state.select(Some(new_pos));
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        let full_height = 20;
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_pos = current.saturating_sub(full_height);
         self.list_state.select(Some(new_pos));
     }
 

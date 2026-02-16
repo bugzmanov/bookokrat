@@ -82,6 +82,8 @@ pub struct CommentInputState {
     pub quoted_text: Option<String>,
     /// Read-only preview mode used for comment navigation.
     pub read_only: bool,
+    /// Screen-space cursor position (col, row) computed during rendering.
+    pub computed_cursor_pos: Option<(u16, u16)>,
 }
 
 /// A search match on the current page
@@ -159,6 +161,7 @@ impl CommentInputState {
         self.target = None;
         self.quoted_text = None;
         self.read_only = false;
+        self.computed_cursor_pos = None;
     }
 
     pub fn is_active(&self) -> bool {
@@ -464,6 +467,22 @@ impl PdfReaderState {
 
     pub fn force_redraw(&mut self) {
         self.last_render.rect = Rect::default();
+    }
+
+    /// Force redraw and invalidate all uploaded Kitty images so they get re-transmitted.
+    /// Call this after `delete_all_images()` or when terminal graphics state is lost.
+    /// Returns page indices that had uploaded images (need re-conversion).
+    pub fn invalidate_kitty_images(&mut self) -> Vec<usize> {
+        self.last_render.rect = Rect::default();
+        self.last_kitty_cache_window = None;
+        let mut invalidated = Vec::new();
+        for (i, info) in self.rendered.iter_mut().enumerate() {
+            if info.img.is_some() {
+                info.img = None;
+                invalidated.push(i);
+            }
+        }
+        invalidated
     }
 
     pub fn bg_color(&self) -> Color {

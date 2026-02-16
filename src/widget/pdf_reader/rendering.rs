@@ -538,12 +538,12 @@ impl PdfReaderState {
             let border_style = Style::default().fg(border_color);
             let mode_style = Style::default()
                 .fg(palette.base_07)
-                .bg(palette.base_0a)
+                .bg(palette.base_03)
                 .add_modifier(Modifier::BOLD);
             Some(
                 Line::from(vec![
                     Span::styled(line::HORIZONTAL, border_style),
-                    Span::styled(" Comment ", mode_style),
+                    Span::styled(" COMMENT ", mode_style),
                 ])
                 .left_aligned(),
             )
@@ -982,6 +982,14 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
         .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
         .send(&mut stdout, &pixel, tmux);
 
+    // Position the terminal cursor at the textarea caret after all Kitty
+    // commands, so it renders on top of the overlay image.
+    if let Some((cx, cy)) = pdf_reader.comment_input.computed_cursor_pos {
+        use std::io::Write;
+        // CSI row;col H  (1-based)
+        let _ = write!(stdout, "\x1b[{};{}H\x1b[?25h", cy + 1, cx + 1);
+    }
+
     let _ = std::io::Write::flush(&mut stdout);
 }
 
@@ -1397,6 +1405,7 @@ impl PdfReaderState {
         font_size: FontSize,
     ) -> DisplayBatch<'s> {
         self.modal_overlay_rect = None;
+        self.comment_input.computed_cursor_pos = None;
         let modal_bg = self.bg_color();
         let modal_fg = self.fg_color();
         let modal_panel_bg = self.palette.base_01;
@@ -2253,9 +2262,25 @@ impl PdfReaderState {
 
         textarea.set_style(Style::default().fg(fg_color).bg(panel_bg));
         textarea.set_cursor_style(Style::default().fg(bg_color).bg(fg_color));
+        textarea.set_cursor_line_style(Style::default());
         textarea.set_block(Block::default());
 
         frame.render_widget(&*textarea, inner);
+
+        let cursor_pos = if !comment_input.read_only {
+            let (cursor_row, cursor_col) = textarea.cursor();
+            let (scroll_row, scroll_col) = textarea.viewport.scroll_top();
+            let cursor_x = inner.x + (cursor_col as u16).saturating_sub(scroll_col);
+            let cursor_y = inner.y + (cursor_row as u16).saturating_sub(scroll_row);
+            if cursor_x < inner.x + inner.width && cursor_y < inner.y + inner.height {
+                Some((cursor_x, cursor_y))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        comment_input.computed_cursor_pos = cursor_pos;
 
         Some((backing_x, backing_y, backing_w, backing_h))
     }

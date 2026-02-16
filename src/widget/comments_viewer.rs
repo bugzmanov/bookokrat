@@ -2038,6 +2038,44 @@ impl VimNavMotions for CommentsViewer {
         }
     }
 
+    fn handle_ctrl_f(&mut self) {
+        match self.focus {
+            ViewerFocus::Chapters => self.page_chapters_down(),
+            ViewerFocus::Comments => {
+                let content_height = self
+                    .last_comments_area
+                    .map(|a| a.height.saturating_sub(2) as usize)
+                    .unwrap_or(20);
+                for _ in 0..content_height {
+                    if self.rendered_entries.is_empty()
+                        || self.selected_index >= self.rendered_entries.len() - 1
+                    {
+                        break;
+                    }
+                    self.next();
+                }
+            }
+        }
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        match self.focus {
+            ViewerFocus::Chapters => self.page_chapters_up(),
+            ViewerFocus::Comments => {
+                let content_height = self
+                    .last_comments_area
+                    .map(|a| a.height.saturating_sub(2) as usize)
+                    .unwrap_or(20);
+                for _ in 0..content_height {
+                    if self.selected_index == 0 {
+                        break;
+                    }
+                    self.previous();
+                }
+            }
+        }
+    }
+
     fn handle_gg(&mut self) {
         match self.focus {
             ViewerFocus::Chapters => self.select_chapter(0),
@@ -2231,6 +2269,22 @@ impl CommentsViewer {
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     self.handle_ctrl_u();
+                    None
+                }
+                KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.handle_ctrl_f();
+                    None
+                }
+                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.handle_ctrl_b();
+                    None
+                }
+                KeyCode::PageDown => {
+                    self.handle_ctrl_f();
+                    None
+                }
+                KeyCode::PageUp => {
+                    self.handle_ctrl_b();
                     None
                 }
                 KeyCode::Char('/') => {

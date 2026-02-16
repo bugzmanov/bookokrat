@@ -305,6 +305,28 @@ impl VimNavMotions for ReadingHistory {
         }
     }
 
+    fn handle_ctrl_f(&mut self) {
+        for _ in 0..20 {
+            let current = self.state.selected().unwrap_or(0);
+            if current < self.items.len() - 1 {
+                self.next();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        for _ in 0..20 {
+            let current = self.state.selected().unwrap_or(0);
+            if current > 0 {
+                self.previous();
+            } else {
+                break;
+            }
+        }
+    }
+
     fn handle_gg(&mut self) {
         // Go to top - select first item
         if !self.items.is_empty() {
@@ -360,6 +382,22 @@ impl ReadingHistory {
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.handle_ctrl_u();
+                None
+            }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_b();
+                None
+            }
+            KeyCode::PageDown => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::PageUp => {
+                self.handle_ctrl_b();
                 None
             }
             KeyCode::Esc => Some(ReadingHistoryAction::Close),

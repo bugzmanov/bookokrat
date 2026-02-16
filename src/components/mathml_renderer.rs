@@ -6,6 +6,7 @@ Parses MathML expressions and generates properly positioned ASCII art.
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
+use unicode_width::UnicodeWidthChar;
 
 /// Error types for MathML processing
 #[derive(Debug)]
@@ -169,19 +170,28 @@ pub struct MathBox {
 impl MathBox {
     /// Initialize a simple text box
     pub fn new(text: &str) -> Self {
-        let width = text.chars().count();
+        let mut grid_chars = Vec::new();
+        for ch in text.chars() {
+            match ch.width() {
+                Some(0) | None => {}
+                Some(1) => grid_chars.push(ch),
+                Some(w) => {
+                    grid_chars.push(ch);
+                    for _ in 1..w {
+                        grid_chars.push(' ');
+                    }
+                }
+            }
+        }
+
+        let width = grid_chars.len();
         let height = if width > 0 { 1 } else { 0 };
-        let baseline = 0;
-        let content = if width > 0 {
-            vec![text.chars().collect()]
-        } else {
-            vec![]
-        };
+        let content = if width > 0 { vec![grid_chars] } else { vec![] };
 
         Self {
             width,
             height,
-            baseline,
+            baseline: 0,
             content,
         }
     }

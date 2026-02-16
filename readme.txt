@@ -62,6 +62,8 @@
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
 │  Space+a       Open comments/annotations viewer                             │
+│  Ctrl+l        Force full screen redraw                                     │
+│  Ctrl+q        Suspend process (unix only, resume with fg)                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -69,6 +71,8 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  j / k         Move down / up                                               │
 │  Ctrl+d / u    Scroll half page down / up                                   │
+│  Ctrl+f / b    Scroll full page down / up                                   │
+│  PgDn / PgUp   Scroll full page down / up                                   │
 │  gg            Jump to top                                                  │
 │  G             Jump to bottom                                               │
 │  /             Start search/filter                                          │
@@ -83,6 +87,8 @@
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  j / k         Scroll down / up by line                                     │
 │  Ctrl+d / u    Scroll half screen down / up                                 │
+│  Ctrl+f / b    Scroll full screen down / up                                 │
+│  PgDn / PgUp   Scroll full screen down / up                                 │
 │  gg            Jump to top of chapter                                       │
 │  G             Jump to bottom of chapter                                    │
 │  h / l         Previous / next chapter                                      │
@@ -109,6 +115,7 @@
 │  h/j/k/l       Move cursor                                                  │
 │  w/W/b/e       Word motions (small/Big)                                     │
 │  0/^/$         Line start / first non-space / end                           │
+│  Ctrl+d/u/f/b  Half / full page scroll                                      │
 │  gg / G        Top / bottom of document                                     │
 │  f/F/t/T ;     Find/till char and repeat                                    │
 │  v / V         Visual selection (char/line)                                 │
@@ -236,7 +243,8 @@ Review and manage notes efficiently:
   ▸ Enter or double-click jumps from a comment back into the reader
   ▸ dd deletes the highlighted comment directly from the viewer
 
-Comments are saved per-book and persist across sessions.
+Comments are saved per-book in your XDG data directory and persist across
+sessions. Your working directory stays clean.
 PDF annotations require a graphics-capable terminal.
 
 ===============================================================================
@@ -273,6 +281,7 @@ PDF annotations require a graphics-capable terminal.
   ▸ PDF settings: Press Space+s (or Ctrl+s) to toggle support and render mode
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
+  ▸ Full-page jumps: Use Ctrl+f / Ctrl+b or PgDn / PgUp
   ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
   ▸ Adjust margins: Press + or - to widen or narrow content
   ▸ Theme switching: Press Space+t to browse and apply color themes
@@ -280,6 +289,24 @@ PDF annotations require a graphics-capable terminal.
 ===============================================================================
 
                                CUSTOMIZATION
+
+  [DATA STORAGE]
+    Bookokrat stores all application data in XDG-compliant directories,
+    keeping your working directories clean. Each directory where you run
+    bookokrat is treated as an isolated library:
+
+      • Bookmarks    <data_dir>/bookokrat/libraries/<library>/bookmarks.json
+      • Comments     <data_dir>/bookokrat/libraries/<library>/comments/
+      • Image cache  <cache_dir>/bookokrat/libraries/<library>/temp_images/
+      • Log file     <state_dir>/bookokrat/bookokrat.log
+
+    Typical <data_dir> paths:
+      • macOS:  ~/Library/Application Support
+      • Linux:  ~/.local/share
+
+    If old files (bookmarks.json, .bookokrat_comments/, temp_images/) are
+    found in your working directory, they are automatically migrated to
+    the new locations on startup.
 
   [SETTINGS FILE]
     Bookokrat saves your preferences to ~/.bookokrat_settings.yaml:

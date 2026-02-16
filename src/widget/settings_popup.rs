@@ -782,6 +782,22 @@ impl SettingsPopup {
                 self.handle_ctrl_u();
                 None
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.handle_ctrl_b();
+                None
+            }
+            KeyCode::PageDown => {
+                self.handle_ctrl_f();
+                None
+            }
+            KeyCode::PageUp => {
+                self.handle_ctrl_b();
+                None
+            }
             KeyCode::Esc => Some(SettingsAction::Close),
             KeyCode::Enter | KeyCode::Char(' ') => match self.current_tab {
                 SettingsTab::PdfSupport => self.apply_pdf_selected(),
@@ -826,6 +842,22 @@ impl VimNavMotions for SettingsPopup {
     fn handle_ctrl_u(&mut self) {
         if self.current_tab == SettingsTab::Themes {
             for _ in 0..5 {
+                self.theme_previous();
+            }
+        }
+    }
+
+    fn handle_ctrl_f(&mut self) {
+        if self.current_tab == SettingsTab::Themes {
+            for _ in 0..10 {
+                self.theme_next();
+            }
+        }
+    }
+
+    fn handle_ctrl_b(&mut self) {
+        if self.current_tab == SettingsTab::Themes {
+            for _ in 0..10 {
                 self.theme_previous();
             }
         }

@@ -28,18 +28,6 @@ wait 2000
 escape
 wait 300
 
-# Jump to PDF page 1 (same as demo_pdf)
-key space
-wait 150
-key g
-wait 300
-key p
-wait 200
-type 1
-wait 200
-return
-wait 4000
-
 # Enable scroll mode via settings (same path as demo_pdf)
 ctrl s
 wait 400
@@ -149,6 +137,10 @@ repeat_key j 4 0.15
 wait 200
 key l
 wait 300
+repeat_key j 2 0.15
+wait 200
+key l
+wait 250
 key j
 wait 200
 return
