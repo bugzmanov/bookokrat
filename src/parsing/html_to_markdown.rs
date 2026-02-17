@@ -1955,13 +1955,21 @@ impl HtmlToMarkdownConverter {
                             }
                         }
                         _ => {
-                            let mut blocks = self.extract_formatted_content_as_blocks(child, false);
-                            for block in blocks.iter_mut() {
+                            let mut temp_doc = Document::new();
+                            for grandchild in child.children.borrow().iter() {
+                                let before_len = temp_doc.blocks.len();
+                                self.visit_node(grandchild, &mut temp_doc);
+                                if temp_doc.blocks.len() == before_len {
+                                    self.ensure_inline_placeholder(grandchild, &mut temp_doc);
+                                }
+                            }
+                            self.ensure_placeholder_block(child, &mut temp_doc);
+                            for block in temp_doc.blocks.iter_mut() {
                                 if let Block::Paragraph { content } = &mut block.block {
                                     Self::clear_code_style_if_uniform_code(content);
                                 }
                             }
-                            content.extend(blocks);
+                            content.extend(temp_doc.blocks);
                         }
                     }
                 }
@@ -2621,8 +2629,9 @@ impl HtmlToMarkdownConverter {
             | "appendix" | "preface" | "foreword" | "introduction" | "conclusion" | "epigraph"
             | "dedication" => Some(epub_type),
 
-            "chapter" | "part" | "section" | "subsection" | "titlepage" | "toc" | "bodymatter"
-            | "frontmatter" | "backmatter" | "cover" | "acknowledgments" | "copyright-page" => None,
+            "chapter" | "part" | "section" | "subsection" | "division" | "titlepage" | "toc"
+            | "bodymatter" | "frontmatter" | "backmatter" | "cover" | "acknowledgments"
+            | "copyright-page" => None,
 
             _ => Some(epub_type),
         }

@@ -298,6 +298,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    node_index,
                 );
             }
         }
@@ -3045,6 +3046,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        node_index: Option<usize>,
     ) {
         // Add line separator before the block
         let separator_line = ".".repeat(width);
@@ -3087,7 +3089,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         width,
                         palette,
                         is_focused,
-                        None, // No annotation support inside containers
+                        node_index,
                     );
                 }
                 _ => {
@@ -3099,7 +3101,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         0,
-                        None,
+                        node_index,
                         RenderContext::InsideContainer,
                     );
                 }
