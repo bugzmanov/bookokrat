@@ -35,11 +35,6 @@ impl ImageStorage {
         })
     }
 
-    pub fn new_in_project_temp() -> Result<Self> {
-        let base_dir = PathBuf::from("temp_images");
-        Self::new(base_dir)
-    }
-
     pub fn extract_images(&self, epub_path: &Path) -> Result<()> {
         let epub_path_str = epub_path.to_string_lossy().to_string();
         info!("Starting image extraction for: {epub_path_str}");

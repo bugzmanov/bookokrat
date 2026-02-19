@@ -248,7 +248,7 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        Self::new_with_config(None, Some("bookmarks.json"), true, None)
+        Self::new_with_config(None, Some("bookmarks.json"), true, None, None)
     }
 
     /// Helper method to check if focus is on a main panel (not a popup)
@@ -368,6 +368,7 @@ impl App {
         auto_load_recent: bool,
         system_executor: crate::system_command::MockSystemCommandExecutor,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
@@ -375,6 +376,7 @@ impl App {
             auto_load_recent,
             Box::new(system_executor),
             comments_dir,
+            image_cache_dir,
         )
     }
 
@@ -383,6 +385,7 @@ impl App {
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
@@ -390,6 +393,7 @@ impl App {
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
             comments_dir,
+            image_cache_dir,
         )
     }
 
@@ -399,6 +403,7 @@ impl App {
         auto_load_recent: bool,
         system_executor: Box<dyn SystemCommandExecutor>,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         let book_manager = match book_directory {
             Some(dir) => BookManager::new_with_directory(dir),
@@ -410,7 +415,9 @@ impl App {
         text_reader.set_margin(settings::get_margin());
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
-        let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
+        let cache_dir =
+            image_cache_dir.unwrap_or_else(|| std::env::temp_dir().join("bookokrat_images"));
+        let image_storage = Arc::new(ImageStorage::new(cache_dir).unwrap_or_else(|e| {
             error!("Failed to initialize image storage: {e}. Using fallback.");
             ImageStorage::new(std::env::temp_dir().join("bookokrat_images"))
                 .expect("Failed to create fallback image storage")
@@ -3144,18 +3151,6 @@ impl App {
 
     pub fn set_test_mode(&mut self, enabled: bool) {
         self.test_mode = enabled;
-    }
-
-    pub fn set_image_cache_dir(&mut self, dir: std::path::PathBuf) {
-        match ImageStorage::new(dir) {
-            Ok(storage) => {
-                let storage = Arc::new(storage);
-                self.book_images = BookImages::new(storage);
-            }
-            Err(e) => {
-                error!("Failed to set image cache dir: {e}");
-            }
-        }
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus

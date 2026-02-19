@@ -210,17 +210,16 @@ fn main() -> Result<()> {
         );
     })?;
 
+    let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
     let mut app = App::new_with_config(
         book_directory,
         bookmark_file.as_deref(),
         auto_load_recent,
         comments_dir.as_deref(),
+        image_cache_dir,
     );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
-    if let Ok(ref paths) = lib_paths {
-        app.set_image_cache_dir(paths.image_cache_dir.clone());
-    }
     if let Some(path) = args.file_path.as_deref() {
         if let Err(err) = app.open_book_for_reading_by_path(path) {
             error!("Failed to open requested book: {err}");

@@ -170,6 +170,7 @@ pub mod test_helpers {
             Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
             false,                  // Don't auto-load recent books
             None,                   // Use default comments directory
+            None,                   // Use temp dir for image cache
         )
     }
 
@@ -237,6 +238,7 @@ pub mod test_helpers {
             Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
             false,                               // Don't auto-load recent books
             None,                                // Use default comments directory
+            None,                                // Use temp dir for image cache
         );
 
         (app, temp_manager)
@@ -254,6 +256,7 @@ pub mod test_helpers {
             Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
             false,                               // Don't auto-load recent books
             None,                                // Use default comments directory
+            None,                                // Use temp dir for image cache
         );
 
         (app, temp_manager)
@@ -270,6 +273,7 @@ pub mod test_helpers {
             Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
             false,                  // Don't auto-load recent books
             Some(comments_dir),     // Use isolated comments directory
+            None,                   // Use temp dir for image cache
         )
     }
 }

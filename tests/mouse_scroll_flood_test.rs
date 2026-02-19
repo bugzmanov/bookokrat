@@ -66,6 +66,7 @@ fn test_horizontal_scroll_flood_performance() {
         Some("test_bookmarks.json"),
         false,
         None,
+        None,
     );
 
     // Create terminal with test backend
@@ -106,6 +107,7 @@ fn test_mixed_scroll_events_performance() {
         Some("tests/testdata"),
         Some("test_bookmarks.json"),
         false,
+        None,
         None,
     );
 
