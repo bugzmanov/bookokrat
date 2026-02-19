@@ -3934,6 +3934,7 @@ impl PdfReaderState {
 
     pub fn get_selected_text(&self) -> Option<String> {
         self.extract_visual_text()
+            .or_else(|| self.extract_selection_text())
     }
 
     fn extract_visual_text(&self) -> Option<String> {

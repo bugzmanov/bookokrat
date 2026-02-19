@@ -4309,6 +4309,22 @@ impl App {
 
         // Handle vim normal mode keys when active
         if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
+            // Handle Space-prefixed sequences (Space+l, Space+h, etc.) in normal/visual mode.
+            // Space must be recorded here since visual mode's catch-all would swallow it.
+            if key.code == KeyCode::Char(' ') {
+                self.key_sequence.handle_key(' ');
+                return None;
+            }
+            if self.key_sequence.current_sequence() == " " {
+                if let KeyCode::Char(c) = key.code {
+                    if self.handle_key_sequence(c) {
+                        return None;
+                    }
+                    // Not a valid Space+key sequence, clear and let normal mode handle the key
+                    self.key_sequence.clear();
+                }
+            }
+
             // Clear expired yank highlight
             self.text_reader.clear_expired_yank_highlight();
 
@@ -5689,6 +5705,15 @@ where
                         if !app.pdf_text_input_active()
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                             && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('q'))
+                            && app.handle_global_hotkeys(*key)
+                        {
+                            continue;
+                        }
+
+                        // If there's a pending Space in key sequence, complete it
+                        // before PDF normal mode consumes the key (e.g. Space+l lookup)
+                        if !app.pdf_text_input_active()
+                            && app.key_sequence.current_sequence() == " "
                             && app.handle_global_hotkeys(*key)
                         {
                             continue;
