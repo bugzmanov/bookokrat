@@ -146,6 +146,7 @@ pub struct App {
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
     lookup_popup: Option<LookupPopup>,
+    pending_visual_inner: bool,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -462,6 +463,7 @@ impl App {
             comments_viewer: None,
             settings_popup: None,
             lookup_popup: None,
+            pending_visual_inner: false,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -4500,7 +4502,27 @@ impl App {
                 use crate::markdown_text_reader::VisualMode;
                 let visual_mode = self.text_reader.get_visual_mode();
 
+                // Handle text objects: iw, iW (inner word/WORD)
+                if self.pending_visual_inner {
+                    self.pending_visual_inner = false;
+                    match key.code {
+                        KeyCode::Char('w') => {
+                            self.text_reader.visual_select_inner_word();
+                            return None;
+                        }
+                        KeyCode::Char('W') => {
+                            self.text_reader.visual_select_inner_big_word();
+                            return None;
+                        }
+                        _ => {} // not a valid text object, fall through
+                    }
+                }
+
                 match key.code {
+                    KeyCode::Char('i') => {
+                        self.pending_visual_inner = true;
+                        return None;
+                    }
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
                             let _ = self.text_reader.copy_to_clipboard(text);

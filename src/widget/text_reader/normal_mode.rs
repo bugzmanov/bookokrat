@@ -1972,6 +1972,31 @@ impl MarkdownTextReader {
         self.normal_mode.visual_mode != VisualMode::None
     }
 
+    /// Select inner word (iw) as a visual text object.
+    /// Sets anchor to word start and cursor to word end-1.
+    pub fn visual_select_inner_word(&mut self) {
+        let line = self.normal_mode.cursor.line;
+        let col = self.normal_mode.cursor.column;
+        if let Some((start, end)) = self.find_word_bounds(line, col) {
+            self.normal_mode.visual_mode = VisualMode::CharacterWise;
+            self.normal_mode.visual_anchor = Some(CursorPosition::new(line, start));
+            self.normal_mode.cursor.column = end.saturating_sub(1);
+            self.ensure_cursor_visible();
+        }
+    }
+
+    /// Select inner big word (iW) as a visual text object.
+    pub fn visual_select_inner_big_word(&mut self) {
+        let line = self.normal_mode.cursor.line;
+        let col = self.normal_mode.cursor.column;
+        if let Some((start, end)) = self.find_big_word_bounds(line, col) {
+            self.normal_mode.visual_mode = VisualMode::CharacterWise;
+            self.normal_mode.visual_anchor = Some(CursorPosition::new(line, start));
+            self.normal_mode.cursor.column = end.saturating_sub(1);
+            self.ensure_cursor_visible();
+        }
+    }
+
     pub fn get_visual_mode(&self) -> VisualMode {
         self.normal_mode.visual_mode
     }
