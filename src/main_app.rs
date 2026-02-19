@@ -4545,6 +4545,12 @@ impl App {
             KeyCode::Char('k') | KeyCode::Up => {
                 self.scroll_up();
             }
+            KeyCode::Char('{') => {
+                self.text_reader.scroll_paragraph_up();
+            }
+            KeyCode::Char('}') => {
+                self.text_reader.scroll_paragraph_down();
+            }
             KeyCode::Char('h') => {
                 if !self.handle_key_sequence('h') {
                     let _ = self.navigate_chapter_relative(ChapterDirection::Previous);

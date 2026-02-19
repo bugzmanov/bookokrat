@@ -834,7 +834,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn find_prev_paragraph_boundary(&self, line: usize) -> usize {
+    pub(super) fn find_prev_paragraph_boundary(&self, line: usize) -> usize {
         if line == 0 {
             return 0;
         }
@@ -862,7 +862,7 @@ impl MarkdownTextReader {
         current
     }
 
-    fn find_next_paragraph_boundary(&self, line: usize) -> usize {
+    pub(super) fn find_next_paragraph_boundary(&self, line: usize) -> usize {
         let total = self.raw_text_lines.len();
         if total == 0 {
             return 0;
