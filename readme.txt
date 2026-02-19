@@ -61,6 +61,7 @@
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
+│  Space+l       Lookup selected text (run configured shell command)          │
 │  Space+a       Open comments/annotations viewer                             │
 │  Ctrl+l        Force full screen redraw                                     │
 │  Ctrl+q        Suspend process (unix only, resume with fg)                  │
@@ -328,6 +329,31 @@ PDF annotations require a graphics-capable terminal.
     Add custom themes using Base16 color schemes. Edit your settings file
     and add entries to the custom_themes section. See the commented template
     in the settings file for the full color format.
+
+  [DICTIONARY / SHELL LOOKUP]
+    Press Space+l on selected text to run a shell lookup command.
+    Configure it in your settings file:
+
+      lookup_command: "dict {}"
+      lookup_display: popup
+
+    {} is replaced with the selected word. If no {} is present, the text
+    is appended as a shell-escaped argument. lookup_display can be:
+      • popup          - capture stdout and show in a scrollable popup
+      • fire_and_forget - launch and forget (e.g., open a browser URL)
+
+    Examples:
+      CLI dictionary (output in popup):
+        lookup_command: "dict {}"
+        lookup_display: popup
+
+      macOS Dictionary.app:
+        lookup_command: "open dict://{}"
+        lookup_display: fire_and_forget
+
+      Online dictionary in browser:
+        lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
+        lookup_display: fire_and_forget
 
   [ZEN MODE]
     Press Ctrl+z to toggle zen mode for distraction-free reading:

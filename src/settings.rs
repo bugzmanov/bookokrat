@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 const SETTINGS_FILENAME: &str = "config.yaml";
 const LEGACY_SETTINGS_FILENAME: &str = ".bookokrat_settings.yaml";
 const APP_NAME: &str = "bookokrat";
@@ -47,6 +47,17 @@ pub enum BookSortOrder {
     ByName,
     /// Group by type: PDFs first, then EPUBs, each sorted by name
     ByType,
+}
+
+/// Display mode for lookup command results
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LookupDisplay {
+    /// Show command output in a scrollable popup
+    #[default]
+    Popup,
+    /// Run command and forget (just show notification)
+    FireAndForget,
 }
 
 /// PDF render mode for Kitty terminals
@@ -104,6 +115,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub book_sort_order: BookSortOrder,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup_command: Option<String>,
+
+    #[serde(default)]
+    pub lookup_display: LookupDisplay,
 }
 
 fn default_true() -> bool {
@@ -136,6 +153,8 @@ impl Default for Settings {
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             book_sort_order: BookSortOrder::default(),
+            lookup_command: None,
+            lookup_display: LookupDisplay::default(),
         }
     }
 }
@@ -214,10 +233,8 @@ fn migrate_settings(settings: &mut Settings) {
         settings.version, CURRENT_VERSION
     );
 
-    // Future migrations go here:
-    // if settings.version < 2 {
-    //     migrate_v1_to_v2(settings);
-    // }
+    // v2 -> v3: lookup command added, re-save to include template comments
+    // (no data migration needed, just triggers config file re-write)
 
     settings.version = CURRENT_VERSION;
 }
@@ -281,6 +298,18 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     content.push('\n');
 
+    if let Some(ref cmd) = settings.lookup_command {
+        content.push_str(&format!("lookup_command: \"{}\"\n", cmd));
+        let display_str = match settings.lookup_display {
+            LookupDisplay::Popup => "popup",
+            LookupDisplay::FireAndForget => "fire_and_forget",
+        };
+        content.push_str(&format!("lookup_display: {}\n", display_str));
+    } else {
+        content.push_str(LOOKUP_COMMAND_TEMPLATE);
+    }
+    content.push('\n');
+
     content.push_str(CUSTOM_THEMES_TEMPLATE);
 
     if !settings.custom_themes.is_empty() {
@@ -340,6 +369,31 @@ const CUSTOM_THEMES_TEMPLATE: &str = r#"# ======================================
 #     base0D: "7E9CD8"    # Blue (links)
 #     base0E: "957FB8"    # Purple (keywords)
 #     base0F: "D27E99"    # Brown/Pink
+
+"#;
+
+const LOOKUP_COMMAND_TEMPLATE: &str = r#"# ============================================================================
+# Lookup Command
+# ============================================================================
+# Shell command to run when you press Space+l on selected text.
+# Use {} as a placeholder for the selected word. If no {} is present,
+# the selected text is appended as a shell-escaped argument.
+#
+# lookup_display controls how output is shown:
+#   popup          - capture stdout and show in a scrollable popup (default)
+#   fire_and_forget - spawn command and move on (e.g., open a browser)
+#
+# Example: CLI dictionary (output shown in popup)
+#   lookup_command: "dict {}"
+#   lookup_display: popup
+#
+# Example: macOS Dictionary.app
+#   lookup_command: "open dict://{}"
+#   lookup_display: fire_and_forget
+#
+# Example: online dictionary in browser
+#   lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
+#   lookup_display: fire_and_forget
 
 "#;
 
@@ -467,6 +521,17 @@ pub fn set_book_sort_order(order: BookSortOrder) {
         settings.book_sort_order = order;
     }
     save_settings();
+}
+
+pub fn get_lookup_command() -> Option<String> {
+    SETTINGS.read().ok().and_then(|s| s.lookup_command.clone())
+}
+
+pub fn get_lookup_display() -> LookupDisplay {
+    SETTINGS
+        .read()
+        .map(|s| s.lookup_display)
+        .unwrap_or_default()
 }
 
 /// Called on app startup to fix incompatible settings when switching terminals

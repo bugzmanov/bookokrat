@@ -1825,7 +1825,7 @@ impl MarkdownTextReader {
 
     // ==================== HELPERS ====================
 
-    fn extract_text(
+    pub(super) fn extract_text(
         &self,
         start_line: usize,
         start_col: usize,
@@ -1861,7 +1861,7 @@ impl MarkdownTextReader {
         Some(result)
     }
 
-    fn extract_lines(&self, start_line: usize, end_line: usize) -> Option<String> {
+    pub(super) fn extract_lines(&self, start_line: usize, end_line: usize) -> Option<String> {
         let mut result = String::new();
 
         for line in start_line..=end_line {

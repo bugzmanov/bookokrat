@@ -3932,6 +3932,10 @@ impl PdfReaderState {
         self.notifications.info(msg);
     }
 
+    pub fn get_selected_text(&self) -> Option<String> {
+        self.extract_visual_text()
+    }
+
     fn extract_visual_text(&self) -> Option<String> {
         let (start, end) = self.normal_mode.get_visual_range()?;
         let all_line_bounds = self.collect_all_line_bounds();

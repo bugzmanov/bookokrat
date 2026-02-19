@@ -23,6 +23,7 @@ use crate::table_of_contents::TocItem;
 use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
+use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
 use image::GenericImageView;
 use log::warn;
 
@@ -144,6 +145,7 @@ pub struct App {
     help_popup: Option<HelpPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
+    lookup_popup: Option<LookupPopup>,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -238,6 +240,7 @@ pub enum PopupWindow {
     Help,
     CommentsViewer,
     Settings,
+    Lookup,
 }
 
 impl Default for App {
@@ -458,6 +461,7 @@ impl App {
             help_popup: None,
             comments_viewer: None,
             settings_popup: None,
+            lookup_popup: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -535,6 +539,87 @@ impl App {
         }
 
         app
+    }
+
+    fn execute_lookup_command(&mut self, selected_text: &str) {
+        let Some(command_template) = settings::get_lookup_command() else {
+            self.show_info(
+                "No lookup command configured. Set lookup_command in settings (Space+s).",
+            );
+            return;
+        };
+
+        let trimmed = selected_text.trim();
+        if trimmed.is_empty() {
+            self.show_info("No text selected");
+            return;
+        }
+
+        // Shell-escape the selected text with single quotes
+        let escaped = trimmed.replace('\'', "'\\''");
+        let command = if command_template.contains("{}") {
+            command_template.replace("{}", &escaped)
+        } else {
+            format!("{} '{}'", command_template, escaped)
+        };
+
+        let display = settings::get_lookup_display();
+        match display {
+            settings::LookupDisplay::FireAndForget => {
+                match std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(_) => self.show_info(format!("Launched: {}", command_template)),
+                    Err(e) => self.show_error(format!("Failed to launch command: {e}")),
+                }
+            }
+            settings::LookupDisplay::Popup => {
+                let word = if trimmed.len() > 40 {
+                    format!(
+                        "{}...",
+                        &trimmed[..trimmed
+                            .char_indices()
+                            .nth(37)
+                            .map(|(i, _)| i)
+                            .unwrap_or(trimmed.len())]
+                    )
+                } else {
+                    trimmed.to_string()
+                };
+
+                let result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .output();
+
+                let popup_result = match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                            if stderr.is_empty() {
+                                Err(format!("Command exited with status {}", output.status))
+                            } else {
+                                Err(stderr)
+                            }
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to run command: {e}")),
+                };
+
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
+                self.lookup_popup = Some(LookupPopup::new(word, popup_result));
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::Lookup);
+            }
+        }
     }
 
     fn is_profiling(&self) -> bool {
@@ -1752,6 +1837,16 @@ impl App {
                     return;
                 }
 
+                if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+                    if let Some(ref popup) = self.lookup_popup {
+                        if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
+                            self.lookup_popup = None;
+                            self.close_popup_to_previous();
+                        }
+                    }
+                    return;
+                }
+
                 let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
@@ -2247,6 +2342,21 @@ impl App {
                         for _ in 0..(-scroll_amount).min(10) {
                             viewer.handle_k();
                         }
+                    }
+                }
+            }
+            return;
+        }
+
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+            if let Some(ref mut popup) = self.lookup_popup {
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        popup.scroll_down();
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        popup.scroll_up();
                     }
                 }
             }
@@ -2792,6 +2902,19 @@ impl App {
                 settings_popup.render(f, f.area());
             }
         }
+
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut lookup_popup) = self.lookup_popup {
+                lookup_popup.render(f, f.area());
+            }
+        }
         let draw_closure_elapsed = draw_closure_start.elapsed();
         if draw_closure_elapsed.as_millis() > 5 {
             log::debug!(
@@ -3037,6 +3160,9 @@ impl App {
                 }
                 FocusedPanel::Popup(PopupWindow::Settings) => {
                     "Tab/h/l: Tabs | j/k: Navigate | Enter: Apply | ESC: Close"
+                }
+                FocusedPanel::Popup(PopupWindow::Lookup) => {
+                    "j/k: Scroll | Ctrl+d/u: Half-page | gg/G: Top/Bottom | ESC/q: Close"
                 }
             };
             help_text.to_string()
@@ -3427,6 +3553,31 @@ impl App {
                     }
                     self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " l" => {
+                let selected = if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.pdf_reader.as_ref().and_then(|r| r.get_selected_text())
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    {
+                        None
+                    }
+                } else {
+                    self.text_reader.get_selected_text()
+                };
+
+                match selected {
+                    Some(text) if !text.trim().is_empty() => {
+                        self.execute_lookup_command(&text);
+                    }
+                    _ => {
+                        self.show_info("No text selected. Select text first, then press Space+l.");
+                    }
                 }
                 self.key_sequence.clear();
                 true
@@ -4085,6 +4236,20 @@ impl App {
                         }
                     }
                 }
+            }
+            return None;
+        }
+
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::Lookup) {
+            let action = if let Some(ref mut popup) = self.lookup_popup {
+                popup.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(LookupPopupAction::Close) = action {
+                self.lookup_popup = None;
+                self.close_popup_to_previous();
             }
             return None;
         }
