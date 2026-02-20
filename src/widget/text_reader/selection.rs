@@ -191,6 +191,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    pub fn get_selected_text(&self) -> Option<String> {
+        if let Some(text) = self
+            .text_selection
+            .extract_selected_text(&self.raw_text_lines)
+        {
+            return Some(text);
+        }
+
+        if let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
+        {
+            return match self.normal_mode.visual_mode {
+                super::VisualMode::LineWise => self.extract_lines(start_line, end_line),
+                super::VisualMode::CharacterWise => {
+                    self.extract_text(start_line, start_col, end_line, end_col)
+                }
+                super::VisualMode::None => None,
+            };
+        }
+
+        None
+    }
+
     pub fn clear_selection(&mut self) {
         self.text_selection.clear_selection();
     }

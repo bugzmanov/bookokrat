@@ -40,6 +40,7 @@ fn create_test_app_isolated() -> (App, TempDir) {
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
+        None,
     );
     (app, comments_dir)
 }
@@ -363,6 +364,7 @@ fn test_inline_comment_rendering_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -455,6 +457,7 @@ fn test_list_comment_rendering_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -594,6 +597,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -722,6 +726,7 @@ fn test_list_comment_rendering_complex_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -2657,6 +2662,7 @@ fn test_mathml_content_rendering_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -2799,6 +2805,7 @@ fn test_book_reading_history_with_many_entries_svg() {
         Some(&bookmark_path.to_string_lossy()),
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     // Now show the reading history popup with capital H
@@ -2894,6 +2901,7 @@ fn test_headings_h1_to_h6_rendering_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3001,6 +3009,7 @@ fn test_table_with_links_and_linebreaks_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3167,6 +3176,7 @@ fetchData('https://api.example.com/data')
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3240,6 +3250,7 @@ fn test_epub_type_attributes_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3328,6 +3339,7 @@ fn test_complex_table_with_code_and_linebreaks_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3396,6 +3408,7 @@ Q = xW<sub>Q</sub></pre>
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3509,6 +3522,7 @@ fn test_definition_list_with_complex_content_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3749,6 +3763,7 @@ fn test_lists_with_tables_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -3850,6 +3865,7 @@ hello_world()</code></pre>
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     // Load the test document
@@ -4200,6 +4216,7 @@ fn test_normal_mode_visual_selection_yank_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4273,6 +4290,7 @@ fn test_comment_input_placement_from_visual_selection_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4354,6 +4372,7 @@ fn test_normal_mode_jump_to_bottom_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4431,6 +4450,7 @@ fn test_normal_mode_counted_motion_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4524,6 +4544,7 @@ fn test_image_inside_anchor_link_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4612,6 +4633,7 @@ fn test_visual_mode_comment_selection_includes_cursor_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);
@@ -4709,6 +4731,7 @@ fn test_list_comment_target_stable_in_zen_margin_svg() {
         None,
         false,
         Some(comments_dir.path()),
+        None,
     );
 
     open_first_book(&mut app);

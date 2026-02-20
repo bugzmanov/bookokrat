@@ -23,6 +23,7 @@ use crate::table_of_contents::TocItem;
 use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
+use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
 use image::GenericImageView;
 use log::warn;
 
@@ -144,6 +145,8 @@ pub struct App {
     help_popup: Option<HelpPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
+    lookup_popup: Option<LookupPopup>,
+    pending_visual_inner: bool,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -238,6 +241,7 @@ pub enum PopupWindow {
     Help,
     CommentsViewer,
     Settings,
+    Lookup,
 }
 
 impl Default for App {
@@ -248,7 +252,7 @@ impl Default for App {
 
 impl App {
     pub fn new() -> Self {
-        Self::new_with_config(None, Some("bookmarks.json"), true, None)
+        Self::new_with_config(None, Some("bookmarks.json"), true, None, None)
     }
 
     /// Helper method to check if focus is on a main panel (not a popup)
@@ -368,6 +372,7 @@ impl App {
         auto_load_recent: bool,
         system_executor: crate::system_command::MockSystemCommandExecutor,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
@@ -375,6 +380,7 @@ impl App {
             auto_load_recent,
             Box::new(system_executor),
             comments_dir,
+            image_cache_dir,
         )
     }
 
@@ -383,6 +389,7 @@ impl App {
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         Self::new_with_config_and_executor(
             book_directory,
@@ -390,6 +397,7 @@ impl App {
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
             comments_dir,
+            image_cache_dir,
         )
     }
 
@@ -399,6 +407,7 @@ impl App {
         auto_load_recent: bool,
         system_executor: Box<dyn SystemCommandExecutor>,
         comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
     ) -> Self {
         let book_manager = match book_directory {
             Some(dir) => BookManager::new_with_directory(dir),
@@ -410,7 +419,9 @@ impl App {
         text_reader.set_margin(settings::get_margin());
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
-        let image_storage = Arc::new(ImageStorage::new_in_project_temp().unwrap_or_else(|e| {
+        let cache_dir =
+            image_cache_dir.unwrap_or_else(|| std::env::temp_dir().join("bookokrat_images"));
+        let image_storage = Arc::new(ImageStorage::new(cache_dir).unwrap_or_else(|e| {
             error!("Failed to initialize image storage: {e}. Using fallback.");
             ImageStorage::new(std::env::temp_dir().join("bookokrat_images"))
                 .expect("Failed to create fallback image storage")
@@ -451,6 +462,8 @@ impl App {
             help_popup: None,
             comments_viewer: None,
             settings_popup: None,
+            lookup_popup: None,
+            pending_visual_inner: false,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -528,6 +541,87 @@ impl App {
         }
 
         app
+    }
+
+    fn execute_lookup_command(&mut self, selected_text: &str) {
+        let Some(command_template) = settings::get_lookup_command() else {
+            self.show_info(
+                "No lookup command configured. Set lookup_command in settings (Space+s).",
+            );
+            return;
+        };
+
+        let trimmed = selected_text.trim();
+        if trimmed.is_empty() {
+            self.show_info("No text selected");
+            return;
+        }
+
+        // Shell-escape the selected text with single quotes
+        let escaped = trimmed.replace('\'', "'\\''");
+        let command = if command_template.contains("{}") {
+            command_template.replace("{}", &escaped)
+        } else {
+            format!("{} '{}'", command_template, escaped)
+        };
+
+        let display = settings::get_lookup_display();
+        match display {
+            settings::LookupDisplay::FireAndForget => {
+                match std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(_) => self.show_info(format!("Launched: {}", command_template)),
+                    Err(e) => self.show_error(format!("Failed to launch command: {e}")),
+                }
+            }
+            settings::LookupDisplay::Popup => {
+                let word = if trimmed.len() > 40 {
+                    format!(
+                        "{}...",
+                        &trimmed[..trimmed
+                            .char_indices()
+                            .nth(37)
+                            .map(|(i, _)| i)
+                            .unwrap_or(trimmed.len())]
+                    )
+                } else {
+                    trimmed.to_string()
+                };
+
+                let result = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&command)
+                    .output();
+
+                let popup_result = match result {
+                    Ok(output) => {
+                        if output.status.success() {
+                            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                            if stderr.is_empty() {
+                                Err(format!("Command exited with status {}", output.status))
+                            } else {
+                                Err(stderr)
+                            }
+                        }
+                    }
+                    Err(e) => Err(format!("Failed to run command: {e}")),
+                };
+
+                if let FocusedPanel::Main(panel) = self.focused_panel {
+                    self.previous_main_panel = panel;
+                }
+                self.lookup_popup = Some(LookupPopup::new(word, popup_result));
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::Lookup);
+            }
+        }
     }
 
     fn is_profiling(&self) -> bool {
@@ -1745,6 +1839,16 @@ impl App {
                     return;
                 }
 
+                if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+                    if let Some(ref popup) = self.lookup_popup {
+                        if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
+                            self.lookup_popup = None;
+                            self.close_popup_to_previous();
+                        }
+                    }
+                    return;
+                }
+
                 let nav_panel_width = self.nav_panel_width();
                 if mouse_event.column < nav_panel_width {
                     self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
@@ -2240,6 +2344,21 @@ impl App {
                         for _ in 0..(-scroll_amount).min(10) {
                             viewer.handle_k();
                         }
+                    }
+                }
+            }
+            return;
+        }
+
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+            if let Some(ref mut popup) = self.lookup_popup {
+                if scroll_amount > 0 {
+                    for _ in 0..scroll_amount.min(10) {
+                        popup.scroll_down();
+                    }
+                } else {
+                    for _ in 0..(-scroll_amount).min(10) {
+                        popup.scroll_up();
                     }
                 }
             }
@@ -2785,6 +2904,19 @@ impl App {
                 settings_popup.render(f, f.area());
             }
         }
+
+        if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut lookup_popup) = self.lookup_popup {
+                lookup_popup.render(f, f.area());
+            }
+        }
         let draw_closure_elapsed = draw_closure_start.elapsed();
         if draw_closure_elapsed.as_millis() > 5 {
             log::debug!(
@@ -3031,6 +3163,9 @@ impl App {
                 FocusedPanel::Popup(PopupWindow::Settings) => {
                     "Tab/h/l: Tabs | j/k: Navigate | Enter: Apply | ESC: Close"
                 }
+                FocusedPanel::Popup(PopupWindow::Lookup) => {
+                    "j/k: Scroll | Ctrl+d/u: Half-page | gg/G: Top/Bottom | ESC/q: Close"
+                }
             };
             help_text.to_string()
         };
@@ -3144,18 +3279,6 @@ impl App {
 
     pub fn set_test_mode(&mut self, enabled: bool) {
         self.test_mode = enabled;
-    }
-
-    pub fn set_image_cache_dir(&mut self, dir: std::path::PathBuf) {
-        match ImageStorage::new(dir) {
-            Ok(storage) => {
-                let storage = Arc::new(storage);
-                self.book_images = BookImages::new(storage);
-            }
-            Err(e) => {
-                error!("Failed to set image cache dir: {e}");
-            }
-        }
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus
@@ -3432,6 +3555,31 @@ impl App {
                     }
                     self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " l" => {
+                let selected = if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.pdf_reader.as_ref().and_then(|r| r.get_selected_text())
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    {
+                        None
+                    }
+                } else {
+                    self.text_reader.get_selected_text()
+                };
+
+                match selected {
+                    Some(text) if !text.trim().is_empty() => {
+                        self.execute_lookup_command(&text);
+                    }
+                    _ => {
+                        self.show_info("No text selected. Select text first, then press Space+l.");
+                    }
                 }
                 self.key_sequence.clear();
                 true
@@ -4094,6 +4242,20 @@ impl App {
             return None;
         }
 
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::Lookup) {
+            let action = if let Some(ref mut popup) = self.lookup_popup {
+                popup.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+
+            if let Some(LookupPopupAction::Close) = action {
+                self.lookup_popup = None;
+                self.close_popup_to_previous();
+            }
+            return None;
+        }
+
         if self.is_search_input_mode() {
             match key.code {
                 KeyCode::Char(c) => self.handle_search_input(c),
@@ -4149,6 +4311,22 @@ impl App {
 
         // Handle vim normal mode keys when active
         if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
+            // Handle Space-prefixed sequences (Space+l, Space+h, etc.) in normal/visual mode.
+            // Space must be recorded here since visual mode's catch-all would swallow it.
+            if key.code == KeyCode::Char(' ') {
+                self.key_sequence.handle_key(' ');
+                return None;
+            }
+            if self.key_sequence.current_sequence() == " " {
+                if let KeyCode::Char(c) = key.code {
+                    if self.handle_key_sequence(c) {
+                        return None;
+                    }
+                    // Not a valid Space+key sequence, clear and let normal mode handle the key
+                    self.key_sequence.clear();
+                }
+            }
+
             // Clear expired yank highlight
             self.text_reader.clear_expired_yank_highlight();
 
@@ -4324,7 +4502,27 @@ impl App {
                 use crate::markdown_text_reader::VisualMode;
                 let visual_mode = self.text_reader.get_visual_mode();
 
+                // Handle text objects: iw, iW (inner word/WORD)
+                if self.pending_visual_inner {
+                    self.pending_visual_inner = false;
+                    match key.code {
+                        KeyCode::Char('w') => {
+                            self.text_reader.visual_select_inner_word();
+                            return None;
+                        }
+                        KeyCode::Char('W') => {
+                            self.text_reader.visual_select_inner_big_word();
+                            return None;
+                        }
+                        _ => {} // not a valid text object, fall through
+                    }
+                }
+
                 match key.code {
+                    KeyCode::Char('i') => {
+                        self.pending_visual_inner = true;
+                        return None;
+                    }
                     KeyCode::Char('y') => {
                         if let Some(text) = self.text_reader.yank_visual_selection() {
                             let _ = self.text_reader.copy_to_clipboard(text);
@@ -4544,6 +4742,12 @@ impl App {
             }
             KeyCode::Char('k') | KeyCode::Up => {
                 self.scroll_up();
+            }
+            KeyCode::Char('{') => {
+                self.text_reader.scroll_paragraph_up();
+            }
+            KeyCode::Char('}') => {
+                self.text_reader.scroll_paragraph_down();
             }
             KeyCode::Char('h') => {
                 if !self.handle_key_sequence('h') {
@@ -5523,6 +5727,15 @@ where
                         if !app.pdf_text_input_active()
                             && key.modifiers.contains(KeyModifiers::CONTROL)
                             && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('q'))
+                            && app.handle_global_hotkeys(*key)
+                        {
+                            continue;
+                        }
+
+                        // If there's a pending Space in key sequence, complete it
+                        // before PDF normal mode consumes the key (e.g. Space+l lookup)
+                        if !app.pdf_text_input_active()
+                            && app.key_sequence.current_sequence() == " "
                             && app.handle_global_hotkeys(*key)
                         {
                             continue;

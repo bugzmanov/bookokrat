@@ -61,6 +61,7 @@
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
+│  Space+l       Lookup selected text (run configured shell command)          │
 │  Space+a       Open comments/annotations viewer                             │
 │  Ctrl+l        Force full screen redraw                                     │
 │  Ctrl+q        Suspend process (unix only, resume with fg)                  │
@@ -91,6 +92,7 @@
 │  PgDn / PgUp   Scroll full screen down / up                                 │
 │  gg            Jump to top of chapter                                       │
 │  G             Jump to bottom of chapter                                    │
+│  { / }         Jump to previous / next paragraph                            │
 │  h / l         Previous / next chapter                                      │
 │  Ctrl+o        Jump backward in history                                     │
 │  Ctrl+i        Jump forward in history                                      │
@@ -116,6 +118,7 @@
 │  w/W/b/e       Word motions (small/Big)                                     │
 │  0/^/$         Line start / first non-space / end                           │
 │  Ctrl+d/u/f/b  Half / full page scroll                                      │
+│  { / }         Jump to previous / next paragraph                            │
 │  gg / G        Top / bottom of document                                     │
 │  f/F/t/T ;     Find/till char and repeat                                    │
 │  v / V         Visual selection (char/line)                                 │
@@ -328,6 +331,27 @@ PDF annotations require a graphics-capable terminal.
     Add custom themes using Base16 color schemes. Edit your settings file
     and add entries to the custom_themes section. See the commented template
     in the settings file for the full color format.
+
+  [DICTIONARY / SHELL LOOKUP]
+    Select text and press Space+l to look up words. Configure in your
+    settings file (~/.bookokrat_settings.yaml):
+
+    Console dictionary (output shown in scrollable popup):
+      lookup_command: "dict {}"
+      lookup_display: popup
+      Other options: sdcv -n {} (offline), wn {} -over (WordNet)
+
+    Web dictionary (opens in browser):
+      lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
+      lookup_display: fire_and_forget
+
+    GUI dictionary (opens native app):
+      lookup_command: "open dict://{}"
+      lookup_display: fire_and_forget
+      Other options: goldendict {} (cross-platform)
+
+    {} is replaced with the selected text. lookup_display can be "popup"
+    (capture output) or "fire_and_forget" (launch and forget).
 
   [ZEN MODE]
     Press Ctrl+z to toggle zen mode for distraction-free reading:

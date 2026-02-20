@@ -25,6 +25,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    pub fn scroll_paragraph_up(&mut self) {
+        let target = self.find_prev_paragraph_boundary(self.scroll_offset);
+        self.scroll_offset = target;
+    }
+
+    pub fn scroll_paragraph_down(&mut self) {
+        let target = self.find_next_paragraph_boundary(self.scroll_offset);
+        self.scroll_offset = target.min(self.get_max_scroll_offset());
+    }
+
     pub fn scroll_half_screen_up(&mut self, screen_height: usize) {
         let scroll_amount = screen_height / 2;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);

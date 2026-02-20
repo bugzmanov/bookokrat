@@ -834,7 +834,7 @@ impl MarkdownTextReader {
         }
     }
 
-    fn find_prev_paragraph_boundary(&self, line: usize) -> usize {
+    pub(super) fn find_prev_paragraph_boundary(&self, line: usize) -> usize {
         if line == 0 {
             return 0;
         }
@@ -862,7 +862,7 @@ impl MarkdownTextReader {
         current
     }
 
-    fn find_next_paragraph_boundary(&self, line: usize) -> usize {
+    pub(super) fn find_next_paragraph_boundary(&self, line: usize) -> usize {
         let total = self.raw_text_lines.len();
         if total == 0 {
             return 0;
@@ -1825,7 +1825,7 @@ impl MarkdownTextReader {
 
     // ==================== HELPERS ====================
 
-    fn extract_text(
+    pub(super) fn extract_text(
         &self,
         start_line: usize,
         start_col: usize,
@@ -1861,7 +1861,7 @@ impl MarkdownTextReader {
         Some(result)
     }
 
-    fn extract_lines(&self, start_line: usize, end_line: usize) -> Option<String> {
+    pub(super) fn extract_lines(&self, start_line: usize, end_line: usize) -> Option<String> {
         let mut result = String::new();
 
         for line in start_line..=end_line {
@@ -1970,6 +1970,31 @@ impl MarkdownTextReader {
 
     pub fn is_visual_mode_active(&self) -> bool {
         self.normal_mode.visual_mode != VisualMode::None
+    }
+
+    /// Select inner word (iw) as a visual text object.
+    /// Sets anchor to word start and cursor to word end-1.
+    pub fn visual_select_inner_word(&mut self) {
+        let line = self.normal_mode.cursor.line;
+        let col = self.normal_mode.cursor.column;
+        if let Some((start, end)) = self.find_word_bounds(line, col) {
+            self.normal_mode.visual_mode = VisualMode::CharacterWise;
+            self.normal_mode.visual_anchor = Some(CursorPosition::new(line, start));
+            self.normal_mode.cursor.column = end.saturating_sub(1);
+            self.ensure_cursor_visible();
+        }
+    }
+
+    /// Select inner big word (iW) as a visual text object.
+    pub fn visual_select_inner_big_word(&mut self) {
+        let line = self.normal_mode.cursor.line;
+        let col = self.normal_mode.cursor.column;
+        if let Some((start, end)) = self.find_big_word_bounds(line, col) {
+            self.normal_mode.visual_mode = VisualMode::CharacterWise;
+            self.normal_mode.visual_anchor = Some(CursorPosition::new(line, start));
+            self.normal_mode.cursor.column = end.saturating_sub(1);
+            self.ensure_cursor_visible();
+        }
     }
 
     pub fn get_visual_mode(&self) -> VisualMode {

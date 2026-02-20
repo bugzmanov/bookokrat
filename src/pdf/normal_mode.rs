@@ -21,6 +21,8 @@ pub struct NormalModeState {
     pub visual_anchor: Option<CursorPosition>,
     /// Last position before deactivation
     pub last_position: Option<CursorPosition>,
+    /// Pending 'i' key for text objects (iw, iW)
+    pub pending_inner: bool,
 }
 
 /// Visual mode type
@@ -360,6 +362,101 @@ impl NormalModeState {
         }
 
         self.cursor.char_idx = idx;
+    }
+
+    /// Select inner word (iw) as a visual text object.
+    pub fn select_inner_word(&mut self, line_bounds: &[LineBounds]) {
+        if !self.active {
+            return;
+        }
+        let Some(line) = line_bounds.get(self.cursor.line_idx) else {
+            return;
+        };
+        let idx = self.cursor.char_idx;
+        if idx >= line.chars.len() {
+            return;
+        }
+
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let ch = line.chars[idx].c;
+
+        let (start, end) = if is_word(ch) {
+            let mut s = idx;
+            while s > 0 && is_word(line.chars[s - 1].c) {
+                s -= 1;
+            }
+            let mut e = idx;
+            while e < line.chars.len() && is_word(line.chars[e].c) {
+                e += 1;
+            }
+            (s, e)
+        } else if ch.is_whitespace() {
+            let mut s = idx;
+            while s > 0 && line.chars[s - 1].c.is_whitespace() {
+                s -= 1;
+            }
+            let mut e = idx;
+            while e < line.chars.len() && line.chars[e].c.is_whitespace() {
+                e += 1;
+            }
+            (s, e)
+        } else {
+            let mut s = idx;
+            while s > 0 && !is_word(line.chars[s - 1].c) && !line.chars[s - 1].c.is_whitespace() {
+                s -= 1;
+            }
+            let mut e = idx;
+            while e < line.chars.len()
+                && !is_word(line.chars[e].c)
+                && !line.chars[e].c.is_whitespace()
+            {
+                e += 1;
+            }
+            (s, e)
+        };
+
+        if end > start {
+            self.visual_mode = VisualMode::CharacterWise;
+            self.visual_anchor = Some(CursorPosition {
+                page: self.cursor.page,
+                line_idx: self.cursor.line_idx,
+                char_idx: start,
+            });
+            self.cursor.char_idx = end.saturating_sub(1);
+        }
+    }
+
+    /// Select inner big word (iW) as a visual text object.
+    pub fn select_inner_big_word(&mut self, line_bounds: &[LineBounds]) {
+        if !self.active {
+            return;
+        }
+        let Some(line) = line_bounds.get(self.cursor.line_idx) else {
+            return;
+        };
+        let idx = self.cursor.char_idx;
+        if idx >= line.chars.len() || line.chars[idx].c.is_whitespace() {
+            return;
+        }
+
+        let mut start = idx;
+        while start > 0 && !line.chars[start - 1].c.is_whitespace() {
+            start -= 1;
+        }
+        let mut end = idx;
+        while end < line.chars.len() && !line.chars[end].c.is_whitespace() {
+            end += 1;
+        }
+
+        if end > start {
+            self.visual_mode = VisualMode::CharacterWise;
+            self.visual_anchor = Some(CursorPosition {
+                page: self.cursor.page,
+                line_idx: self.cursor.line_idx,
+                char_idx: start,
+            });
+            self.cursor.char_idx = end.saturating_sub(1);
+        }
     }
 
     /// Move to page top

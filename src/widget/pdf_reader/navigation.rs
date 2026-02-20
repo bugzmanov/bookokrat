@@ -3614,6 +3614,25 @@ impl PdfReaderState {
             return Some(InputAction::Redraw);
         }
 
+        if self.normal_mode.pending_inner {
+            self.normal_mode.pending_inner = false;
+            match c {
+                'w' => {
+                    self.normal_mode.select_inner_word(&line_bounds);
+                    let all_line_bounds = self.collect_all_line_bounds();
+                    let visual_rects = self.normal_mode.get_visual_rects_multi(&all_line_bounds);
+                    return Some(InputAction::VisualChanged(visual_rects, None));
+                }
+                'W' => {
+                    self.normal_mode.select_inner_big_word(&line_bounds);
+                    let all_line_bounds = self.collect_all_line_bounds();
+                    let visual_rects = self.normal_mode.get_visual_rects_multi(&all_line_bounds);
+                    return Some(InputAction::VisualChanged(visual_rects, None));
+                }
+                _ => return Some(InputAction::Redraw),
+            }
+        }
+
         match c {
             'h' => {
                 self.normal_mode.move_left(&line_bounds);
@@ -3767,6 +3786,10 @@ impl PdfReaderState {
                     self.clear_pending_scroll();
                     self.make_render_scale_action(self.non_kitty_zoom_factor)
                 }
+            }
+            'i' => {
+                self.normal_mode.pending_inner = true;
+                Some(InputAction::Redraw)
             }
             '/' => self.start_page_search(),
             _ => None,
@@ -3930,6 +3953,11 @@ impl PdfReaderState {
 
     pub fn notify_info(&mut self, msg: impl Into<String>) {
         self.notifications.info(msg);
+    }
+
+    pub fn get_selected_text(&self) -> Option<String> {
+        self.extract_visual_text()
+            .or_else(|| self.extract_selection_text())
     }
 
     fn extract_visual_text(&self) -> Option<String> {

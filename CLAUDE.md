@@ -20,7 +20,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     - New app versions must be able to read old data files (missing fields default to `None` or sensible defaults)
     - If a breaking change is unavoidable, ASK the user how to design a migration path before implementing
     - Test both directions: old data → new app, and consider new data → old app
-12. **VHS Test Tapes and Keyboard Shortcuts**: When changing keyboard shortcut mappings, ALWAYS check and update all VHS test tapes in `vhs_tests/tapes/` to use the new keybindings. Test tapes simulate user input, so outdated keybindings will cause test failures.
+12. **Settings File Preservation**: The config file (`config.yaml`) uses a **targeted update** approach to preserve user edits. Key rules:
+    - `save_settings_to_file()` reads the existing file and only updates **app-managed keys** in-place (version, theme, margin, pdf_*, book_sort_order). All comments, blank lines, and user-managed sections are preserved untouched.
+    - `generate_settings_yaml()` is only used for **brand new config files** (first launch). It includes template comments for lookup_command and custom_themes.
+    - **App-managed keys** (updated programmatically): `version`, `theme`, `margin`, `transparent_background`, `pdf_scale`, `pdf_pan_shift`, `pdf_render_mode`, `pdf_enabled`, `pdf_settings_configured`, `book_sort_order`
+    - **User-managed keys** (only edited by hand in YAML): `lookup_command`, `lookup_display`, `custom_themes` — the app reads but never writes these
+    - When adding a new setting: if it's app-managed, add it to `app_managed_key_values()`. If it's user-managed, only add it to `generate_settings_yaml()` (for new files) and to `migrate_settings()` (to append template for upgrading users).
+    - **Migrations** (`migrate_settings()`) receive the file content as `&str` and return modified content. Insert new template sections at the correct position relative to existing sections (e.g., before custom_themes). The targeted update then writes the version bump on top.
+    - NEVER regenerate the entire config file on save — this destroys user comments and formatting
+13. **VHS Test Tapes and Keyboard Shortcuts**: When changing keyboard shortcut mappings, ALWAYS check and update all VHS test tapes in `vhs_tests/tapes/` to use the new keybindings. Test tapes simulate user input, so outdated keybindings will cause test failures.
 13. **Keyboard Mapping Collisions**: When adding a new keyboard shortcut, ALWAYS check for collisions with existing mappings. Search the codebase for existing uses of the proposed key/key combination. If a collision is found, notify the user about the conflict and ask for a decision on how to proceed (use a different key, override existing mapping, or make it context-dependent).
 
 ## Core Principles

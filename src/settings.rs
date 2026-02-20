@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 
-pub const CURRENT_VERSION: u32 = 2;
+pub const CURRENT_VERSION: u32 = 3;
 const SETTINGS_FILENAME: &str = "config.yaml";
 const LEGACY_SETTINGS_FILENAME: &str = ".bookokrat_settings.yaml";
 const APP_NAME: &str = "bookokrat";
@@ -47,6 +47,17 @@ pub enum BookSortOrder {
     ByName,
     /// Group by type: PDFs first, then EPUBs, each sorted by name
     ByType,
+}
+
+/// Display mode for lookup command results
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LookupDisplay {
+    /// Show command output in a scrollable popup
+    #[default]
+    Popup,
+    /// Run command and forget (just show notification)
+    FireAndForget,
 }
 
 /// PDF render mode for Kitty terminals
@@ -104,6 +115,12 @@ pub struct Settings {
 
     #[serde(default)]
     pub book_sort_order: BookSortOrder,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup_command: Option<String>,
+
+    #[serde(default)]
+    pub lookup_display: LookupDisplay,
 }
 
 fn default_true() -> bool {
@@ -136,6 +153,8 @@ impl Default for Settings {
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             book_sort_order: BookSortOrder::default(),
+            lookup_command: None,
+            lookup_display: LookupDisplay::default(),
         }
     }
 }
@@ -190,8 +209,12 @@ fn load_settings_from_path(path: &PathBuf) {
                 debug!("Loaded settings from {path:?}");
 
                 if settings.version < CURRENT_VERSION {
-                    migrate_settings(&mut settings);
-                    save_settings_to_file(&settings, path);
+                    let migrated_content = migrate_settings(&mut settings, &content);
+                    let updated = update_settings_values(&migrated_content, &settings);
+                    match fs::write(path, updated) {
+                        Ok(()) => debug!("Migrated settings in {path:?}"),
+                        Err(e) => error!("Failed to save migrated settings to {path:?}: {e}"),
+                    }
                 }
 
                 if let Ok(mut global) = SETTINGS.write() {
@@ -208,18 +231,33 @@ fn load_settings_from_path(path: &PathBuf) {
     }
 }
 
-fn migrate_settings(settings: &mut Settings) {
+fn migrate_settings(settings: &mut Settings, file_content: &str) -> String {
     info!(
         "Migrating settings from v{} to v{}",
         settings.version, CURRENT_VERSION
     );
 
-    // Future migrations go here:
-    // if settings.version < 2 {
-    //     migrate_v1_to_v2(settings);
-    // }
+    let mut content = file_content.to_string();
+
+    // v2 -> v3: insert lookup command template before custom_themes section
+    if settings.version < 3 && !content.contains("lookup_command") {
+        let insert_text = format!("\n{}", LOOKUP_COMMAND_TEMPLATE);
+        if let Some(pos) = content.find("# Custom Themes") {
+            // Back up to the start of the comment block separator line
+            let insert_pos = content[..pos]
+                .rfind("\n# ====")
+                .map(|p| p + 1)
+                .unwrap_or(pos);
+            content.insert_str(insert_pos, &insert_text);
+        } else if let Some(pos) = content.find("custom_themes:") {
+            content.insert_str(pos, &insert_text);
+        } else {
+            content.push_str(&insert_text);
+        }
+    }
 
     settings.version = CURRENT_VERSION;
+    content
 }
 
 pub fn save_settings() {
@@ -244,12 +282,101 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
         }
     }
 
-    let content = generate_settings_yaml(settings);
+    // If file exists, do targeted update preserving user comments and manual edits
+    let content = if let Ok(existing) = fs::read_to_string(path) {
+        update_settings_values(&existing, settings)
+    } else {
+        generate_settings_yaml(settings)
+    };
 
     match fs::write(path, content) {
         Ok(()) => debug!("Saved settings to {path:?}"),
         Err(e) => error!("Failed to save settings to {path:?}: {e}"),
     }
+}
+
+/// Update only app-managed keys in an existing config file, preserving
+/// all comments, blank lines, and user-managed sections (lookup_command,
+/// lookup_display, custom_themes).
+fn update_settings_values(existing_content: &str, settings: &Settings) -> String {
+    use std::collections::HashSet;
+
+    let key_values = app_managed_key_values(settings);
+    let key_set: HashSet<&str> = key_values.iter().map(|(k, _)| k.as_str()).collect();
+    let mut found_keys = HashSet::new();
+
+    let mut lines: Vec<String> = existing_content.lines().map(|l| l.to_string()).collect();
+
+    for line in lines.iter_mut() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('#') || trimmed.is_empty() {
+            continue;
+        }
+        let key_owned = match trimmed.find(':') {
+            Some(pos) => trimmed[..pos].trim().to_string(),
+            None => continue,
+        };
+        if key_set.contains(key_owned.as_str()) {
+            if let Some((_, value)) = key_values.iter().find(|(k, _)| k == &key_owned) {
+                *line = format!("{}: {}", key_owned, value);
+                found_keys.insert(key_owned);
+            }
+        }
+    }
+
+    // Append any app-managed keys missing from the file
+    let mut appended = false;
+    for (key, value) in &key_values {
+        if !found_keys.contains(key.as_str()) {
+            if !appended {
+                lines.push(String::new());
+                appended = true;
+            }
+            lines.push(format!("{}: {}", key, value));
+        }
+    }
+
+    let mut result = lines.join("\n");
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
+fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
+    vec![
+        ("version".into(), format!("{}", settings.version)),
+        ("theme".into(), format!("\"{}\"", settings.theme)),
+        ("margin".into(), format!("{}", settings.margin)),
+        (
+            "transparent_background".into(),
+            format!("{}", settings.transparent_background),
+        ),
+        ("pdf_scale".into(), format!("{}", settings.pdf_scale)),
+        (
+            "pdf_pan_shift".into(),
+            format!("{}", settings.pdf_pan_shift),
+        ),
+        (
+            "pdf_render_mode".into(),
+            match settings.pdf_render_mode {
+                PdfRenderMode::Page => "page".into(),
+                PdfRenderMode::Scroll => "scroll".into(),
+            },
+        ),
+        ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
+        (
+            "pdf_settings_configured".into(),
+            format!("{}", settings.pdf_settings_configured),
+        ),
+        (
+            "book_sort_order".into(),
+            match settings.book_sort_order {
+                BookSortOrder::ByName => "by_name".into(),
+                BookSortOrder::ByType => "by_type".into(),
+            },
+        ),
+    ]
 }
 
 fn generate_settings_yaml(settings: &Settings) -> String {
@@ -279,6 +406,18 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByType => "by_type",
     };
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
+    content.push('\n');
+
+    if let Some(ref cmd) = settings.lookup_command {
+        content.push_str(&format!("lookup_command: \"{}\"\n", cmd));
+        let display_str = match settings.lookup_display {
+            LookupDisplay::Popup => "popup",
+            LookupDisplay::FireAndForget => "fire_and_forget",
+        };
+        content.push_str(&format!("lookup_display: {}\n", display_str));
+    } else {
+        content.push_str(LOOKUP_COMMAND_TEMPLATE);
+    }
     content.push('\n');
 
     content.push_str(CUSTOM_THEMES_TEMPLATE);
@@ -340,6 +479,31 @@ const CUSTOM_THEMES_TEMPLATE: &str = r#"# ======================================
 #     base0D: "7E9CD8"    # Blue (links)
 #     base0E: "957FB8"    # Purple (keywords)
 #     base0F: "D27E99"    # Brown/Pink
+
+"#;
+
+const LOOKUP_COMMAND_TEMPLATE: &str = r#"# ============================================================================
+# Lookup Command
+# ============================================================================
+# Shell command to run when you press Space+l on selected text.
+# Use {} as a placeholder for the selected word. If no {} is present,
+# the selected text is appended as a shell-escaped argument.
+#
+# lookup_display controls how output is shown:
+#   popup          - capture stdout and show in a scrollable popup (default)
+#   fire_and_forget - spawn command and move on (e.g., open a browser)
+#
+# Example: CLI dictionary (output shown in popup)
+#   lookup_command: "dict {}"
+#   lookup_display: popup
+#
+# Example: macOS Dictionary.app
+#   lookup_command: "open dict://{}"
+#   lookup_display: fire_and_forget
+#
+# Example: online dictionary in browser
+#   lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
+#   lookup_display: fire_and_forget
 
 "#;
 
@@ -469,6 +633,17 @@ pub fn set_book_sort_order(order: BookSortOrder) {
     save_settings();
 }
 
+pub fn get_lookup_command() -> Option<String> {
+    SETTINGS.read().ok().and_then(|s| s.lookup_command.clone())
+}
+
+pub fn get_lookup_display() -> LookupDisplay {
+    SETTINGS
+        .read()
+        .map(|s| s.lookup_display)
+        .unwrap_or_default()
+}
+
 /// Called on app startup to fix incompatible settings when switching terminals
 /// (e.g., from Kitty to WezTerm with Scroll mode selected)
 pub fn fix_incompatible_pdf_settings() {
@@ -481,5 +656,104 @@ pub fn fix_incompatible_pdf_settings() {
             settings.pdf_render_mode = PdfRenderMode::Page;
         }
         save_settings();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn targeted_update_preserves_user_managed_sections() {
+        let existing = r#"version: 2
+theme: "Old Theme"
+margin: 0
+pdf_scale: 1
+pdf_pan_shift: 0
+pdf_render_mode: page
+pdf_enabled: true
+pdf_settings_configured: false
+book_sort_order: by_name
+
+# manual section
+lookup_command: "open dict://{}"
+lookup_display: fire_and_forget
+
+custom_themes:
+  - scheme: "Manual Theme"
+    base00: "000000"
+"#;
+
+        let mut settings = Settings::default();
+        settings.version = CURRENT_VERSION;
+        settings.theme = "Oceanic Next".to_string();
+        settings.margin = 3;
+        settings.pdf_scale = 1.25;
+        settings.pdf_render_mode = PdfRenderMode::Scroll;
+
+        let updated = update_settings_values(existing, &settings);
+
+        assert!(updated.contains("lookup_command: \"open dict://{}\""));
+        assert!(updated.contains("lookup_display: fire_and_forget"));
+        assert!(updated.contains("custom_themes:\n  - scheme: \"Manual Theme\""));
+        assert!(updated.contains("theme: \"Oceanic Next\""));
+        assert!(updated.contains("margin: 3"));
+        assert!(updated.contains("pdf_scale: 1.25"));
+        assert!(updated.contains("pdf_render_mode: scroll"));
+    }
+
+    #[test]
+    fn targeted_update_preserves_non_managed_keys_and_comments() {
+        let existing = r#"# top comment
+version: 2 # inline note
+theme: "Old Theme"
+margin: 1
+my_custom_flag: true
+"#;
+
+        let mut settings = Settings::default();
+        settings.version = CURRENT_VERSION;
+        settings.theme = "New Theme".to_string();
+        settings.margin = 7;
+
+        let updated = update_settings_values(existing, &settings);
+
+        assert!(updated.contains("# top comment"));
+        assert!(updated.contains("my_custom_flag: true"));
+        assert!(updated.contains("theme: \"New Theme\""));
+        assert!(updated.contains("margin: 7"));
+        assert!(updated.contains("version: 3"));
+    }
+
+    #[test]
+    fn targeted_update_appends_missing_app_managed_keys() {
+        let existing = "lookup_command: \"dict {}\"\n";
+        let settings = Settings::default();
+
+        let updated = update_settings_values(existing, &settings);
+
+        assert!(updated.contains("lookup_command: \"dict {}\""));
+        assert!(updated.contains("version: 3"));
+        assert!(updated.contains("theme: \"Oceanic Next\""));
+        assert!(updated.contains("book_sort_order: by_name"));
+    }
+
+    #[test]
+    fn migration_inserts_lookup_template_before_custom_themes() {
+        let original = format!(
+            "version: 2\n{}\n",
+            CUSTOM_THEMES_TEMPLATE.trim_end_matches('\n')
+        );
+        let mut settings = Settings {
+            version: 2,
+            ..Settings::default()
+        };
+
+        let migrated = migrate_settings(&mut settings, &original);
+
+        let lookup_pos = migrated.find("# Lookup Command").unwrap();
+        let themes_pos = migrated.find("# Custom Themes").unwrap();
+        assert!(lookup_pos < themes_pos);
+        assert_eq!(settings.version, CURRENT_VERSION);
     }
 }
