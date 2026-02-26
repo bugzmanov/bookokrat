@@ -132,7 +132,7 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "pdf")]
     {
-        let caps = terminal::detect_terminal();
+        let caps = terminal::detect_terminal_with_probe();
         info!(
             "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
              protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \

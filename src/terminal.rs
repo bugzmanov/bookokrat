@@ -1,4 +1,5 @@
 use std::env;
+use std::sync::OnceLock;
 
 use log::warn;
 
@@ -105,6 +106,25 @@ pub fn detect_terminal_with_picker(picker: &mut Picker) -> TerminalCapabilities 
     caps.pdf = derive_pdf_capabilities(&caps);
 
     caps
+}
+
+/// Detect terminal capabilities, probing via escape sequences if env-based
+/// detection yields no graphics protocol (i.e. unknown terminals).
+/// The result is cached so the probe runs at most once.
+pub fn detect_terminal_with_probe() -> TerminalCapabilities {
+    static PROBED_CAPS: OnceLock<TerminalCapabilities> = OnceLock::new();
+    PROBED_CAPS
+        .get_or_init(|| {
+            let caps = detect_terminal();
+            if caps.protocol.is_some() {
+                return caps;
+            }
+            match crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
+                Ok(mut picker) => detect_terminal_with_picker(&mut picker),
+                Err(_) => caps,
+            }
+        })
+        .clone()
 }
 
 pub fn supports_true_color() -> bool {

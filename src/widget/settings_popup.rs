@@ -75,7 +75,7 @@ impl SettingsPopup {
     }
 
     pub fn new_with_tab(tab: SettingsTab) -> Self {
-        let caps = terminal::detect_terminal();
+        let caps = terminal::detect_terminal_with_probe();
         Self::new_with_caps(tab, caps.supports_graphics, caps.pdf.supports_scroll_mode)
     }
 

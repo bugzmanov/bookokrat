@@ -193,7 +193,7 @@ pub fn load_settings() {
         };
         info!("Settings file not found, creating with defaults at {path:?}");
         if let Ok(mut settings) = SETTINGS.write() {
-            let caps = crate::terminal::detect_terminal();
+            let caps = crate::terminal::detect_terminal_with_probe();
             if caps.pdf.supports_scroll_mode {
                 settings.pdf_render_mode = PdfRenderMode::Scroll;
             }
@@ -647,7 +647,7 @@ pub fn get_lookup_display() -> LookupDisplay {
 /// Called on app startup to fix incompatible settings when switching terminals
 /// (e.g., from Kitty to WezTerm with Scroll mode selected)
 pub fn fix_incompatible_pdf_settings() {
-    let caps = crate::terminal::detect_terminal();
+    let caps = crate::terminal::detect_terminal_with_probe();
     let current_mode = get_pdf_render_mode();
 
     // If user switched from Kitty to non-Kitty terminal with Scroll mode, silently fix it

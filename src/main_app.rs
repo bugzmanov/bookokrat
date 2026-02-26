@@ -437,7 +437,7 @@ impl App {
         };
 
         #[cfg(feature = "pdf")]
-        let startup_caps = crate::terminal::detect_terminal();
+        let startup_caps = crate::terminal::detect_terminal_with_probe();
 
         let mut app = Self {
             book_manager,
@@ -928,7 +928,7 @@ impl App {
         let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
-            None => crate::terminal::detect_terminal(),
+            None => crate::terminal::detect_terminal_with_probe(),
         };
         self.pdf_supports_graphics = caps.supports_graphics;
         self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
