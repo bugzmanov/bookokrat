@@ -2,7 +2,9 @@ use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
 use crate::parsing::markdown_renderer::MarkdownRenderer;
+use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
+use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
 use anyhow::Result;
 use crossterm::event::KeyModifiers;
@@ -13,6 +15,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use std::collections::HashMap;
 use std::io::{Read, Seek};
 
 /// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
@@ -52,8 +55,7 @@ pub struct BookStat {
 struct ChapterStat {
     title: String,
     count: usize,
-    chapter_index: usize, // The actual chapter index in the EPUB
-    is_top_level: bool,   // Whether this is a top-level chapter or nested section
+    chapter_index: usize, // The spine index in the EPUB
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -115,15 +117,37 @@ impl BookStat {
         self.chapter_stats.clear();
         self.stat_unit = StatUnit::Screens;
 
-        let toc = TocParser::parse_toc_structure(epub);
-
         let popup_height = terminal_size.1.saturating_sub(4) as usize;
         let text_width = terminal_size.0.saturating_sub(6) as usize;
-        let lines_per_screen = popup_height.saturating_sub(4); // Account for borders and padding
+        let lines_per_screen = popup_height.saturating_sub(4);
 
-        if !toc.is_empty() {
-            self.process_toc_items(&toc, epub, text_width, lines_per_screen);
+        let toc = TocParser::parse_toc_structure(epub);
+        let toc_title_map = Self::build_toc_title_map(&toc);
+
+        let original_chapter = epub.get_current_chapter();
+        let num_chapters = epub.spine.len();
+
+        for idx in 0..num_chapters {
+            if !epub.set_current_chapter(idx) {
+                continue;
+            }
+
+            let content = match epub.get_current_str() {
+                Some((content, _)) => content,
+                None => {
+                    error!("BookStat: Failed to get content for spine index {idx}");
+                    continue;
+                }
+            };
+
+            let title = self
+                .resolve_spine_title(epub, idx, &toc_title_map, &content)
+                .unwrap_or_else(|| format!("Chapter {}", idx + 1));
+
+            self.add_chapter_stat(&title, &content, text_width, lines_per_screen, idx);
         }
+
+        epub.set_current_chapter(original_chapter);
 
         if !self.chapter_stats.is_empty() {
             self.list_state.select(Some(0));
@@ -198,7 +222,6 @@ impl BookStat {
                 title: title.clone(),
                 count: pages,
                 chapter_index: *start_page,
-                is_top_level: true,
             });
         }
 
@@ -211,175 +234,75 @@ impl BookStat {
         Ok(())
     }
 
-    fn process_toc_items<R: Read + Seek>(
-        &mut self,
-        items: &[crate::table_of_contents::TocItem],
-        epub: &mut EpubDoc<R>,
-        text_width: usize,
-        lines_per_screen: usize,
-    ) {
-        self.process_toc_items_recursive(items, epub, text_width, lines_per_screen, true);
+    /// Build a flat map from resource path suffix → TOC title by recursively walking the TOC.
+    /// Strips anchors from hrefs (e.g. "ch1.xhtml#section" → "ch1.xhtml") since spine items
+    /// don't have anchors. When multiple TOC entries map to the same file, the first one wins.
+    fn build_toc_title_map(items: &[TocItem]) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        Self::collect_toc_titles(items, &mut map);
+        map
     }
 
-    fn process_toc_items_recursive<R: Read + Seek>(
-        &mut self,
-        items: &[crate::table_of_contents::TocItem],
-        epub: &mut EpubDoc<R>,
-        text_width: usize,
-        lines_per_screen: usize,
-        is_top_level: bool,
-    ) {
+    fn collect_toc_titles(items: &[TocItem], map: &mut HashMap<String, String>) {
         for item in items {
             match item {
-                crate::table_of_contents::TocItem::Chapter { title, href, .. } => {
-                    // Find the spine index for this href
-                    let current_page = epub.get_current_chapter();
-                    // URL-decode the href (NCX files may have URL-encoded paths like %27 for ')
-                    let decoded_href = percent_decode(href);
-
-                    // Try to find the chapter in the spine
-                    let mut spine_index = None;
-                    for (idx, spine_item) in epub.spine.iter().enumerate() {
-                        if let Some(resource) = epub.resources.get(&spine_item.idref) {
-                            let path_str = resource.path.to_string_lossy();
-                            if path_str.ends_with(&decoded_href)
-                                || decoded_href.ends_with(&*path_str)
-                            {
-                                spine_index = Some(idx);
-                                break;
-                            }
-                        }
-                    }
-
-                    let content_result = if let Some(idx) = spine_index {
-                        if epub.set_current_chapter(idx) {
-                            epub.get_current_str().map(|(content, _)| content)
-                        } else {
-                            None
-                        }
-                    } else {
-                        // Fallback to trying to find the resource by path
-                        let matching_id = epub
-                            .resources
-                            .iter()
-                            .find(|(_, resource)| {
-                                let path_str = resource.path.to_string_lossy();
-                                path_str == decoded_href || path_str.ends_with(&decoded_href)
-                            })
-                            .map(|(id, _)| id.clone());
-
-                        if let Some(id) = matching_id {
-                            epub.get_resource_str(&id).map(|(content, _)| content)
-                        } else {
-                            None
-                        }
-                    };
-
-                    // Restore original page
-                    epub.set_current_chapter(current_page);
-
-                    match content_result {
-                        Some(content) => {
-                            self.add_chapter_stat(
-                                title,
-                                &content,
-                                text_width,
-                                lines_per_screen,
-                                spine_index.unwrap_or(0),
-                                is_top_level,
-                            );
-                        }
-                        None => {
-                            error!(
-                                "BookStat: Failed to get content for chapter '{title}' with href '{href}'"
-                            );
-                        }
-                    }
+                TocItem::Chapter { title, href, .. } => {
+                    let stripped = Self::strip_anchor(href);
+                    let decoded = percent_decode(&stripped);
+                    map.entry(decoded).or_insert_with(|| title.clone());
                 }
-                crate::table_of_contents::TocItem::Section {
+                TocItem::Section {
                     title,
                     href,
                     children,
                     ..
                 } => {
-                    // Process section if it has content
                     if let Some(href_str) = href {
-                        // For sections, we need to find the actual chapter index from the epub spine
-                        let current_page = epub.get_current_chapter();
-                        // URL-decode the href (NCX files may have URL-encoded paths like %27 for ')
-                        let decoded_href = percent_decode(href_str);
+                        let stripped = Self::strip_anchor(href_str);
+                        let decoded = percent_decode(&stripped);
+                        map.entry(decoded).or_insert_with(|| title.clone());
+                    }
+                    Self::collect_toc_titles(children, map);
+                }
+            }
+        }
+    }
 
-                        // Try to find the section in the spine
-                        let mut spine_index = None;
-                        for (idx, spine_item) in epub.spine.iter().enumerate() {
-                            if let Some(resource) = epub.resources.get(&spine_item.idref) {
-                                let path_str = resource.path.to_string_lossy();
-                                if path_str.ends_with(&decoded_href)
-                                    || decoded_href.ends_with(&*path_str)
-                                {
-                                    spine_index = Some(idx);
-                                    break;
-                                }
-                            }
-                        }
+    fn strip_anchor(href: &str) -> String {
+        match href.find('#') {
+            Some(pos) => href[..pos].to_string(),
+            None => href.to_string(),
+        }
+    }
 
-                        let content_result = if let Some(idx) = spine_index {
-                            // Use found index
-                            if epub.set_current_chapter(idx) {
-                                epub.get_current_str().map(|(content, _)| content)
-                            } else {
-                                None
-                            }
-                        } else {
-                            // Try to find resource by path as fallback
-                            let matching_id = epub
-                                .resources
-                                .iter()
-                                .find(|(_, resource)| {
-                                    let path_str = resource.path.to_string_lossy();
-                                    path_str == decoded_href || path_str.ends_with(&decoded_href)
-                                })
-                                .map(|(id, _)| id.clone());
-
-                            if let Some(id) = matching_id {
-                                epub.get_resource_str(&id).map(|(content, _)| content)
-                            } else {
-                                None
-                            }
-                        };
-
-                        // Restore original page
-                        epub.set_current_chapter(current_page);
-
-                        match content_result {
-                            Some(content) => {
-                                self.add_chapter_stat(
-                                    title,
-                                    &content,
-                                    text_width,
-                                    lines_per_screen,
-                                    spine_index.unwrap_or(0),
-                                    is_top_level,
-                                );
-                            }
-                            None => {
-                                error!(
-                                    "BookStat: Failed to get content for section '{title}' with href '{href_str}'"
-                                );
-                            }
-                        }
-                    } else if !children.is_empty() {
-                        self.process_toc_items_recursive(
-                            children,
-                            epub,
-                            text_width,
-                            lines_per_screen,
-                            false,
-                        );
+    /// Resolve a title for a spine item by looking up the TOC map, then falling back
+    /// to extracting a title from the HTML content.
+    fn resolve_spine_title<R: Read + Seek>(
+        &self,
+        epub: &EpubDoc<R>,
+        spine_index: usize,
+        toc_title_map: &HashMap<String, String>,
+        content: &str,
+    ) -> Option<String> {
+        if let Some(spine_item) = epub.spine.get(spine_index) {
+            if let Some(resource) = epub.resources.get(&spine_item.idref) {
+                let path_str = resource.path.to_string_lossy();
+                // Try matching against TOC entries by path suffix
+                for (toc_href, title) in toc_title_map {
+                    if path_str.ends_with(toc_href.as_str()) || toc_href.ends_with(&*path_str) {
+                        return Some(title.clone());
                     }
                 }
             }
         }
+
+        // Fallback: extract title from HTML content
+        if let Some(title) = TextGenerator::extract_chapter_title(content) {
+            return Some(title);
+        }
+
+        // Last resort: use the spine idref
+        epub.spine.get(spine_index).map(|item| item.idref.clone())
     }
 
     fn add_chapter_stat(
@@ -389,39 +312,20 @@ impl BookStat {
         text_width: usize,
         lines_per_screen: usize,
         chapter_index: usize,
-        is_top_level: bool,
     ) {
-        // Convert HTML to Markdown AST
         let mut converter = HtmlToMarkdownConverter::new();
         let document = converter.convert(content);
 
-        // Render to text
         let renderer = MarkdownRenderer::new();
         let rendered_text = renderer.render(&document);
 
-        // Calculate screens based on rendered text
         let screens = self.calculate_screens(&rendered_text, text_width, lines_per_screen);
 
-        if is_top_level {
-            // Only add top-level chapters to the visible stats list
-            self.chapter_stats.push(ChapterStat {
-                title: title.to_string(),
-                count: screens,
-                chapter_index,
-                is_top_level,
-            });
-        } else {
-            // For nested sections, contribute screens to the parent top-level chapter
-            // Find the last top-level chapter and add screens to it
-            if let Some(last_top_level) = self
-                .chapter_stats
-                .iter_mut()
-                .rev()
-                .find(|stat| stat.is_top_level)
-            {
-                last_top_level.count += screens;
-            }
-        }
+        self.chapter_stats.push(ChapterStat {
+            title: title.to_string(),
+            count: screens,
+            chapter_index,
+        });
     }
 
     fn calculate_screens(&self, text: &str, width: usize, lines_per_screen: usize) -> usize {
@@ -498,31 +402,40 @@ impl BookStat {
                 Style::default().fg(current_theme().base_0a),
             )])])]
         } else {
+            // Available width inside the popup (borders=2, highlight symbol "» "=2)
+            let inner_width = popup_width.saturating_sub(4) as usize;
+
             self.chapter_stats
                 .iter()
                 .map(|stat| {
-                    // Calculate percentage read before this chapter
                     let percentage = if total_screens > 0 {
                         (cumulative_screens * 100) / total_screens
                     } else {
                         0
                     };
 
-                    // Update cumulative for next iteration
                     cumulative_screens += stat.count;
                     let count_text = self.stat_unit.format_count(stat.count);
+                    let count_suffix = format!(" [{count_text}]");
+                    let prefix = format!("{percentage:3}% ");
+
+                    // Truncate title so the full line fits within inner_width
+                    let title_clean = stat.title.replace('\n', " ");
+                    let overhead = prefix.chars().count() + count_suffix.chars().count();
+                    let max_title = inner_width.saturating_sub(overhead);
+                    let title_chars: Vec<char> = title_clean.chars().collect();
+                    let title = if title_chars.len() > max_title {
+                        let truncated: String =
+                            title_chars[..max_title.saturating_sub(1)].iter().collect();
+                        format!("{truncated}…")
+                    } else {
+                        title_clean
+                    };
 
                     let content = vec![Line::from(vec![
-                        Span::styled(
-                            format!("{percentage:3}% "),
-                            Style::default().fg(current_theme().base_03),
-                        ),
-                        Span::raw(stat.title.replace("\n", " ")),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("[{count_text}]"),
-                            Style::default().fg(current_theme().base_0c),
-                        ),
+                        Span::styled(prefix, Style::default().fg(current_theme().base_03)),
+                        Span::raw(title),
+                        Span::styled(count_suffix, Style::default().fg(current_theme().base_0c)),
                     ])];
 
                     ListItem::new(content)
