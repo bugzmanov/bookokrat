@@ -275,6 +275,8 @@ impl App {
             // Force one cleanup pass when closing image popup so stale overlay
             // fragments are removed before returning to content view.
             self.text_reader.request_overlay_cleanup_on_next_frame();
+            // Rebuild image protocols so terminal-side evictions/deletes are recovered.
+            self.text_reader.invalidate_loaded_image_protocols();
         }
         let panel = if self.zen_mode {
             MainPanel::Content
