@@ -569,6 +569,7 @@ impl PdfReaderState {
                     'h' => self.prev_page(),
                     'q' => Some(InputAction::QuitApp),
                     'i' => Some(InputAction::ToggleInvertImages),
+                    'I' => Some(InputAction::TogglePdfTheming),
                     'p' => Some(InputAction::ToggleProfiling),
                     'x' => Some(InputAction::DumpDebugState),
                     'a' => self.start_comment_input(),
@@ -4410,6 +4411,31 @@ impl PdfReaderState {
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
+            InputAction::TogglePdfTheming => {
+                for rendered_info in &mut self.rendered {
+                    rendered_info.img = None;
+                }
+                self.themed_rendering = !self.themed_rendering;
+                if let Some(service) = service {
+                    if self.themed_rendering {
+                        let (br, bg, bb) = extract_pdf_rgb(&self.palette.base_00);
+                        let (fr, fg, fb) = extract_pdf_rgb(&self.palette.base_05);
+                        let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
+                        let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+                        service.apply_command(crate::pdf::Command::SetColors { black, white });
+                        notifications.info("PDF rendering: themed");
+                    } else {
+                        service.apply_command(crate::pdf::Command::SetColors {
+                            black: -1,
+                            white: -1,
+                        });
+                        notifications.info("PDF rendering: original");
+                    }
+                    service.request_page(self.page);
+                }
+                send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
+            }
             InputAction::SelectionChanged(rects) => {
                 if !self.is_kitty {
                     self.force_redraw();
@@ -4582,6 +4608,7 @@ pub(crate) fn save_pdf_bookmark(
         zoom_factor,
         pan_position,
         Some(pdf_reader.invert_images),
+        Some(pdf_reader.themed_rendering),
     );
 
     let now = std::time::Instant::now();
@@ -4852,10 +4879,15 @@ pub(crate) fn apply_theme_to_pdf_reader(
         rendered_info.img = None;
     }
 
-    let (br, bg, bb) = extract_pdf_rgb(&palette.base_00);
-    let (fr, fg, fb) = extract_pdf_rgb(&palette.base_05);
-    let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
-    let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+    let (black, white) = if pdf_reader.themed_rendering {
+        let (br, bg, bb) = extract_pdf_rgb(&palette.base_00);
+        let (fr, fg, fb) = extract_pdf_rgb(&palette.base_05);
+        let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
+        let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+        (black, white)
+    } else {
+        (-1, -1)
+    };
 
     if let Some(service) = service {
         service.apply_command(crate::pdf::Command::SetColors { black, white });

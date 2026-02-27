@@ -998,6 +998,7 @@ impl App {
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
         let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
         let bookmark_invert = bookmark.and_then(|b| b.pdf_invert_images);
+        let bookmark_themed = bookmark.and_then(|b| b.pdf_themed_rendering);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -1049,6 +1050,15 @@ impl App {
             pdf_reader.invert_images = inverted;
             if !inverted {
                 service.apply_command(crate::pdf::Command::ToggleInvertImages);
+            }
+        }
+        if let Some(themed) = bookmark_themed {
+            pdf_reader.themed_rendering = themed;
+            if !themed {
+                service.apply_command(crate::pdf::Command::SetColors {
+                    black: -1,
+                    white: -1,
+                });
             }
         }
         if let Some(supported) = self.pdf_kitty_delete_range_support {

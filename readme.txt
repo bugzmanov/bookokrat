@@ -98,7 +98,11 @@
 │  Ctrl+i        Jump forward in history                                      │
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
-│  i (PDF)       Toggle image inversion                                       │
+│  i (PDF)       Toggle image inversion (themed mode only; saved per book)    │
+│  I (PDF)       Switch between original PDF rendering and themed style        │
+│                (saved per book).                                             │
+│                Themed style is the default.                                  │
+│                In original rendering mode, i has no visual effect.          │
 │  n             Toggle normal mode                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
 
