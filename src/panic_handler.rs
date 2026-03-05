@@ -1,7 +1,10 @@
 use crossterm::{
+    cursor::{MoveTo, Show},
     event::DisableMouseCapture,
     execute,
-    terminal::{LeaveAlternateScreen, disable_raw_mode},
+    terminal::{
+        Clear, ClearType, EndSynchronizedUpdate, LeaveAlternateScreen, disable_raw_mode,
+    },
 };
 use std::io::{self, Write};
 use std::panic;
@@ -36,7 +39,15 @@ pub fn initialize_panic_handler() {
 /// - Showing the cursor
 pub fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
-    let _ = execute!(io::stderr(), crossterm::cursor::Show);
-    let _ = writeln!(io::stderr());
+    let _ = execute!(
+        io::stdout(),
+        EndSynchronizedUpdate,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Clear(ClearType::All),
+        MoveTo(0, 0),
+        Show
+    );
+    let _ = writeln!(io::stdout());
+    let _ = io::stdout().flush();
 }
