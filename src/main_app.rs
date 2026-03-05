@@ -5325,6 +5325,7 @@ impl App {
         let Some(mut pdf_reader) = self.pdf_reader.take() else {
             return;
         };
+        let page_before = pdf_reader.page;
         crate::widget::pdf_reader::navigate_pdf_to_page(
             &mut pdf_reader,
             page,
@@ -5336,9 +5337,12 @@ impl App {
             &mut self.last_bookmark_save,
         );
         // For non-Kitty protocols: wait for the page to be converted before redrawing
-        if !pdf_reader.is_kitty {
-            self.pdf_waiting_for_page = Some(page);
-            log::trace!("Set pdf_waiting_for_page to {page} for TOC navigation");
+        if !pdf_reader.is_kitty && pdf_reader.page != page_before {
+            self.pdf_waiting_for_page = Some(pdf_reader.page);
+            log::trace!(
+                "Set pdf_waiting_for_page to {} for TOC navigation",
+                pdf_reader.page
+            );
         }
         self.pdf_reader = Some(pdf_reader);
     }
@@ -5974,6 +5978,12 @@ where
             last_tick = std::time::Instant::now();
         }
 
+        // Keep non-Kitty viewport commands flowing even when redraw is suppressed.
+        // This prevents deadlocks where we wait for converted frames without having
+        // sent the viewport update needed by the converter.
+        #[cfg(feature = "pdf")]
+        app.update_non_kitty_viewport();
+
         // For non-Kitty PDF: suppress redraw while waiting for page/viewport to be converted.
         // This prevents flicker and wasted CPU drawing incomplete state.
         #[cfg(feature = "pdf")]
@@ -5993,7 +6003,6 @@ where
             #[cfg(feature = "pdf")]
             {
                 app.execute_pdf_display_plan();
-                app.update_non_kitty_viewport();
                 app.handle_kitty_eviction_responses(event_source);
             }
             let _ = execute!(stdout(), EndSynchronizedUpdate);
