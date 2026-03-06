@@ -1214,6 +1214,7 @@ impl App {
         pdf_reader.render_in_area(
             f,
             area,
+            self.is_main_panel(MainPanel::Content),
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
@@ -2955,12 +2956,18 @@ impl App {
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
         // Use focus-aware colors instead of hardcoded false
+        let content_focused = self.is_main_panel(MainPanel::Content);
         let (text_color, border_color, _bg_color) =
-            current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
+            current_theme().get_panel_colors(content_focused);
+        let title = if content_focused {
+            "Content • "
+        } else {
+            "Content"
+        };
 
         let content_border = Block::default()
             .borders(Borders::ALL)
-            .title("Content")
+            .title(title)
             .border_style(Style::default().fg(border_color))
             .style(Style::default().bg(theme_background()));
 

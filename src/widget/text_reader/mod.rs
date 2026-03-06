@@ -493,6 +493,11 @@ impl MarkdownTextReader {
         } else {
             format!("Chapter {current_chapter}/{total_chapters}")
         };
+        let title_text = if is_focused {
+            format!("{title_text} • ")
+        } else {
+            title_text
+        };
 
         let progress = self.calculate_progress("", width, self.visible_height);
 

@@ -830,7 +830,11 @@ impl TableOfContents {
             &mut toc_item_index,
             is_focused,
         );
-        let title = format!("{book_display_name} - Book");
+        let title = if is_focused {
+            format!("{book_display_name} - Book • ")
+        } else {
+            format!("{book_display_name} - Book")
+        };
         let mut toc_list = List::new(items)
             .block(
                 Block::default()
@@ -844,6 +848,7 @@ impl TableOfContents {
         if is_focused {
             toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
         }
+        toc_list = toc_list.highlight_symbol(if is_focused { "> " } else { "  " });
 
         f.render_stateful_widget(toc_list, area, &mut self.list_state);
     }
@@ -874,7 +879,8 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{indent}{title}");
+                    let marker = if should_highlight { "* " } else { "  " };
+                    let full_text = format!("{indent}{marker}{title}");
 
                     // Check if this item matches search
                     let chapter_content = if self.search_state.active
@@ -913,7 +919,8 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{indent}{section_icon} {title}");
+                    let marker = if should_highlight { "* " } else { "  " };
+                    let full_text = format!("{indent}{marker}{section_icon} {title}");
 
                     // Check if this item matches search
                     let section_content = if self.search_state.active

@@ -498,6 +498,7 @@ impl PdfReaderState {
         &mut self,
         f: &mut ratatui::Frame,
         area: Rect,
+        is_focused: bool,
         font_size: (u16, u16),
         text_color: Color,
         border_color: Color,
@@ -517,6 +518,11 @@ impl PdfReaderState {
             format!("[{current_page}/{total_pages}] {chapter}")
         } else {
             format!("[{current_page}/{total_pages}]")
+        };
+        let title_text = if is_focused {
+            format!("{title_text} • ")
+        } else {
+            title_text
         };
 
         let progress = if total_pages > 0 {

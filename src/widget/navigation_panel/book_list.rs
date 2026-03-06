@@ -220,6 +220,11 @@ impl BookList {
             // Check if this item is a search match
             let is_search_match = self.search_state.is_match(idx);
             let is_current_search_match = self.search_state.is_current_match(idx);
+            let marker_text = if Some(idx) == current_book_index {
+                "* "
+            } else {
+                "  "
+            };
 
             // Build the line with potential search highlights
             let content = if self.search_state.active && is_search_match {
@@ -234,6 +239,7 @@ impl BookList {
                     .unwrap_or(&empty_vec);
 
                 let mut spans = Vec::new();
+                spans.push(Span::styled(marker_text, base_style));
 
                 // Add [pdf]prefix if this is a PDF
                 if is_pdf {
@@ -300,6 +306,7 @@ impl BookList {
             } else {
                 // No search active or not a match - render normally
                 let mut spans = Vec::new();
+                spans.push(Span::styled(marker_text, base_style));
                 if is_pdf {
                     spans.push(Span::styled("[pdf]", pdf_prefix_style));
                 }
@@ -319,14 +326,19 @@ impl BookList {
             Style::default().bg(selection_bg).fg(selection_fg)
         };
 
-        let title = match (is_calibre_mode, get_book_sort_order()) {
+        let base_title = match (is_calibre_mode, get_book_sort_order()) {
             (true, BookSortOrder::ByType) => "Books [Calibre] [by type]",
             (true, BookSortOrder::ByName) => "Books [Calibre]",
             (false, BookSortOrder::ByType) => "Books [by type]",
             (false, BookSortOrder::ByName) => "Books",
         };
+        let title = if is_focused {
+            format!("{base_title} • ")
+        } else {
+            base_title.to_string()
+        };
 
-        let files = List::new(items)
+        let mut files = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -336,6 +348,7 @@ impl BookList {
             )
             .highlight_style(highlight_style)
             .style(Style::default().bg(theme_background()));
+        files = files.highlight_symbol(if is_focused { "> " } else { "  " });
 
         f.render_stateful_widget(files, area, &mut self.list_state);
     }
