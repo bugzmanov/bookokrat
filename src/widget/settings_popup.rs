@@ -1,7 +1,8 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    PdfRenderMode, get_pdf_render_mode, is_pdf_enabled, is_transparent_background, set_pdf_enabled,
+    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
+    is_pdf_enabled, is_transparent_background, set_pdf_enabled, set_pdf_page_layout_mode,
     set_pdf_render_mode, set_transparent_background,
 };
 use crate::terminal;
@@ -19,6 +20,7 @@ use ratatui::{
 pub enum SettingsAction {
     Close,
     SettingsChanged,
+    PageLayoutChanged,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -112,7 +114,7 @@ impl SettingsPopup {
         if !is_pdf_enabled() {
             return 1;
         }
-        if self.supports_scroll_mode { 3 } else { 2 }
+        5
     }
 
     fn render_mode_available(&self) -> bool {
@@ -240,6 +242,7 @@ impl SettingsPopup {
     fn render_pdf_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
         let pdf_enabled = is_pdf_enabled();
         let current_mode = get_pdf_render_mode();
+        let current_layout_mode = get_pdf_page_layout_mode();
         let effective_pdf_enabled = self.supports_graphics && pdf_enabled;
         let render_mode_available = self.render_mode_available();
 
@@ -251,6 +254,10 @@ impl SettingsPopup {
                 Constraint::Length(1), // Render Mode header
                 Constraint::Length(1), // empty line
                 Constraint::Length(2), // Render Mode options
+                Constraint::Length(1), // spacer
+                Constraint::Length(1), // Page Layout header
+                Constraint::Length(1), // empty line
+                Constraint::Length(2), // Page Layout options
                 Constraint::Length(1), // spacer
                 Constraint::Min(1),    // Info message
             ])
@@ -383,9 +390,70 @@ impl SettingsPopup {
         );
         f.render_widget(Paragraph::new(scroll_line), render_chunks[1]);
 
+        // Page Layout section header
+        let layout_header_color = if render_mode_available {
+            palette.base_06
+        } else {
+            palette.base_03
+        };
+        self.render_section_header(f, chunks[6], "Page Layout", palette, layout_header_color);
+
+        // Page Layout options
+        let layout_options_area = Rect {
+            x: chunks[8].x + 2,
+            y: chunks[8].y,
+            width: chunks[8].width.saturating_sub(2),
+            height: chunks[8].height,
+        };
+
+        let layout_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(layout_options_area);
+
+        let layout_option_style = if render_mode_available {
+            Style::default().fg(palette.base_06)
+        } else {
+            Style::default().fg(palette.base_03)
+        };
+
+        let single_radio = if current_layout_mode == PdfPageLayoutMode::Single {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let single_line = self.render_radio_option(
+            single_radio,
+            "Single",
+            Some("one page"),
+            layout_option_style,
+            self.current_tab == SettingsTab::PdfSupport
+                && self.pdf_selected_idx == 4
+                && render_mode_available,
+            palette,
+        );
+        f.render_widget(Paragraph::new(single_line), layout_chunks[0]);
+
+        let dual_radio = if current_layout_mode == PdfPageLayoutMode::Dual {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let dual_line = self.render_radio_option(
+            dual_radio,
+            "Dual",
+            Some("two pages"),
+            layout_option_style,
+            self.current_tab == SettingsTab::PdfSupport
+                && self.pdf_selected_idx == 5
+                && render_mode_available,
+            palette,
+        );
+        f.render_widget(Paragraph::new(dual_line), layout_chunks[1]);
+
         // Info message
         let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
-        f.render_widget(Paragraph::new(info_lines), chunks[6]);
+        f.render_widget(Paragraph::new(info_lines), chunks[10]);
     }
 
     fn render_themes_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
@@ -608,40 +676,48 @@ impl SettingsPopup {
     fn pdf_next(&mut self) {
         let min_idx = self.pdf_min_selectable_idx();
         let max_idx = self.pdf_max_selectable_idx();
-        let mut next_idx = self.pdf_selected_idx + 1;
-        if next_idx > max_idx {
-            next_idx = min_idx;
+        let mut next_idx = self.pdf_selected_idx;
+        for _ in 0..=max_idx {
+            next_idx = if next_idx >= max_idx {
+                min_idx
+            } else {
+                next_idx + 1
+            };
+            if self.is_pdf_idx_selectable(next_idx) {
+                self.pdf_selected_idx = next_idx;
+                break;
+            }
         }
-        if !self.supports_graphics && (next_idx == 0 || next_idx == 1) {
-            next_idx = 2;
-        }
-        if !self.render_mode_available() && (next_idx == 2 || next_idx == 3) {
-            next_idx = min_idx;
-        }
-        if !self.supports_scroll_mode && next_idx == 3 {
-            next_idx = min_idx;
-        }
-        self.pdf_selected_idx = next_idx;
     }
 
     fn pdf_previous(&mut self) {
         let min_idx = self.pdf_min_selectable_idx();
         let max_idx = self.pdf_max_selectable_idx();
-        let mut prev_idx = if self.pdf_selected_idx <= min_idx {
-            max_idx
-        } else {
-            self.pdf_selected_idx - 1
-        };
-        if !self.supports_graphics && (prev_idx == 0 || prev_idx == 1) {
-            prev_idx = max_idx;
+        let mut prev_idx = self.pdf_selected_idx;
+        for _ in 0..=max_idx {
+            prev_idx = if prev_idx <= min_idx {
+                max_idx
+            } else {
+                prev_idx - 1
+            };
+            if self.is_pdf_idx_selectable(prev_idx) {
+                self.pdf_selected_idx = prev_idx;
+                break;
+            }
         }
-        if !self.render_mode_available() && (prev_idx == 2 || prev_idx == 3) {
-            prev_idx = max_idx;
+    }
+
+    fn is_pdf_idx_selectable(&self, idx: usize) -> bool {
+        if !self.supports_graphics {
+            return false;
         }
-        if !self.supports_scroll_mode && prev_idx == 3 {
-            prev_idx = 2;
+        match idx {
+            0 | 1 => true,
+            2 => self.render_mode_available(),
+            3 => self.render_mode_available() && self.supports_scroll_mode,
+            4 | 5 => self.render_mode_available(),
+            _ => false,
         }
-        self.pdf_selected_idx = prev_idx;
     }
 
     fn theme_max_idx(&self) -> usize {
@@ -692,6 +768,20 @@ impl SettingsPopup {
                 if get_pdf_render_mode() != PdfRenderMode::Scroll {
                     set_pdf_render_mode(PdfRenderMode::Scroll);
                     return Some(SettingsAction::SettingsChanged);
+                }
+                None
+            }
+            4 if self.render_mode_available() => {
+                if get_pdf_page_layout_mode() != PdfPageLayoutMode::Single {
+                    set_pdf_page_layout_mode(PdfPageLayoutMode::Single);
+                    return Some(SettingsAction::PageLayoutChanged);
+                }
+                None
+            }
+            5 if self.render_mode_available() => {
+                if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
+                    set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
+                    return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }

@@ -24,6 +24,7 @@ use crate::widget::hud_message::{HudMessage, HudMode};
 
 use super::types::{LastRender, PageJumpMode, PendingScroll, PrevFrame, RenderedInfo};
 use crate::comments::{BookComments, CommentTarget};
+use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
 
 /// Default jump list size
 const DEFAULT_JUMP_LIST_SIZE: usize = 100;
@@ -86,9 +87,11 @@ pub struct CommentInputState {
     pub computed_cursor_pos: Option<(u16, u16)>,
 }
 
-/// A search match on the current page
+/// A search match on a visible page (may span left/right page in dual mode)
 #[derive(Clone, Debug)]
 pub struct PageSearchMatch {
+    /// Page index this match belongs to
+    pub page: usize,
     /// Line index in the page's line_bounds
     pub line_idx: usize,
     /// Character index within the line (start of match)
@@ -215,6 +218,32 @@ pub enum InputAction {
 
 /// Separator height between pages in continuous scroll
 pub const SEPARATOR_HEIGHT: u16 = 1;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NonKittyDualSlice {
+    pub page: usize,
+    pub screen_start: u16,
+    pub screen_end: u16,
+    pub page_x_offset: u16,
+    pub width: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct NonKittyDualLayout {
+    pub left_page: usize,
+    pub right_page: usize,
+    pub left_width: u16,
+    pub right_width: u16,
+    pub gap: u16,
+    pub strip_width: u16,
+    pub viewport_width: u16,
+    pub pan: u32,
+    pub max_pan: u32,
+    pub overflows: bool,
+    pub fit_x_offset: u16,
+    pub left_slice: NonKittyDualSlice,
+    pub right_slice: Option<NonKittyDualSlice>,
+}
 
 /// Main PDF reader widget state
 pub struct PdfReaderState {
@@ -366,11 +395,7 @@ impl PdfReaderState {
             normal_mode: NormalModeState::new(),
             non_kitty_zoom_factor: if is_kitty { 1.0 } else { zoom_factor },
             non_kitty_scroll_offset: 0,
-            non_kitty_pan_offset: if is_kitty {
-                0
-            } else {
-                u32::from(pan_from_left)
-            },
+            non_kitty_pan_offset: if is_kitty { 0 } else { pan_from_left as u32 },
             is_iterm,
             coord_info: None,
             mouse_tracker: MouseTracker::new(),
@@ -514,5 +539,276 @@ impl PdfReaderState {
                     .map(|img| img.cell_dimensions().as_tuple().1)
             })
             .unwrap_or(self.last_render.img_area_height)
+    }
+
+    pub(crate) fn debug_non_kitty_dual_enabled() -> bool {
+        std::env::var("BOOKOKRAT_DEBUG_NONKITTY_DUAL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn intrinsic_page_cell_size(&self, page_idx: usize) -> Option<crate::pdf::CellSize> {
+        self.rendered.get(page_idx).and_then(|p| p.full_cell_size)
+    }
+
+    pub(crate) fn page_matches_dual_scale(&self, page_idx: usize, viewport_width: u16) -> bool {
+        if self.is_kitty
+            || crate::settings::get_pdf_page_layout_mode()
+                != crate::settings::PdfPageLayoutMode::Dual
+        {
+            return true;
+        }
+        let Some(info) = self.rendered.get(page_idx) else {
+            return false;
+        };
+        if let Some(requested_scale) = info.requested_scale
+            && (requested_scale - self.non_kitty_zoom_factor).abs() > 0.0001
+        {
+            return false;
+        }
+        if let Some(render_width) = info.render_area_width_cells
+            && render_width != viewport_width
+        {
+            return false;
+        }
+        true
+    }
+
+    pub(crate) fn intrinsic_page_cell_size_current_scale(
+        &self,
+        page_idx: usize,
+        viewport_width: u16,
+    ) -> Option<crate::pdf::CellSize> {
+        if !self.page_matches_dual_scale(page_idx, viewport_width) {
+            return None;
+        }
+        self.intrinsic_page_cell_size(page_idx)
+    }
+
+    pub(crate) fn build_non_kitty_dual_layout(
+        &self,
+        viewport_width: u16,
+        pan_cells: u32,
+    ) -> Option<NonKittyDualLayout> {
+        if viewport_width == 0 {
+            return None;
+        }
+        let left_page = self.page;
+        let right_page = left_page.saturating_add(1);
+        let left_width = self
+            .intrinsic_page_cell_size_current_scale(left_page, viewport_width)?
+            .width;
+        if left_width == 0 {
+            return None;
+        }
+        let right_width = self
+            .intrinsic_page_cell_size_current_scale(right_page, viewport_width)
+            .map(|s| s.width)
+            .unwrap_or(0);
+        let has_right = right_width > 0;
+        let gap = if has_right {
+            DUAL_PAGE_GAP_CELLS.min(viewport_width.saturating_sub(1))
+        } else {
+            0
+        };
+        let strip_width = if has_right {
+            left_width.saturating_add(gap).saturating_add(right_width)
+        } else {
+            left_width
+        };
+        let max_pan = u32::from(strip_width.saturating_sub(viewport_width));
+        let pan = pan_cells.min(max_pan);
+        let overflows = strip_width > viewport_width;
+        let fit_x_offset = if overflows {
+            0
+        } else {
+            viewport_width.saturating_sub(strip_width) / 2
+        };
+
+        let window_start = pan;
+        let window_end = pan.saturating_add(u32::from(viewport_width));
+
+        let left_start = 0u32;
+        let left_end = u32::from(left_width);
+        let left_inter_start = left_start.max(window_start);
+        let left_inter_end = left_end.min(window_end);
+        if left_inter_end <= left_inter_start {
+            return None;
+        }
+        let left_slice = NonKittyDualSlice {
+            page: left_page,
+            screen_start: if overflows {
+                (left_inter_start.saturating_sub(window_start)) as u16
+            } else {
+                fit_x_offset
+            },
+            screen_end: if overflows {
+                (left_inter_end.saturating_sub(window_start)) as u16
+            } else {
+                fit_x_offset.saturating_add(left_width)
+            },
+            page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
+            width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+        };
+
+        let right_slice = if has_right {
+            let right_start = u32::from(left_width.saturating_add(gap));
+            let right_end = right_start.saturating_add(u32::from(right_width));
+            let right_inter_start = right_start.max(window_start);
+            let right_inter_end = right_end.min(window_end);
+            if right_inter_end > right_inter_start {
+                Some(NonKittyDualSlice {
+                    page: right_page,
+                    screen_start: if overflows {
+                        (right_inter_start.saturating_sub(window_start)) as u16
+                    } else {
+                        fit_x_offset.saturating_add(left_width).saturating_add(gap)
+                    },
+                    screen_end: if overflows {
+                        (right_inter_end.saturating_sub(window_start)) as u16
+                    } else {
+                        fit_x_offset
+                            .saturating_add(left_width)
+                            .saturating_add(gap)
+                            .saturating_add(right_width)
+                    },
+                    page_x_offset: right_inter_start.saturating_sub(right_start) as u16,
+                    width: (right_inter_end.saturating_sub(right_inter_start)) as u16,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let layout = NonKittyDualLayout {
+            left_page,
+            right_page,
+            left_width,
+            right_width,
+            gap,
+            strip_width,
+            viewport_width,
+            pan,
+            max_pan,
+            overflows,
+            fit_x_offset,
+            left_slice,
+            right_slice,
+        };
+
+        if Self::debug_non_kitty_dual_enabled() {
+            log::debug!(
+                "dual-layout page={} vw={} pan_in={} pan={} max_pan={} strip={} gap={} left_w={} right_w={} overflows={} left=[{}..{} off={} w={}] right={:?}",
+                self.page,
+                viewport_width,
+                pan_cells,
+                layout.pan,
+                layout.max_pan,
+                layout.strip_width,
+                layout.gap,
+                layout.left_width,
+                layout.right_width,
+                layout.overflows,
+                layout.left_slice.screen_start,
+                layout.left_slice.screen_end,
+                layout.left_slice.page_x_offset,
+                layout.left_slice.width,
+                layout.right_slice.map(|s| (
+                    s.screen_start,
+                    s.screen_end,
+                    s.page_x_offset,
+                    s.width
+                ))
+            );
+        }
+
+        Some(layout)
+    }
+
+    pub(crate) fn dual_viewports_for_non_kitty(
+        &self,
+        viewport: ViewportUpdate,
+    ) -> Vec<ViewportUpdate> {
+        let mut result = Vec::new();
+        let Some(layout) = self
+            .build_non_kitty_dual_layout(viewport.viewport_width_cells, viewport.x_offset_cells)
+        else {
+            return result;
+        };
+
+        let push_slice = |slice: NonKittyDualSlice, result: &mut Vec<ViewportUpdate>| {
+            if slice.width == 0 {
+                return;
+            }
+            result.push(ViewportUpdate {
+                page: slice.page,
+                y_offset_cells: viewport.y_offset_cells,
+                x_offset_cells: u32::from(slice.page_x_offset),
+                viewport_height_cells: viewport.viewport_height_cells,
+                viewport_width_cells: slice.width,
+            });
+        };
+
+        push_slice(layout.left_slice, &mut result);
+        if let Some(right) = layout.right_slice {
+            push_slice(right, &mut result);
+        }
+        if Self::debug_non_kitty_dual_enabled() {
+            log::debug!(
+                "dual-viewports base(page={} y={} x={} h={} w={}) -> {:?}",
+                viewport.page,
+                viewport.y_offset_cells,
+                viewport.x_offset_cells,
+                viewport.viewport_height_cells,
+                viewport.viewport_width_cells,
+                result
+                    .iter()
+                    .map(|v| (v.page, v.x_offset_cells, v.viewport_width_cells))
+                    .collect::<Vec<_>>()
+            );
+        }
+        result
+    }
+
+    pub(crate) fn viewport_command(
+        &self,
+        viewport: ViewportUpdate,
+    ) -> Option<crate::pdf::ConversionCommand> {
+        let dual_mode =
+            crate::settings::get_pdf_page_layout_mode() == crate::settings::PdfPageLayoutMode::Dual;
+        if self.is_kitty || !dual_mode {
+            return Some(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+        }
+        let right_page = self.page.saturating_add(1);
+        let right_exists = right_page < self.rendered.len();
+        let left_ready = self
+            .intrinsic_page_cell_size_current_scale(self.page, viewport.viewport_width_cells)
+            .is_some();
+        let right_ready = if right_exists {
+            self.intrinsic_page_cell_size_current_scale(right_page, viewport.viewport_width_cells)
+                .is_some()
+        } else {
+            true
+        };
+        if !(left_ready && right_ready) {
+            if Self::debug_non_kitty_dual_enabled() {
+                log::debug!(
+                    "dual-viewport skipped (pair not ready) page={} right_exists={} left_ready={} right_ready={}",
+                    self.page,
+                    right_exists,
+                    left_ready,
+                    right_ready
+                );
+            }
+            return None;
+        }
+        let dual = self.dual_viewports_for_non_kitty(viewport);
+        if dual.is_empty() {
+            None
+        } else {
+            Some(crate::pdf::ConversionCommand::UpdateDualViewport(dual))
+        }
     }
 }

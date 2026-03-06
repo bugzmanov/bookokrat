@@ -919,15 +919,29 @@ impl App {
         // Clear any existing book search (will be re-initialized on demand for new PDF)
         self.book_search = None;
 
-        // Get terminal font size for rendering
-        let cell_size = self.get_terminal_font_size();
+        // Query picker with retries and reuse it for both font-size and terminal capability
+        // detection. On some terminals, the first query can fail during startup.
+        let mut picker = None;
+        for _ in 0..3 {
+            if let Ok(p) = crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
+                picker = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let cell_size = picker
+            .as_ref()
+            .map(|picker| {
+                let (width, height) = picker.font_size();
+                CellSize::new(width, height)
+            })
+            .unwrap_or(self.pdf_font_size);
 
         // Get theme colors for rendering (MuPDF format: 0xRRGGBB)
         let palette = crate::theme::current_theme();
         let (black, white) = Self::palette_to_mupdf_colors(palette);
 
         // Detect terminal protocol and capabilities
-        let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal_with_probe(),
@@ -1033,6 +1047,16 @@ impl App {
         // Prefer per-book zoom from bookmark, fall back to global setting
         let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
         let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
+        log::info!(
+            "PDF startup params: path={}, cell_size={:?}, picker_ok={}, bookmark_zoom={:?}, effective_zoom={}, layout={:?}, mode={:?}",
+            path,
+            cell_size.as_tuple(),
+            picker.is_some(),
+            bookmark_zoom,
+            pdf_scale,
+            crate::settings::get_pdf_page_layout_mode(),
+            crate::settings::get_pdf_render_mode()
+        );
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1131,10 +1155,16 @@ impl App {
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
 
-        // Sync initial page to service so first render requests the correct page.
-        // Use set_current_page_no_render to avoid triggering a render with zero area.
+        // Sync initial page and scale to service so first render requests the correct page
+        // at the correct zoom level. Use set_current_page_no_render to avoid triggering
+        // a render with zero area.
         if let Some(ref mut service) = self.pdf_service {
             service.set_current_page_no_render(initial_page);
+            // Kitty zoom is display-only; applying worker scale here would double-apply
+            // persisted zoom (render-time scale * display-time zoom).
+            if !use_kitty && (pdf_scale - 1.0).abs() > f32::EPSILON {
+                service.apply_command(crate::pdf::Command::SetScale(pdf_scale));
+            }
         }
 
         // Defer the initial render until the layout is known to avoid 0-sized pages.
@@ -1153,21 +1183,6 @@ impl App {
         self.save_bookmark_with_throttle(true);
 
         Ok(())
-    }
-
-    /// Get terminal font size in pixels
-    #[cfg(feature = "pdf")]
-    fn get_terminal_font_size(&self) -> CellSize {
-        // Default cell size if we can't detect
-        let default = CellSize::new(8, 16);
-
-        // Try to get from picker
-        if let Ok(picker) = crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
-            let (width, height) = picker.font_size();
-            CellSize::new(width, height)
-        } else {
-            default
-        }
     }
 
     /// Convert palette colors to MuPDF format (0xRRGGBB as i32)
@@ -4212,6 +4227,16 @@ impl App {
                     SettingsAction::Close => {
                         self.close_popup_to_previous();
                         self.settings_popup = None;
+                    }
+                    SettingsAction::PageLayoutChanged => {
+                        #[cfg(feature = "pdf")]
+                        if let Some(ref mut pdf_reader) = self.pdf_reader {
+                            if let Some(ref mut zoom) = pdf_reader.zoom {
+                                zoom.global_scroll_offset = 0;
+                            }
+                            pdf_reader.last_sent_viewport = None;
+                            pdf_reader.force_redraw();
+                        }
                     }
                     SettingsAction::SettingsChanged => {
                         // Invalidate render cache for theme changes
