@@ -29,7 +29,10 @@ impl BaseDirs {
     }
 
     fn library_cache_dir(&self, slug: &str) -> PathBuf {
-        self.cache_dir.join("bookokrat").join("libraries").join(slug)
+        self.cache_dir
+            .join("bookokrat")
+            .join("libraries")
+            .join(slug)
     }
 
     fn app_state_or_cache_dir(&self) -> &Path {

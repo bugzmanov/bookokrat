@@ -4884,7 +4884,11 @@ impl PdfReaderState {
                 }
                 self.invert_images = !self.invert_images;
                 let mode = if self.invert_images { "ON" } else { "OFF" };
-                notifications.info(format!("Image inversion {mode}"));
+                self.set_hud_message(
+                    format!("Image inversion {mode}"),
+                    crate::widget::hud_message::HudMode::Normal,
+                    std::time::Duration::from_secs(2),
+                );
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::ToggleInvertImages);
                     service.request_page(self.page);
@@ -4905,13 +4909,21 @@ impl PdfReaderState {
                         let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
                         let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
                         service.apply_command(crate::pdf::Command::SetColors { black, white });
-                        notifications.info("PDF rendering: themed");
+                        self.set_hud_message(
+                            "PDF rendering: themed".to_string(),
+                            crate::widget::hud_message::HudMode::Normal,
+                            std::time::Duration::from_secs(2),
+                        );
                     } else {
                         service.apply_command(crate::pdf::Command::SetColors {
                             black: -1,
                             white: -1,
                         });
-                        notifications.info("PDF rendering: original");
+                        self.set_hud_message(
+                            "PDF rendering: original".to_string(),
+                            crate::widget::hud_message::HudMode::Normal,
+                            std::time::Duration::from_secs(2),
+                        );
                     }
                     service.request_page(self.page);
                 }

@@ -2,9 +2,7 @@ use crossterm::{
     cursor::{MoveTo, Show},
     event::DisableMouseCapture,
     execute,
-    terminal::{
-        Clear, ClearType, EndSynchronizedUpdate, LeaveAlternateScreen, disable_raw_mode,
-    },
+    terminal::{Clear, ClearType, EndSynchronizedUpdate, LeaveAlternateScreen, disable_raw_mode},
 };
 use std::io::{self, Write};
 use std::panic;

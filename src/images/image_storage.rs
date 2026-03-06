@@ -478,9 +478,9 @@ fn is_cache_stale(epub_path: &Path, book_dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::thread::sleep;
     use std::time::Duration;
+    use tempfile::TempDir;
     use walkdir::WalkDir;
 
     #[test]
