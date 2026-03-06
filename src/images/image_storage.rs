@@ -39,20 +39,29 @@ impl ImageStorage {
         let epub_path_str = epub_path.to_string_lossy().to_string();
         info!("Starting image extraction for: {epub_path_str}");
 
-        if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
-            info!("Images already extracted for this book");
-            return Ok(());
-        }
-
         let book_name = epub_path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown");
         let safe_book_name = sanitize_filename(book_name);
         let book_dir = self.base_dir.join(&safe_book_name);
+        let cache_is_stale = is_cache_stale(epub_path, &book_dir);
+
+        if cache_is_stale {
+            info!("EPUB is newer than cached images; forcing re-extraction");
+            self.book_dirs.lock().unwrap().remove(&epub_path_str);
+            if let Err(e) = fs::remove_dir_all(&book_dir)
+                && book_dir.exists()
+            {
+                warn!("Failed to remove stale image cache {book_dir:?}: {e}");
+            }
+        } else if self.book_dirs.lock().unwrap().contains_key(&epub_path_str) {
+            info!("Images already extracted for this book");
+            return Ok(());
+        }
 
         // Check if directory exists and already contains images
-        if book_dir.exists() {
+        if book_dir.exists() && !cache_is_stale {
             let mut has_images = false;
             if let Ok(entries) = fs::read_dir(&book_dir) {
                 for entry in entries.flatten() {
@@ -460,10 +469,18 @@ fn collect_images_recursive(dir: &Path, images: &mut Vec<PathBuf>) -> Result<()>
     Ok(())
 }
 
+fn is_cache_stale(epub_path: &Path, book_dir: &Path) -> bool {
+    let epub_modified = epub_path.metadata().and_then(|m| m.modified()).ok();
+    let cache_modified = book_dir.metadata().and_then(|m| m.modified()).ok();
+    matches!((epub_modified, cache_modified), (Some(epub_t), Some(cache_t)) if epub_t > cache_t)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+    use std::thread::sleep;
+    use std::time::Duration;
     use walkdir::WalkDir;
 
     #[test]
@@ -582,5 +599,19 @@ mod tests {
         }
 
         assert!(found, "expected extracted .jpg in image storage");
+    }
+
+    #[test]
+    fn cache_stale_when_epub_newer_than_cache_dir() {
+        let root = TempDir::new().unwrap();
+        let epub = root.path().join("book.epub");
+        let cache = root.path().join("book");
+
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(cache.join("cover.webp"), b"old").unwrap();
+        sleep(Duration::from_millis(1100));
+        fs::write(&epub, b"newer epub").unwrap();
+
+        assert!(is_cache_stale(&epub, &cache));
     }
 }
