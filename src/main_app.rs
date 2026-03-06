@@ -55,7 +55,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
-use crossterm::terminal::EndSynchronizedUpdate;
+use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use pprof::ProfilerGuard;
@@ -190,6 +190,7 @@ pub struct App {
     pdf_supports_graphics: bool,
     #[cfg(feature = "pdf")]
     pdf_supports_scroll_mode: bool,
+    last_terminal_title: Option<String>,
 }
 
 #[cfg(feature = "pdf")]
@@ -505,6 +506,7 @@ impl App {
             pdf_supports_graphics: startup_caps.supports_graphics,
             #[cfg(feature = "pdf")]
             pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
+            last_terminal_title: None,
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
@@ -705,6 +707,7 @@ impl App {
 
         self.navigation_panel.current_book_path = Some(path_owned);
         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+        self.sync_terminal_title();
 
         Ok(())
     }
@@ -2978,6 +2981,36 @@ impl App {
         f.render_widget(paragraph, area);
     }
 
+    fn desired_terminal_title(&self) -> String {
+        if let Some(ref book) = self.current_book {
+            let book_title = Self::extract_book_title(&book.file);
+            return format!("bookokrat — {book_title}");
+        }
+        #[cfg(feature = "pdf")]
+        {
+            if self.pdf_reader.is_some()
+                && let Some(path) = self.pdf_document_path.as_ref()
+            {
+                let book_title = Self::extract_book_title(&path.to_string_lossy());
+                return format!("bookokrat — {book_title}");
+            }
+        }
+        "bookokrat".to_string()
+    }
+
+    fn sync_terminal_title(&mut self) {
+        if self.test_mode {
+            return;
+        }
+        let title = self.desired_terminal_title();
+        if self.last_terminal_title.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        if execute!(stdout(), SetTitle(title.clone())).is_ok() {
+            self.last_terminal_title = Some(title);
+        }
+    }
+
     fn handle_help_bar_click(&mut self, click_x: u16, click_y: u16) -> bool {
         let area = self.help_bar_area;
         if click_y < area.y || click_y >= area.y + area.height {
@@ -4276,6 +4309,7 @@ impl App {
                                 // Switch back to book list
                                 self.navigation_panel.switch_to_book_mode();
                                 self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
+                                self.sync_terminal_title();
                                 self.close_popup_to_previous();
                                 self.settings_popup = None;
                             }
@@ -5733,6 +5767,7 @@ where
     let mut last_tick = std::time::Instant::now();
     let mut fps_counter = FPSCounter::new();
     let mut first_render = true; // Ensure we always render at least once on startup
+    app.sync_terminal_title();
     loop {
         let mut events_processed = 0;
         let mut should_quit = false;
