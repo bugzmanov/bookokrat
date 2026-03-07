@@ -15,7 +15,7 @@ pub fn initialize_panic_handler() {
 
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        restore_terminal();
+        restore_terminal_after_panic();
 
         // Clean up SHM objects before exiting to prevent resource leaks in /dev/shm
         #[cfg(feature = "pdf")]
@@ -42,10 +42,23 @@ pub fn restore_terminal() {
         EndSynchronizedUpdate,
         LeaveAlternateScreen,
         DisableMouseCapture,
+        Show
+    );
+    let _ = write!(io::stdout(), "\r\n");
+    let _ = io::stdout().flush();
+}
+
+fn restore_terminal_after_panic() {
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        EndSynchronizedUpdate,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
         Clear(ClearType::All),
         MoveTo(0, 0),
         Show
     );
-    let _ = writeln!(io::stdout());
+    let _ = write!(io::stdout(), "\r\n");
     let _ = io::stdout().flush();
 }

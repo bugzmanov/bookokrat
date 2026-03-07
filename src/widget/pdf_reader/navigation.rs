@@ -4881,7 +4881,8 @@ impl PdfReaderState {
             InputAction::ToggleInvertImages => {
                 if !self.themed_rendering {
                     self.set_hud_message(
-                        "Image inversion is only available in PDF themed mode (I - to toggle)".to_string(),
+                        "Image inversion is only available in PDF themed mode (I - to toggle)"
+                            .to_string(),
                         crate::widget::hud_message::HudMode::Error,
                         std::time::Duration::from_secs(2),
                     );
