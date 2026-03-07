@@ -418,6 +418,9 @@ impl App {
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
+        #[cfg(any(test, feature = "test-utils"))]
+        let mut text_reader = MarkdownTextReader::new_without_image_support();
+        #[cfg(not(any(test, feature = "test-utils")))]
         let mut text_reader = MarkdownTextReader::new();
         text_reader.set_margin(settings::get_margin());
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
