@@ -3,7 +3,7 @@
 //! This module handles the rendering of PDF pages to the terminal,
 //! including continuous scroll mode, page display, and UI overlays.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::stdout;
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -25,7 +25,9 @@ use crate::notification::NotificationManager;
 use crate::pdf::kittyv2::{DisplayLocation, ImageState};
 use crate::pdf::{CellSize, ConvertedImage};
 use crate::pdf::{Command, ConversionCommand, RenderResponse, RenderedFrame, WorkerFault};
-use crate::settings::{PdfRenderMode, get_pdf_render_mode};
+use crate::settings::{
+    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
+};
 use crate::terminal_overlay;
 use crate::theme::{Base16Palette, current_theme};
 use crate::{bookmarks::Bookmarks, navigation_panel::TableOfContents};
@@ -39,9 +41,35 @@ use super::types::{
 };
 
 const KITTY_CACHE_RADIUS: usize = 10;
+pub(crate) const DUAL_PAGE_GAP_CELLS: u16 = 2;
 
 /// Minimum width in columns for the comment textarea to be usable
 pub(crate) const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
+
+fn kitty_source_y_range_from_dest_rows(
+    offset_dest_cells: u16,
+    display_rows: u16,
+    font_h: u16,
+    zoom_factor: f32,
+    source_total_h_px: u32,
+) -> (u32, u32) {
+    if source_total_h_px == 0 || zoom_factor <= 0.0 || !zoom_factor.is_finite() {
+        return (0, 0);
+    }
+
+    let font_h = f32::from(font_h.max(1));
+    let source_start_px = (((f32::from(offset_dest_cells) * font_h) / zoom_factor).floor() as u32)
+        .min(source_total_h_px.saturating_sub(1));
+    let source_end_px = (((f32::from(offset_dest_cells.saturating_add(display_rows)) * font_h)
+        / zoom_factor)
+        .floor() as u32)
+        .min(source_total_h_px);
+
+    (
+        source_start_px,
+        source_end_px.max(source_start_px.saturating_add(1)),
+    )
+}
 
 pub(crate) fn convert_page_image(
     img_data: &crate::pdf::ImageData,
@@ -132,6 +160,9 @@ pub(crate) fn apply_render_responses(
                     data.img_data.height_cell,
                 ));
                 info.scale_factor = Some(data.scale_factor);
+                info.requested_scale = Some(data.requested_scale);
+                info.render_area_width_cells = Some(data.render_area_width_cells);
+                info.render_area_height_cells = Some(data.render_area_height_cells);
                 info.line_bounds = data.line_bounds.clone();
                 info.link_rects = data.link_rects.clone();
                 info.page_px_height = Some(data.page_height_px);
@@ -182,6 +213,12 @@ pub(crate) fn apply_render_responses(
                         }
                     }
                 }
+
+                if !use_kitty {
+                    // Intrinsic geometry may have changed (new page metrics),
+                    // so force next viewport command to be re-emitted.
+                    pdf_reader.last_sent_viewport = None;
+                }
             }
             RenderResponse::Error { error, .. } => {
                 log::error!("PDF render error: {error}");
@@ -222,6 +259,10 @@ pub(crate) fn apply_render_responses(
                     }
                     pdf_reader.last_render.rect = Rect::default();
                     updated = true;
+                    if !use_kitty {
+                        // Fresh converted frame can change dual strip intersections.
+                        pdf_reader.last_sent_viewport = None;
+                    }
                     // Track the current page's frame arrival for waiting_for_page optimization
                     if frame.index == pdf_reader.page {
                         converted_frame_page = Some(frame.index);
@@ -338,6 +379,80 @@ mod tests {
             pdf_reader.rendered[10].img.is_some(),
             "boundary queued kitty image should be retained"
         );
+    }
+
+    #[test]
+    fn kitty_source_range_tail_does_not_upscale() {
+        let font_h = 17u16;
+        let zoom = 1.73f32;
+        let source_total_h_px = 14_321u32;
+        let available_height = 42u16;
+
+        // Walk offsets near and past the tail. The invariant we care about:
+        // rendered rows must be representable by requested source pixels.
+        for offset_dest_cells in 0..5_000u16 {
+            let source_start = (((f32::from(offset_dest_cells) * f32::from(font_h)) / zoom).floor()
+                as u32)
+                .min(source_total_h_px.saturating_sub(1));
+            let available_h_px = source_total_h_px.saturating_sub(source_start);
+            let rows_from_available =
+                ((available_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+            let display_rows = available_height.min(rows_from_available);
+
+            let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
+                offset_dest_cells,
+                display_rows,
+                font_h,
+                zoom,
+                source_total_h_px,
+            );
+            let source_h_px = end_px.saturating_sub(start_px);
+            let max_rows_from_source =
+                ((source_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+
+            assert!(
+                display_rows <= max_rows_from_source.saturating_add(1),
+                "upscale risk at offset={offset_dest_cells}: display_rows={display_rows}, source_h_px={source_h_px}, max_rows_from_source={max_rows_from_source}"
+            );
+        }
+    }
+
+    #[test]
+    fn kitty_source_range_shrinks_rows_when_bottom_is_pinned() {
+        let font_h = 16u16;
+        let zoom = 1.51f32;
+        let source_total_h_px = 9_001u32;
+        let available_height = 38u16;
+        let mut prev: Option<(u32, u32, u16)> = None;
+
+        for offset_dest_cells in 0..4_000u16 {
+            let source_start = (((f32::from(offset_dest_cells) * f32::from(font_h)) / zoom).floor()
+                as u32)
+                .min(source_total_h_px.saturating_sub(1));
+            let available_h_px = source_total_h_px.saturating_sub(source_start);
+            let rows_from_available =
+                ((available_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+            let display_rows = available_height.min(rows_from_available);
+            let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
+                offset_dest_cells,
+                display_rows,
+                font_h,
+                zoom,
+                source_total_h_px,
+            );
+
+            if let Some((prev_start, prev_end, prev_rows)) = prev
+                && end_px == prev_end
+                && start_px > prev_start
+            {
+                assert!(
+                    display_rows < prev_rows,
+                    "bottom pinned but rows did not shrink: prev_rows={prev_rows}, rows={display_rows}, prev_start={prev_start}, start={start_px}, end={end_px}"
+                );
+            }
+
+            prev = Some((start_px, end_px, display_rows));
+        }
     }
 }
 
@@ -482,6 +597,7 @@ impl PdfReaderState {
         &mut self,
         f: &mut ratatui::Frame,
         area: Rect,
+        is_focused: bool,
         font_size: (u16, u16),
         text_color: Color,
         border_color: Color,
@@ -501,6 +617,11 @@ impl PdfReaderState {
             format!("[{current_page}/{total_pages}] {chapter}")
         } else {
             format!("[{current_page}/{total_pages}]")
+        };
+        let title_text = if is_focused {
+            format!("{title_text} • ")
+        } else {
+            title_text
         };
 
         let progress = if total_pages > 0 {
@@ -664,30 +785,63 @@ impl PdfReaderState {
         }
 
         if let Some(service) = service {
-            service.request_page_if_needed(expected_page);
-            service.request_page_if_needed(expected_page.saturating_add(1));
-            if expected_page > 0 {
-                service.request_page_if_needed(expected_page - 1);
-            }
+            // In dual layout, prefetch one full pair ahead/behind (±3 pages)
+            // so the next spread is ready before the user scrolls to it.
+            let prefetch_ahead = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                3
+            } else {
+                1
+            };
+            let total_pages = self.rendered.len();
 
-            // For Kitty: if page is cached in service but converter might not have it,
-            // re-send the cached data. Only sends if local state has no image.
-            if is_kitty {
-                if let Some(tx) = conversion_tx {
-                    send_cached_page_to_converter(service, tx, expected_page, &self.rendered);
-                    send_cached_page_to_converter(
-                        service,
-                        tx,
-                        expected_page.saturating_add(1),
-                        &self.rendered,
-                    );
-                    if expected_page > 0 {
+            if total_pages > 0 {
+                let max_page = total_pages - 1;
+                let clamped_expected_page = expected_page.min(max_page);
+
+                service.request_page_if_needed(clamped_expected_page);
+                for offset in 1..=prefetch_ahead {
+                    if let Some(forward_page) = clamped_expected_page
+                        .checked_add(offset)
+                        .filter(|page| *page <= max_page)
+                    {
+                        service.request_page_if_needed(forward_page);
+                    }
+                    if clamped_expected_page >= offset {
+                        service.request_page_if_needed(clamped_expected_page - offset);
+                    }
+                }
+
+                // For Kitty: if page is cached in service but converter might not have it,
+                // re-send the cached data. Only sends if local state has no image.
+                if is_kitty {
+                    if let Some(tx) = conversion_tx {
                         send_cached_page_to_converter(
                             service,
                             tx,
-                            expected_page - 1,
+                            clamped_expected_page,
                             &self.rendered,
                         );
+                        for offset in 1..=prefetch_ahead {
+                            if let Some(forward_page) = clamped_expected_page
+                                .checked_add(offset)
+                                .filter(|page| *page <= max_page)
+                            {
+                                send_cached_page_to_converter(
+                                    service,
+                                    tx,
+                                    forward_page,
+                                    &self.rendered,
+                                );
+                            }
+                            if clamped_expected_page >= offset {
+                                send_cached_page_to_converter(
+                                    service,
+                                    tx,
+                                    clamped_expected_page - offset,
+                                    &self.rendered,
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -938,26 +1092,21 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     let mut stdout = std::io::stdout();
     let tmux = crate::pdf::kittyv2::is_tmux_mode();
 
-    // Always delete previous overlay
-    let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
-        .delete()
-        .quiet(crate::pdf::kittyv2::Quiet::Silent)
-        .write_to(&mut stdout, tmux);
+    let wanted = pdf_reader
+        .modal_overlay_rect
+        .filter(|&(_, _, w, h)| w > 0 && h > 0);
 
-    let Some((col, row, width, height)) = pdf_reader.modal_overlay_rect else {
+    // No overlay needed — delete if one was previously sent.
+    let Some((col, row, width, height)) = wanted else {
+        if pdf_reader.modal_overlay_sent.is_some() {
+            let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
+                .delete()
+                .quiet(crate::pdf::kittyv2::Quiet::Silent)
+                .write_to(&mut stdout, tmux);
+            pdf_reader.modal_overlay_sent = None;
+        }
         let _ = std::io::Write::flush(&mut stdout);
         return;
-    };
-
-    if width == 0 || height == 0 {
-        let _ = std::io::Write::flush(&mut stdout);
-        return;
-    }
-
-    // Extract RGB from the panel background color
-    let (r, g, b) = match pdf_reader.palette.base_01 {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => (0x34, 0x3D, 0x46), // fallback to Oceanic Next base_01
     };
 
     let cursor = if tmux {
@@ -970,17 +1119,53 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
         (row as u32 + 1, col as u32 + 1)
     };
 
-    let pixel = [r, g, b];
-    let _ = crate::pdf::kittyv2::DirectTransmit::new(1, 1)
-        .format(crate::pdf::kittyv2::Format::Rgb)
-        .image_id(MODAL_OVERLAY_IMAGE_ID)
-        .placement_id(MODAL_OVERLAY_IMAGE_ID)
-        .quiet(crate::pdf::kittyv2::Quiet::Silent)
-        .no_cursor_move(true)
-        .cursor_at(cursor.0, cursor.1)
-        .dest_cells(width, height)
-        .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
-        .send(&mut stdout, &pixel, tmux);
+    // If the overlay rect hasn't changed, just re-place the existing image.
+    if pdf_reader.modal_overlay_sent == Some((col, row, width, height)) {
+        let _ = crate::pdf::kittyv2::DisplayCommand::new(MODAL_OVERLAY_IMAGE_ID)
+            .placement_id(MODAL_OVERLAY_IMAGE_ID)
+            .quiet(crate::pdf::kittyv2::Quiet::Silent)
+            .no_cursor_move(true)
+            .cursor_at(cursor.0, cursor.1)
+            .dest_cells(width, height)
+            .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
+            .write_to(&mut stdout, tmux);
+    } else {
+        // Delete old overlay if it existed at a different size/position.
+        if pdf_reader.modal_overlay_sent.is_some() {
+            let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
+                .delete()
+                .quiet(crate::pdf::kittyv2::Quiet::Silent)
+                .write_to(&mut stdout, tmux);
+        }
+
+        let (r, g, b) = match pdf_reader.palette.base_01 {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0x34, 0x3D, 0x46),
+        };
+
+        // Source image dimensions must match the dest cell ratio because Kitty
+        // preserves aspect ratio when scaling. Use 1 pixel per cell — small
+        // enough for inline base64 (~5KB max) but correctly shaped.
+        let pw = width as u32;
+        let ph = height as u32;
+        let pixel_count = (pw * ph) as usize;
+        let mut pixels = Vec::with_capacity(pixel_count * 3);
+        for _ in 0..pixel_count {
+            pixels.extend_from_slice(&[r, g, b]);
+        }
+        let _ = crate::pdf::kittyv2::DirectTransmit::new(pw, ph)
+            .format(crate::pdf::kittyv2::Format::Rgb)
+            .image_id(MODAL_OVERLAY_IMAGE_ID)
+            .placement_id(MODAL_OVERLAY_IMAGE_ID)
+            .quiet(crate::pdf::kittyv2::Quiet::Silent)
+            .no_cursor_move(true)
+            .cursor_at(cursor.0, cursor.1)
+            .dest_cells(width, height)
+            .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
+            .send(&mut stdout, &pixels, tmux);
+
+        pdf_reader.modal_overlay_sent = Some((col, row, width, height));
+    }
 
     // Position the terminal cursor at the textarea caret after all Kitty
     // commands, so it renders on top of the overlay image.
@@ -997,35 +1182,63 @@ pub(crate) fn update_non_kitty_viewport(
     pdf_reader: &mut PdfReaderState,
     conversion_tx: Option<&flume::Sender<ConversionCommand>>,
 ) {
-    let viewport_to_send = {
-        if pdf_reader.is_kitty {
-            return;
-        }
-        let viewport = pdf_reader.current_viewport_update().or_else(|| {
-            pdf_reader
-                .coord_info
-                .map(|(area, _font_size)| crate::pdf::ViewportUpdate {
-                    page: pdf_reader.page,
-                    y_offset_cells: pdf_reader.non_kitty_scroll_offset,
-                    x_offset_cells: pdf_reader.non_kitty_pan_offset,
-                    viewport_height_cells: area.height,
-                    viewport_width_cells: area.width,
-                })
-        });
-        let Some(viewport) = viewport else {
-            return;
-        };
-        if pdf_reader.last_sent_viewport == Some(viewport) {
-            None
-        } else {
-            pdf_reader.last_sent_viewport = Some(viewport);
-            Some(viewport)
-        }
-    };
-
-    if let (Some(viewport), Some(tx)) = (viewport_to_send, conversion_tx) {
-        let _ = tx.send(ConversionCommand::UpdateViewport(viewport));
+    if pdf_reader.is_kitty {
+        return;
     }
+    let viewport = pdf_reader.current_viewport_update().or_else(|| {
+        pdf_reader
+            .coord_info
+            .map(|(area, _font_size)| crate::pdf::ViewportUpdate {
+                page: pdf_reader.page,
+                y_offset_cells: pdf_reader.non_kitty_scroll_offset,
+                x_offset_cells: pdf_reader.non_kitty_pan_offset,
+                viewport_height_cells: area.height,
+                viewport_width_cells: area.width,
+            })
+    });
+    let Some(viewport) = viewport else {
+        return;
+    };
+    if pdf_reader.last_sent_viewport == Some(viewport) {
+        return;
+    }
+    let Some(tx) = conversion_tx else {
+        return;
+    };
+    if let Some(cmd) = pdf_reader.viewport_command(viewport) {
+        if PdfReaderState::debug_non_kitty_dual_enabled() {
+            match &cmd {
+                ConversionCommand::UpdateViewport(v) => {
+                    log::debug!(
+                        "send-viewport single page={} y={} x={} h={} w={}",
+                        v.page,
+                        v.y_offset_cells,
+                        v.x_offset_cells,
+                        v.viewport_height_cells,
+                        v.viewport_width_cells
+                    );
+                }
+                ConversionCommand::UpdateDualViewport(vs) => {
+                    log::debug!(
+                        "send-viewport dual base(page={} y={} x={} h={} w={}) -> {:?}",
+                        viewport.page,
+                        viewport.y_offset_cells,
+                        viewport.x_offset_cells,
+                        viewport.viewport_height_cells,
+                        viewport.viewport_width_cells,
+                        vs.iter()
+                            .map(|v| (v.page, v.x_offset_cells, v.viewport_width_cells))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                _ => {}
+            }
+        }
+        let _ = tx.send(cmd);
+        pdf_reader.last_sent_viewport = Some(viewport);
+    }
+    // If viewport_command() returned None (pair not ready in dual mode),
+    // do NOT update last_sent_viewport so we retry on next frame.
 }
 
 /// Internal structure for visible page calculation
@@ -1155,6 +1368,262 @@ impl PdfReaderState {
         DisplayBatch::Display(vec![image_request])
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn render_dual_page_kitty<'a>(
+        rendered: &'a mut [RenderedInfo],
+        frame: &mut Frame<'_>,
+        img_area: Rect,
+        font_size: FontSize,
+        zoom: &mut crate::pdf::Zoom,
+        current_page: usize,
+        palette: &Base16Palette,
+    ) -> DisplayBatch<'a> {
+        let zoom_factor = zoom.factor();
+        let right_page = current_page.saturating_add(1);
+
+        let left_cell_size = rendered
+            .get(current_page)
+            .and_then(|page| page.img.as_ref())
+            .map(|img| img.cell_dimensions());
+        let right_cell_size = rendered
+            .get(right_page)
+            .and_then(|page| page.img.as_ref())
+            .map(|img| img.cell_dimensions());
+
+        let Some(left_size) = left_cell_size else {
+            Self::render_loading_in(frame, img_area, palette);
+            return DisplayBatch::Clear;
+        };
+
+        let left_dest_w = ((f32::from(left_size.width) * zoom_factor).ceil() as u16).max(1);
+        let left_dest_h = ((f32::from(left_size.height) * zoom_factor).ceil() as u16).max(1);
+        let right_dest_w = right_cell_size
+            .map(|size| ((f32::from(size.width) * zoom_factor).ceil() as u16).max(1))
+            .unwrap_or(0);
+        let right_dest_h = right_cell_size
+            .map(|size| ((f32::from(size.height) * zoom_factor).ceil() as u16).max(1))
+            .unwrap_or(0);
+        let has_right = right_dest_w > 0 && right_dest_h > 0;
+        let gap = if has_right {
+            DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
+        } else {
+            0
+        };
+        let content_dest_h = left_dest_h.max(right_dest_h);
+        let max_scroll = content_dest_h.saturating_sub(img_area.height);
+        let scroll_offset = (zoom.global_scroll_offset as u16).min(max_scroll);
+        zoom.global_scroll_offset = u32::from(scroll_offset);
+        let group_width = if has_right {
+            left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+        } else {
+            left_dest_w
+        };
+        let group_fits = group_width <= img_area.width;
+        let group_x = if group_fits {
+            img_area.x + (img_area.width - group_width) / 2
+        } else {
+            img_area.x
+        };
+        let gap_source = if has_right {
+            ((f32::from(gap) / zoom_factor).ceil() as u16).max(1)
+        } else {
+            0
+        };
+        let right_source_w = right_cell_size.map(|s| s.width).unwrap_or(0);
+        let total_source_w = if has_right {
+            left_size
+                .width
+                .saturating_add(gap_source)
+                .saturating_add(right_source_w)
+        } else {
+            left_size.width
+        };
+        let viewport_source_w = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
+        let max_pan = total_source_w.saturating_sub(viewport_source_w);
+        zoom.cell_pan_from_left = zoom.cell_pan_from_left.min(max_pan);
+        if group_fits {
+            zoom.cell_pan_from_left = 0;
+        }
+        let vis_start = zoom.cell_pan_from_left;
+        let vis_end = vis_start.saturating_add(viewport_source_w);
+
+        let display_y_offset = if content_dest_h < img_area.height {
+            (img_area.height - content_dest_h) / 2
+        } else {
+            0
+        };
+
+        let build_request = |img: &'a mut ImageState,
+                             page_idx: usize,
+                             cell_size: CellSize,
+                             dest_w: u16,
+                             dest_h: u16,
+                             x_pos: u16,
+                             row_source_start: u16|
+         -> Option<ImageRequest<'a>> {
+            if cell_size.height == 0 || cell_size.width == 0 {
+                return None;
+            }
+
+            let source_y_px = if scroll_offset > 0 {
+                let offset_dest = f32::from(scroll_offset);
+                let source_y = (offset_dest / zoom_factor) * f32::from(font_size.1);
+                source_y.floor().max(0.0) as u32
+            } else {
+                0
+            };
+
+            let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
+            let available_h_px = source_total_h_px.saturating_sub(source_y_px);
+            if available_h_px == 0 {
+                return None;
+            }
+
+            let remaining_dest_h = dest_h.saturating_sub(scroll_offset);
+            let max_display_rows = remaining_dest_h.min(img_area.height);
+            if max_display_rows == 0 {
+                return None;
+            }
+            let rows_from_available =
+                ((available_h_px as f32 * zoom_factor) / f32::from(font_size.1)).floor() as u16;
+            let display_rows = rows_from_available.min(max_display_rows).max(1);
+            let visible_source_h_px =
+                ((f32::from(display_rows) * f32::from(font_size.1)) / zoom_factor).round() as u32;
+            let visible_source_h_px = visible_source_h_px.min(available_h_px).max(1);
+
+            let (source_x_cells, visible_source_w, display_x, display_cols) = if group_fits {
+                let max_x = img_area.x.saturating_add(img_area.width);
+                if x_pos >= max_x {
+                    return None;
+                }
+                let available_cols = max_x.saturating_sub(x_pos);
+                let cols = dest_w.min(available_cols);
+                if cols == 0 {
+                    return None;
+                }
+                let vis_w = if cols == dest_w {
+                    cell_size.width
+                } else {
+                    (f32::from(cols) / zoom_factor).ceil() as u16
+                };
+                (0u16, vis_w, x_pos, cols)
+            } else {
+                let page_start = row_source_start;
+                let page_end = row_source_start.saturating_add(cell_size.width);
+                let inter_start = page_start.max(vis_start);
+                let inter_end = page_end.min(vis_end);
+                if inter_end <= inter_start {
+                    return None;
+                }
+                let rel_start = inter_start.saturating_sub(vis_start);
+                let rel_end = inter_end.saturating_sub(vis_start);
+                let dest_start = (f32::from(rel_start) * zoom_factor).floor() as u16;
+                let dest_end = (f32::from(rel_end) * zoom_factor).ceil() as u16;
+                let available_cols = img_area.width.saturating_sub(dest_start);
+                let cols = dest_end.saturating_sub(dest_start).min(available_cols);
+                if cols == 0 {
+                    return None;
+                }
+                (
+                    inter_start.saturating_sub(page_start),
+                    inter_end.saturating_sub(inter_start),
+                    img_area.x.saturating_add(dest_start),
+                    cols,
+                )
+            };
+
+            let page_y_offset = if dest_h < content_dest_h {
+                (content_dest_h - dest_h) / 2
+            } else {
+                0
+            };
+
+            Some(ImageRequest {
+                image: img,
+                page: page_idx,
+                position: Position {
+                    x: display_x,
+                    y: img_area.y + display_y_offset + page_y_offset,
+                },
+                location: DisplayLocation {
+                    x: u32::from(source_x_cells) * u32::from(font_size.0),
+                    y: source_y_px,
+                    width: u32::from(visible_source_w) * u32::from(font_size.0),
+                    height: visible_source_h_px,
+                    columns: display_cols,
+                    rows: display_rows,
+                },
+            })
+        };
+
+        let mut image_requests = Vec::with_capacity(2);
+        let right_x = group_x.saturating_add(left_dest_w).saturating_add(gap);
+
+        if has_right && right_page < rendered.len() {
+            let (left_slice, right_slice) = rendered.split_at_mut(right_page);
+            let left_rendered = &mut left_slice[current_page];
+            let right_rendered = &mut right_slice[0];
+
+            if let Some(ConvertedImage::Kitty {
+                img: ref mut left_img,
+                ..
+            }) = left_rendered.img
+                && let Some(request) = build_request(
+                    left_img,
+                    current_page,
+                    left_size,
+                    left_dest_w,
+                    left_dest_h,
+                    group_x,
+                    0,
+                )
+            {
+                image_requests.push(request);
+            }
+
+            if let Some(right_size) = right_cell_size
+                && let Some(ConvertedImage::Kitty {
+                    img: ref mut right_img,
+                    ..
+                }) = right_rendered.img
+                && let Some(request) = build_request(
+                    right_img,
+                    right_page,
+                    right_size,
+                    right_dest_w,
+                    right_dest_h,
+                    right_x,
+                    left_size.width.saturating_add(gap_source),
+                )
+            {
+                image_requests.push(request);
+            }
+        } else if let Some(left_rendered) = rendered.get_mut(current_page)
+            && let Some(ConvertedImage::Kitty {
+                img: ref mut left_img,
+                ..
+            }) = left_rendered.img
+            && let Some(request) = build_request(
+                left_img,
+                current_page,
+                left_size,
+                left_dest_w,
+                left_dest_h,
+                group_x,
+                0,
+            )
+        {
+            image_requests.push(request);
+        }
+
+        if image_requests.is_empty() {
+            Self::render_loading_in(frame, img_area, palette);
+            DisplayBatch::Clear
+        } else {
+            DisplayBatch::Display(image_requests)
+        }
+    }
+
     /// Render continuous scroll mode (Kitty terminals)
     #[allow(clippy::too_many_arguments)]
     fn render_continuous_scroll<'a>(
@@ -1166,10 +1635,12 @@ impl PdfReaderState {
         current_page_hint: usize,
         separator_height: u16,
         muted_color: Color,
+        page_layout_mode: PdfPageLayoutMode,
         palette: &Base16Palette,
     ) -> (DisplayBatch<'a>, Option<usize>, Vec<VisiblePageUiInfo>) {
         let zoom_factor = zoom.factor();
         let viewport_height = u32::from(img_area.height);
+        let dual_layout = page_layout_mode == PdfPageLayoutMode::Dual;
 
         let reference_height: Option<u16> = rendered
             .iter()
@@ -1182,68 +1653,170 @@ impl PdfReaderState {
 
         let mut cumulative_y: u32 = 0;
         let mut visible_info: Vec<VisiblePageInfo> = Vec::new();
-        for (idx, rendered_page) in rendered.iter().enumerate() {
-            let cell_size = rendered_page
-                .img
-                .as_ref()
-                .map_or(CellSize::new(0, 0), |img| img.cell_dimensions());
-            if cell_size.height == 0 {
-                let estimated_h = reference_height.unwrap_or(img_area.height);
-                let dest_h = ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1);
-                cumulative_y += dest_h + u32::from(separator_height);
-                continue;
-            }
+        let viewport_start = scroll_offset;
+        let viewport_end = scroll_offset + viewport_height;
 
-            let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
-            let dest_h = ((f32::from(cell_size.height) * zoom_factor).ceil() as u16).max(1);
+        if dual_layout {
+            for left_idx in (0..rendered.len()).step_by(2) {
+                let right_idx = left_idx + 1;
 
-            let page_start = cumulative_y;
-            let page_end = cumulative_y + u32::from(dest_h);
-            let viewport_start = scroll_offset;
-            let viewport_end = scroll_offset + viewport_height;
+                let left_size = rendered[left_idx]
+                    .img
+                    .as_ref()
+                    .map_or(CellSize::new(0, 0), |img| img.cell_dimensions());
+                let right_size = rendered
+                    .get(right_idx)
+                    .and_then(|page| page.img.as_ref())
+                    .map_or(CellSize::new(0, 0), |img| img.cell_dimensions());
 
-            if page_end > viewport_start && page_start < viewport_end {
-                let screen_y_start = if page_start >= scroll_offset {
-                    (page_start - scroll_offset) as u16
+                let left_dest_h = if left_size.height == 0 {
+                    ((f32::from(reference_height.unwrap_or(img_area.height)) * zoom_factor).ceil()
+                        as u16)
+                        .max(1)
                 } else {
-                    0
+                    ((f32::from(left_size.height) * zoom_factor).ceil() as u16).max(1)
                 };
-                let mut img_clip_top_px = if scroll_offset > page_start {
-                    let offset_dest = (scroll_offset - page_start) as f32;
-                    let source_y_px = (offset_dest / zoom_factor) * f32::from(font_size.1);
-                    source_y_px.floor().max(0.0) as u32
+                let right_dest_h = if right_size.height == 0 {
+                    0
                 } else {
-                    0
+                    ((f32::from(right_size.height) * zoom_factor).ceil() as u16).max(1)
                 };
-                let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
-                if img_clip_top_px >= source_total_h_px {
-                    img_clip_top_px = source_total_h_px.saturating_sub(1);
+                let row_dest_h = left_dest_h.max(right_dest_h);
+
+                let row_start = cumulative_y;
+                let row_end = cumulative_y + u32::from(row_dest_h);
+
+                if row_end > viewport_start && row_start < viewport_end {
+                    let screen_y_start = if row_start >= scroll_offset {
+                        (row_start - scroll_offset) as u16
+                    } else {
+                        0
+                    };
+                    let offset_dest_cells = if scroll_offset > row_start {
+                        (scroll_offset - row_start) as u16
+                    } else {
+                        0
+                    };
+                    let available_height = img_area.height.saturating_sub(screen_y_start);
+
+                    let mut push_visible =
+                        |page_idx: usize, cell_size: CellSize, dest_h: u16, dest_w: u16| {
+                            if cell_size.height == 0 || dest_h == 0 {
+                                return;
+                            }
+                            let mut img_clip_top_px = if scroll_offset > row_start {
+                                let offset_dest = (scroll_offset - row_start) as f32;
+                                let source_y_px =
+                                    (offset_dest / zoom_factor) * f32::from(font_size.1);
+                                source_y_px.floor().max(0.0) as u32
+                            } else {
+                                0
+                            };
+                            let source_total_h_px =
+                                u32::from(cell_size.height) * u32::from(font_size.1);
+                            if img_clip_top_px >= source_total_h_px {
+                                img_clip_top_px = source_total_h_px.saturating_sub(1);
+                            }
+                            let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
+                            let rows_from_available = ((available_h_px as f32 * zoom_factor)
+                                / f32::from(font_size.1))
+                            .floor() as u16;
+                            let display_rows = available_height.min(rows_from_available);
+                            if display_rows == 0 {
+                                return;
+                            }
+                            visible_info.push(VisiblePageInfo {
+                                page_idx,
+                                screen_y_start,
+                                img_clip_top_px,
+                                display_rows,
+                                offset_dest_cells,
+                                cell_size,
+                                dest_w,
+                                dest_h,
+                            });
+                        };
+
+                    let left_dest_w =
+                        ((f32::from(left_size.width) * zoom_factor).ceil() as u16).max(1);
+                    push_visible(left_idx, left_size, left_dest_h, left_dest_w);
+                    if right_idx < rendered.len() {
+                        let right_dest_w =
+                            ((f32::from(right_size.width) * zoom_factor).ceil() as u16).max(1);
+                        push_visible(right_idx, right_size, right_dest_h, right_dest_w);
+                    }
                 }
-                let available_height = img_area.height.saturating_sub(screen_y_start);
-                let offset_dest_cells = if scroll_offset > page_start {
-                    (scroll_offset - page_start) as u16
-                } else {
-                    0
-                };
-                let remaining_page = dest_h.saturating_sub(offset_dest_cells);
-                let display_rows = remaining_page.min(available_height);
 
-                if display_rows > 0 {
-                    visible_info.push(VisiblePageInfo {
-                        page_idx: idx,
-                        screen_y_start,
-                        img_clip_top_px,
-                        display_rows,
-                        offset_dest_cells,
-                        cell_size,
-                        dest_w,
-                        dest_h,
-                    });
+                cumulative_y = row_end + u32::from(separator_height);
+                if row_start > viewport_end {
+                    break;
                 }
             }
-            cumulative_y = page_end + u32::from(separator_height);
-            if page_start > viewport_end {
-                break;
+        } else {
+            for (idx, rendered_page) in rendered.iter().enumerate() {
+                let cell_size = rendered_page
+                    .img
+                    .as_ref()
+                    .map_or(CellSize::new(0, 0), |img| img.cell_dimensions());
+                if cell_size.height == 0 {
+                    let estimated_h = reference_height.unwrap_or(img_area.height);
+                    let dest_h = ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1);
+                    cumulative_y += dest_h + u32::from(separator_height);
+                    continue;
+                }
+
+                let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                let dest_h = ((f32::from(cell_size.height) * zoom_factor).ceil() as u16).max(1);
+
+                let page_start = cumulative_y;
+                let page_end = cumulative_y + u32::from(dest_h);
+
+                if page_end > viewport_start && page_start < viewport_end {
+                    let screen_y_start = if page_start >= scroll_offset {
+                        (page_start - scroll_offset) as u16
+                    } else {
+                        0
+                    };
+                    let mut img_clip_top_px = if scroll_offset > page_start {
+                        let offset_dest = (scroll_offset - page_start) as f32;
+                        let source_y_px = (offset_dest / zoom_factor) * f32::from(font_size.1);
+                        source_y_px.floor().max(0.0) as u32
+                    } else {
+                        0
+                    };
+                    let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
+                    if img_clip_top_px >= source_total_h_px {
+                        img_clip_top_px = source_total_h_px.saturating_sub(1);
+                    }
+                    let available_height = img_area.height.saturating_sub(screen_y_start);
+                    let offset_dest_cells = if scroll_offset > page_start {
+                        (scroll_offset - page_start) as u16
+                    } else {
+                        0
+                    };
+                    let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
+                    let rows_from_available = ((available_h_px as f32 * zoom_factor)
+                        / f32::from(font_size.1))
+                    .floor() as u16;
+                    let display_rows = available_height.min(rows_from_available);
+
+                    if display_rows > 0 {
+                        visible_info.push(VisiblePageInfo {
+                            page_idx: idx,
+                            screen_y_start,
+                            img_clip_top_px,
+                            display_rows,
+                            offset_dest_cells,
+                            cell_size,
+                            dest_w,
+                            dest_h,
+                        });
+                    }
+                }
+                cumulative_y = page_end + u32::from(separator_height);
+                if page_start > viewport_end {
+                    break;
+                }
             }
         }
 
@@ -1285,7 +1858,7 @@ impl PdfReaderState {
 
         // Render separators between pages
         for (idx, info) in visible_info.iter().enumerate() {
-            if idx > 0 {
+            if idx > 0 && info.screen_y_start != visible_info[idx - 1].screen_y_start {
                 let sep_y = img_area.y + info.screen_y_start.saturating_sub(separator_height);
                 if sep_y >= img_area.y && sep_y < img_area.y + img_area.height {
                     let separator_area = Rect {
@@ -1302,15 +1875,65 @@ impl PdfReaderState {
             }
         }
 
+        let dual_row_source_widths: HashMap<usize, (u16, u16)> = if dual_layout {
+            (0..rendered.len())
+                .step_by(2)
+                .map(|row_start| {
+                    let left_source_w = rendered
+                        .get(row_start)
+                        .and_then(|page| page.img.as_ref())
+                        .map(|img| img.cell_dimensions().width)
+                        .unwrap_or(0);
+                    let right_source_w = rendered
+                        .get(row_start + 1)
+                        .and_then(|page| page.img.as_ref())
+                        .map(|img| img.cell_dimensions().width)
+                        .unwrap_or(0);
+                    (row_start, (left_source_w, right_source_w))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+
         // Clamp horizontal pan
-        if let Some(first) = visible_info.first() {
-            if first.dest_w > img_area.width {
-                let visible_source_w = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
-                let max_pan = first.cell_size.width.saturating_sub(visible_source_w);
-                zoom.cell_pan_from_left = zoom.cell_pan_from_left.min(max_pan);
-            } else {
-                zoom.cell_pan_from_left = 0;
+        if !dual_layout {
+            if let Some(first) = visible_info.first() {
+                if first.dest_w > img_area.width {
+                    let visible_source_w = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
+                    let max_pan = first.cell_size.width.saturating_sub(visible_source_w);
+                    zoom.cell_pan_from_left = zoom.cell_pan_from_left.min(max_pan);
+                } else {
+                    zoom.cell_pan_from_left = 0;
+                }
             }
+        } else {
+            let viewport_source_w = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
+            let clamp_row_start = (current_page_hint & !1).min(rendered.len().saturating_sub(1));
+            let (left_source_w, right_source_w) = dual_row_source_widths
+                .get(&clamp_row_start)
+                .copied()
+                .unwrap_or((0, 0));
+            let has_right = right_source_w > 0;
+            let gap = if has_right {
+                DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
+            } else {
+                0
+            };
+            let gap_source = if has_right {
+                ((f32::from(gap) / zoom_factor).ceil() as u16).max(1)
+            } else {
+                0
+            };
+            let total_source_w = if has_right {
+                left_source_w
+                    .saturating_add(gap_source)
+                    .saturating_add(right_source_w)
+            } else {
+                left_source_w
+            };
+            let max_pan = total_source_w.saturating_sub(viewport_source_w);
+            zoom.cell_pan_from_left = zoom.cell_pan_from_left.min(max_pan);
         }
 
         // Build image display requests
@@ -1319,6 +1942,35 @@ impl PdfReaderState {
             .iter()
             .map(|info| (info.page_idx, info))
             .collect();
+        let dual_row_widths: HashMap<usize, (u16, u16)> = if dual_layout {
+            (0..rendered.len())
+                .step_by(2)
+                .map(|row_start| {
+                    let left_dest_w = rendered
+                        .get(row_start)
+                        .and_then(|page| page.img.as_ref())
+                        .map(|img| {
+                            ((f32::from(img.cell_dimensions().width) * zoom_factor).ceil() as u16)
+                                .max(1)
+                        })
+                        .unwrap_or(0);
+                    let right_dest_w = rendered
+                        .get(row_start + 1)
+                        .and_then(|page| page.img.as_ref())
+                        .map(|img| {
+                            ((f32::from(img.cell_dimensions().width) * zoom_factor).ceil() as u16)
+                                .max(1)
+                        })
+                        .unwrap_or(0);
+                    (row_start, (left_dest_w, right_dest_w))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        let vis_start = zoom.cell_pan_from_left;
+        let vis_end =
+            vis_start.saturating_add((f32::from(img_area.width) / zoom_factor).ceil() as u16);
 
         for (idx, rendered_page) in rendered.iter_mut().enumerate() {
             let Some(info) = info_map.get(&idx) else {
@@ -1333,36 +1985,129 @@ impl PdfReaderState {
                 continue;
             };
 
-            let (source_x_cells, visible_source_w, display_x_offset, display_cols) =
-                if info.dest_w <= img_area.width {
-                    let x_offset = (img_area.width - info.dest_w) / 2;
-                    (0u16, info.cell_size.width, x_offset, info.dest_w)
+            let (source_x_cells, visible_source_w, display_x, display_cols) = if dual_layout {
+                let row_start = info.page_idx & !1;
+                let (left_dest_w, right_dest_w) =
+                    dual_row_widths.get(&row_start).copied().unwrap_or((0, 0));
+                let (left_source_w, right_source_w) = dual_row_source_widths
+                    .get(&row_start)
+                    .copied()
+                    .unwrap_or((0, 0));
+                let has_right = right_dest_w > 0;
+                let gap = if has_right {
+                    DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
                 } else {
-                    let pan = zoom.cell_pan_from_left;
-                    let visible_source = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
-                    let remaining_width = info.cell_size.width.saturating_sub(pan);
-                    let visible = remaining_width.min(visible_source);
-                    (pan, visible, 0u16, img_area.width)
+                    0
                 };
+                let gap_source = if has_right {
+                    ((f32::from(gap) / zoom_factor).ceil() as u16).max(1)
+                } else {
+                    0
+                };
+                let group_width = if has_right {
+                    left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+                } else {
+                    left_dest_w
+                };
+                let group_fits = group_width <= img_area.width;
+                let group_x = if group_fits {
+                    img_area.x + (img_area.width - group_width) / 2
+                } else {
+                    img_area.x
+                };
+                if group_fits {
+                    let page_x = if info.page_idx % 2 == 0 {
+                        group_x
+                    } else {
+                        group_x.saturating_add(left_dest_w).saturating_add(gap)
+                    };
+                    let available_cols = img_area
+                        .x
+                        .saturating_add(img_area.width)
+                        .saturating_sub(page_x);
+                    let cols = info.dest_w.min(available_cols);
+                    let visible_source = if cols == info.dest_w {
+                        info.cell_size.width
+                    } else {
+                        (f32::from(cols) / zoom_factor).ceil() as u16
+                    };
+                    (0u16, visible_source, page_x, cols)
+                } else {
+                    let page_start = if info.page_idx % 2 == 0 {
+                        0
+                    } else {
+                        left_source_w.saturating_add(gap_source)
+                    };
+                    let page_width = if info.page_idx % 2 == 0 {
+                        left_source_w
+                    } else {
+                        right_source_w
+                    };
+                    let page_end = page_start.saturating_add(page_width);
+                    let inter_start = page_start.max(vis_start);
+                    let inter_end = page_end.min(vis_end);
+                    if inter_end <= inter_start {
+                        continue;
+                    }
+                    let rel_start = inter_start.saturating_sub(vis_start);
+                    let rel_end = inter_end.saturating_sub(vis_start);
+                    let dest_start = (f32::from(rel_start) * zoom_factor).floor() as u16;
+                    let dest_end = (f32::from(rel_end) * zoom_factor).ceil() as u16;
+                    let available_cols = img_area.width.saturating_sub(dest_start);
+                    let cols = dest_end.saturating_sub(dest_start).min(available_cols);
+                    if cols == 0 {
+                        continue;
+                    }
+                    (
+                        inter_start.saturating_sub(page_start),
+                        inter_end.saturating_sub(inter_start),
+                        img_area.x.saturating_add(dest_start),
+                        cols,
+                    )
+                }
+            } else if info.dest_w <= img_area.width {
+                let x_offset = (img_area.width - info.dest_w) / 2;
+                (
+                    0u16,
+                    info.cell_size.width,
+                    img_area.x + x_offset,
+                    info.dest_w,
+                )
+            } else {
+                let pan = zoom.cell_pan_from_left;
+                let visible_source = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
+                let remaining_width = info.cell_size.width.saturating_sub(pan);
+                let visible = remaining_width.min(visible_source);
+                (pan, visible, img_area.x, img_area.width)
+            };
+
+            if display_cols == 0 {
+                continue;
+            }
 
             let source_total_h_px = u32::from(info.cell_size.height) * u32::from(font_size.1);
-            let available_h_px = source_total_h_px.saturating_sub(info.img_clip_top_px);
-            let requested_h_px = ((f32::from(info.display_rows) * f32::from(font_size.1))
-                / zoom_factor)
-                .round()
-                .max(1.0) as u32;
-            let visible_source_h_px = requested_h_px.min(available_h_px);
+            let (source_start_px, source_end_px) = kitty_source_y_range_from_dest_rows(
+                info.offset_dest_cells,
+                info.display_rows,
+                font_size.1,
+                zoom_factor,
+                source_total_h_px,
+            );
+            let visible_source_h_px = source_end_px
+                .saturating_sub(source_start_px)
+                .max(1)
+                .min(source_total_h_px.saturating_sub(source_start_px));
 
             images_to_display.push(ImageRequest {
                 image: img,
                 page: info.page_idx,
                 position: Position {
-                    x: img_area.x + display_x_offset,
+                    x: display_x,
                     y: img_area.y + info.screen_y_start,
                 },
                 location: DisplayLocation {
                     x: u32::from(source_x_cells) * u32::from(font_size.0),
-                    y: info.img_clip_top_px,
+                    y: source_start_px,
                     width: u32::from(visible_source_w) * u32::from(font_size.0),
                     height: visible_source_h_px,
                     columns: display_cols,
@@ -1447,22 +2192,33 @@ impl PdfReaderState {
         let is_kitty_with_zoom = self.zoom.is_some() && self.is_kitty;
         let use_scroll_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Scroll;
         let use_page_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Page;
+        let page_layout_mode = get_pdf_page_layout_mode();
 
         // NoChange optimization for Kitty modes
         // Skip if current page has a Queued image that needs to be displayed (e.g., cursor/selection update)
-        let current_page_needs_display = self
-            .rendered
-            .get(self.page)
-            .and_then(|info| info.img.as_ref())
-            .is_some_and(|img| {
-                matches!(
-                    img,
-                    ConvertedImage::Kitty {
-                        img: ImageState::Queued(_),
-                        ..
-                    }
-                )
-            });
+        let page_has_queued_image = |page: usize| {
+            self.rendered
+                .get(page)
+                .and_then(|info| info.img.as_ref())
+                .is_some_and(|img| {
+                    matches!(
+                        img,
+                        ConvertedImage::Kitty {
+                            img: ImageState::Queued(_),
+                            ..
+                        }
+                    )
+                })
+        };
+        let current_page_needs_display = if use_scroll_mode
+            && page_layout_mode == PdfPageLayoutMode::Dual
+        {
+            // In dual scroll mode, cursor/visual updates can target either page
+            // in the current spread. Avoid NoChange if either side is queued.
+            page_has_queued_image(self.page) || page_has_queued_image(self.page.saturating_add(1))
+        } else {
+            page_has_queued_image(self.page)
+        };
 
         if size == self.last_render.rect
             && is_kitty_with_zoom
@@ -1491,36 +2247,79 @@ impl PdfReaderState {
                 .and_then(|page| page.img.as_ref())
                 .map(|img| img.cell_dimensions().as_tuple().0)
                 .unwrap_or(0);
+            let right_base_width = self
+                .rendered
+                .get(self.page + 1)
+                .and_then(|page| page.img.as_ref())
+                .map(|img| img.cell_dimensions().as_tuple().0)
+                .unwrap_or(0);
             let page_cell_size = self
                 .rendered
                 .get(self.page)
                 .and_then(|page| page.img.as_ref())
                 .map(|img| img.cell_dimensions());
             let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
-            let sidebar_comments = if self.comments_enabled && !comment_modal {
-                self.get_comments_for_sidebar(self.page)
-            } else {
-                Vec::new()
-            };
+            let (sidebar_comments, left_page_comment_count_kitty) =
+                if self.comments_enabled && !comment_modal {
+                    let mut comments = self.get_comments_for_sidebar(self.page);
+                    let left_count = comments.len();
+                    if page_layout_mode == PdfPageLayoutMode::Dual {
+                        comments.extend(self.get_comments_for_sidebar(self.page + 1));
+                    }
+                    (comments, left_count)
+                } else {
+                    (Vec::new(), 0)
+                };
             let comment_nav_active = self.comment_nav_active;
             let comment_nav_index = self.comment_nav_index;
+            let flat_nav_index_kitty = if page_layout_mode == PdfPageLayoutMode::Dual
+                && self.comment_nav_page == self.page + 1
+            {
+                left_page_comment_count_kitty + comment_nav_index
+            } else {
+                comment_nav_index
+            };
 
             let mut zoom = self.zoom.take().unwrap();
 
-            let result = Self::render_single_page_kitty(
-                &mut self.rendered,
-                frame,
-                pdf_area,
-                font_size,
-                &mut zoom,
-                self.page,
-                &self.palette,
-            );
+            let result = if page_layout_mode == PdfPageLayoutMode::Dual {
+                Self::render_dual_page_kitty(
+                    &mut self.rendered,
+                    frame,
+                    pdf_area,
+                    font_size,
+                    &mut zoom,
+                    self.page,
+                    &self.palette,
+                )
+            } else {
+                Self::render_single_page_kitty(
+                    &mut self.rendered,
+                    frame,
+                    pdf_area,
+                    font_size,
+                    &mut zoom,
+                    self.page,
+                    &self.palette,
+                )
+            };
 
             self.zoom = Some(zoom);
 
             // Calculate content width for sidebar positioning
-            let content_width = if base_width > 0 {
+            let content_width = if page_layout_mode == PdfPageLayoutMode::Dual {
+                let left_w = ((f32::from(base_width) * zoom_factor).ceil() as u16).max(1);
+                let right_w = if right_base_width > 0 {
+                    ((f32::from(right_base_width) * zoom_factor).ceil() as u16).max(1)
+                } else {
+                    0
+                };
+                let gap = if right_w > 0 { DUAL_PAGE_GAP_CELLS } else { 0 };
+                left_w
+                    .saturating_add(gap)
+                    .saturating_add(right_w)
+                    .min(pdf_area.width)
+            } else if base_width > 0 {
                 ((f32::from(base_width) * zoom_factor).ceil() as u16)
                     .max(1)
                     .min(pdf_area.width)
@@ -1583,7 +2382,7 @@ impl PdfReaderState {
                             self.palette.base_0e,
                             muted_color,
                             comment_nav_active,
-                            comment_nav_index,
+                            flat_nav_index_kitty,
                         );
                     }
                 }
@@ -1633,8 +2432,13 @@ impl PdfReaderState {
                         .map(|img| img.cell_dimensions().as_tuple().1)
                 }) {
                     let dest_h = ((f32::from(reference_height) * zoom_factor).ceil() as u32).max(1);
-                    let per_page = dest_h + u32::from(SEPARATOR_HEIGHT);
-                    zoom.global_scroll_offset = per_page.saturating_mul(self.page as u32);
+                    let per_row = dest_h + u32::from(SEPARATOR_HEIGHT);
+                    let row_index = if page_layout_mode == PdfPageLayoutMode::Dual {
+                        (self.page / 2) as u32
+                    } else {
+                        self.page as u32
+                    };
+                    zoom.global_scroll_offset = per_row.saturating_mul(row_index);
                 }
             }
 
@@ -1657,6 +2461,7 @@ impl PdfReaderState {
                 self.page,
                 SEPARATOR_HEIGHT,
                 muted_color,
+                page_layout_mode,
                 &self.palette,
             );
             self.zoom = Some(zoom);
@@ -1664,37 +2469,61 @@ impl PdfReaderState {
             if let Some(page) = current_page {
                 self.page = page;
             }
-            if self.comment_nav_active && self.comment_nav_page != self.page {
+            let nav_in_spread = self.comment_nav_page == self.page
+                || (page_layout_mode == PdfPageLayoutMode::Dual
+                    && self.comment_nav_page == self.page + 1);
+            if self.comment_nav_active && !nav_in_spread {
                 self.comment_nav_page = self.page;
                 self.comment_nav_index = 0;
             }
 
             let comment_nav_active = self.comment_nav_active;
             let comment_nav_index = self.comment_nav_index;
+            let mut scroll_dual_left_count = 0usize;
             if self.comments_enabled && !comment_modal {
-                // Prefer showing comments for the current page if it's visible and has comments
-                let hint_comments = sidebar_comments_by_page
-                    .get(&sidebar_page_hint)
-                    .cloned()
-                    .unwrap_or_default();
-                if !hint_comments.is_empty()
-                    && visible_pages
-                        .iter()
-                        .any(|info| info.page_idx == sidebar_page_hint)
-                {
-                    sidebar_page_idx = Some(sidebar_page_hint);
-                    sidebar_comments = hint_comments;
+                if page_layout_mode == PdfPageLayoutMode::Dual {
+                    // In dual mode, merge comments from both pages
+                    let left_comments = sidebar_comments_by_page
+                        .get(&sidebar_page_hint)
+                        .cloned()
+                        .unwrap_or_default();
+                    let right_page = sidebar_page_hint + 1;
+                    let right_comments = sidebar_comments_by_page
+                        .get(&right_page)
+                        .cloned()
+                        .unwrap_or_default();
+                    if !left_comments.is_empty() || !right_comments.is_empty() {
+                        sidebar_page_idx = Some(sidebar_page_hint);
+                        let left_count = left_comments.len();
+                        sidebar_comments = left_comments;
+                        sidebar_comments.extend(right_comments);
+                        scroll_dual_left_count = left_count;
+                    }
                 } else {
-                    // Fall back to any visible page that has comments
-                    for info in &visible_pages {
-                        let comments = sidebar_comments_by_page
-                            .get(&info.page_idx)
-                            .cloned()
-                            .unwrap_or_default();
-                        if !comments.is_empty() {
-                            sidebar_page_idx = Some(info.page_idx);
-                            sidebar_comments = comments;
-                            break;
+                    // Prefer showing comments for the current page if it's visible and has comments
+                    let hint_comments = sidebar_comments_by_page
+                        .get(&sidebar_page_hint)
+                        .cloned()
+                        .unwrap_or_default();
+                    if !hint_comments.is_empty()
+                        && visible_pages
+                            .iter()
+                            .any(|info| info.page_idx == sidebar_page_hint)
+                    {
+                        sidebar_page_idx = Some(sidebar_page_hint);
+                        sidebar_comments = hint_comments;
+                    } else {
+                        // Fall back to any visible page that has comments
+                        for info in &visible_pages {
+                            let comments = sidebar_comments_by_page
+                                .get(&info.page_idx)
+                                .cloned()
+                                .unwrap_or_default();
+                            if !comments.is_empty() {
+                                sidebar_page_idx = Some(info.page_idx);
+                                sidebar_comments = comments;
+                                break;
+                            }
                         }
                     }
                 }
@@ -1702,9 +2531,24 @@ impl PdfReaderState {
 
             let page_idx = current_page.unwrap_or(self.page);
             let base_width = page_widths.get(page_idx).copied().unwrap_or(pdf_area.width);
-            let content_width = ((f32::from(base_width) * zoom_factor).ceil() as u16)
-                .max(1)
-                .min(pdf_area.width);
+            let content_width = if page_layout_mode == PdfPageLayoutMode::Dual {
+                let left_w = ((f32::from(base_width) * zoom_factor).ceil() as u16).max(1);
+                let right_w = page_widths
+                    .get(page_idx + 1)
+                    .copied()
+                    .filter(|&w| w > 0)
+                    .map(|w| ((f32::from(w) * zoom_factor).ceil() as u16).max(1))
+                    .unwrap_or(0);
+                let gap = if right_w > 0 { DUAL_PAGE_GAP_CELLS } else { 0 };
+                left_w
+                    .saturating_add(gap)
+                    .saturating_add(right_w)
+                    .min(pdf_area.width)
+            } else {
+                ((f32::from(base_width) * zoom_factor).ceil() as u16)
+                    .max(1)
+                    .min(pdf_area.width)
+            };
 
             self.coord_info = Some((pdf_area, font_size));
 
@@ -1745,11 +2589,34 @@ impl PdfReaderState {
                 } else if let Some(page_idx) = sidebar_page_idx
                     && let Some(info) = visible_pages.iter().find(|info| info.page_idx == page_idx)
                 {
-                    let bounds = Rect {
-                        x: pdf_area.x,
-                        y: pdf_area.y + info.screen_y_start,
-                        width: pdf_area.width,
-                        height: info.display_rows,
+                    let bounds = if page_layout_mode == PdfPageLayoutMode::Dual {
+                        let right_info = visible_pages.iter().find(|i| i.page_idx == page_idx + 1);
+                        let combined_height = if let Some(ri) = right_info {
+                            let top = info.screen_y_start.min(ri.screen_y_start);
+                            let bottom = (info.screen_y_start + info.display_rows)
+                                .max(ri.screen_y_start + ri.display_rows);
+                            bottom.saturating_sub(top)
+                        } else {
+                            info.display_rows
+                        };
+                        let top_y = if let Some(ri) = right_info {
+                            info.screen_y_start.min(ri.screen_y_start)
+                        } else {
+                            info.screen_y_start
+                        };
+                        Rect {
+                            x: pdf_area.x,
+                            y: pdf_area.y + top_y,
+                            width: pdf_area.width,
+                            height: combined_height,
+                        }
+                    } else {
+                        Rect {
+                            x: pdf_area.x,
+                            y: pdf_area.y + info.screen_y_start,
+                            width: pdf_area.width,
+                            height: info.display_rows,
+                        }
                     };
                     if let Some(sidebar_area) = Self::comment_sidebar_area_with_bounds(
                         inner_area,
@@ -1757,7 +2624,13 @@ impl PdfReaderState {
                         &sidebar_comments,
                         bounds,
                     ) {
-                        // Sidebar only shows if there's enough natural margin
+                        let flat_nav_idx = if page_layout_mode == PdfPageLayoutMode::Dual
+                            && self.comment_nav_page == page_idx + 1
+                        {
+                            scroll_dual_left_count + comment_nav_index
+                        } else {
+                            comment_nav_index
+                        };
                         Self::render_comment_list_sidebar(
                             &sidebar_comments,
                             frame,
@@ -1766,7 +2639,7 @@ impl PdfReaderState {
                             self.palette.base_0e,
                             muted_color,
                             comment_nav_active,
-                            comment_nav_index,
+                            flat_nav_idx,
                         );
                     }
                 }
@@ -1789,10 +2662,16 @@ impl PdfReaderState {
 
         // Non-Kitty mode (tiled/generic rendering)
         // Pre-fetch comments for sidebar before mutable borrow
-        let sidebar_comments = if self.comments_enabled && !comment_modal {
-            self.get_comments_for_sidebar(self.page)
+        let (sidebar_comments, left_page_comment_count) = if self.comments_enabled && !comment_modal
+        {
+            let mut comments = self.get_comments_for_sidebar(self.page);
+            let left_count = comments.len();
+            if page_layout_mode == PdfPageLayoutMode::Dual {
+                comments.extend(self.get_comments_for_sidebar(self.page + 1));
+            }
+            (comments, left_count)
         } else {
-            Vec::new()
+            (Vec::new(), 0)
         };
 
         // iTerm2/Sixel images are terminal overlays that persist until explicitly cleared.
@@ -1812,12 +2691,38 @@ impl PdfReaderState {
             img_area,
         );
 
-        // Single page display (no side-by-side)
+        // Single/dual page display
         let mut page_sizes = Vec::new();
-        if let Some(page) = self.rendered.get(self.page) {
-            if let Some(img) = page.img.as_ref() {
-                let (w, h) = img.cell_dimensions().as_tuple();
-                page_sizes.push((self.page, w, h));
+        let pages_to_render = if page_layout_mode == PdfPageLayoutMode::Dual {
+            2
+        } else {
+            1
+        };
+        for offset in 0..pages_to_render {
+            let page_idx = self.page + offset;
+            if let Some(page) = self.rendered.get(page_idx) {
+                if page.img.is_some()
+                    && (page_layout_mode != PdfPageLayoutMode::Dual
+                        || self.page_matches_dual_scale(page_idx, img_area.width))
+                    && let Some((w, h)) = page.full_cell_size.map(|size| size.as_tuple())
+                {
+                    page_sizes.push((page_idx, w, h));
+                }
+            }
+        }
+        if page_layout_mode == PdfPageLayoutMode::Dual {
+            let right_page = self.page.saturating_add(1);
+            let right_exists = right_page < self.rendered.len();
+            if page_sizes.len() < 2 && right_exists {
+                if PdfReaderState::debug_non_kitty_dual_enabled() {
+                    log::debug!(
+                        "dual-render waiting for pair page={} right_page={} sizes_ready={}",
+                        self.page,
+                        right_page,
+                        page_sizes.len()
+                    );
+                }
+                page_sizes.clear();
             }
         }
 
@@ -1848,7 +2753,7 @@ impl PdfReaderState {
             }
             if comment_modal {
                 let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
-                let selection_rows = Self::compute_comment_rows_non_kitty(
+                let mut selection_rows = Self::compute_comment_rows_non_kitty(
                     &comment_target_bounds,
                     self.page,
                     page_scale,
@@ -1856,6 +2761,17 @@ impl PdfReaderState {
                     font_size,
                     self.non_kitty_scroll_offset,
                 );
+                if selection_rows.is_none() && page_layout_mode == PdfPageLayoutMode::Dual {
+                    let right_scale = *page_scales.get(self.page + 1).unwrap_or(&1.0);
+                    selection_rows = Self::compute_comment_rows_non_kitty(
+                        &comment_target_bounds,
+                        self.page + 1,
+                        right_scale,
+                        img_area,
+                        font_size,
+                        self.non_kitty_scroll_offset,
+                    );
+                }
                 self.modal_overlay_rect = Self::render_comment_modal(
                     &mut self.comment_input,
                     frame,
@@ -1881,10 +2797,31 @@ impl PdfReaderState {
             self.last_nonkitty_cleanup_area = Some(img_area);
             self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
 
-            let total_width = page_sizes.iter().map(|(_, w, _)| w).sum::<u16>();
+            let dual_layout = page_layout_mode == PdfPageLayoutMode::Dual;
+            let dual_layout_info = if dual_layout {
+                self.build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset)
+            } else {
+                None
+            };
+            let total_width = if dual_layout {
+                dual_layout_info
+                    .map(|layout| layout.strip_width)
+                    .unwrap_or_else(|| page_sizes.iter().map(|(_, w, _)| *w).sum::<u16>())
+            } else {
+                let gap_count = page_sizes.len().saturating_sub(1) as u16;
+                page_sizes
+                    .iter()
+                    .map(|(_, w, _)| *w)
+                    .sum::<u16>()
+                    .saturating_add(gap_count.saturating_mul(DUAL_PAGE_GAP_CELLS))
+            };
             self.last_render.pages_shown = page_sizes.len();
 
-            let unused_width = img_area.width.saturating_sub(total_width);
+            let unused_width = if dual_layout {
+                0
+            } else {
+                img_area.width.saturating_sub(total_width)
+            };
             self.last_render.unused_width = unused_width;
             img_area.x += unused_width / 2;
 
@@ -1896,7 +2833,7 @@ impl PdfReaderState {
 
             let centered_img_area = img_area;
             let page_scale = *page_scales.get(self.page).unwrap_or(&1.0);
-            let selection_rows_nonkitty = Self::compute_comment_rows_non_kitty(
+            let mut selection_rows_nonkitty = Self::compute_comment_rows_non_kitty(
                 &comment_target_bounds,
                 self.page,
                 page_scale,
@@ -1904,43 +2841,123 @@ impl PdfReaderState {
                 font_size,
                 self.non_kitty_scroll_offset,
             );
+            let mut comment_target_on_right = false;
+            if selection_rows_nonkitty.is_none() && dual_layout {
+                let right_scale = *page_scales.get(self.page + 1).unwrap_or(&1.0);
+                selection_rows_nonkitty = Self::compute_comment_rows_non_kitty(
+                    &comment_target_bounds,
+                    self.page + 1,
+                    right_scale,
+                    centered_img_area,
+                    font_size,
+                    self.non_kitty_scroll_offset,
+                );
+                if selection_rows_nonkitty.is_some() {
+                    comment_target_on_right = true;
+                }
+            }
 
-            let page_sizes = self.rendered[self.page..]
+            let current_scale_pages: Option<HashSet<usize>> = if dual_layout {
+                let mut set = HashSet::new();
+                for offset in 0..page_sizes.len() {
+                    let page_idx = self.page + offset;
+                    if self.page_matches_dual_scale(page_idx, img_area.width) {
+                        set.insert(page_idx);
+                    }
+                }
+                Some(set)
+            } else {
+                None
+            };
+
+            let page_images = self.rendered[self.page..]
                 .iter_mut()
                 .enumerate()
                 .take(page_sizes.len())
                 .filter_map(|(idx, page)| {
-                    page.img.as_mut().map(|img| {
-                        let (w, h) = img.cell_dimensions().as_tuple();
-                        (self.page + idx, w, h, img)
-                    })
+                    let page_idx = self.page + idx;
+                    if dual_layout
+                        && !current_scale_pages
+                            .as_ref()
+                            .is_some_and(|set| set.contains(&page_idx))
+                    {
+                        return None;
+                    }
+                    let img = page.img.as_mut()?;
+                    let (w, h) = page.full_cell_size.map(|size| size.as_tuple())?;
+                    Some((page_idx, w, h, img))
                 })
                 .collect::<Vec<_>>();
 
             let mut to_display = Vec::new();
-            for (page_num, width, _height, img) in page_sizes.into_iter() {
-                let render_width = width.min(img_area.width);
-                let maybe_img = Self::render_single_page(
-                    frame,
-                    img,
-                    Rect {
-                        width: render_width,
-                        ..img_area
-                    },
-                    None,
-                    bg_color,
-                );
-
-                // Cursor is baked into the image by the converter for all protocols
-
-                img_area.x += width;
-                if let Some((img, pos)) = maybe_img {
-                    to_display.push(ImageRequest {
-                        image: img,
-                        page: page_num,
-                        position: pos,
-                        location: DisplayLocation::default(),
-                    });
+            if dual_layout {
+                if let Some(layout) = dual_layout_info {
+                    self.non_kitty_pan_offset = layout.pan;
+                    log::debug!(
+                        "dual-render: pan={} img_area=({},{} {}x{}) left=[start={} end={} w={} page={}] right={:?}",
+                        layout.pan,
+                        img_area.x,
+                        img_area.y,
+                        img_area.width,
+                        img_area.height,
+                        layout.left_slice.screen_start,
+                        layout.left_slice.screen_end,
+                        layout.left_slice.width,
+                        layout.left_slice.page,
+                        layout
+                            .right_slice
+                            .map(|s| (s.screen_start, s.screen_end, s.width, s.page)),
+                    );
+                    for (page_num, _width, _height, img) in page_images.into_iter() {
+                        let slice = if page_num == layout.left_page {
+                            Some(layout.left_slice)
+                        } else if layout.right_slice.is_some_and(|s| s.page == page_num) {
+                            layout.right_slice
+                        } else {
+                            None
+                        };
+                        let Some(slice) = slice else {
+                            continue;
+                        };
+                        let maybe_img = Self::render_single_page(
+                            frame,
+                            img,
+                            Rect {
+                                x: img_area.x.saturating_add(slice.screen_start),
+                                width: slice.width,
+                                ..img_area
+                            },
+                            None,
+                            bg_color,
+                        );
+                        if let Some((img, pos)) = maybe_img {
+                            to_display.push(ImageRequest {
+                                image: img,
+                                page: page_num,
+                                position: pos,
+                                location: DisplayLocation::default(),
+                            });
+                        }
+                    }
+                }
+            } else {
+                for (page_num, width, _height, img) in page_images.into_iter() {
+                    let maybe_img = Self::render_single_page(
+                        frame,
+                        img,
+                        Rect { width, ..img_area },
+                        None,
+                        bg_color,
+                    );
+                    img_area.x += width.saturating_add(DUAL_PAGE_GAP_CELLS);
+                    if let Some((img, pos)) = maybe_img {
+                        to_display.push(ImageRequest {
+                            image: img,
+                            page: page_num,
+                            position: pos,
+                            location: DisplayLocation::default(),
+                        });
+                    }
                 }
             }
 
@@ -1955,6 +2972,11 @@ impl PdfReaderState {
                 if let Some(sidebar_area) =
                     Self::comment_sidebar_area(inner_area, total_width, &sidebar_comments)
                 {
+                    let flat_nav_index = if dual_layout && self.comment_nav_page == self.page + 1 {
+                        left_page_comment_count + self.comment_nav_index
+                    } else {
+                        self.comment_nav_index
+                    };
                     Self::render_comment_list_sidebar(
                         &sidebar_comments,
                         frame,
@@ -1963,7 +2985,7 @@ impl PdfReaderState {
                         self.palette.base_0e,
                         muted_color,
                         self.comment_nav_active,
-                        self.comment_nav_index,
+                        flat_nav_index,
                     );
                 }
             }
@@ -1980,10 +3002,51 @@ impl PdfReaderState {
                 );
             }
             if comment_modal {
+                let modal_area = if dual_layout {
+                    let pad = 2u16;
+                    if comment_target_on_right {
+                        if let Some(layout) = dual_layout_info
+                            && let Some(rs) = layout.right_slice
+                        {
+                            let x = centered_img_area
+                                .x
+                                .saturating_add(rs.screen_start)
+                                .saturating_sub(pad);
+                            let max_w = inner_area
+                                .x
+                                .saturating_add(inner_area.width)
+                                .saturating_sub(x);
+                            Rect {
+                                x,
+                                width: rs.width.saturating_add(pad * 2).min(max_w),
+                                ..inner_area
+                            }
+                        } else {
+                            inner_area
+                        }
+                    } else if let Some(layout) = dual_layout_info {
+                        let x = centered_img_area
+                            .x
+                            .saturating_add(layout.left_slice.screen_start);
+                        let max_w = inner_area
+                            .x
+                            .saturating_add(inner_area.width)
+                            .saturating_sub(x);
+                        Rect {
+                            x,
+                            width: layout.left_slice.width.saturating_add(pad * 2).min(max_w),
+                            ..inner_area
+                        }
+                    } else {
+                        inner_area
+                    }
+                } else {
+                    inner_area
+                };
                 self.modal_overlay_rect = Self::render_comment_modal(
                     &mut self.comment_input,
                     frame,
-                    inner_area,
+                    modal_area,
                     Some(total_width.min(centered_img_area.width)),
                     selection_rows_nonkitty,
                     modal_bg,
@@ -2009,7 +3072,8 @@ impl PdfReaderState {
                 frame.render_widget(Image::new(page_img), img_area);
                 None
             }
-            ConvertedImage::Tiled { tiles, .. } => {
+            ConvertedImage::Tiled { tiles, cell_size } => {
+                let tile_render_width = cell_size.width.min(img_area.width);
                 if let Some(plan) = scroll_plan {
                     let abs_delta = plan.delta_cells.unsigned_abs();
                     if abs_delta < img_area.height {
@@ -2040,7 +3104,7 @@ impl PdfReaderState {
                                     let tile_area = Rect {
                                         x: img_area.x,
                                         y: img_area.y.saturating_add(tile.y_offset_cells),
-                                        width: img_area.width,
+                                        width: tile_render_width,
                                         height: tile.height_cells,
                                     };
                                     frame.render_widget(Image::new(&tile.protocol), tile_area);
@@ -2072,7 +3136,7 @@ impl PdfReaderState {
                                     let tile_area = Rect {
                                         x: img_area.x,
                                         y: img_area.y.saturating_add(tile.y_offset_cells),
-                                        width: img_area.width,
+                                        width: tile_render_width,
                                         height: tile.height_cells,
                                     };
                                     frame.render_widget(Image::new(&tile.protocol), tile_area);
@@ -2086,7 +3150,7 @@ impl PdfReaderState {
                     let tile_area = Rect {
                         x: img_area.x,
                         y: img_area.y.saturating_add(tile.y_offset_cells),
-                        width: img_area.width,
+                        width: tile_render_width,
                         height: tile.height_cells,
                     };
                     frame.render_widget(Image::new(&tile.protocol), tile_area);
@@ -2413,14 +3477,15 @@ impl PdfReaderState {
 
         let min_sidebar = MIN_COMMENT_TEXTAREA_WIDTH;
         let max_sidebar = 40u16;
+        let padding = 1u16;
         let gap_total = area.width.saturating_sub(content_width);
         let right_gap = gap_total.saturating_sub(gap_total / 2); // Right half (PDF is centered)
 
-        if right_gap < min_sidebar {
+        if right_gap < min_sidebar + padding {
             return None;
         }
 
-        let sidebar_width = right_gap.min(max_sidebar);
+        let sidebar_width = (right_gap - padding).min(max_sidebar);
         Some(Rect {
             x: area.x + area.width.saturating_sub(sidebar_width),
             y: area.y,
@@ -2446,14 +3511,15 @@ impl PdfReaderState {
 
         let min_sidebar = MIN_COMMENT_TEXTAREA_WIDTH;
         let max_sidebar = 40u16;
+        let padding = 1u16;
         let gap_total = area.width.saturating_sub(content_width);
         let right_gap = gap_total.saturating_sub(gap_total / 2);
 
-        if right_gap < min_sidebar {
+        if right_gap < min_sidebar + padding {
             return None;
         }
 
-        let sidebar_width = right_gap.min(max_sidebar);
+        let sidebar_width = (right_gap - padding).min(max_sidebar);
         let y = bounds.y;
 
         Some(Rect {

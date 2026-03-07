@@ -318,6 +318,7 @@ pub enum ConversionCommand {
     NavigateTo(usize),
     EnqueuePage(Arc<PageData>),
     UpdateViewport(ViewportUpdate),
+    UpdateDualViewport(Vec<ViewportUpdate>),
     UpdateSelection(Vec<SelectionRect>),
     UpdateComments(Vec<SelectionRect>),
     UpdateCursor(Option<CursorRect>),
@@ -343,6 +344,7 @@ struct ConverterEngine {
     visual_rects: Vec<VisualRect>,
     cursor_rect: Option<CursorRect>,
     viewport: Option<ViewportUpdate>,
+    last_viewport_by_page: HashMap<usize, ViewportUpdate>,
     tiled_pages: HashSet<usize>,
     sent_for_viewport: HashSet<usize>,
     /// Pages that need cursor re-rendering once they arrive in cache.
@@ -357,6 +359,106 @@ struct CommentCacheEntry {
 }
 
 impl ConverterEngine {
+    fn handle_single_viewport_update(
+        &mut self,
+        new_viewport: ViewportUpdate,
+        sender: &Sender<Result<RenderedFrame, PipelineError>>,
+    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
+        self.viewport = Some(new_viewport);
+        let old_page_viewport = self.last_viewport_by_page.get(&new_viewport.page).copied();
+        // Record the latest desired viewport per page even if we cannot
+        // render immediately (e.g., page not cached yet). This allows
+        // later EnqueuePage processing to render against the correct
+        // viewport in dual-page non-Kitty mode.
+        self.last_viewport_by_page
+            .insert(new_viewport.page, new_viewport);
+        // Drop distant pixel buffers when viewport moves, even if render is skipped.
+        self.clear_distant_pixels(new_viewport.page, 5);
+
+        // Invalidate tile cache when horizontal offset or width changes (tiles are keyed by Y only)
+        if old_page_viewport.is_some_and(|old| {
+            old.x_offset_cells != new_viewport.x_offset_cells
+                || old.viewport_width_cells != new_viewport.viewport_width_cells
+        }) {
+            if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
+                cached.tile_cache.clear();
+            }
+        }
+
+        if self.picker.protocol_type() != ProtocolType::Kitty {
+            let viewport_changed = old_page_viewport != Some(new_viewport);
+            let already_sent = self.sent_for_viewport.contains(&new_viewport.page);
+
+            if viewport_changed || !already_sent {
+                let overlays = self.build_overlay_set(new_viewport.page);
+                if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
+                    match render_viewport_tiles(cached, &new_viewport, &overlays, &self.picker) {
+                        Ok(img) => {
+                            self.tiled_pages.insert(new_viewport.page);
+                            self.sent_for_viewport.insert(new_viewport.page);
+                            sender.send(Ok(RenderedFrame {
+                                index: new_viewport.page,
+                                image: img,
+                            }))?;
+                        }
+                        Err(e) => {
+                            sender.send(Err(e))?;
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+
+        // For Kitty: skip reconversion if page already has an uploaded image.
+        // The display layer will re-display the cached image at the new position.
+        // Only reconvert if overlays changed or page not yet converted.
+        let already_sent = self.sent_for_viewport.contains(&new_viewport.page);
+        if already_sent {
+            // Just update viewport tracking, don't reconvert
+            return Ok(());
+        }
+
+        let overlays = self.build_overlay_set(new_viewport.page);
+        if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
+            let use_tiles = self.picker.protocol_type() == ProtocolType::Iterm2;
+            let result = if use_tiles {
+                render_viewport_tiles(cached, &new_viewport, &overlays, &self.picker)
+            } else {
+                render_page_with_viewport(
+                    cached,
+                    new_viewport.page,
+                    &overlays,
+                    &self.picker,
+                    self.viewport.as_ref(),
+                    self.pid,
+                    self.kitty_shm_support,
+                )
+            };
+
+            match result {
+                Ok(img) => {
+                    if use_tiles {
+                        self.tiled_pages.insert(new_viewport.page);
+                    } else {
+                        self.tiled_pages.remove(&new_viewport.page);
+                    }
+                    self.sent_for_viewport.insert(new_viewport.page);
+
+                    sender.send(Ok(RenderedFrame {
+                        index: new_viewport.page,
+                        image: img,
+                    }))?;
+                }
+                Err(e) => {
+                    sender.send(Err(e))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn new(picker: Picker, prerender: usize, kitty_shm_support: bool) -> Self {
         Self {
             picker,
@@ -372,6 +474,7 @@ impl ConverterEngine {
             visual_rects: Vec::new(),
             cursor_rect: None,
             viewport: None,
+            last_viewport_by_page: HashMap::new(),
             tiled_pages: HashSet::new(),
             sent_for_viewport: HashSet::new(),
             pending_cursor_pages: HashSet::new(),
@@ -380,9 +483,6 @@ impl ConverterEngine {
 
     fn next_page(&mut self, iteration: &mut usize) -> Result<Option<RenderedFrame>, PipelineError> {
         if self.images.is_empty() {
-            return Ok(None);
-        }
-        if *iteration >= self.prerender {
             return Ok(None);
         }
 
@@ -397,36 +497,45 @@ impl ConverterEngine {
 
         let focus_page = self.page.clamp(idx_start, idx_end - 1);
 
-        let Some((page_info, new_iter, page_num)) =
-            self.pick_candidate(focus_page, idx_start..idx_end)
-        else {
-            return Ok(None);
-        };
+        loop {
+            if *iteration >= self.prerender {
+                return Ok(None);
+            }
 
-        self.update_cache_for_page(page_num, &page_info);
+            let Some((page_info, new_iter, page_num)) =
+                self.pick_candidate(focus_page, idx_start..idx_end)
+            else {
+                return Ok(None);
+            };
 
-        if let Some(new_iter) = self.should_skip_render(page_num, new_iter) {
+            self.update_cache_for_page(page_num, &page_info);
+
+            if let Some(new_iter) = self.should_skip_render(page_num, new_iter) {
+                // Page data is already in page_cache from update_cache_for_page above,
+                // so UpdateViewport can render from cache later. Don't re-enqueue in
+                // images — that would block pick_candidate from reaching other pages.
+                *iteration = new_iter;
+                continue;
+            }
+
+            let overlays = self.build_overlay_set(page_num);
+            let img = self.render_page_from_cache(page_num, &overlays)?;
+
             *iteration = new_iter;
-            return Ok(None);
+
+            self.sent_for_viewport.insert(page_info.page_num);
+
+            // Clear pixel cache for distant pages to limit memory usage.
+            // Keep pixels for nearby pages so overlays can be re-rendered.
+            // Use self.page (navigation position) not the rendered page, so pages
+            // near the user's view are preserved regardless of render order.
+            self.clear_distant_pixels(self.page, 5);
+
+            return Ok(Some(RenderedFrame {
+                index: page_info.page_num,
+                image: img,
+            }));
         }
-
-        let overlays = self.build_overlay_set(page_num);
-        let img = self.render_page_from_cache(page_num, &overlays)?;
-
-        *iteration = new_iter;
-
-        self.sent_for_viewport.insert(page_info.page_num);
-
-        // Clear pixel cache for distant pages to limit memory usage.
-        // Keep pixels for nearby pages so overlays can be re-rendered.
-        // Use self.page (navigation position) not the rendered page, so pages
-        // near the user's view are preserved regardless of render order.
-        self.clear_distant_pixels(self.page, 5);
-
-        Ok(Some(RenderedFrame {
-            index: page_info.page_num,
-            image: img,
-        }))
     }
 
     fn pick_candidate(
@@ -442,32 +551,26 @@ impl ConverterEngine {
 
     fn should_skip_render(&self, page_num: usize, new_iter: usize) -> Option<usize> {
         match self.picker.protocol_type() {
-            ProtocolType::Iterm2 => {
+            ProtocolType::Kitty => {
                 if self.sent_for_viewport.contains(&page_num) {
                     return Some(new_iter);
                 }
 
-                if page_num != self.page {
-                    let viewport_matches =
-                        self.viewport.as_ref().is_some_and(|vp| vp.page == page_num);
-
-                    if !viewport_matches {
-                        return Some(new_iter);
-                    }
-                }
-
                 None
             }
-            ProtocolType::Kitty => {
-                // Skip if page was already sent. The image is stored in Kitty's
-                // memory by ID and can be re-displayed without re-uploading.
+            _ => {
                 if self.sent_for_viewport.contains(&page_num) {
+                    return Some(new_iter);
+                }
+
+                let viewport_matches = self.last_viewport_by_page.contains_key(&page_num)
+                    || self.viewport.as_ref().is_some_and(|vp| vp.page == page_num);
+                if !viewport_matches {
                     Some(new_iter)
                 } else {
                     None
                 }
             }
-            _ => None,
         }
     }
 
@@ -477,15 +580,20 @@ impl ConverterEngine {
         }
 
         // Preserve existing tile cache if dimensions match, otherwise start fresh
-        let existing_tile_cache = self.page_cache[page_num]
-            .as_ref()
-            .filter(|cached| {
-                cached.data.img_data.width_cell == page_info.img_data.width_cell
-                    && cached.data.img_data.height_cell == page_info.img_data.height_cell
-                    && (cached.data.scale_factor - page_info.scale_factor).abs() < 0.001
-            })
-            .map(|cached| cached.tile_cache.clone())
-            .unwrap_or_default();
+        let dimensions_match = self.page_cache[page_num].as_ref().is_some_and(|cached| {
+            cached.data.img_data.width_cell == page_info.img_data.width_cell
+                && cached.data.img_data.height_cell == page_info.img_data.height_cell
+                && (cached.data.scale_factor - page_info.scale_factor).abs() < 0.001
+        });
+        let existing_tile_cache = if dimensions_match {
+            self.page_cache[page_num]
+                .as_ref()
+                .map(|cached| cached.tile_cache.clone())
+                .unwrap_or_default()
+        } else {
+            self.sent_for_viewport.remove(&page_num);
+            HashMap::new()
+        };
 
         self.page_cache[page_num] = Some(CachedPage {
             data: Arc::clone(page_info),
@@ -536,6 +644,7 @@ impl ConverterEngine {
                 self.page_cache.reset_to_len(n_pages);
                 self.page = self.page.min(n_pages.saturating_sub(1));
                 self.sent_for_viewport.clear();
+                self.last_viewport_by_page.clear();
                 self.tiled_pages.clear();
             }
             ConversionCommand::NavigateTo(new_page) => {
@@ -549,94 +658,44 @@ impl ConverterEngine {
                 self.clear_distant_pixels(new_page, 5);
             }
             ConversionCommand::UpdateViewport(new_viewport) => {
-                let old_viewport = self.viewport.replace(new_viewport);
-                // Drop distant pixel buffers when viewport moves, even if render is skipped.
-                self.clear_distant_pixels(new_viewport.page, 5);
-
-                // Invalidate tile cache when horizontal offset changes (tiles are keyed by Y only)
-                if old_viewport.is_some_and(|old| old.x_offset_cells != new_viewport.x_offset_cells)
+                if std::env::var("BOOKOKRAT_DEBUG_NONKITTY_DUAL")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
                 {
-                    if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
-                        cached.tile_cache.clear();
-                    }
+                    log::debug!(
+                        "converter-viewport single page={} y={} x={} h={} w={}",
+                        new_viewport.page,
+                        new_viewport.y_offset_cells,
+                        new_viewport.x_offset_cells,
+                        new_viewport.viewport_height_cells,
+                        new_viewport.viewport_width_cells
+                    );
                 }
-
-                if self.picker.protocol_type() != ProtocolType::Kitty {
-                    let is_same_page =
-                        old_viewport.is_some_and(|old| old.page == new_viewport.page);
-
-                    let already_sent = self.sent_for_viewport.contains(&new_viewport.page);
-
-                    if is_same_page || !already_sent {
-                        let overlays = self.build_overlay_set(new_viewport.page);
-                        if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
-                            match render_viewport_tiles(
-                                cached,
-                                &new_viewport,
-                                &overlays,
-                                &self.picker,
-                            ) {
-                                Ok(img) => {
-                                    self.tiled_pages.insert(new_viewport.page);
-                                    self.sent_for_viewport.insert(new_viewport.page);
-                                    sender.send(Ok(RenderedFrame {
-                                        index: new_viewport.page,
-                                        image: img,
-                                    }))?;
-                                }
-                                Err(e) => {
-                                    sender.send(Err(e))?;
-                                }
-                            }
-                        }
-                    }
-                    return Ok(());
+                self.handle_single_viewport_update(new_viewport, sender)?;
+            }
+            ConversionCommand::UpdateDualViewport(viewports) => {
+                if std::env::var("BOOKOKRAT_DEBUG_NONKITTY_DUAL")
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                {
+                    log::debug!(
+                        "converter-viewport dual {:?}",
+                        viewports
+                            .iter()
+                            .map(|v| {
+                                (
+                                    v.page,
+                                    v.y_offset_cells,
+                                    v.x_offset_cells,
+                                    v.viewport_height_cells,
+                                    v.viewport_width_cells,
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                    );
                 }
-
-                // For Kitty: skip reconversion if page already has an uploaded image.
-                // The display layer will re-display the cached image at the new position.
-                // Only reconvert if overlays changed or page not yet converted.
-                let already_sent = self.sent_for_viewport.contains(&new_viewport.page);
-                if already_sent {
-                    // Just update viewport tracking, don't reconvert
-                    return Ok(());
-                }
-
-                let overlays = self.build_overlay_set(new_viewport.page);
-                if let Some(Some(cached)) = self.page_cache.get_mut(new_viewport.page) {
-                    let use_tiles = self.picker.protocol_type() == ProtocolType::Iterm2;
-                    let result = if use_tiles {
-                        render_viewport_tiles(cached, &new_viewport, &overlays, &self.picker)
-                    } else {
-                        render_page_with_viewport(
-                            cached,
-                            new_viewport.page,
-                            &overlays,
-                            &self.picker,
-                            self.viewport.as_ref(),
-                            self.pid,
-                            self.kitty_shm_support,
-                        )
-                    };
-
-                    match result {
-                        Ok(img) => {
-                            if use_tiles {
-                                self.tiled_pages.insert(new_viewport.page);
-                            } else {
-                                self.tiled_pages.remove(&new_viewport.page);
-                            }
-                            self.sent_for_viewport.insert(new_viewport.page);
-
-                            sender.send(Ok(RenderedFrame {
-                                index: new_viewport.page,
-                                image: img,
-                            }))?;
-                        }
-                        Err(e) => {
-                            sender.send(Err(e))?;
-                        }
-                    }
+                for viewport in viewports {
+                    self.handle_single_viewport_update(viewport, sender)?;
                 }
             }
             ConversionCommand::UpdateSelection(new_rects) => {
@@ -678,6 +737,8 @@ impl ConverterEngine {
                 self.tiled_pages.clear();
                 self.comment_cache.clear();
                 self.sent_for_viewport.clear();
+                self.last_viewport_by_page.clear();
+                self.viewport = None;
                 // Clear overlay state to prevent stale rendering after cache invalidation
                 self.cursor_rect = None;
                 self.visual_rects.clear();
@@ -694,6 +755,7 @@ impl ConverterEngine {
                 }
                 for page in pages {
                     self.sent_for_viewport.remove(&page);
+                    self.last_viewport_by_page.remove(&page);
                 }
             }
             ConversionCommand::DumpState => {
@@ -1178,12 +1240,16 @@ impl ConverterEngine {
             return Err(pipeline_error("Missing cached page"));
         };
 
+        let page_viewport = self
+            .last_viewport_by_page
+            .get(&page_num)
+            .copied()
+            .or_else(|| self.viewport.filter(|vp| vp.page == page_num));
+
         // Use tile rendering for all non-Kitty protocols (matches reconvert_pages logic)
         if self.picker.protocol_type() != ProtocolType::Kitty {
-            if let Some(viewport) = self.viewport.as_ref() {
-                if viewport.page == page_num {
-                    return render_viewport_tiles(cached, viewport, overlays, &self.picker);
-                }
+            if let Some(viewport) = page_viewport.as_ref() {
+                return render_viewport_tiles(cached, viewport, overlays, &self.picker);
             }
         }
 
@@ -1192,7 +1258,7 @@ impl ConverterEngine {
             page_num,
             overlays,
             &self.picker,
-            self.viewport.as_ref(),
+            page_viewport.as_ref(),
             self.pid,
             self.kitty_shm_support,
         )

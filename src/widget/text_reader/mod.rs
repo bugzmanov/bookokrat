@@ -91,6 +91,7 @@ pub struct MarkdownTextReader {
     embedded_images: RefCell<HashMap<String, EmbeddedImage>>,
     last_rendered_image_rects: HashMap<String, Rect>,
     last_overlay_cleanup_key: Option<(usize, u64, u64, Rect)>,
+    inline_images_suppressed: bool,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -241,6 +242,7 @@ impl MarkdownTextReader {
             embedded_images: RefCell::new(HashMap::new()),
             last_rendered_image_rects: HashMap::new(),
             last_overlay_cleanup_key: None,
+            inline_images_suppressed: false,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             raw_html_content: None,
@@ -491,6 +493,11 @@ impl MarkdownTextReader {
         } else {
             format!("Chapter {current_chapter}/{total_chapters}")
         };
+        let title_text = if is_focused {
+            format!("{title_text} • ")
+        } else {
+            title_text
+        };
 
         let progress = self.calculate_progress("", width, self.visible_height);
 
@@ -733,14 +740,19 @@ impl MarkdownTextReader {
 
         // Clear overlay images when suppressing (e.g., popup is shown)
         if suppress_images {
-            if terminal_overlay::kitty_delete_overlay_hack_enabled() {
-                terminal_overlay::emit_kitty_delete_all();
+            if !self.inline_images_suppressed {
+                if terminal_overlay::kitty_delete_overlay_hack_enabled() {
+                    terminal_overlay::emit_kitty_delete_all();
+                }
+                if terminal_overlay::overlay_force_clear_enabled() {
+                    terminal_overlay::clear_rects_direct(
+                        self.last_rendered_image_rects.values().copied(),
+                    );
+                }
             }
-            if terminal_overlay::overlay_force_clear_enabled() {
-                terminal_overlay::clear_rects_direct(
-                    self.last_rendered_image_rects.values().copied(),
-                );
-            }
+            self.inline_images_suppressed = true;
+        } else {
+            self.inline_images_suppressed = false;
         }
 
         if !self.show_raw_html && !suppress_images {
@@ -1166,6 +1178,7 @@ impl MarkdownTextReader {
         self.embedded_images.borrow_mut().clear();
         self.last_rendered_image_rects.clear();
         self.last_overlay_cleanup_key = None;
+        self.inline_images_suppressed = false;
     }
 
     pub fn set_raw_html(&mut self, html: String) {

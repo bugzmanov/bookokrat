@@ -1,7 +1,8 @@
 use crossterm::{
+    cursor::{MoveTo, Show},
     event::DisableMouseCapture,
     execute,
-    terminal::{LeaveAlternateScreen, disable_raw_mode},
+    terminal::{Clear, ClearType, EndSynchronizedUpdate, LeaveAlternateScreen, disable_raw_mode},
 };
 use std::io::{self, Write};
 use std::panic;
@@ -14,7 +15,7 @@ pub fn initialize_panic_handler() {
 
     let default_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
-        restore_terminal();
+        restore_terminal_after_panic();
 
         // Clean up SHM objects before exiting to prevent resource leaks in /dev/shm
         #[cfg(feature = "pdf")]
@@ -36,7 +37,28 @@ pub fn initialize_panic_handler() {
 /// - Showing the cursor
 pub fn restore_terminal() {
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
-    let _ = execute!(io::stderr(), crossterm::cursor::Show);
-    let _ = writeln!(io::stderr());
+    let _ = execute!(
+        io::stdout(),
+        EndSynchronizedUpdate,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Show
+    );
+    let _ = write!(io::stdout(), "\r\n");
+    let _ = io::stdout().flush();
+}
+
+fn restore_terminal_after_panic() {
+    let _ = disable_raw_mode();
+    let _ = execute!(
+        io::stdout(),
+        EndSynchronizedUpdate,
+        LeaveAlternateScreen,
+        DisableMouseCapture,
+        Clear(ClearType::All),
+        MoveTo(0, 0),
+        Show
+    );
+    let _ = write!(io::stdout(), "\r\n");
+    let _ = io::stdout().flush();
 }

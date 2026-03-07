@@ -370,23 +370,28 @@ pub fn render_page(
 
     let rgb = Colorspace::device_rgb();
     let mut pixmap = page.to_pixmap(&spec.transform, &rgb, false, false)?;
+    let themed_rendering = params.black >= 0 && params.white >= 0;
 
-    let image_regions = if !params.invert_images {
+    let image_regions = if themed_rendering && !params.invert_images {
         let rects = collect_image_rects(&page, spec.mag, pixmap.width(), pixmap.height());
         stash_image_regions(&pixmap, &rects)
     } else {
         Vec::new()
     };
 
-    pixmap.tint(params.white, params.black)?;
+    if themed_rendering {
+        pixmap.tint(params.white, params.black)?;
+    }
 
-    if !image_regions.is_empty() {
+    if themed_rendering && !image_regions.is_empty() {
         restore_image_regions(&mut pixmap, &image_regions);
     }
 
-    if let Ok(title_rects) = collect_title_rects(&page, spec.mag, page_bounds.0) {
-        if !title_rects.is_empty() {
-            apply_title_color(&mut pixmap, &title_rects, true);
+    if themed_rendering {
+        if let Ok(title_rects) = collect_title_rects(&page, spec.mag, page_bounds.0) {
+            if !title_rects.is_empty() {
+                apply_title_color(&mut pixmap, &title_rects, true);
+            }
         }
     }
 
@@ -411,6 +416,9 @@ pub fn render_page(
         },
         page_num,
         scale_factor: spec.mag,
+        requested_scale: params.scale,
+        render_area_width_cells: params.area.width,
+        render_area_height_cells: params.area.height,
         line_bounds,
         link_rects,
         page_height_px: spec.output_height,

@@ -192,6 +192,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         any_loaded
     }
 
+    pub fn invalidate_loaded_image_protocols(&mut self) {
+        let Some(picker) = self.image_picker.clone() else {
+            return;
+        };
+
+        for embedded_image in self.embedded_images.borrow_mut().values_mut() {
+            if let ImageLoadState::Loaded { image, protocol } = &mut embedded_image.state {
+                *protocol = picker.new_resize_protocol(image.as_ref().clone());
+            }
+        }
+    }
+
     pub fn check_image_click(&self, x: u16, y: u16) -> Option<String> {
         // Use the inner text area if available
         let text_area = self.last_inner_text_area?;
@@ -205,15 +217,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        // Calculate the line number that was clicked within the text area
-        let clicked_line = self.scroll_offset + (y - text_area.y) as usize;
-
-        // Check each embedded image to see if the click is within its bounds
-        for (src, embedded_image) in self.embedded_images.borrow().iter() {
-            let image_start = embedded_image.lines_before_image;
-            let image_end = image_start + embedded_image.height_cells as usize;
-
-            if clicked_line >= image_start && clicked_line < image_end {
+        // Hit-test against the actual rendered image rectangle, not only line range.
+        // This prevents treating off-image horizontal clicks as image clicks.
+        for (src, image_rect) in &self.last_rendered_image_rects {
+            if x >= image_rect.x
+                && x < image_rect.x + image_rect.width
+                && y >= image_rect.y
+                && y < image_rect.y + image_rect.height
+            {
                 return Some(src.clone());
             }
         }

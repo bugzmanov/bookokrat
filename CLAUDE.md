@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## CRITICAL RULES FOR AI ASSISTANTS
 
+0. **Working Directory**: NEVER CHANGE WORKING DIRECTORY UNLESS SPECIFICALLY ASKED. THE CURRENT USER WORKFLOW IS BASED ON WORKTREES, BY RECKLESSLY CHANGING DIRECTORIES YOU CAN MAKE IRREVERSIBLE DAMAGE.
+
 1. **Testing**: ALWAYS use the existing SVG-based snapshot testing in `tests/svg_snapshots.rs`. NEVER introduce new testing frameworks or approaches.
+1a. **Sandbox-Safe Tests**: All tests must run in sandboxed environments (e.g., Nix builds). This means tests MUST NOT: rely on a writable home directory or system directories (`dirs::data_dir()`, `dirs::cache_dir()`, etc.); make network requests; depend on system fonts, a real TTY, or specific environment variables (`TERM`, `COLORTERM`, `TERM_PROGRAM`); assume standard tools exist in `PATH` beyond what's declared as dependencies. Use `tempfile::TempDir` for any filesystem operations, and inject/mock any external dependencies rather than relying on the host environment.
 2. **Golden Snapshots**: NEVER update golden snapshot files with `SNAPSHOTS=overwrite` unless explicitly requested by the user. This is critical for test integrity.
 3. **Test Updates**: NEVER update any test files or test expectations unless explicitly requested by the user. This includes unit tests, integration tests, and snapshot tests.
 4. **File Creation**: Prefer editing existing files over creating new ones. Only create new files when absolutely necessary.

@@ -13,11 +13,11 @@ Hard UX:
  [ ] Rework footer command bar to be context-aware and higher-contrast, reducing clutter.
  [ ] Comments editing in pdf annotations is very non-ergonomic. Potentially need normal mode.
  --
- [ ] update & analyze tapes & tests
- [ ] Analyze the PDF impact: size wise, heap wise and make it sure that it wouldn't affect epub only readers
- [ ] update help (new stuff & inspiration links)
+ [x] update & analyze tapes & tests
+ [x] Analyze the PDF impact: size wise, heap wise and make it sure that it wouldn't affect epub only readers
+ [x] update help (new stuff & inspiration links)
     [ ] Make help context dependent
- [ ] new pictures for the site and potentially new video for the app. 
+ [x] new pictures for the site and potentially new video for the app. 
 
 ideas to implement:
  - [ ] Dimming should probably just use math instead of sticking to fixed palette
@@ -94,6 +94,35 @@ bugs:
 [ ] Effective rust - chapter 4 
    [ ] Too much visual noise. (potentially because bg highlights)
 [ ] <i>code</i> will have bg color instead of being cursive
+[ ] 
+-----
+of choosing which rule to apply to rewrite a symbol, we make that decision randomly. For example,
+consider our apple-banana grammar: Sentence → apple Sentence banana, Sentence → apple banana. If we
+start with the symbol Sentence and then flip a coin for which rule to apply, we end up defining a
+probability distribution over all sentences with some number of apples followed by the same number of
+bananas: “apple banana” appears with probability
+
+1
+─
+2
+
+, “apple apple banana banana” with probability
+
+1
+─
+4
+
+, “apple apple apple banana banana banana” with probability
+
+1
+─
+8
+
+, and so on.
+-----
+
+Simple mathml expressions should be one-liners: 1/2, 1/4 etc.
+
 
 Tools with cool ratatui UI:
 - https://github.com/erikjuhani/basalt

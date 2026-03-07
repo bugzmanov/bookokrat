@@ -2,9 +2,9 @@ use std::{fs::File, io::stdout, path::Path};
 
 use anyhow::Result;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::EnableMouseCapture,
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{EnterAlternateScreen, enable_raw_mode},
 };
 use log::{error, info, warn};
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -132,7 +132,7 @@ fn main() -> Result<()> {
 
     #[cfg(feature = "pdf")]
     {
-        let caps = terminal::detect_terminal();
+        let caps = terminal::detect_terminal_with_probe();
         info!(
             "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
              protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \
@@ -239,13 +239,7 @@ fn main() -> Result<()> {
     let _ = delete_all_images();
 
     // Restore terminal state
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
+    panic_handler::restore_terminal();
 
     if let Err(err) = res {
         error!("Application error: {err:?}");

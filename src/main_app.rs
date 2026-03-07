@@ -45,7 +45,7 @@ pub enum ChapterDirection {
     Previous,
 }
 
-use std::io::{BufReader, stdout};
+use std::io::{BufReader, IsTerminal, stdout};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "pdf")]
 use std::sync::OnceLock;
@@ -55,7 +55,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crossterm::execute;
-use crossterm::terminal::EndSynchronizedUpdate;
+use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use pprof::ProfilerGuard;
@@ -190,6 +190,7 @@ pub struct App {
     pdf_supports_graphics: bool,
     #[cfg(feature = "pdf")]
     pdf_supports_scroll_mode: bool,
+    last_terminal_title: Option<String>,
 }
 
 #[cfg(feature = "pdf")]
@@ -275,6 +276,8 @@ impl App {
             // Force one cleanup pass when closing image popup so stale overlay
             // fragments are removed before returning to content view.
             self.text_reader.request_overlay_cleanup_on_next_frame();
+            // Rebuild image protocols so terminal-side evictions/deletes are recovered.
+            self.text_reader.invalidate_loaded_image_protocols();
         }
         let panel = if self.zen_mode {
             MainPanel::Content
@@ -437,7 +440,7 @@ impl App {
         };
 
         #[cfg(feature = "pdf")]
-        let startup_caps = crate::terminal::detect_terminal();
+        let startup_caps = crate::terminal::detect_terminal_with_probe();
 
         let mut app = Self {
             book_manager,
@@ -503,6 +506,7 @@ impl App {
             pdf_supports_graphics: startup_caps.supports_graphics,
             #[cfg(feature = "pdf")]
             pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
+            last_terminal_title: None,
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
@@ -703,6 +707,7 @@ impl App {
 
         self.navigation_panel.current_book_path = Some(path_owned);
         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
+        self.sync_terminal_title();
 
         Ok(())
     }
@@ -917,18 +922,32 @@ impl App {
         // Clear any existing book search (will be re-initialized on demand for new PDF)
         self.book_search = None;
 
-        // Get terminal font size for rendering
-        let cell_size = self.get_terminal_font_size();
+        // Query picker with retries and reuse it for both font-size and terminal capability
+        // detection. On some terminals, the first query can fail during startup.
+        let mut picker = None;
+        for _ in 0..3 {
+            if let Ok(p) = crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
+                picker = Some(p);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let cell_size = picker
+            .as_ref()
+            .map(|picker| {
+                let (width, height) = picker.font_size();
+                CellSize::new(width, height)
+            })
+            .unwrap_or(self.pdf_font_size);
 
         // Get theme colors for rendering (MuPDF format: 0xRRGGBB)
         let palette = crate::theme::current_theme();
         let (black, white) = Self::palette_to_mupdf_colors(palette);
 
         // Detect terminal protocol and capabilities
-        let mut picker = crate::vendored::ratatui_image::picker::Picker::from_query_stdio().ok();
         let caps = match picker.as_mut() {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
-            None => crate::terminal::detect_terminal(),
+            None => crate::terminal::detect_terminal_with_probe(),
         };
         self.pdf_supports_graphics = caps.supports_graphics;
         self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
@@ -998,6 +1017,7 @@ impl App {
         let bookmark_zoom = bookmark.and_then(|b| b.pdf_zoom);
         let bookmark_pan = bookmark.and_then(|b| b.pdf_pan);
         let bookmark_invert = bookmark.and_then(|b| b.pdf_invert_images);
+        let bookmark_themed = bookmark.and_then(|b| b.pdf_themed_rendering);
 
         // Initialize PDF comments for terminals with image protocol support (Kitty, iTerm2).
         // Comments are always loaded so underlines are visible even in ToC mode.
@@ -1030,6 +1050,16 @@ impl App {
         // Prefer per-book zoom from bookmark, fall back to global setting
         let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
         let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
+        log::info!(
+            "PDF startup params: path={}, cell_size={:?}, picker_ok={}, bookmark_zoom={:?}, effective_zoom={}, layout={:?}, mode={:?}",
+            path,
+            cell_size.as_tuple(),
+            picker.is_some(),
+            bookmark_zoom,
+            pdf_scale,
+            crate::settings::get_pdf_page_layout_mode(),
+            crate::settings::get_pdf_render_mode()
+        );
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1049,6 +1079,15 @@ impl App {
             pdf_reader.invert_images = inverted;
             if !inverted {
                 service.apply_command(crate::pdf::Command::ToggleInvertImages);
+            }
+        }
+        if let Some(themed) = bookmark_themed {
+            pdf_reader.themed_rendering = themed;
+            if !themed {
+                service.apply_command(crate::pdf::Command::SetColors {
+                    black: -1,
+                    white: -1,
+                });
             }
         }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
@@ -1119,10 +1158,16 @@ impl App {
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
 
-        // Sync initial page to service so first render requests the correct page.
-        // Use set_current_page_no_render to avoid triggering a render with zero area.
+        // Sync initial page and scale to service so first render requests the correct page
+        // at the correct zoom level. Use set_current_page_no_render to avoid triggering
+        // a render with zero area.
         if let Some(ref mut service) = self.pdf_service {
             service.set_current_page_no_render(initial_page);
+            // Kitty zoom is display-only; applying worker scale here would double-apply
+            // persisted zoom (render-time scale * display-time zoom).
+            if !use_kitty && (pdf_scale - 1.0).abs() > f32::EPSILON {
+                service.apply_command(crate::pdf::Command::SetScale(pdf_scale));
+            }
         }
 
         // Defer the initial render until the layout is known to avoid 0-sized pages.
@@ -1141,21 +1186,6 @@ impl App {
         self.save_bookmark_with_throttle(true);
 
         Ok(())
-    }
-
-    /// Get terminal font size in pixels
-    #[cfg(feature = "pdf")]
-    fn get_terminal_font_size(&self) -> CellSize {
-        // Default cell size if we can't detect
-        let default = CellSize::new(8, 16);
-
-        // Try to get from picker
-        if let Ok(picker) = crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
-            let (width, height) = picker.font_size();
-            CellSize::new(width, height)
-        } else {
-            default
-        }
     }
 
     /// Convert palette colors to MuPDF format (0xRRGGBB as i32)
@@ -1187,6 +1217,7 @@ impl App {
         pdf_reader.render_in_area(
             f,
             area,
+            self.is_main_panel(MainPanel::Content),
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
@@ -2928,12 +2959,18 @@ impl App {
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
         // Use focus-aware colors instead of hardcoded false
+        let content_focused = self.is_main_panel(MainPanel::Content);
         let (text_color, border_color, _bg_color) =
-            current_theme().get_panel_colors(self.is_main_panel(MainPanel::Content));
+            current_theme().get_panel_colors(content_focused);
+        let title = if content_focused {
+            "Content • "
+        } else {
+            "Content"
+        };
 
         let content_border = Block::default()
             .borders(Borders::ALL)
-            .title("Content")
+            .title(title)
             .border_style(Style::default().fg(border_color))
             .style(Style::default().bg(theme_background()));
 
@@ -2942,6 +2979,39 @@ impl App {
             .style(Style::default().fg(text_color).bg(theme_background()));
 
         f.render_widget(paragraph, area);
+    }
+
+    fn desired_terminal_title(&self) -> String {
+        if let Some(ref book) = self.current_book {
+            let book_title = Self::extract_book_title(&book.file);
+            return format!("bookokrat — {book_title}");
+        }
+        #[cfg(feature = "pdf")]
+        {
+            if self.pdf_reader.is_some()
+                && let Some(path) = self.pdf_document_path.as_ref()
+            {
+                let book_title = Self::extract_book_title(&path.to_string_lossy());
+                return format!("bookokrat — {book_title}");
+            }
+        }
+        "bookokrat".to_string()
+    }
+
+    fn sync_terminal_title(&mut self) {
+        if self.test_mode {
+            return;
+        }
+        if !stdout().is_terminal() {
+            return;
+        }
+        let title = self.desired_terminal_title();
+        if self.last_terminal_title.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        if execute!(stdout(), SetTitle(title.clone())).is_ok() {
+            self.last_terminal_title = Some(title);
+        }
     }
 
     fn handle_help_bar_click(&mut self, click_x: u16, click_y: u16) -> bool {
@@ -4201,6 +4271,16 @@ impl App {
                         self.close_popup_to_previous();
                         self.settings_popup = None;
                     }
+                    SettingsAction::PageLayoutChanged => {
+                        #[cfg(feature = "pdf")]
+                        if let Some(ref mut pdf_reader) = self.pdf_reader {
+                            if let Some(ref mut zoom) = pdf_reader.zoom {
+                                zoom.global_scroll_offset = 0;
+                            }
+                            pdf_reader.last_sent_viewport = None;
+                            pdf_reader.force_redraw();
+                        }
+                    }
                     SettingsAction::SettingsChanged => {
                         // Invalidate render cache for theme changes
                         self.text_reader.invalidate_render_cache();
@@ -4232,6 +4312,7 @@ impl App {
                                 // Switch back to book list
                                 self.navigation_panel.switch_to_book_mode();
                                 self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
+                                self.sync_terminal_title();
                                 self.close_popup_to_previous();
                                 self.settings_popup = None;
                             }
@@ -5288,6 +5369,7 @@ impl App {
         let Some(mut pdf_reader) = self.pdf_reader.take() else {
             return;
         };
+        let page_before = pdf_reader.page;
         crate::widget::pdf_reader::navigate_pdf_to_page(
             &mut pdf_reader,
             page,
@@ -5299,9 +5381,12 @@ impl App {
             &mut self.last_bookmark_save,
         );
         // For non-Kitty protocols: wait for the page to be converted before redrawing
-        if !pdf_reader.is_kitty {
-            self.pdf_waiting_for_page = Some(page);
-            log::trace!("Set pdf_waiting_for_page to {page} for TOC navigation");
+        if !pdf_reader.is_kitty && pdf_reader.page != page_before {
+            self.pdf_waiting_for_page = Some(pdf_reader.page);
+            log::trace!(
+                "Set pdf_waiting_for_page to {} for TOC navigation",
+                pdf_reader.page
+            );
         }
         self.pdf_reader = Some(pdf_reader);
     }
@@ -5685,6 +5770,7 @@ where
     let mut last_tick = std::time::Instant::now();
     let mut fps_counter = FPSCounter::new();
     let mut first_render = true; // Ensure we always render at least once on startup
+    app.sync_terminal_title();
     loop {
         let mut events_processed = 0;
         let mut should_quit = false;
@@ -5937,6 +6023,12 @@ where
             last_tick = std::time::Instant::now();
         }
 
+        // Keep non-Kitty viewport commands flowing even when redraw is suppressed.
+        // This prevents deadlocks where we wait for converted frames without having
+        // sent the viewport update needed by the converter.
+        #[cfg(feature = "pdf")]
+        app.update_non_kitty_viewport();
+
         // For non-Kitty PDF: suppress redraw while waiting for page/viewport to be converted.
         // This prevents flicker and wasted CPU drawing incomplete state.
         #[cfg(feature = "pdf")]
@@ -5956,7 +6048,6 @@ where
             #[cfg(feature = "pdf")]
             {
                 app.execute_pdf_display_plan();
-                app.update_non_kitty_viewport();
                 app.handle_kitty_eviction_responses(event_source);
             }
             let _ = execute!(stdout(), EndSynchronizedUpdate);

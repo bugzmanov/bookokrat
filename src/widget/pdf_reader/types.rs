@@ -103,6 +103,12 @@ pub struct RenderedInfo {
     pub pixel_h: Option<u32>,
     /// Scale factor applied
     pub scale_factor: Option<f32>,
+    /// Requested user zoom factor used by worker
+    pub requested_scale: Option<f32>,
+    /// Render viewport width used by worker request
+    pub render_area_width_cells: Option<u16>,
+    /// Render viewport height used by worker request
+    pub render_area_height_cells: Option<u16>,
     /// Line bounds for text selection
     pub line_bounds: Vec<crate::pdf::LineBounds>,
     /// Link rectangles

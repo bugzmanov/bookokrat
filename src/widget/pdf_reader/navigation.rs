@@ -24,7 +24,10 @@ use crate::vendored::ratatui_image::FontSize;
 use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
-use crate::settings::{PdfRenderMode, get_pdf_render_mode};
+use crate::settings::{
+    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
+};
+use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
 use pprof::ProfilerGuard;
 
 pub struct InputResponse {
@@ -183,6 +186,7 @@ impl PdfReaderState {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
                 }
             }
+            self.last_sent_viewport = None;
         } else {
             // iTerm2/WezTerm: Don't adjust scale during zen toggle.
             // The viewport change will be handled by SetArea during the next render,
@@ -198,8 +202,9 @@ impl PdfReaderState {
             );
 
             let heights = self.page_heights_scaled(self.non_kitty_zoom_factor);
+            let page_offset = self.scroll_offset_for_page_start(page, &heights);
             if let Some(z) = &mut self.zoom {
-                z.scroll_to_page(page, &heights, super::state::SEPARATOR_HEIGHT);
+                z.global_scroll_offset = page_offset;
             }
             self.last_render.rect = ratatui::layout::Rect::default();
 
@@ -215,6 +220,7 @@ impl PdfReaderState {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
                 }
             }
+            self.last_sent_viewport = None;
             // Don't send SetScale - let the natural render flow with SetArea handle the viewport change
         }
 
@@ -569,6 +575,7 @@ impl PdfReaderState {
                     'h' => self.prev_page(),
                     'q' => Some(InputAction::QuitApp),
                     'i' => Some(InputAction::ToggleInvertImages),
+                    'I' => Some(InputAction::TogglePdfTheming),
                     'p' => Some(InputAction::ToggleProfiling),
                     'x' => Some(InputAction::DumpDebugState),
                     'a' => self.start_comment_input(),
@@ -894,12 +901,15 @@ impl PdfReaderState {
     fn reset_zoom_to_fit(&mut self) -> Option<InputAction> {
         if self.is_kitty {
             let fit_factor = self.fit_to_height_zoom_factor();
+            let heights = self.page_heights_scaled(fit_factor);
+            let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
             self.zoom = Some(Zoom {
                 factor: fit_factor,
                 cell_pan_from_left: 0,
-                global_scroll_offset: 0,
+                global_scroll_offset: page_offset,
             });
             self.set_zoom_hud(fit_factor);
+            self.clamp_kitty_scroll_offset();
             self.last_render.rect = Rect::default();
             crate::settings::set_pdf_scale(fit_factor);
             crate::settings::set_pdf_pan_shift(0);
@@ -921,12 +931,15 @@ impl PdfReaderState {
     fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
         if self.is_kitty {
             let fit_factor = self.fit_to_width_zoom_factor();
+            let heights = self.page_heights_scaled(fit_factor);
+            let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
             self.zoom = Some(Zoom {
                 factor: fit_factor,
                 cell_pan_from_left: 0,
-                global_scroll_offset: 0,
+                global_scroll_offset: page_offset,
             });
             self.set_zoom_hud(fit_factor);
+            self.clamp_kitty_scroll_offset();
             self.last_render.rect = Rect::default();
             crate::settings::set_pdf_scale(fit_factor);
             crate::settings::set_pdf_pan_shift(0);
@@ -1030,12 +1043,18 @@ impl PdfReaderState {
             return None;
         }
 
-        let full_width = self
-            .rendered
-            .get(self.page)
-            .and_then(|r| r.full_cell_size.map(|size| size.width))
-            .unwrap_or(viewport_width);
-        let max_offset = u32::from(full_width.saturating_sub(viewport_width));
+        let max_offset = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
+                .map(|layout| layout.max_pan)
+                .unwrap_or(0)
+        } else {
+            let full_width = self
+                .rendered
+                .get(self.page)
+                .and_then(|r| r.full_cell_size.map(|size| size.width))
+                .unwrap_or(viewport_width);
+            u32::from(full_width.saturating_sub(viewport_width))
+        };
 
         let old_offset = self.non_kitty_pan_offset;
         let new_offset = match direction {
@@ -1106,11 +1125,21 @@ impl PdfReaderState {
 
     // Unified page navigation
     fn next_page(&mut self) -> Option<InputAction> {
-        self.navigate_pages(1)
+        let step = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            2
+        } else {
+            1
+        };
+        self.navigate_pages(step)
     }
 
     fn prev_page(&mut self) -> Option<InputAction> {
-        self.navigate_pages(-1)
+        let step = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            2
+        } else {
+            1
+        };
+        self.navigate_pages(-step)
     }
 
     #[allow(dead_code)]
@@ -1127,11 +1156,14 @@ impl PdfReaderState {
 
     fn navigate_pages(&mut self, delta: isize) -> Option<InputAction> {
         let old = self.page;
-        let new_page = if delta >= 0 {
+        let mut new_page = if delta >= 0 {
             (self.page + delta as usize).min(self.rendered.len().saturating_sub(1))
         } else {
             self.page.saturating_sub((-delta) as usize)
         };
+        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            new_page &= !1;
+        }
         self.set_page(new_page);
 
         if self.page == old {
@@ -1180,6 +1212,7 @@ impl PdfReaderState {
         };
         self.set_zoom_hud(factor);
         let heights = self.page_heights_scaled(factor);
+        let page_offset = self.scroll_offset_for_page_start(page, &heights);
 
         if let Some(ratio) = old_scroll_ratio {
             // Page mode: restore relative scroll position within the page
@@ -1188,7 +1221,7 @@ impl PdfReaderState {
                 z.global_scroll_offset = (ratio * new_page_height as f64).round() as u32;
             }
         } else if let Some(z) = &mut self.zoom {
-            z.scroll_to_page(page, &heights, SEPARATOR_HEIGHT);
+            z.global_scroll_offset = page_offset;
         }
 
         if self.is_kitty {
@@ -1214,8 +1247,9 @@ impl PdfReaderState {
             .as_ref()
             .map(|z| self.page_heights_scaled(z.factor()))
             .unwrap_or_default();
+        let bottom_offset = self.total_scroll_height(&heights).saturating_sub(1);
         if let Some(z) = &mut self.zoom {
-            z.scroll_to_bottom(&heights, SEPARATOR_HEIGHT);
+            z.global_scroll_offset = bottom_offset;
         }
         self.last_render.rect = Rect::default();
         Some(InputAction::Redraw)
@@ -1252,8 +1286,9 @@ impl PdfReaderState {
             } else if let Some(factor) = self.zoom.as_ref().map(|z| z.factor()) {
                 // Scroll mode: calculate cumulative offset to page start
                 let heights = self.page_heights_scaled(factor);
+                let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
                 if let Some(z) = &mut self.zoom {
-                    z.scroll_to_page(self.page, &heights, SEPARATOR_HEIGHT);
+                    z.global_scroll_offset = page_offset;
                 }
             }
             self.clamp_kitty_scroll_offset();
@@ -1286,11 +1321,7 @@ impl PdfReaderState {
                     page_height.saturating_sub(viewport_height)
                 } else {
                     // Scroll mode: calculate cumulative offset
-                    let page_start: u32 = heights
-                        .iter()
-                        .take(self.page)
-                        .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
-                        .sum();
+                    let page_start: u32 = self.scroll_offset_for_page_start(self.page, &heights);
                     page_start + page_height.saturating_sub(viewport_height)
                 };
 
@@ -1538,6 +1569,44 @@ impl PdfReaderState {
             .collect()
     }
 
+    fn scroll_offset_for_page_start(&self, page: usize, heights: &[u32]) -> u32 {
+        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            let left_idx = page & !1;
+            (0..left_idx)
+                .step_by(2)
+                .map(|row_left| {
+                    let left_h = heights.get(row_left).copied().unwrap_or(0);
+                    let right_h = heights.get(row_left + 1).copied().unwrap_or(0);
+                    left_h.max(right_h) + u32::from(SEPARATOR_HEIGHT)
+                })
+                .sum()
+        } else {
+            heights
+                .iter()
+                .take(page)
+                .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
+                .sum()
+        }
+    }
+
+    fn total_scroll_height(&self, heights: &[u32]) -> u32 {
+        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            (0..heights.len())
+                .step_by(2)
+                .map(|left_idx| {
+                    let left_h = heights.get(left_idx).copied().unwrap_or(0);
+                    let right_h = heights.get(left_idx + 1).copied().unwrap_or(0);
+                    left_h.max(right_h) + u32::from(SEPARATOR_HEIGHT)
+                })
+                .sum()
+        } else {
+            heights
+                .iter()
+                .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
+                .sum()
+        }
+    }
+
     fn clamp_kitty_scroll_offset(&mut self) {
         let Some(factor) = self.zoom.as_ref().map(|z| z.factor()) else {
             return;
@@ -1560,10 +1629,7 @@ impl PdfReaderState {
             current_page_height.saturating_sub(viewport_height)
         } else {
             // In scroll mode, use total document height
-            let total_height: u32 = heights
-                .iter()
-                .map(|&h| h + u32::from(SEPARATOR_HEIGHT))
-                .sum();
+            let total_height: u32 = self.total_scroll_height(&heights);
             total_height.saturating_sub(viewport_height)
         };
 
@@ -1581,6 +1647,7 @@ impl PdfReaderState {
         if get_pdf_render_mode() == PdfRenderMode::Page {
             return self.page;
         }
+        let page_layout_mode = get_pdf_page_layout_mode();
 
         let Some(zoom) = &self.zoom else {
             return self.page;
@@ -1600,6 +1667,21 @@ impl PdfReaderState {
 
         let heights = self.page_heights_scaled(zoom.factor());
         let scroll_offset = zoom.global_scroll_offset;
+
+        if page_layout_mode == PdfPageLayoutMode::Dual {
+            let mut cumulative: u32 = 0;
+            for left_idx in (0..heights.len()).step_by(2) {
+                let left_h = heights.get(left_idx).copied().unwrap_or(0);
+                let right_h = heights.get(left_idx + 1).copied().unwrap_or(0);
+                let row_h = left_h.max(right_h);
+                let row_end = cumulative + row_h + u32::from(SEPARATOR_HEIGHT);
+                if scroll_offset < row_end {
+                    return left_idx;
+                }
+                cumulative = row_end;
+            }
+            return heights.len().saturating_sub(1);
+        }
 
         let mut cumulative: u32 = 0;
         for (idx, &height) in heights.iter().enumerate() {
@@ -1641,11 +1723,30 @@ impl PdfReaderState {
     }
 
     fn fit_to_width_zoom_factor(&self) -> f32 {
-        let page_cell_w = self
-            .rendered
-            .get(self.page)
-            .and_then(|r| r.full_cell_size.map(|size| size.width))
-            .unwrap_or(0);
+        let page_layout_mode = get_pdf_page_layout_mode();
+        let page_cell_w = if page_layout_mode == PdfPageLayoutMode::Dual {
+            let left = self
+                .rendered
+                .get(self.page)
+                .and_then(|r| r.full_cell_size.map(|size| size.width))
+                .unwrap_or(0);
+            let right = self
+                .rendered
+                .get(self.page.saturating_add(1))
+                .and_then(|r| r.full_cell_size.map(|size| size.width))
+                .unwrap_or(0);
+            if right > 0 {
+                left.saturating_add(right)
+                    .saturating_add(DUAL_PAGE_GAP_CELLS)
+            } else {
+                left
+            }
+        } else {
+            self.rendered
+                .get(self.page)
+                .and_then(|r| r.full_cell_size.map(|size| size.width))
+                .unwrap_or(0)
+        };
 
         let area_w = self.last_render.img_area_width;
 
@@ -1687,13 +1788,14 @@ impl PdfReaderState {
                 .as_ref()
                 .map(|z| self.page_heights_scaled(z.factor()))
                 .unwrap_or_default();
+            let page_offset = self.scroll_offset_for_page_start(page, &heights);
             if let Some(ref mut zoom) = self.zoom {
                 if get_pdf_render_mode() == PdfRenderMode::Page {
                     // In page mode, reset scroll to top of current page
                     zoom.global_scroll_offset = 0;
                 } else {
                     // In scroll mode, scroll to the page position in document
-                    zoom.scroll_to_page(page, &heights, SEPARATOR_HEIGHT);
+                    zoom.global_scroll_offset = page_offset;
                 }
             }
         }
@@ -1977,23 +2079,128 @@ impl PdfReaderState {
             let scroll_offset = zoom.global_scroll_offset;
             let cell_pan_from_left = zoom.cell_pan_from_left;
             let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+            let page_layout_mode = get_pdf_page_layout_mode();
 
-            // In page mode, we know exactly which page we're on - no cumulative calculation needed
+            // In page mode, page selection is based on visible row geometry.
             let (page_idx, page_local_y, dest_w) = if is_page_mode {
-                let rendered_page = self.rendered.get(self.page)?;
-                let cell_size = rendered_page
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions())
-                    .or(rendered_page.full_cell_size)
-                    .unwrap_or(CellSize::new(0, 0));
-                if cell_size.height == 0 {
-                    return None;
+                if page_layout_mode == PdfPageLayoutMode::Dual {
+                    let left_page = self.page;
+                    let right_page = self.page.saturating_add(1);
+                    let left_cell_size = self
+                        .rendered
+                        .get(left_page)?
+                        .img
+                        .as_ref()
+                        .map(|img| img.cell_dimensions())
+                        .or(self.rendered.get(left_page).and_then(|p| p.full_cell_size))
+                        .unwrap_or(CellSize::new(0, 0));
+                    if left_cell_size.height == 0 {
+                        return None;
+                    }
+                    let right_cell_size = self
+                        .rendered
+                        .get(right_page)
+                        .and_then(|p| {
+                            p.img
+                                .as_ref()
+                                .map(|img| img.cell_dimensions())
+                                .or(p.full_cell_size)
+                        })
+                        .unwrap_or(CellSize::new(0, 0));
+
+                    let left_dest_w =
+                        ((f32::from(left_cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                    let left_dest_h =
+                        ((f32::from(left_cell_size.height) * zoom_factor).ceil() as u16).max(1);
+                    let right_dest_w =
+                        ((f32::from(right_cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                    let right_dest_h =
+                        ((f32::from(right_cell_size.height) * zoom_factor).ceil() as u16).max(1);
+                    let has_right = right_cell_size.height > 0 && right_cell_size.width > 0;
+                    let gap = if has_right {
+                        DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
+                    } else {
+                        0
+                    };
+                    let row_dest_h = left_dest_h.max(right_dest_h);
+                    let group_width = if has_right {
+                        left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+                    } else {
+                        left_dest_w
+                    };
+                    let group_x = if group_width < img_area.width {
+                        (img_area.width - group_width) / 2
+                    } else {
+                        0
+                    };
+                    let row_y_offset = if row_dest_h < img_area.height {
+                        (img_area.height - row_dest_h) / 2
+                    } else {
+                        0
+                    };
+
+                    if rel_row < row_y_offset {
+                        return None;
+                    }
+                    let rel_row_in_row = rel_row - row_y_offset;
+                    let virtual_y = u32::from(rel_row_in_row) + scroll_offset;
+
+                    let left_page_y = if left_dest_h < row_dest_h {
+                        (row_dest_h - left_dest_h) / 2
+                    } else {
+                        0
+                    };
+                    let right_page_y = if right_dest_h < row_dest_h {
+                        (row_dest_h - right_dest_h) / 2
+                    } else {
+                        0
+                    };
+                    let left_x_start = group_x;
+                    let left_x_end = left_x_start.saturating_add(left_dest_w);
+                    let right_x_start = left_x_end.saturating_add(gap);
+                    let right_x_end = right_x_start.saturating_add(right_dest_w);
+
+                    if rel_col >= left_x_start && rel_col < left_x_end {
+                        if virtual_y < u32::from(left_page_y)
+                            || virtual_y >= u32::from(left_page_y.saturating_add(left_dest_h))
+                        {
+                            return None;
+                        }
+                        (
+                            left_page,
+                            virtual_y.saturating_sub(u32::from(left_page_y)),
+                            left_dest_w,
+                        )
+                    } else if has_right && rel_col >= right_x_start && rel_col < right_x_end {
+                        if virtual_y < u32::from(right_page_y)
+                            || virtual_y >= u32::from(right_page_y.saturating_add(right_dest_h))
+                        {
+                            return None;
+                        }
+                        (
+                            right_page,
+                            virtual_y.saturating_sub(u32::from(right_page_y)),
+                            right_dest_w,
+                        )
+                    } else {
+                        return None;
+                    }
+                } else {
+                    let rendered_page = self.rendered.get(self.page)?;
+                    let cell_size = rendered_page
+                        .img
+                        .as_ref()
+                        .map(|img| img.cell_dimensions())
+                        .or(rendered_page.full_cell_size)
+                        .unwrap_or(CellSize::new(0, 0));
+                    if cell_size.height == 0 {
+                        return None;
+                    }
+                    let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                    // In page mode, scroll_offset is within the current page
+                    let virtual_y = u32::from(rel_row) + scroll_offset;
+                    (self.page, virtual_y, dest_w)
                 }
-                let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
-                // In page mode, scroll_offset is within the current page
-                let virtual_y = u32::from(rel_row) + scroll_offset;
-                (self.page, virtual_y, dest_w)
             } else {
                 // Scroll mode: iterate through pages with separators
                 let virtual_y = u32::from(rel_row) + scroll_offset;
@@ -2009,33 +2216,114 @@ impl PdfReaderState {
                 let mut target_page = None;
                 let mut local_y = 0u32;
 
-                for (idx, rendered_page) in self.rendered.iter().enumerate() {
-                    let cell_size = rendered_page
-                        .img
-                        .as_ref()
-                        .map(|img| img.cell_dimensions())
-                        .or(rendered_page.full_cell_size)
-                        .unwrap_or(CellSize::new(0, 0));
-                    if cell_size.height == 0 {
-                        let estimated_h = reference_height.unwrap_or(img_area.height);
-                        let dest_h = ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1);
-                        cumulative_y += dest_h + u32::from(SEPARATOR_HEIGHT);
-                        continue;
+                if page_layout_mode == PdfPageLayoutMode::Dual {
+                    for left_idx in (0..self.rendered.len()).step_by(2) {
+                        let right_idx = left_idx + 1;
+                        let left_cell = self.rendered[left_idx]
+                            .img
+                            .as_ref()
+                            .map(|img| img.cell_dimensions())
+                            .or(self.rendered[left_idx].full_cell_size)
+                            .unwrap_or(CellSize::new(0, 0));
+                        let right_cell = self
+                            .rendered
+                            .get(right_idx)
+                            .and_then(|p| {
+                                p.img
+                                    .as_ref()
+                                    .map(|img| img.cell_dimensions())
+                                    .or(p.full_cell_size)
+                            })
+                            .unwrap_or(CellSize::new(0, 0));
+                        let left_dest_h = if left_cell.height == 0 {
+                            let estimated_h = reference_height.unwrap_or(img_area.height);
+                            ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1)
+                        } else {
+                            ((f32::from(left_cell.height) * zoom_factor).ceil() as u32).max(1)
+                        };
+                        let right_dest_h = if right_cell.height == 0 {
+                            0
+                        } else {
+                            ((f32::from(right_cell.height) * zoom_factor).ceil() as u32).max(1)
+                        };
+                        let left_dest_w =
+                            ((f32::from(left_cell.width) * zoom_factor).ceil() as u16).max(1);
+                        let right_dest_w =
+                            ((f32::from(right_cell.width) * zoom_factor).ceil() as u16).max(1);
+                        let has_right = right_cell.height > 0 && right_cell.width > 0;
+                        let gap = if has_right {
+                            DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
+                        } else {
+                            0
+                        };
+                        let row_dest_h = left_dest_h.max(right_dest_h);
+                        let row_start = cumulative_y;
+                        let row_end = row_start + row_dest_h;
+
+                        if virtual_y >= row_start && virtual_y < row_end {
+                            let group_width = if has_right {
+                                left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+                            } else {
+                                left_dest_w
+                            };
+                            let group_x = if group_width < img_area.width {
+                                (img_area.width - group_width) / 2
+                            } else {
+                                0
+                            };
+                            let left_x_start = group_x;
+                            let left_x_end = left_x_start.saturating_add(left_dest_w);
+                            let right_x_start = left_x_end.saturating_add(gap);
+                            let right_x_end = right_x_start.saturating_add(right_dest_w);
+                            let y_in_row = virtual_y - row_start;
+                            if rel_col >= left_x_start && rel_col < left_x_end {
+                                target_page = Some((left_idx, left_dest_w));
+                                local_y = y_in_row;
+                                break;
+                            } else if has_right && rel_col >= right_x_start && rel_col < right_x_end
+                            {
+                                target_page = Some((right_idx, right_dest_w));
+                                local_y = y_in_row;
+                                break;
+                            } else {
+                                return None;
+                            }
+                        }
+
+                        cumulative_y = row_end + u32::from(SEPARATOR_HEIGHT);
                     }
+                } else {
+                    for (idx, rendered_page) in self.rendered.iter().enumerate() {
+                        let cell_size = rendered_page
+                            .img
+                            .as_ref()
+                            .map(|img| img.cell_dimensions())
+                            .or(rendered_page.full_cell_size)
+                            .unwrap_or(CellSize::new(0, 0));
+                        if cell_size.height == 0 {
+                            let estimated_h = reference_height.unwrap_or(img_area.height);
+                            let dest_h =
+                                ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1);
+                            cumulative_y += dest_h + u32::from(SEPARATOR_HEIGHT);
+                            continue;
+                        }
 
-                    let dest_h = ((f32::from(cell_size.height) * zoom_factor).ceil() as u32).max(1);
-                    let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                        let dest_h =
+                            ((f32::from(cell_size.height) * zoom_factor).ceil() as u32).max(1);
+                        let dest_w =
+                            ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
 
-                    let page_start = cumulative_y;
-                    let page_end = cumulative_y + dest_h;
+                        let page_start = cumulative_y;
+                        let page_end = cumulative_y + dest_h;
 
-                    if virtual_y >= page_start && virtual_y < page_end {
-                        target_page = Some((idx, dest_w));
-                        local_y = virtual_y - page_start;
-                        break;
+                        if virtual_y >= page_start && virtual_y < page_end {
+                            target_page = Some((idx, dest_w));
+                            local_y = virtual_y - page_start;
+                            break;
+                        }
+
+                        cumulative_y = page_end + u32::from(SEPARATOR_HEIGHT);
                     }
-
-                    cumulative_y = page_end + u32::from(SEPARATOR_HEIGHT);
                 }
 
                 let (idx, dest_w) = target_page?;
@@ -2045,7 +2333,71 @@ impl PdfReaderState {
             let rendered_page = self.rendered.get(page_idx)?;
             let (px_per_cell_x, px_per_cell_y) = pixels_per_cell(rendered_page);
 
-            let x_in_dest = if dest_w <= img_area.width {
+            let x_in_dest = if page_layout_mode == PdfPageLayoutMode::Dual {
+                let is_page_mode_dual = is_page_mode && page_layout_mode == PdfPageLayoutMode::Dual;
+                if is_page_mode_dual {
+                    let left_page = self.page;
+                    let right_page = self.page.saturating_add(1);
+                    let left_dest_w = self
+                        .rendered
+                        .get(left_page)
+                        .and_then(|p| {
+                            p.img
+                                .as_ref()
+                                .map(|img| img.cell_dimensions())
+                                .or(p.full_cell_size)
+                        })
+                        .map(|s| ((f32::from(s.width) * zoom_factor).ceil() as u16).max(1))
+                        .unwrap_or(0);
+                    let right_dest_w = self
+                        .rendered
+                        .get(right_page)
+                        .and_then(|p| {
+                            p.img
+                                .as_ref()
+                                .map(|img| img.cell_dimensions())
+                                .or(p.full_cell_size)
+                        })
+                        .map(|s| ((f32::from(s.width) * zoom_factor).ceil() as u16).max(1))
+                        .unwrap_or(0);
+                    let has_right = right_dest_w > 0;
+                    let gap = if has_right {
+                        DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
+                    } else {
+                        0
+                    };
+                    let group_width = if has_right {
+                        left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+                    } else {
+                        left_dest_w
+                    };
+                    let group_x = if group_width < img_area.width {
+                        (img_area.width - group_width) / 2
+                    } else {
+                        0
+                    };
+                    if page_idx % 2 == 0 {
+                        if rel_col < group_x || rel_col >= group_x.saturating_add(left_dest_w) {
+                            return None;
+                        }
+                        rel_col - group_x
+                    } else {
+                        let right_start = group_x.saturating_add(left_dest_w).saturating_add(gap);
+                        if rel_col < right_start || rel_col >= right_start.saturating_add(dest_w) {
+                            return None;
+                        }
+                        rel_col - right_start
+                    }
+                } else if dest_w <= img_area.width {
+                    let x_offset = (img_area.width - dest_w) / 2;
+                    if rel_col < x_offset || rel_col >= x_offset + dest_w {
+                        return None;
+                    }
+                    rel_col - x_offset
+                } else {
+                    rel_col + cell_pan_from_left
+                }
+            } else if dest_w <= img_area.width {
                 let x_offset = (img_area.width - dest_w) / 2;
                 if rel_col < x_offset || rel_col >= x_offset + dest_w {
                     return None;
@@ -2070,32 +2422,69 @@ impl PdfReaderState {
             })
         } else {
             let scroll_offset = self.non_kitty_scroll_offset;
-
-            let rendered_page = self.rendered.get(self.page)?;
-            let cell_size = rendered_page
-                .img
-                .as_ref()
-                .map(|img| img.cell_dimensions())
-                .or(rendered_page.full_cell_size)
-                .unwrap_or(CellSize::new(0, 0));
-            if cell_size.height == 0 {
-                return None;
-            }
-            let (px_per_cell_x, px_per_cell_y) = pixels_per_cell(rendered_page);
-
-            if rel_col >= cell_size.width {
-                return None;
-            }
+            let page_layout_mode = get_pdf_page_layout_mode();
+            let (page_idx, x_in_dest, px_per_cell_x, px_per_cell_y) =
+                if page_layout_mode == PdfPageLayoutMode::Dual {
+                    let layout = self
+                        .build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset)?;
+                    let left_rendered = self.rendered.get(layout.left_page)?;
+                    let left_cell = left_rendered.full_cell_size.unwrap_or(CellSize::new(0, 0));
+                    if left_cell.height == 0 || layout.left_slice.width == 0 {
+                        return None;
+                    }
+                    if rel_col >= layout.left_slice.screen_start
+                        && rel_col < layout.left_slice.screen_end
+                    {
+                        let (px_x, px_y) = pixels_per_cell(left_rendered);
+                        (
+                            layout.left_page,
+                            layout
+                                .left_slice
+                                .page_x_offset
+                                .saturating_add(rel_col - layout.left_slice.screen_start),
+                            px_x,
+                            px_y,
+                        )
+                    } else if let Some(right_slice) = layout.right_slice
+                        && rel_col >= right_slice.screen_start
+                        && rel_col < right_slice.screen_end
+                    {
+                        let right_rendered = self.rendered.get(right_slice.page)?;
+                        let (px_x, px_y) = pixels_per_cell(right_rendered);
+                        (
+                            right_slice.page,
+                            right_slice
+                                .page_x_offset
+                                .saturating_add(rel_col - right_slice.screen_start),
+                            px_x,
+                            px_y,
+                        )
+                    } else {
+                        return None;
+                    }
+                } else {
+                    let rendered_page = self.rendered.get(self.page)?;
+                    let cell_size = rendered_page
+                        .img
+                        .as_ref()
+                        .map(|img| img.cell_dimensions())
+                        .or(rendered_page.full_cell_size)
+                        .unwrap_or(CellSize::new(0, 0));
+                    if cell_size.height == 0 || rel_col >= cell_size.width {
+                        return None;
+                    }
+                    let (px_x, px_y) = pixels_per_cell(rendered_page);
+                    (self.page, rel_col, px_x, px_y)
+                };
 
             let virtual_y = u32::from(rel_row) + scroll_offset;
-
-            let pdf_x = f32::from(rel_col) * px_per_cell_x;
-            let pdf_y = virtual_y as f32 * px_per_cell_y;
+            let pdf_x = f32::from(x_in_dest) * px_per_cell_x;
+            let pdf_y = (virtual_y as f32 + 0.5) * px_per_cell_y;
 
             Some(SelectionPoint {
                 term_col,
                 term_row,
-                page: self.page,
+                page: page_idx,
                 pdf_x,
                 pdf_y,
             })
@@ -2840,13 +3229,21 @@ impl PdfReaderState {
         if !self.comments_enabled {
             return None;
         }
+        let mut nav_page = self.page;
         let count = self.comment_count_for_page(self.page);
         if count == 0 {
-            return None;
+            let is_dual = crate::settings::get_pdf_page_layout_mode()
+                == crate::settings::PdfPageLayoutMode::Dual;
+            if is_dual && self.comment_count_for_page(self.page + 1) > 0 {
+                nav_page = self.page + 1;
+            } else {
+                return None;
+            }
         }
         self.comment_nav_active = true;
-        self.comment_nav_page = self.page;
-        self.comment_nav_index = self.comment_nav_index.min(count.saturating_sub(1));
+        self.comment_nav_page = nav_page;
+        let nav_count = self.comment_count_for_page(nav_page);
+        self.comment_nav_index = self.comment_nav_index.min(nav_count.saturating_sub(1));
         if !self.zen_mode {
             self.set_comment_preview_from_nav();
         }
@@ -2872,7 +3269,11 @@ impl PdfReaderState {
         if !self.comment_nav_active {
             return None;
         }
-        if self.comment_nav_page != self.page {
+        let is_dual =
+            crate::settings::get_pdf_page_layout_mode() == crate::settings::PdfPageLayoutMode::Dual;
+        let in_spread = self.comment_nav_page == self.page
+            || (is_dual && self.comment_nav_page == self.page + 1);
+        if !in_spread {
             self.comment_nav_page = self.page;
             self.comment_nav_index = 0;
         }
@@ -2888,9 +3289,13 @@ impl PdfReaderState {
                 .rev()
                 .find(|&page| self.comment_count_for_page(page) > 0)
             {
+                let in_spread_back =
+                    prev_page == self.page || (is_dual && prev_page == self.page + 1);
                 let prev_comments = self.comments_for_page(prev_page);
                 let prev_count = prev_comments.len();
-                self.set_page(prev_page);
+                if !in_spread_back {
+                    self.set_page(prev_page);
+                }
                 self.comment_nav_page = prev_page;
                 self.comment_nav_index = prev_count.saturating_sub(1);
                 let scale_factor = self
@@ -2905,6 +3310,10 @@ impl PdfReaderState {
                 if !self.zen_mode {
                     self.set_comment_preview_from_nav();
                 }
+                if in_spread_back {
+                    self.last_render.rect = Rect::default();
+                    return Some(InputAction::SelectionChanged(selection_rects));
+                }
                 let viewport = if !self.zen_mode {
                     self.ensure_comment_visible(&selection_rects)
                 } else {
@@ -2917,6 +3326,9 @@ impl PdfReaderState {
                 });
             }
             let selection_rects = self.current_comment_selection_rects();
+            if is_dual && self.comment_nav_page == self.page + 1 {
+                return Some(InputAction::SelectionChanged(selection_rects));
+            }
             let viewport = if !self.zen_mode {
                 self.ensure_comment_visible(&selection_rects)
             } else {
@@ -2934,8 +3346,11 @@ impl PdfReaderState {
             if let Some(next_page) = ((self.comment_nav_page + 1)..=last_page)
                 .find(|&page| self.comment_count_for_page(page) > 0)
             {
+                let in_spread = next_page == self.page || (is_dual && next_page == self.page + 1);
                 let next_comments = self.comments_for_page(next_page);
-                self.set_page(next_page);
+                if !in_spread {
+                    self.set_page(next_page);
+                }
                 self.comment_nav_page = next_page;
                 self.comment_nav_index = 0;
                 let scale_factor = self
@@ -2950,6 +3365,10 @@ impl PdfReaderState {
                 if !self.zen_mode {
                     self.set_comment_preview_from_nav();
                 }
+                if in_spread {
+                    self.last_render.rect = Rect::default();
+                    return Some(InputAction::SelectionChanged(selection_rects));
+                }
                 let viewport = if !self.zen_mode {
                     self.ensure_comment_visible(&selection_rects)
                 } else {
@@ -2962,6 +3381,9 @@ impl PdfReaderState {
                 });
             }
             let selection_rects = self.current_comment_selection_rects();
+            if is_dual && self.comment_nav_page == self.page + 1 {
+                return Some(InputAction::SelectionChanged(selection_rects));
+            }
             let viewport = if !self.zen_mode {
                 self.ensure_comment_visible(&selection_rects)
             } else {
@@ -2988,6 +3410,9 @@ impl PdfReaderState {
             self.last_render.rect = Rect::default();
         }
         let selection_rects = self.current_comment_selection_rects();
+        if is_dual && self.comment_nav_page == self.page + 1 {
+            return Some(InputAction::SelectionChanged(selection_rects));
+        }
         let viewport = if !self.zen_mode {
             self.ensure_comment_visible(&selection_rects)
         } else {
@@ -3357,13 +3782,15 @@ impl PdfReaderState {
                         .map(|r| r.line_bounds.as_slice())
                         .unwrap_or(&[]);
 
-                    self.normal_mode.activate_at(
-                        last_pos.page,
-                        last_pos.line_idx,
-                        last_pos.char_idx,
-                    );
-                    let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
-                    return Some(InputAction::CursorChanged(cursor_rect, None));
+                    if let Some(line) = line_bounds.get(last_pos.line_idx)
+                        && !line.chars.is_empty()
+                    {
+                        let char_idx = last_pos.char_idx.min(line.chars.len().saturating_sub(1));
+                        self.normal_mode
+                            .activate_at(last_pos.page, last_pos.line_idx, char_idx);
+                        let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
+                        return Some(InputAction::CursorChanged(cursor_rect, None));
+                    }
                 }
             }
 
@@ -3374,24 +3801,50 @@ impl PdfReaderState {
                     .map(|r| r.line_bounds.as_slice())
                     .unwrap_or(&[]);
 
-                let target_line = (line_idx + 2).min(line_bounds.len().saturating_sub(1));
+                let mut target_line = (line_idx + 2).min(line_bounds.len().saturating_sub(1));
+                while target_line < line_bounds.len() && line_bounds[target_line].chars.is_empty() {
+                    target_line += 1;
+                }
+                if target_line >= line_bounds.len() {
+                    target_line = line_bounds
+                        .iter()
+                        .position(|line| !line.chars.is_empty())
+                        .unwrap_or(0);
+                }
 
                 self.normal_mode.activate_at(page, target_line, 0);
                 let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
                 Some(InputAction::CursorChanged(cursor_rect, None))
             } else {
-                // Fallback: activate at current page even if line_bounds not yet available
-                // This handles the case when page is still rendering
-                let page = self.page;
-                let line_bounds = self
-                    .rendered
-                    .get(page)
-                    .map(|r| r.line_bounds.as_slice())
-                    .unwrap_or(&[]);
+                // Fallback: find any line with character bounds in current spread/document.
+                let mut candidate_pages = Vec::with_capacity(self.rendered.len().min(4));
+                candidate_pages.push(self.page);
+                if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                    candidate_pages.push(self.page.saturating_add(1));
+                }
+                for idx in 0..self.rendered.len() {
+                    if !candidate_pages.contains(&idx) {
+                        candidate_pages.push(idx);
+                    }
+                }
 
-                self.normal_mode.activate_at(page, 0, 0);
-                let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
-                Some(InputAction::CursorChanged(cursor_rect, None))
+                if let Some((page, line_idx)) = candidate_pages.into_iter().find_map(|page| {
+                    self.rendered
+                        .get(page)
+                        .and_then(|r| r.line_bounds.iter().position(|line| !line.chars.is_empty()))
+                        .map(|line_idx| (page, line_idx))
+                }) {
+                    let line_bounds = self
+                        .rendered
+                        .get(page)
+                        .map(|r| r.line_bounds.as_slice())
+                        .unwrap_or(&[]);
+                    self.normal_mode.activate_at(page, line_idx, 0);
+                    let cursor_rect = self.normal_mode.get_cursor_rect(line_bounds);
+                    Some(InputAction::CursorChanged(cursor_rect, None))
+                } else {
+                    None
+                }
             }
         }
     }
@@ -3449,22 +3902,9 @@ impl PdfReaderState {
             // In page mode, no cumulative calculation - scroll is within current page
             0
         } else {
-            // Scroll mode: calculate cumulative height up to target page
-            let estimated_h = self.estimated_page_height_cells();
-            let mut cumulative = 0u32;
-            for (idx, r) in self.rendered.iter().enumerate() {
-                if idx >= page {
-                    break;
-                }
-                let cell_height = r
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().height)
-                    .unwrap_or(estimated_h);
-                let dest_h = ((f32::from(cell_height) * zoom_factor).ceil() as u32).max(1);
-                cumulative += dest_h + u32::from(SEPARATOR_HEIGHT);
-            }
-            cumulative
+            // Scroll mode: derive page start from active layout (single vs dual rows).
+            let heights = self.page_heights_scaled(zoom_factor);
+            self.scroll_offset_for_page_start(page, &heights)
         };
 
         let line_top_cells = ((line.y0 / f32::from(font_size.1)) * zoom_factor).floor() as u32;
@@ -3491,6 +3931,9 @@ impl PdfReaderState {
             // In page mode, only look at current page
             let rendered_page = self.rendered.get(self.page)?;
             for (line_idx, line) in rendered_page.line_bounds.iter().enumerate() {
+                if line.chars.is_empty() {
+                    continue;
+                }
                 let line_top_cells =
                     ((line.y0 / f32::from(font_size.1)) * zoom_factor).floor() as u32;
 
@@ -3507,42 +3950,42 @@ impl PdfReaderState {
             }
             None
         } else {
-            // Scroll mode: iterate through all pages with separators
-            let mut cumulative_y: u32 = 0;
-            let estimated_h = self.estimated_page_height_cells();
+            // Scroll mode: get current visible page from layout-aware scroll math,
+            // then search that page (and its dual companion) for first visible line.
+            let page_hint = self.expected_page_from_scroll();
+            let candidate_pages = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                [page_hint, page_hint.saturating_add(1)]
+            } else {
+                [page_hint, page_hint]
+            };
+            let heights = self.page_heights_scaled(zoom_factor);
 
-            for (page_idx, rendered_page) in self.rendered.iter().enumerate() {
-                let cell_height = rendered_page
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().height)
-                    .unwrap_or(estimated_h);
+            for page_idx in candidate_pages {
+                let Some(rendered_page) = self.rendered.get(page_idx) else {
+                    continue;
+                };
+                let page_start = self.scroll_offset_for_page_start(page_idx, &heights);
 
-                let dest_h = ((f32::from(cell_height) * zoom_factor).ceil() as u32).max(1);
-                let page_start = cumulative_y;
-                let page_end = cumulative_y + dest_h;
+                for (line_idx, line) in rendered_page.line_bounds.iter().enumerate() {
+                    if line.chars.is_empty() {
+                        continue;
+                    }
+                    let line_top_cells =
+                        ((line.y0 / f32::from(font_size.1)) * zoom_factor).floor() as u32;
+                    let global_line_top = page_start + line_top_cells;
 
-                if page_end > scroll_offset {
-                    for (line_idx, line) in rendered_page.line_bounds.iter().enumerate() {
-                        let line_top_cells =
-                            ((line.y0 / f32::from(font_size.1)) * zoom_factor).floor() as u32;
-                        let global_line_top = page_start + line_top_cells;
+                    if global_line_top >= scroll_offset {
+                        return Some((page_idx, line_idx));
+                    }
 
-                        if global_line_top >= scroll_offset {
-                            return Some((page_idx, line_idx));
-                        }
+                    let line_bottom_cells =
+                        ((line.y1 / f32::from(font_size.1)) * zoom_factor).ceil() as u32;
+                    let global_line_bottom = page_start + line_bottom_cells;
 
-                        let line_bottom_cells =
-                            ((line.y1 / f32::from(font_size.1)) * zoom_factor).ceil() as u32;
-                        let global_line_bottom = page_start + line_bottom_cells;
-
-                        if global_line_bottom > scroll_offset {
-                            return Some((page_idx, line_idx));
-                        }
+                    if global_line_bottom > scroll_offset {
+                        return Some((page_idx, line_idx));
                     }
                 }
-
-                cumulative_y = page_end + u32::from(SEPARATOR_HEIGHT);
             }
 
             None
@@ -3802,8 +4245,7 @@ impl PdfReaderState {
         }
 
         let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
-        let estimated_h = self.estimated_page_height_cells();
-        let Some(zoom) = self.zoom.as_mut() else {
+        let Some(zoom_factor) = self.zoom.as_ref().map(|z| z.factor()) else {
             return false;
         };
         let Some((img_area, font_size)) = self.coord_info else {
@@ -3818,33 +4260,21 @@ impl PdfReaderState {
             return false;
         };
 
-        let zoom_factor = zoom.factor();
-
-        // In page mode, cursor must be on current page - if not, we need to navigate
+        // In page mode, cursor must be on a visible page
         if is_page_mode && cursor.page != self.page {
-            // Can't scroll to different page in page mode - would need page navigation
-            return false;
+            let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+            if !(is_dual && cursor.page == self.page + 1) {
+                return false;
+            }
         }
 
         let cumulative_y: u32 = if is_page_mode {
             // In page mode, no cumulative calculation
             0
         } else {
-            // Scroll mode: calculate cumulative height
-            let mut cumulative = 0u32;
-            for (idx, r) in self.rendered.iter().enumerate() {
-                if idx >= cursor.page {
-                    break;
-                }
-                let cell_height = r
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().height)
-                    .unwrap_or(estimated_h);
-                let dest_h = ((f32::from(cell_height) * zoom_factor).ceil() as u32).max(1);
-                cumulative += dest_h + u32::from(SEPARATOR_HEIGHT);
-            }
-            cumulative
+            // Scroll mode: use layout-aware page offset (dual rows share the same Y start).
+            let heights = self.page_heights_scaled(zoom_factor);
+            self.scroll_offset_for_page_start(cursor.page, &heights)
         };
 
         let cell_height = rendered_page
@@ -3866,14 +4296,21 @@ impl PdfReaderState {
         let cursor_top = cumulative_y + line_top_cells;
         let cursor_bottom = cumulative_y + line_bottom_cells;
 
-        let viewport_top = zoom.global_scroll_offset;
+        let Some(viewport_top) = self.zoom.as_ref().map(|z| z.global_scroll_offset) else {
+            return false;
+        };
         let viewport_bottom = viewport_top + u32::from(img_area.height);
 
         if cursor_top < viewport_top {
-            zoom.global_scroll_offset = cursor_top;
+            if let Some(zoom) = self.zoom.as_mut() {
+                zoom.global_scroll_offset = cursor_top;
+            }
             true
         } else if cursor_bottom > viewport_bottom {
-            zoom.global_scroll_offset = cursor_bottom.saturating_sub(u32::from(img_area.height));
+            if let Some(zoom) = self.zoom.as_mut() {
+                zoom.global_scroll_offset =
+                    cursor_bottom.saturating_sub(u32::from(img_area.height));
+            }
             true
         } else {
             false
@@ -3884,6 +4321,13 @@ impl PdfReaderState {
         let cursor = &self.normal_mode.cursor;
 
         if cursor.page != self.page {
+            let is_dual = crate::settings::get_pdf_page_layout_mode()
+                == crate::settings::PdfPageLayoutMode::Dual;
+            if is_dual && cursor.page == self.page + 1 {
+                self.non_kitty_scroll_offset = 0;
+                self.last_render.rect = Rect::default();
+                return true;
+            }
             self.page = cursor.page;
             self.non_kitty_scroll_offset = 0;
             self.last_render.rect = Rect::default();
@@ -4158,8 +4602,11 @@ impl PdfReaderState {
                 if query.is_empty() {
                     Some(InputAction::SelectionChanged(vec![]))
                 } else {
-                    let page = self.normal_mode.cursor.page;
-                    let rects = self.find_text_selection_rects(page, &query);
+                    let mut rects = self.find_text_selection_rects(self.page, &query);
+                    let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+                    if is_dual && self.rendered.get(self.page + 1).is_some() {
+                        rects.extend(self.find_text_selection_rects(self.page + 1, &query));
+                    }
                     Some(InputAction::SelectionChanged(rects))
                 }
             }
@@ -4169,39 +4616,52 @@ impl PdfReaderState {
     fn execute_page_search(&mut self, query: &str) {
         use super::state::PageSearchMatch;
 
-        let page = self.normal_mode.cursor.page;
-        let Some(rendered) = self.rendered.get(page) else {
-            self.page_search.matches.clear();
-            self.page_search.matches_page = page;
-            return;
+        let base_page = self.page;
+        let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+
+        let pages_to_search: Vec<usize> = if is_dual {
+            let mut pages = vec![base_page];
+            if self.rendered.get(base_page + 1).is_some() {
+                pages.push(base_page + 1);
+            }
+            pages
+        } else {
+            vec![self.normal_mode.cursor.page]
         };
 
         let query_lower = query.to_lowercase();
         let mut matches = Vec::new();
 
-        for (line_idx, line) in rendered.line_bounds.iter().enumerate() {
-            let line_text: String = line.chars.iter().map(|c| c.c).collect();
-            let line_lower = line_text.to_lowercase();
+        for &page in &pages_to_search {
+            let Some(rendered) = self.rendered.get(page) else {
+                continue;
+            };
 
-            let mut search_start = 0;
-            while let Some(match_start) = line_lower[search_start..].find(&query_lower) {
-                let abs_start = search_start + match_start;
-                let char_len = query.chars().count();
+            for (line_idx, line) in rendered.line_bounds.iter().enumerate() {
+                let line_text: String = line.chars.iter().map(|c| c.c).collect();
+                let line_lower = line_text.to_lowercase();
 
-                if abs_start < line.chars.len() {
-                    matches.push(PageSearchMatch {
-                        line_idx,
-                        char_idx: abs_start,
-                        length: char_len,
-                    });
+                let mut search_start = 0;
+                while let Some(match_start) = line_lower[search_start..].find(&query_lower) {
+                    let abs_start = search_start + match_start;
+                    let char_len = query.chars().count();
+
+                    if abs_start < line.chars.len() {
+                        matches.push(PageSearchMatch {
+                            page,
+                            line_idx,
+                            char_idx: abs_start,
+                            length: char_len,
+                        });
+                    }
+
+                    search_start = abs_start + 1;
                 }
-
-                search_start = abs_start + 1;
             }
         }
 
         self.page_search.matches = matches;
-        self.page_search.matches_page = page;
+        self.page_search.matches_page = base_page;
         self.page_search.current_match = 0;
 
         self.find_closest_match_to_cursor();
@@ -4212,11 +4672,15 @@ impl PdfReaderState {
             return;
         }
 
+        let cursor_page = self.normal_mode.cursor.page;
         let cursor_line = self.normal_mode.cursor.line_idx;
         let cursor_char = self.normal_mode.cursor.char_idx;
 
         for (idx, m) in self.page_search.matches.iter().enumerate() {
-            if m.line_idx > cursor_line || (m.line_idx == cursor_line && m.char_idx >= cursor_char)
+            if m.page > cursor_page
+                || (m.page == cursor_page
+                    && (m.line_idx > cursor_line
+                        || (m.line_idx == cursor_line && m.char_idx >= cursor_char)))
             {
                 self.page_search.current_match = idx;
                 return;
@@ -4229,6 +4693,7 @@ impl PdfReaderState {
     fn jump_to_current_search_match(&mut self) -> Option<InputAction> {
         let m = self.page_search.current()?.clone();
 
+        self.normal_mode.cursor.page = m.page;
         self.normal_mode.cursor.line_idx = m.line_idx;
         self.normal_mode.cursor.char_idx = m.char_idx;
 
@@ -4261,7 +4726,7 @@ impl PdfReaderState {
     fn jump_to_next_search_match(&mut self) -> Option<InputAction> {
         if !self.page_search.has_matches() {
             if let Some(query) = self.page_search.query.clone() {
-                if self.page_search.matches_page != self.normal_mode.cursor.page {
+                if self.page_search.matches_page != self.page {
                     self.execute_page_search(&query);
                 }
             }
@@ -4278,7 +4743,7 @@ impl PdfReaderState {
     fn jump_to_prev_search_match(&mut self) -> Option<InputAction> {
         if !self.page_search.has_matches() {
             if let Some(query) = self.page_search.query.clone() {
-                if self.page_search.matches_page != self.normal_mode.cursor.page {
+                if self.page_search.matches_page != self.page {
                     self.execute_page_search(&query);
                 }
             }
@@ -4328,13 +4793,18 @@ impl PdfReaderState {
             InputAction::JumpingToPage { page, viewport } => {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::GoToPage(page));
+                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                        service.request_page(page.saturating_add(1));
+                    }
                 }
                 send_conversion(crate::pdf::ConversionCommand::NavigateTo(page));
                 update_pdf_toc_active(table_of_contents, self, page, toc_height);
                 if let Some(viewport) = viewport
                     && !self.is_kitty
                 {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+                    if let Some(cmd) = self.viewport_command(viewport) {
+                        send_conversion(cmd);
+                    }
                 }
                 if !self.normal_mode.active {
                     send_conversion(crate::pdf::ConversionCommand::UpdateCursor(None));
@@ -4343,7 +4813,9 @@ impl PdfReaderState {
             }
             InputAction::ViewportChanged(viewport) => {
                 if !self.is_kitty {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+                    if let Some(cmd) = self.viewport_command(viewport) {
+                        send_conversion(cmd);
+                    }
                 }
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
@@ -4354,10 +4826,16 @@ impl PdfReaderState {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::SetScale(factor));
                     service.request_page(self.page);
+                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                        service.request_page(self.page.saturating_add(1));
+                    }
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                self.last_sent_viewport = None;
                 if let Some(vp) = viewport {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(vp));
+                    if let Some(cmd) = self.viewport_command(vp) {
+                        send_conversion(cmd);
+                    }
                 }
             }
             InputAction::ThemeChanged { black, white } => {
@@ -4367,8 +4845,12 @@ impl PdfReaderState {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::SetColors { black, white });
                     service.request_page(self.page);
+                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                        service.request_page(self.page.saturating_add(1));
+                    }
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                self.last_sent_viewport = None;
             }
             InputAction::OpenExternalLink(url) => {
                 open_url(&url);
@@ -4397,17 +4879,59 @@ impl PdfReaderState {
                 toggle_profiling(profiler);
             }
             InputAction::ToggleInvertImages => {
+                if !self.themed_rendering {
+                    self.set_hud_message(
+                        "Image inversion is only available in PDF themed mode (I - to toggle)"
+                            .to_string(),
+                        crate::widget::hud_message::HudMode::Error,
+                        std::time::Duration::from_secs(2),
+                    );
+                } else {
+                    for rendered_info in &mut self.rendered {
+                        rendered_info.img = None;
+                    }
+                    self.invert_images = !self.invert_images;
+                    self.set_hud_message(
+                        self.pdf_rendering_status(),
+                        crate::widget::hud_message::HudMode::Normal,
+                        std::time::Duration::from_secs(2),
+                    );
+                    if let Some(service) = service {
+                        service.apply_command(crate::pdf::Command::ToggleInvertImages);
+                        service.request_page(self.page);
+                    }
+                    send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                    self.last_sent_viewport = None;
+                    save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
+                }
+            }
+            InputAction::TogglePdfTheming => {
                 for rendered_info in &mut self.rendered {
                     rendered_info.img = None;
                 }
-                self.invert_images = !self.invert_images;
-                let mode = if self.invert_images { "ON" } else { "OFF" };
-                notifications.info(format!("Image inversion {mode}"));
+                self.themed_rendering = !self.themed_rendering;
                 if let Some(service) = service {
-                    service.apply_command(crate::pdf::Command::ToggleInvertImages);
+                    if self.themed_rendering {
+                        let (br, bg, bb) = extract_pdf_rgb(&self.palette.base_00);
+                        let (fr, fg, fb) = extract_pdf_rgb(&self.palette.base_05);
+                        let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
+                        let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+                        service.apply_command(crate::pdf::Command::SetColors { black, white });
+                    } else {
+                        service.apply_command(crate::pdf::Command::SetColors {
+                            black: -1,
+                            white: -1,
+                        });
+                    }
+                    self.set_hud_message(
+                        self.pdf_rendering_status(),
+                        crate::widget::hud_message::HudMode::Normal,
+                        std::time::Duration::from_secs(2),
+                    );
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                self.last_sent_viewport = None;
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::SelectionChanged(rects) => {
@@ -4422,7 +4946,9 @@ impl PdfReaderState {
                 }
                 send_conversion(crate::pdf::ConversionCommand::UpdateCursor(cursor));
                 if let Some(viewport) = viewport {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+                    if let Some(cmd) = self.viewport_command(viewport) {
+                        send_conversion(cmd);
+                    }
                 }
             }
             InputAction::VisualChanged(rects, viewport) => {
@@ -4431,7 +4957,9 @@ impl PdfReaderState {
                 }
                 send_conversion(crate::pdf::ConversionCommand::UpdateVisual(rects));
                 if let Some(viewport) = viewport {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+                    if let Some(cmd) = self.viewport_command(viewport) {
+                        send_conversion(cmd);
+                    }
                 }
             }
             InputAction::ExitNormalMode => {
@@ -4453,15 +4981,26 @@ impl PdfReaderState {
                 viewport,
                 selection_rects,
             } => {
+                if let Some(service) = service {
+                    service.apply_command(crate::pdf::Command::GoToPage(page));
+                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                        service.request_page(page.saturating_add(1));
+                    }
+                }
                 send_conversion(crate::pdf::ConversionCommand::NavigateTo(page));
                 if let Some(viewport) = viewport {
-                    send_conversion(crate::pdf::ConversionCommand::UpdateViewport(viewport));
+                    if let Some(cmd) = self.viewport_command(viewport) {
+                        send_conversion(cmd);
+                    }
                 }
                 // Send selection rects to highlight the matched content
                 if !selection_rects.is_empty() {
                     send_conversion(crate::pdf::ConversionCommand::UpdateSelection(
                         selection_rects,
                     ));
+                }
+                if !self.is_kitty {
+                    self.force_redraw();
                 }
             }
             InputAction::CommentSaved { rects, .. } => {
@@ -4582,6 +5121,7 @@ pub(crate) fn save_pdf_bookmark(
         zoom_factor,
         pan_position,
         Some(pdf_reader.invert_images),
+        Some(pdf_reader.themed_rendering),
     );
 
     let now = std::time::Instant::now();
@@ -4852,10 +5392,15 @@ pub(crate) fn apply_theme_to_pdf_reader(
         rendered_info.img = None;
     }
 
-    let (br, bg, bb) = extract_pdf_rgb(&palette.base_00);
-    let (fr, fg, fb) = extract_pdf_rgb(&palette.base_05);
-    let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
-    let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+    let (black, white) = if pdf_reader.themed_rendering {
+        let (br, bg, bb) = extract_pdf_rgb(&palette.base_00);
+        let (fr, fg, fb) = extract_pdf_rgb(&palette.base_05);
+        let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
+        let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
+        (black, white)
+    } else {
+        (-1, -1)
+    };
 
     if let Some(service) = service {
         service.apply_command(crate::pdf::Command::SetColors { black, white });
@@ -4864,6 +5409,7 @@ pub(crate) fn apply_theme_to_pdf_reader(
     if let Some(tx) = conversion_tx {
         let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
     }
+    pdf_reader.last_sent_viewport = None;
 }
 
 fn extract_pdf_rgb(color: &ratatui::style::Color) -> (u8, u8, u8) {

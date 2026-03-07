@@ -30,6 +30,7 @@ pub struct RenderService {
     response_rx: Receiver<RenderResponse>,
     next_request_id: u64,
     pending_requests: HashMap<RequestId, PendingRequest>,
+    latest_page_request: HashMap<usize, RequestId>,
     cache: Arc<Mutex<PageCache>>,
     num_workers: usize,
     prefetch_radius: usize,
@@ -108,6 +109,7 @@ impl RenderService {
             response_rx,
             next_request_id: 1,
             pending_requests: HashMap::new(),
+            latest_page_request: HashMap::new(),
             cache,
             num_workers: num_workers.max(1),
             prefetch_radius,
@@ -214,6 +216,7 @@ impl RenderService {
             .request_tx
             .send(RenderRequest::Page { id, page, params });
         self.pending_requests.insert(id, PendingRequest::Page(page));
+        self.latest_page_request.insert(page, id);
         self.prefetch_in_flight.remove(&page);
 
         id
@@ -251,6 +254,7 @@ impl RenderService {
             .send(RenderRequest::Prefetch { id, page, params });
         self.pending_requests
             .insert(id, PendingRequest::Prefetch(page));
+        self.latest_page_request.insert(page, id);
         self.prefetch_in_flight.insert(page);
 
         id
@@ -271,7 +275,7 @@ impl RenderService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&key);
 
-        if !current_cached && !self.prefetch_in_flight.contains(&current) {
+        if !current_cached && !self.is_page_in_flight(current) {
             self.request_page(current);
         }
 
@@ -318,10 +322,21 @@ impl RenderService {
         let mut responses = vec![];
 
         while let Ok(response) = self.response_rx.try_recv() {
+            let mut skip_response = false;
             match &response {
                 RenderResponse::Page { id, page, .. } => {
                     self.pending_requests.remove(id);
                     self.prefetch_in_flight.remove(page);
+                    let is_latest = self.latest_page_request.get(page) == Some(id);
+                    if !is_latest {
+                        skip_response = true;
+                        log::debug!(
+                            "Dropping stale render response page={} id={} latest={:?}",
+                            page,
+                            id.0,
+                            self.latest_page_request.get(page).map(|r| r.0)
+                        );
+                    }
                 }
                 RenderResponse::Cancelled(id) | RenderResponse::Error { id, .. } => {
                     if let Some(PendingRequest::Page(page) | PendingRequest::Prefetch(page)) =
@@ -336,7 +351,9 @@ impl RenderService {
                 _ => {}
             }
 
-            responses.push(response);
+            if !skip_response {
+                responses.push(response);
+            }
         }
 
         responses

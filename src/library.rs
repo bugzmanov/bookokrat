@@ -9,6 +9,46 @@ pub struct LibraryPaths {
     pub image_cache_dir: PathBuf,
 }
 
+struct BaseDirs {
+    data_dir: PathBuf,
+    cache_dir: PathBuf,
+    state_dir: Option<PathBuf>,
+}
+
+impl BaseDirs {
+    fn from_system() -> Result<Self> {
+        Ok(Self {
+            data_dir: dirs::data_dir().context("Could not determine data directory")?,
+            cache_dir: dirs::cache_dir().context("Could not determine cache directory")?,
+            state_dir: dirs::state_dir(),
+        })
+    }
+
+    fn library_data_dir(&self, slug: &str) -> PathBuf {
+        self.data_dir.join("bookokrat").join("libraries").join(slug)
+    }
+
+    fn library_cache_dir(&self, slug: &str) -> PathBuf {
+        self.cache_dir
+            .join("bookokrat")
+            .join("libraries")
+            .join(slug)
+    }
+
+    fn app_state_or_cache_dir(&self) -> &Path {
+        self.state_dir.as_deref().unwrap_or(&self.cache_dir)
+    }
+
+    #[cfg(test)]
+    fn for_tests(root: &Path) -> Self {
+        Self {
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            state_dir: Some(root.join("state")),
+        }
+    }
+}
+
 /// Compute a slug that uniquely identifies a library directory.
 /// Format: `<md5_first_12>_<slugified_last_2_path_components>`
 pub fn library_slug(abs_path: &Path) -> String {
@@ -54,6 +94,14 @@ pub fn library_slug(abs_path: &Path) -> String {
 /// Compute XDG-compliant paths for a library directory.
 /// Creates the directories if they don't exist.
 pub fn resolve_library_paths(library_dir: &Path) -> Result<LibraryPaths> {
+    let base_dirs = BaseDirs::from_system()?;
+    resolve_library_paths_with_base_dirs(library_dir, &base_dirs)
+}
+
+fn resolve_library_paths_with_base_dirs(
+    library_dir: &Path,
+    base_dirs: &BaseDirs,
+) -> Result<LibraryPaths> {
     let abs_path = if library_dir.is_absolute() {
         library_dir.to_path_buf()
     } else {
@@ -64,17 +112,8 @@ pub fn resolve_library_paths(library_dir: &Path) -> Result<LibraryPaths> {
 
     let slug = library_slug(&abs_path);
 
-    let data_dir = dirs::data_dir()
-        .context("Could not determine data directory")?
-        .join("bookokrat")
-        .join("libraries")
-        .join(&slug);
-
-    let cache_dir = dirs::cache_dir()
-        .context("Could not determine cache directory")?
-        .join("bookokrat")
-        .join("libraries")
-        .join(&slug);
+    let data_dir = base_dirs.library_data_dir(&slug);
+    let cache_dir = base_dirs.library_cache_dir(&slug);
 
     let bookmarks_file = data_dir.join("bookmarks.json");
     let comments_dir = data_dir.join("comments");
@@ -97,9 +136,12 @@ pub fn resolve_library_paths(library_dir: &Path) -> Result<LibraryPaths> {
 /// Compute the XDG-compliant log file path (not per-library).
 /// Uses `state_dir` on platforms that have it, falls back to `cache_dir`.
 pub fn resolve_log_path() -> Result<PathBuf> {
-    let base = dirs::state_dir()
-        .or_else(dirs::cache_dir)
-        .context("Could not determine state or cache directory")?;
+    let base_dirs = BaseDirs::from_system()?;
+    resolve_log_path_with_base_dirs(&base_dirs)
+}
+
+fn resolve_log_path_with_base_dirs(base_dirs: &BaseDirs) -> Result<PathBuf> {
+    let base = base_dirs.app_state_or_cache_dir();
 
     let log_dir = base.join("bookokrat");
     fs::create_dir_all(&log_dir)
@@ -228,7 +270,9 @@ mod tests {
     #[test]
     fn test_resolve_library_paths_creates_dirs() {
         let tmp = TempDir::new().unwrap();
-        let paths = resolve_library_paths(tmp.path()).unwrap();
+        let base_dirs = BaseDirs::for_tests(tmp.path());
+        let library_dir = TempDir::new().unwrap();
+        let paths = resolve_library_paths_with_base_dirs(library_dir.path(), &base_dirs).unwrap();
         assert!(paths.bookmarks_file.parent().unwrap().exists());
         assert!(paths.comments_dir.exists());
         assert!(paths.image_cache_dir.exists());
@@ -236,7 +280,9 @@ mod tests {
 
     #[test]
     fn test_resolve_log_path() {
-        let log_path = resolve_log_path().unwrap();
+        let tmp = TempDir::new().unwrap();
+        let base_dirs = BaseDirs::for_tests(tmp.path());
+        let log_path = resolve_log_path_with_base_dirs(&base_dirs).unwrap();
         assert!(log_path.ends_with("bookokrat.log"));
         assert!(log_path.parent().unwrap().exists());
     }

@@ -98,61 +98,59 @@ impl ImagePopup {
             loading_duration.as_millis()
         );
 
-        // Time the protocol creation (which includes resize)
-        let start = Instant::now();
-        let protocol = self
-            .picker
-            .new_protocol(
+        let needs_protocol_rebuild = self
+            .protocol
+            .as_ref()
+            .is_none_or(|existing| existing.area() != inner_area);
+
+        if needs_protocol_rebuild {
+            let start = Instant::now();
+            match self.picker.new_protocol(
                 self.image.as_ref().clone(),
-                self.calculate_optimal_popup_area(terminal_size),
+                inner_area,
                 Resize::Viewport(ViewportOptions {
                     y_offset: 0,
                     x_offset: 0,
                 }),
-            )
-            .unwrap();
-        let duration = start.elapsed();
+            ) {
+                Ok(protocol) => {
+                    let duration = start.elapsed();
+                    self.protocol = Some(protocol);
+                    self.is_loading = false;
 
-        self.protocol = Some(protocol);
-        self.is_loading = false;
-
-        // Log the timing information
-        let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
-        debug!(
-            "--Image popup stats for '{}': protocol creation: {}ms, total time: {}ms",
-            self.src_path,
-            duration.as_millis(),
-            total_time.as_millis()
-        );
+                    let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
+                    debug!(
+                        "--Image popup stats for '{}': protocol creation: {}ms, total time: {}ms",
+                        self.src_path,
+                        duration.as_millis(),
+                        total_time.as_millis()
+                    );
+                }
+                Err(e) => {
+                    debug!(
+                        "Failed to create image popup protocol for '{}': {e}",
+                        self.src_path
+                    );
+                    self.popup_area = Some(popup_area);
+                    return;
+                }
+            }
+        }
 
         let image_area = inner_area;
-        let image_widget = Image::new(self.protocol.as_ref().unwrap());
+        if let Some(ref protocol) = self.protocol {
+            let image_widget = Image::new(protocol);
 
-        let total_time = self.load_start.map(|s| s.elapsed()).unwrap_or(duration);
-        let duration = start.elapsed();
-        debug!(
-            "--Image creation stats for '{}': protocol creation: {}ms, total time: {}ms",
-            self.src_path,
-            duration.as_millis(),
-            total_time.as_millis()
-        );
+            let image_render_start = Instant::now();
+            f.render_widget(image_widget, image_area);
+            let render_duration = image_render_start.elapsed();
 
-        let render_start = Instant::now();
-        f.render_widget(image_widget, image_area);
-        let render_duration = render_start.elapsed();
-
-        debug!(
-            "--Image widget render time for '{}': {}ms",
-            self.src_path,
-            render_duration.as_millis()
-        );
-
-        let total_render_time = render_start.elapsed();
-        debug!(
-            "TOTAL render() time for '{}': {}ms",
-            self.src_path,
-            total_render_time.as_millis()
-        );
+            debug!(
+                "--Image widget render time for '{}': {}ms",
+                self.src_path,
+                render_duration.as_millis()
+            );
+        }
 
         // Return the popup area so the main app knows where the image is displayed
         self.popup_area = Some(popup_area)

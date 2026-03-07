@@ -804,12 +804,17 @@ impl TableOfContents {
         // Get focus-aware colors
         let (_text_color, border_color, _bg_color) = palette.get_panel_colors(is_focused);
         let (selection_bg, selection_fg) = palette.get_selection_colors(is_focused);
+        let selected_index = if is_focused {
+            self.list_state.selected()
+        } else {
+            None
+        };
 
         let mut items: Vec<ListItem> = Vec::new();
 
         // Add the back button - check if it matches search
         let back_text = "← Books List";
-        let back_line = if self.search_state.active && self.search_state.is_match(0) {
+        let mut back_line = if self.search_state.active && self.search_state.is_match(0) {
             self.create_highlighted_line(back_text, 0, palette.base_0b, palette)
         } else {
             Line::from(vec![Span::styled(
@@ -817,6 +822,9 @@ impl TableOfContents {
                 Style::default().fg(palette.base_0b),
             )])
         };
+        if selected_index == Some(0) {
+            super::underline_line(&mut back_line);
+        }
         items.push(ListItem::new(back_line));
 
         // Render TOC items
@@ -828,9 +836,13 @@ impl TableOfContents {
             &current_book_info.toc_items,
             0,
             &mut toc_item_index,
-            is_focused,
+            selected_index,
         );
-        let title = format!("{book_display_name} - Book");
+        let title = if is_focused {
+            format!("{book_display_name} - Book • ")
+        } else {
+            format!("{book_display_name} - Book")
+        };
         let mut toc_list = List::new(items)
             .block(
                 Block::default()
@@ -842,7 +854,7 @@ impl TableOfContents {
             .style(Style::default().bg(theme_background()));
 
         if is_focused {
-            toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg))
+            toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg));
         }
 
         f.render_stateful_widget(toc_list, area, &mut self.list_state);
@@ -858,8 +870,9 @@ impl TableOfContents {
         toc_items: &[TocItem],
         indent_level: usize,
         toc_item_index: &mut usize,
-        is_focused: bool,
+        selected_index: Option<usize>,
     ) {
+        let is_focused = selected_index.is_some();
         let (text_color, _border_color, _bg_color) = palette.get_panel_colors(is_focused);
         for item in toc_items {
             match item {
@@ -874,10 +887,11 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{indent}{title}");
+                    let marker = if should_highlight { "* " } else { "" };
+                    let full_text = format!("{indent}{marker}{title}");
 
                     // Check if this item matches search
-                    let chapter_content = if self.search_state.active
+                    let mut chapter_content = if self.search_state.active
                         && self.search_state.is_match(*toc_item_index)
                     {
                         self.create_highlighted_line_with_indent(
@@ -893,6 +907,9 @@ impl TableOfContents {
                             Style::default().fg(base_color),
                         )])
                     };
+                    if selected_index == Some(*toc_item_index) {
+                        super::underline_line(&mut chapter_content);
+                    }
                     items.push(ListItem::new(chapter_content));
                 }
                 TocItem::Section {
@@ -913,10 +930,11 @@ impl TableOfContents {
                     };
 
                     let indent = "  ".repeat(indent_level + 1);
-                    let full_text = format!("{indent}{section_icon} {title}");
+                    let marker = if should_highlight { "* " } else { "" };
+                    let full_text = format!("{indent}{marker}{section_icon} {title}");
 
                     // Check if this item matches search
-                    let section_content = if self.search_state.active
+                    let mut section_content = if self.search_state.active
                         && self.search_state.is_match(*toc_item_index)
                     {
                         self.create_highlighted_line_with_indent(
@@ -932,6 +950,9 @@ impl TableOfContents {
                             Style::default().fg(base_color),
                         )])
                     };
+                    if selected_index == Some(*toc_item_index) {
+                        super::underline_line(&mut section_content);
+                    }
                     items.push(ListItem::new(section_content));
 
                     *toc_item_index += 1; // Increment for the section itself
@@ -945,7 +966,7 @@ impl TableOfContents {
                             children,
                             indent_level + 1,
                             toc_item_index,
-                            is_focused,
+                            selected_index,
                         );
                     }
 

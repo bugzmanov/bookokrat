@@ -80,6 +80,26 @@ impl PdfRenderMode {
     }
 }
 
+/// PDF page layout mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfPageLayoutMode {
+    /// Show one page at a time
+    #[default]
+    Single,
+    /// Show two pages side by side
+    Dual,
+}
+
+impl PdfPageLayoutMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PdfPageLayoutMode::Single => "Single",
+            PdfPageLayoutMode::Dual => "Dual",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -105,6 +125,9 @@ pub struct Settings {
 
     #[serde(default = "default_true")]
     pub pdf_enabled: bool,
+
+    #[serde(default)]
+    pub pdf_page_layout_mode: PdfPageLayoutMode,
 
     /// True if user has seen/configured PDF settings (used for migration prompt)
     #[serde(default)]
@@ -150,6 +173,7 @@ impl Default for Settings {
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
             pdf_enabled: true,
+            pdf_page_layout_mode: PdfPageLayoutMode::default(),
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             book_sort_order: BookSortOrder::default(),
@@ -193,7 +217,7 @@ pub fn load_settings() {
         };
         info!("Settings file not found, creating with defaults at {path:?}");
         if let Ok(mut settings) = SETTINGS.write() {
-            let caps = crate::terminal::detect_terminal();
+            let caps = crate::terminal::detect_terminal_with_probe();
             if caps.pdf.supports_scroll_mode {
                 settings.pdf_render_mode = PdfRenderMode::Scroll;
             }
@@ -364,6 +388,13 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 PdfRenderMode::Scroll => "scroll".into(),
             },
         ),
+        (
+            "pdf_page_layout_mode".into(),
+            match settings.pdf_page_layout_mode {
+                PdfPageLayoutMode::Single => "single".into(),
+                PdfPageLayoutMode::Dual => "dual".into(),
+            },
+        ),
         ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
         (
             "pdf_settings_configured".into(),
@@ -396,6 +427,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         PdfRenderMode::Scroll => "scroll",
     };
     content.push_str(&format!("pdf_render_mode: {}\n", mode_str));
+    let layout_mode_str = match settings.pdf_page_layout_mode {
+        PdfPageLayoutMode::Single => "single",
+        PdfPageLayoutMode::Dual => "dual",
+    };
+    content.push_str(&format!("pdf_page_layout_mode: {}\n", layout_mode_str));
     content.push_str(&format!("pdf_enabled: {}\n", settings.pdf_enabled));
     content.push_str(&format!(
         "pdf_settings_configured: {}\n",
@@ -594,6 +630,20 @@ pub fn set_pdf_render_mode(mode: PdfRenderMode) {
     save_settings();
 }
 
+pub fn get_pdf_page_layout_mode() -> PdfPageLayoutMode {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_page_layout_mode)
+        .unwrap_or_default()
+}
+
+pub fn set_pdf_page_layout_mode(mode: PdfPageLayoutMode) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_page_layout_mode = mode;
+    }
+    save_settings();
+}
+
 pub fn is_pdf_enabled() -> bool {
     SETTINGS.read().map(|s| s.pdf_enabled).unwrap_or(true)
 }
@@ -647,7 +697,7 @@ pub fn get_lookup_display() -> LookupDisplay {
 /// Called on app startup to fix incompatible settings when switching terminals
 /// (e.g., from Kitty to WezTerm with Scroll mode selected)
 pub fn fix_incompatible_pdf_settings() {
-    let caps = crate::terminal::detect_terminal();
+    let caps = crate::terminal::detect_terminal_with_probe();
     let current_mode = get_pdf_render_mode();
 
     // If user switched from Kitty to non-Kitty terminal with Scroll mode, silently fix it

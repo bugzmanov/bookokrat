@@ -30,6 +30,10 @@ pub struct Bookmark {
     #[cfg(feature = "pdf")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_invert_images: Option<bool>,
+
+    #[cfg(feature = "pdf")]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub pdf_themed_rendering: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -188,6 +192,7 @@ impl Bookmarks {
             pdf_zoom,
             pdf_pan,
             None,
+            None,
         );
     }
 
@@ -204,6 +209,7 @@ impl Bookmarks {
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
         pdf_invert_images: Option<bool>,
+        pdf_themed_rendering: Option<bool>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -215,6 +221,7 @@ impl Bookmarks {
             pdf_zoom,
             pdf_pan,
             pdf_invert_images,
+            pdf_themed_rendering,
         );
     }
 
@@ -230,7 +237,9 @@ impl Bookmarks {
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
         #[cfg(feature = "pdf")] pdf_invert_images: Option<bool>,
+        #[cfg(feature = "pdf")] pdf_themed_rendering: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_invert_images: Option<bool>,
+        #[cfg(not(feature = "pdf"))] _pdf_themed_rendering: Option<bool>,
     ) {
         let key = self
             .resolve_existing_key(path)
@@ -248,6 +257,8 @@ impl Bookmarks {
                 pdf_pan,
                 #[cfg(feature = "pdf")]
                 pdf_invert_images,
+                #[cfg(feature = "pdf")]
+                pdf_themed_rendering,
             },
         );
 
