@@ -46,6 +46,31 @@ pub(crate) const DUAL_PAGE_GAP_CELLS: u16 = 2;
 /// Minimum width in columns for the comment textarea to be usable
 pub(crate) const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
 
+fn kitty_source_y_range_from_dest_rows(
+    offset_dest_cells: u16,
+    display_rows: u16,
+    font_h: u16,
+    zoom_factor: f32,
+    source_total_h_px: u32,
+) -> (u32, u32) {
+    if source_total_h_px == 0 || zoom_factor <= 0.0 || !zoom_factor.is_finite() {
+        return (0, 0);
+    }
+
+    let font_h = f32::from(font_h.max(1));
+    let source_start_px = (((f32::from(offset_dest_cells) * font_h) / zoom_factor).floor() as u32)
+        .min(source_total_h_px.saturating_sub(1));
+    let source_end_px = (((f32::from(offset_dest_cells.saturating_add(display_rows)) * font_h)
+        / zoom_factor)
+        .floor() as u32)
+        .min(source_total_h_px);
+
+    (
+        source_start_px,
+        source_end_px.max(source_start_px.saturating_add(1)),
+    )
+}
+
 pub(crate) fn convert_page_image(
     img_data: &crate::pdf::ImageData,
     picker: &crate::vendored::ratatui_image::picker::Picker,
@@ -354,6 +379,80 @@ mod tests {
             pdf_reader.rendered[10].img.is_some(),
             "boundary queued kitty image should be retained"
         );
+    }
+
+    #[test]
+    fn kitty_source_range_tail_does_not_upscale() {
+        let font_h = 17u16;
+        let zoom = 1.73f32;
+        let source_total_h_px = 14_321u32;
+        let available_height = 42u16;
+
+        // Walk offsets near and past the tail. The invariant we care about:
+        // rendered rows must be representable by requested source pixels.
+        for offset_dest_cells in 0..5_000u16 {
+            let source_start = (((f32::from(offset_dest_cells) * f32::from(font_h)) / zoom).floor()
+                as u32)
+                .min(source_total_h_px.saturating_sub(1));
+            let available_h_px = source_total_h_px.saturating_sub(source_start);
+            let rows_from_available =
+                ((available_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+            let display_rows = available_height.min(rows_from_available);
+
+            let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
+                offset_dest_cells,
+                display_rows,
+                font_h,
+                zoom,
+                source_total_h_px,
+            );
+            let source_h_px = end_px.saturating_sub(start_px);
+            let max_rows_from_source =
+                ((source_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+
+            assert!(
+                display_rows <= max_rows_from_source.saturating_add(1),
+                "upscale risk at offset={offset_dest_cells}: display_rows={display_rows}, source_h_px={source_h_px}, max_rows_from_source={max_rows_from_source}"
+            );
+        }
+    }
+
+    #[test]
+    fn kitty_source_range_shrinks_rows_when_bottom_is_pinned() {
+        let font_h = 16u16;
+        let zoom = 1.51f32;
+        let source_total_h_px = 9_001u32;
+        let available_height = 38u16;
+        let mut prev: Option<(u32, u32, u16)> = None;
+
+        for offset_dest_cells in 0..4_000u16 {
+            let source_start = (((f32::from(offset_dest_cells) * f32::from(font_h)) / zoom).floor()
+                as u32)
+                .min(source_total_h_px.saturating_sub(1));
+            let available_h_px = source_total_h_px.saturating_sub(source_start);
+            let rows_from_available =
+                ((available_h_px as f32 * zoom) / f32::from(font_h)).floor() as u16;
+            let display_rows = available_height.min(rows_from_available);
+            let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
+                offset_dest_cells,
+                display_rows,
+                font_h,
+                zoom,
+                source_total_h_px,
+            );
+
+            if let Some((prev_start, prev_end, prev_rows)) = prev
+                && end_px == prev_end
+                && start_px > prev_start
+            {
+                assert!(
+                    display_rows < prev_rows,
+                    "bottom pinned but rows did not shrink: prev_rows={prev_rows}, rows={display_rows}, prev_start={prev_start}, start={start_px}, end={end_px}"
+                );
+            }
+
+            prev = Some((start_px, end_px, display_rows));
+        }
     }
 }
 
@@ -1587,8 +1686,11 @@ impl PdfReaderState {
                             if img_clip_top_px >= source_total_h_px {
                                 img_clip_top_px = source_total_h_px.saturating_sub(1);
                             }
-                            let remaining_page = dest_h.saturating_sub(offset_dest_cells);
-                            let display_rows = remaining_page.min(available_height);
+                            let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
+                            let rows_from_available = ((available_h_px as f32 * zoom_factor)
+                                / f32::from(font_size.1))
+                            .floor() as u16;
+                            let display_rows = available_height.min(rows_from_available);
                             if display_rows == 0 {
                                 return;
                             }
@@ -1661,8 +1763,11 @@ impl PdfReaderState {
                     } else {
                         0
                     };
-                    let remaining_page = dest_h.saturating_sub(offset_dest_cells);
-                    let display_rows = remaining_page.min(available_height);
+                    let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
+                    let rows_from_available = ((available_h_px as f32 * zoom_factor)
+                        / f32::from(font_size.1))
+                    .floor() as u16;
+                    let display_rows = available_height.min(rows_from_available);
 
                     if display_rows > 0 {
                         visible_info.push(VisiblePageInfo {
@@ -1950,12 +2055,17 @@ impl PdfReaderState {
             }
 
             let source_total_h_px = u32::from(info.cell_size.height) * u32::from(font_size.1);
-            let available_h_px = source_total_h_px.saturating_sub(info.img_clip_top_px);
-            let requested_h_px = ((f32::from(info.display_rows) * f32::from(font_size.1))
-                / zoom_factor)
-                .round()
-                .max(1.0) as u32;
-            let visible_source_h_px = requested_h_px.min(available_h_px);
+            let (source_start_px, source_end_px) = kitty_source_y_range_from_dest_rows(
+                info.offset_dest_cells,
+                info.display_rows,
+                font_size.1,
+                zoom_factor,
+                source_total_h_px,
+            );
+            let visible_source_h_px = source_end_px
+                .saturating_sub(source_start_px)
+                .max(1)
+                .min(source_total_h_px.saturating_sub(source_start_px));
 
             images_to_display.push(ImageRequest {
                 image: img,
@@ -1966,7 +2076,7 @@ impl PdfReaderState {
                 },
                 location: DisplayLocation {
                     x: u32::from(source_x_cells) * u32::from(font_size.0),
-                    y: info.img_clip_top_px,
+                    y: source_start_px,
                     width: u32::from(visible_source_w) * u32::from(font_size.0),
                     height: visible_source_h_px,
                     columns: display_cols,
