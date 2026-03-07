@@ -4879,23 +4879,30 @@ impl PdfReaderState {
                 toggle_profiling(profiler);
             }
             InputAction::ToggleInvertImages => {
-                for rendered_info in &mut self.rendered {
-                    rendered_info.img = None;
+                if !self.themed_rendering {
+                    self.set_hud_message(
+                        "Image inversion is only available in PDF themed mode (I - to toggle)".to_string(),
+                        crate::widget::hud_message::HudMode::Error,
+                        std::time::Duration::from_secs(2),
+                    );
+                } else {
+                    for rendered_info in &mut self.rendered {
+                        rendered_info.img = None;
+                    }
+                    self.invert_images = !self.invert_images;
+                    self.set_hud_message(
+                        self.pdf_rendering_status(),
+                        crate::widget::hud_message::HudMode::Normal,
+                        std::time::Duration::from_secs(2),
+                    );
+                    if let Some(service) = service {
+                        service.apply_command(crate::pdf::Command::ToggleInvertImages);
+                        service.request_page(self.page);
+                    }
+                    send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                    self.last_sent_viewport = None;
+                    save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
                 }
-                self.invert_images = !self.invert_images;
-                let mode = if self.invert_images { "ON" } else { "OFF" };
-                self.set_hud_message(
-                    format!("Image inversion {mode}"),
-                    crate::widget::hud_message::HudMode::Normal,
-                    std::time::Duration::from_secs(2),
-                );
-                if let Some(service) = service {
-                    service.apply_command(crate::pdf::Command::ToggleInvertImages);
-                    service.request_page(self.page);
-                }
-                send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
-                self.last_sent_viewport = None;
-                save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::TogglePdfTheming => {
                 for rendered_info in &mut self.rendered {
@@ -4909,22 +4916,17 @@ impl PdfReaderState {
                         let black = (br as i32) << 16 | (bg as i32) << 8 | bb as i32;
                         let white = (fr as i32) << 16 | (fg as i32) << 8 | fb as i32;
                         service.apply_command(crate::pdf::Command::SetColors { black, white });
-                        self.set_hud_message(
-                            "PDF rendering: themed".to_string(),
-                            crate::widget::hud_message::HudMode::Normal,
-                            std::time::Duration::from_secs(2),
-                        );
                     } else {
                         service.apply_command(crate::pdf::Command::SetColors {
                             black: -1,
                             white: -1,
                         });
-                        self.set_hud_message(
-                            "PDF rendering: original".to_string(),
-                            crate::widget::hud_message::HudMode::Normal,
-                            std::time::Duration::from_secs(2),
-                        );
                     }
+                    self.set_hud_message(
+                        self.pdf_rendering_status(),
+                        crate::widget::hud_message::HudMode::Normal,
+                        std::time::Duration::from_secs(2),
+                    );
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);

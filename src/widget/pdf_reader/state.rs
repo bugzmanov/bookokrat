@@ -482,6 +482,20 @@ impl PdfReaderState {
         self.hud_message = Some(HudMessage::new(message, duration, mode));
     }
 
+    pub(crate) fn pdf_rendering_status(&self) -> String {
+        let rendering = if self.themed_rendering {
+            "themed"
+        } else {
+            "original"
+        };
+        let images = if self.invert_images {
+            "inverted"
+        } else {
+            "original"
+        };
+        format!("PDF rendering: {rendering}. Images: {images}")
+    }
+
     pub fn set_doc_title(&mut self, title: Option<String>) {
         self.doc_title = title;
     }
