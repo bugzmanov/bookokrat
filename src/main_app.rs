@@ -45,7 +45,7 @@ pub enum ChapterDirection {
     Previous,
 }
 
-use std::io::{BufReader, stdout};
+use std::io::{BufReader, IsTerminal, stdout};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "pdf")]
 use std::sync::OnceLock;
@@ -3000,6 +3000,9 @@ impl App {
 
     fn sync_terminal_title(&mut self) {
         if self.test_mode {
+            return;
+        }
+        if !stdout().is_terminal() {
             return;
         }
         let title = self.desired_terminal_title();
