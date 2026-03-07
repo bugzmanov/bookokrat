@@ -214,6 +214,15 @@ impl MarkdownTextReader {
             }
         };
 
+        Self::with_image_picker(image_picker)
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_without_image_support() -> Self {
+        Self::with_image_picker(None)
+    }
+
+    fn with_image_picker(image_picker: Option<Picker>) -> Self {
         Self {
             markdown_document: None,
             rendered_content: RenderedContent {

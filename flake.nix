@@ -48,11 +48,8 @@
             fontconfig
           ];
 
-          # Can't be tested correctly in sandbox environment
           checkFlags = [
-            "--skip=test_definition_list_with_complex_content_svg"
             "--skip=test_mouse_scroll_file_list_svg"
-            "--skip=test_toc_chapter_navigation_svg"
           ];
 
           meta = with pkgs.lib; {
