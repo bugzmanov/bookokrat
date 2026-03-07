@@ -1389,7 +1389,8 @@ impl PdfReaderState {
                 let rel_end = inter_end.saturating_sub(vis_start);
                 let dest_start = (f32::from(rel_start) * zoom_factor).floor() as u16;
                 let dest_end = (f32::from(rel_end) * zoom_factor).ceil() as u16;
-                let cols = dest_end.saturating_sub(dest_start).min(img_area.width);
+                let available_cols = img_area.width.saturating_sub(dest_start);
+                let cols = dest_end.saturating_sub(dest_start).min(available_cols);
                 if cols == 0 {
                     return None;
                 }
@@ -1916,7 +1917,8 @@ impl PdfReaderState {
                     let rel_end = inter_end.saturating_sub(vis_start);
                     let dest_start = (f32::from(rel_start) * zoom_factor).floor() as u16;
                     let dest_end = (f32::from(rel_end) * zoom_factor).ceil() as u16;
-                    let cols = dest_end.saturating_sub(dest_start).min(img_area.width);
+                    let available_cols = img_area.width.saturating_sub(dest_start);
+                    let cols = dest_end.saturating_sub(dest_start).min(available_cols);
                     if cols == 0 {
                         continue;
                     }
