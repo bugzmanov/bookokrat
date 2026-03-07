@@ -223,11 +223,11 @@ impl BookList {
             let marker_text = if Some(idx) == current_book_index {
                 "* "
             } else {
-                "  "
+                ""
             };
 
             // Build the line with potential search highlights
-            let content = if self.search_state.active && is_search_match {
+            let mut content = if self.search_state.active && is_search_match {
                 // Find the highlight ranges for this match
                 let empty_vec = vec![];
                 let highlight_ranges = self
@@ -314,17 +314,11 @@ impl BookList {
                 Line::from(spans)
             };
 
+            if is_focused && idx == self.selected {
+                super::underline_line(&mut content);
+            }
             items.push(ListItem::new(content));
         }
-
-        // For the currently open book, we want to keep the red color even when selected
-        let highlight_style = if Some(self.selected) == current_book_index {
-            // Currently open book is selected - keep red foreground, add selection background
-            Style::default().bg(selection_bg).fg(palette.base_08) // Keep red text
-        } else {
-            // Normal selection highlighting
-            Style::default().bg(selection_bg).fg(selection_fg)
-        };
 
         let base_title = match (is_calibre_mode, get_book_sort_order()) {
             (true, BookSortOrder::ByType) => "Books [Calibre] [by type]",
@@ -338,7 +332,14 @@ impl BookList {
             base_title.to_string()
         };
 
-        let mut files = List::new(items)
+        // For the currently open book, keep red color even when selected
+        let highlight_style = if Some(self.selected) == current_book_index {
+            Style::default().bg(selection_bg).fg(palette.base_08)
+        } else {
+            Style::default().bg(selection_bg).fg(selection_fg)
+        };
+
+        let files = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
@@ -348,7 +349,6 @@ impl BookList {
             )
             .highlight_style(highlight_style)
             .style(Style::default().bg(theme_background()));
-        files = files.highlight_symbol(if is_focused { "> " } else { "  " });
 
         f.render_stateful_widget(files, area, &mut self.list_state);
     }

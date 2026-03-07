@@ -10,7 +10,7 @@ use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel};
 use crate::theme::Base16Palette;
-use ratatui::{Frame, layout::Rect};
+use ratatui::{Frame, layout::Rect, style::Modifier, text::Span};
 
 pub enum NavigationPanelAction {
     SelectBook {
@@ -554,5 +554,37 @@ impl SearchablePanel for NavigationPanel {
             NavigationMode::BookSelection => self.book_list.get_searchable_content(),
             NavigationMode::TableOfContents => self.table_of_contents.get_searchable_content(),
         }
+    }
+}
+
+/// Adds underline modifier to a Line's spans, skipping leading whitespace.
+pub(super) fn underline_line(line: &mut ratatui::text::Line<'static>) {
+    let mut past_leading = false;
+    let original_spans = std::mem::take(&mut line.spans);
+    for span in original_spans {
+        if !past_leading {
+            let trimmed = span.content.trim_start();
+            if trimmed.is_empty() {
+                line.spans.push(span);
+                continue;
+            }
+            past_leading = true;
+            let leading_len = span.content.len() - trimmed.len();
+            if leading_len > 0 {
+                line.spans.push(Span::styled(
+                    span.content[..leading_len].to_string(),
+                    span.style,
+                ));
+                line.spans.push(Span::styled(
+                    trimmed.to_string(),
+                    span.style.add_modifier(Modifier::UNDERLINED),
+                ));
+                continue;
+            }
+        }
+        line.spans.push(Span::styled(
+            span.content.clone(),
+            span.style.add_modifier(Modifier::UNDERLINED),
+        ));
     }
 }
