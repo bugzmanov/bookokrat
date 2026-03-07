@@ -1092,26 +1092,21 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     let mut stdout = std::io::stdout();
     let tmux = crate::pdf::kittyv2::is_tmux_mode();
 
-    // Always delete previous overlay
-    let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
-        .delete()
-        .quiet(crate::pdf::kittyv2::Quiet::Silent)
-        .write_to(&mut stdout, tmux);
+    let wanted = pdf_reader
+        .modal_overlay_rect
+        .filter(|&(_, _, w, h)| w > 0 && h > 0);
 
-    let Some((col, row, width, height)) = pdf_reader.modal_overlay_rect else {
+    // No overlay needed — delete if one was previously sent.
+    let Some((col, row, width, height)) = wanted else {
+        if pdf_reader.modal_overlay_sent.is_some() {
+            let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
+                .delete()
+                .quiet(crate::pdf::kittyv2::Quiet::Silent)
+                .write_to(&mut stdout, tmux);
+            pdf_reader.modal_overlay_sent = None;
+        }
         let _ = std::io::Write::flush(&mut stdout);
         return;
-    };
-
-    if width == 0 || height == 0 {
-        let _ = std::io::Write::flush(&mut stdout);
-        return;
-    }
-
-    // Extract RGB from the panel background color
-    let (r, g, b) = match pdf_reader.palette.base_01 {
-        Color::Rgb(r, g, b) => (r, g, b),
-        _ => (0x34, 0x3D, 0x46), // fallback to Oceanic Next base_01
     };
 
     let cursor = if tmux {
@@ -1124,17 +1119,53 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
         (row as u32 + 1, col as u32 + 1)
     };
 
-    let pixel = [r, g, b];
-    let _ = crate::pdf::kittyv2::DirectTransmit::new(1, 1)
-        .format(crate::pdf::kittyv2::Format::Rgb)
-        .image_id(MODAL_OVERLAY_IMAGE_ID)
-        .placement_id(MODAL_OVERLAY_IMAGE_ID)
-        .quiet(crate::pdf::kittyv2::Quiet::Silent)
-        .no_cursor_move(true)
-        .cursor_at(cursor.0, cursor.1)
-        .dest_cells(width, height)
-        .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
-        .send(&mut stdout, &pixel, tmux);
+    // If the overlay rect hasn't changed, just re-place the existing image.
+    if pdf_reader.modal_overlay_sent == Some((col, row, width, height)) {
+        let _ = crate::pdf::kittyv2::DisplayCommand::new(MODAL_OVERLAY_IMAGE_ID)
+            .placement_id(MODAL_OVERLAY_IMAGE_ID)
+            .quiet(crate::pdf::kittyv2::Quiet::Silent)
+            .no_cursor_move(true)
+            .cursor_at(cursor.0, cursor.1)
+            .dest_cells(width, height)
+            .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
+            .write_to(&mut stdout, tmux);
+    } else {
+        // Delete old overlay if it existed at a different size/position.
+        if pdf_reader.modal_overlay_sent.is_some() {
+            let _ = crate::pdf::kittyv2::DeleteCommand::by_id(MODAL_OVERLAY_IMAGE_ID)
+                .delete()
+                .quiet(crate::pdf::kittyv2::Quiet::Silent)
+                .write_to(&mut stdout, tmux);
+        }
+
+        let (r, g, b) = match pdf_reader.palette.base_01 {
+            Color::Rgb(r, g, b) => (r, g, b),
+            _ => (0x34, 0x3D, 0x46),
+        };
+
+        // Source image dimensions must match the dest cell ratio because Kitty
+        // preserves aspect ratio when scaling. Use 1 pixel per cell — small
+        // enough for inline base64 (~5KB max) but correctly shaped.
+        let pw = width as u32;
+        let ph = height as u32;
+        let pixel_count = (pw * ph) as usize;
+        let mut pixels = Vec::with_capacity(pixel_count * 3);
+        for _ in 0..pixel_count {
+            pixels.extend_from_slice(&[r, g, b]);
+        }
+        let _ = crate::pdf::kittyv2::DirectTransmit::new(pw, ph)
+            .format(crate::pdf::kittyv2::Format::Rgb)
+            .image_id(MODAL_OVERLAY_IMAGE_ID)
+            .placement_id(MODAL_OVERLAY_IMAGE_ID)
+            .quiet(crate::pdf::kittyv2::Quiet::Silent)
+            .no_cursor_move(true)
+            .cursor_at(cursor.0, cursor.1)
+            .dest_cells(width, height)
+            .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
+            .send(&mut stdout, &pixels, tmux);
+
+        pdf_reader.modal_overlay_sent = Some((col, row, width, height));
+    }
 
     // Position the terminal cursor at the textarea caret after all Kitty
     // commands, so it renders on top of the overlay image.
