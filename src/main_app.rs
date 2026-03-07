@@ -58,6 +58,7 @@ use crossterm::execute;
 use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
+#[cfg(unix)]
 use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
@@ -138,7 +139,10 @@ pub struct App {
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
     terminal_size: Rect,
+    #[cfg(unix)]
     profiler: Arc<Mutex<Option<ProfilerGuard<'static>>>>,
+    #[cfg(not(unix))]
+    profiler: Arc<Mutex<Option<()>>>,
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
@@ -629,26 +633,40 @@ impl App {
     }
 
     fn is_profiling(&self) -> bool {
-        self.profiler.lock().unwrap().is_some()
+        #[cfg(unix)]
+        {
+            self.profiler.lock().unwrap().is_some()
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
     }
 
     fn toggle_profiling(&self) {
-        let mut profiler_lock = self.profiler.lock().unwrap();
+        #[cfg(unix)]
+        {
+            let mut profiler_lock = self.profiler.lock().unwrap();
 
-        if profiler_lock.is_none() {
-            debug!("Profiling started");
-            *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
-        } else {
-            debug!("Profiling stopped and saved");
+            if profiler_lock.is_none() {
+                debug!("Profiling started");
+                *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
+            } else {
+                debug!("Profiling stopped and saved");
 
-            if let Some(guard) = profiler_lock.take() {
-                if let Ok(report) = guard.report().build() {
-                    let file = std::fs::File::create("flamegraph.svg").unwrap();
-                    report.flamegraph(file).unwrap();
-                } else {
-                    debug!("Could not build profile report");
+                if let Some(guard) = profiler_lock.take() {
+                    if let Ok(report) = guard.report().build() {
+                        let file = std::fs::File::create("flamegraph.svg").unwrap();
+                        report.flamegraph(file).unwrap();
+                    } else {
+                        debug!("Could not build profile report");
+                    }
                 }
             }
+        }
+        #[cfg(not(unix))]
+        {
+            log::warn!("Profiling is not supported on Windows");
         }
     }
 

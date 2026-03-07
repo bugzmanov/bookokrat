@@ -28,6 +28,7 @@ use crate::settings::{
     PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
 };
 use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
+#[cfg(unix)]
 use pprof::ProfilerGuard;
 
 pub struct InputResponse {
@@ -4776,7 +4777,8 @@ impl PdfReaderState {
         last_bookmark_save: &mut std::time::Instant,
         table_of_contents: &mut TableOfContents,
         toc_height: usize,
-        profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
+        #[cfg(unix)] profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
+        #[cfg(not(unix))] profiler: &std::sync::Arc<std::sync::Mutex<Option<()>>>,
     ) -> InputOutcome {
         let send_conversion = |cmd: crate::pdf::ConversionCommand| {
             if let Some(tx) = conversion_tx {
@@ -5057,6 +5059,7 @@ impl PdfReaderState {
     }
 }
 
+#[cfg(unix)]
 fn toggle_profiling(profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>) {
     let mut profiler_lock = profiler.lock().unwrap();
 
@@ -5075,6 +5078,11 @@ fn toggle_profiling(profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGu
             }
         }
     }
+}
+
+#[cfg(not(unix))]
+fn toggle_profiling(_profiler: &std::sync::Arc<std::sync::Mutex<Option<()>>>) {
+    log::warn!("Profiling is not supported on Windows");
 }
 
 fn open_url(url: &str) {
