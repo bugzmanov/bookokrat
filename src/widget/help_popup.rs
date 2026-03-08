@@ -1,6 +1,7 @@
 use crate::inputs::KeySeq;
 use crate::search::{SearchMode, SearchState, find_matches_in_text};
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use codepage_437::{BorrowFromCp437, CP437_CONTROL};
 use ratatui::{
     Frame,
@@ -383,17 +384,11 @@ impl HelpPopup {
             .saturating_sub(half_page)
             .min(self.total_lines.saturating_sub(1));
     }
+}
 
-    /// Check if the given coordinates are outside the popup area
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
+impl Popup for HelpPopup {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 

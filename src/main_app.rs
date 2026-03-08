@@ -24,6 +24,7 @@ use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
+use crate::widget::popup::Popup;
 use image::GenericImageView;
 use log::warn;
 

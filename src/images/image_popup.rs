@@ -1,5 +1,6 @@
 use crate::ratatui_image::{Image, Resize, ViewportOptions, picker::Picker, protocol::Protocol};
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use image::{DynamicImage, GenericImageView};
 use log::debug;
 use ratatui::{
@@ -192,15 +193,10 @@ impl ImagePopup {
             height: popup_height,
         }
     }
+}
 
-    pub(crate) fn is_outside_popup_area(&self, click_x: u16, click_y: u16) -> bool {
-        if let Some(popup_area) = self.popup_area {
-            click_x < popup_area.x
-                || click_x >= popup_area.x + popup_area.width
-                || click_y < popup_area.y
-                || click_y >= popup_area.y + popup_area.height
-        } else {
-            false
-        }
+impl Popup for ImagePopup {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.popup_area;
     }
 }
