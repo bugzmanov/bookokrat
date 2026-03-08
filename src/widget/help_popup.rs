@@ -308,56 +308,32 @@ impl HelpPopup {
                 None
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize / 2).max(1)
-                } else {
-                    10
-                };
+                let page_size = (self.popup_height(10) / 2).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize / 2).max(1)
-                } else {
-                    10
-                };
+                let page_size = (self.popup_height(10) / 2).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
             KeyCode::PageDown => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::PageUp => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
