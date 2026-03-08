@@ -4793,6 +4793,11 @@ impl App {
                     self.text_reader.toggle_normal_mode();
                 }
             }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_up(visible_height);
+                }
+            }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(visible_height) = screen_height {
                     self.scroll_full_screen_down(visible_height);
