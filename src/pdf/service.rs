@@ -119,6 +119,10 @@ impl RenderService {
     }
 
     fn load_document_info(doc_path: &Path) -> Option<DocumentInfo> {
+        if super::worker::is_djvu_path(doc_path) {
+            return Self::load_djvu_document_info(doc_path);
+        }
+
         let doc = Document::open(doc_path.to_string_lossy().as_ref()).ok()?;
         let page_count = doc.page_count().ok()? as usize;
 
@@ -139,6 +143,22 @@ impl RenderService {
             title,
             toc,
             page_number_samples,
+        })
+    }
+
+    fn load_djvu_document_info(doc_path: &Path) -> Option<DocumentInfo> {
+        let doc = rdjvu::Document::open(doc_path).ok()?;
+        let page_count = doc.page_count();
+
+        if page_count == 0 {
+            return None;
+        }
+
+        Some(DocumentInfo {
+            page_count,
+            title: None,
+            toc: Vec::new(),
+            page_number_samples: Vec::new(),
         })
     }
 

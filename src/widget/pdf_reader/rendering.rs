@@ -46,10 +46,54 @@ pub(crate) const DUAL_PAGE_GAP_CELLS: u16 = 2;
 /// Minimum width in columns for the comment textarea to be usable
 pub(crate) const MIN_COMMENT_TEXTAREA_WIDTH: u16 = 20;
 
+fn kitty_pixels_per_cell(
+    pixel_w: Option<u32>,
+    pixel_h: Option<u32>,
+    cell_size: CellSize,
+    font_size: FontSize,
+) -> (u32, u32) {
+    let fallback_x = u32::from(font_size.0.max(1));
+    let fallback_y = u32::from(font_size.1.max(1));
+    let px_per_cell_x = if cell_size.width > 0 {
+        (pixel_w.unwrap_or(u32::from(cell_size.width) * fallback_x) / u32::from(cell_size.width))
+            .max(1)
+    } else {
+        fallback_x
+    };
+    let px_per_cell_y = if cell_size.height > 0 {
+        (pixel_h.unwrap_or(u32::from(cell_size.height) * fallback_y) / u32::from(cell_size.height))
+            .max(1)
+    } else {
+        fallback_y
+    };
+    (px_per_cell_x, px_per_cell_y)
+}
+
+fn kitty_source_offset_px(offset_dest_cells: u16, px_per_cell_y: u32, zoom_factor: f32) -> u32 {
+    if zoom_factor <= 0.0 || !zoom_factor.is_finite() {
+        return 0;
+    }
+    (((f32::from(offset_dest_cells) * px_per_cell_y as f32) / zoom_factor).floor() as u32).max(0)
+}
+
+fn kitty_rows_from_available(available_h_px: u32, px_per_cell_y: u32, zoom_factor: f32) -> u16 {
+    if px_per_cell_y == 0 || zoom_factor <= 0.0 || !zoom_factor.is_finite() {
+        return 0;
+    }
+    (((available_h_px as f32) * zoom_factor) / px_per_cell_y as f32).floor() as u16
+}
+
+fn kitty_visible_source_h_px(display_rows: u16, px_per_cell_y: u32, zoom_factor: f32) -> u32 {
+    if px_per_cell_y == 0 || zoom_factor <= 0.0 || !zoom_factor.is_finite() {
+        return 0;
+    }
+    ((f32::from(display_rows) * px_per_cell_y as f32) / zoom_factor).round() as u32
+}
+
 fn kitty_source_y_range_from_dest_rows(
     offset_dest_cells: u16,
     display_rows: u16,
-    font_h: u16,
+    px_per_cell_y: u32,
     zoom_factor: f32,
     source_total_h_px: u32,
 ) -> (u32, u32) {
@@ -57,13 +101,14 @@ fn kitty_source_y_range_from_dest_rows(
         return (0, 0);
     }
 
-    let font_h = f32::from(font_h.max(1));
-    let source_start_px = (((f32::from(offset_dest_cells) * font_h) / zoom_factor).floor() as u32)
+    let source_start_px = kitty_source_offset_px(offset_dest_cells, px_per_cell_y, zoom_factor)
         .min(source_total_h_px.saturating_sub(1));
-    let source_end_px = (((f32::from(offset_dest_cells.saturating_add(display_rows)) * font_h)
-        / zoom_factor)
-        .floor() as u32)
-        .min(source_total_h_px);
+    let source_end_px = kitty_source_offset_px(
+        offset_dest_cells.saturating_add(display_rows),
+        px_per_cell_y,
+        zoom_factor,
+    )
+    .min(source_total_h_px);
 
     (
         source_start_px,
@@ -1249,6 +1294,8 @@ struct VisiblePageInfo {
     display_rows: u16,
     offset_dest_cells: u16,
     cell_size: CellSize,
+    pixel_w: u32,
+    pixel_h: u32,
     dest_w: u16,
     dest_h: u16,
 }
@@ -1288,6 +1335,13 @@ impl PdfReaderState {
             return DisplayBatch::Clear;
         }
 
+        let (source_px_per_cell_x, source_px_per_cell_y) = kitty_pixels_per_cell(
+            rendered_page.pixel_w,
+            rendered_page.pixel_h,
+            cell_size,
+            font_size,
+        );
+
         // Calculate scaled dimensions
         let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
         let dest_h = ((f32::from(cell_size.height) * zoom_factor).ceil() as u16).max(1);
@@ -1299,9 +1353,7 @@ impl PdfReaderState {
 
         // Calculate source clip based on scroll offset
         let source_y_px = if scroll_offset > 0 {
-            let offset_dest = f32::from(scroll_offset);
-            let source_y = (offset_dest / zoom_factor) * f32::from(font_size.1);
-            source_y.floor().max(0.0) as u32
+            kitty_source_offset_px(scroll_offset, source_px_per_cell_y, zoom_factor)
         } else {
             0
         };
@@ -1327,19 +1379,21 @@ impl PdfReaderState {
         let max_display_rows = remaining_dest_h.min(img_area.height);
 
         // Calculate source height in pixels
-        let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
+        let source_total_h_px = rendered_page
+            .pixel_h
+            .unwrap_or(u32::from(cell_size.height).saturating_mul(source_px_per_cell_y));
         let available_h_px = source_total_h_px.saturating_sub(source_y_px);
 
-        // Calculate how many rows the available source content can fill without stretching
-        // This ensures pixel-perfect scaling: source_h / display_rows == font_size.1 / zoom_factor
+        // Calculate how many rows the available source content can fill without stretching.
         let rows_from_available =
-            ((available_h_px as f32 * zoom_factor) / f32::from(font_size.1)).floor() as u16;
+            kitty_rows_from_available(available_h_px, source_px_per_cell_y, zoom_factor);
         let display_rows = rows_from_available.min(max_display_rows).max(1);
 
-        // Calculate actual source height for the display rows
+        // Calculate actual source height for the display rows.
         let visible_source_h_px =
-            ((f32::from(display_rows) * f32::from(font_size.1)) / zoom_factor).round() as u32;
-        let visible_source_h_px = visible_source_h_px.min(available_h_px).max(1);
+            kitty_visible_source_h_px(display_rows, source_px_per_cell_y, zoom_factor)
+                .min(available_h_px)
+                .max(1);
 
         // Center vertically if page is smaller than viewport
         let display_y_offset = if dest_h < img_area.height {
@@ -1356,9 +1410,9 @@ impl PdfReaderState {
                 y: img_area.y + display_y_offset,
             },
             location: DisplayLocation {
-                x: u32::from(source_x_cells) * u32::from(font_size.0),
+                x: u32::from(source_x_cells) * source_px_per_cell_x,
                 y: source_y_px,
-                width: u32::from(visible_source_w) * u32::from(font_size.0),
+                width: u32::from(visible_source_w) * source_px_per_cell_x,
                 height: visible_source_h_px,
                 columns: display_cols,
                 rows: display_rows,
@@ -1456,6 +1510,8 @@ impl PdfReaderState {
         let build_request = |img: &'a mut ImageState,
                              page_idx: usize,
                              cell_size: CellSize,
+                             pixel_w: Option<u32>,
+                             pixel_h: Option<u32>,
                              dest_w: u16,
                              dest_h: u16,
                              x_pos: u16,
@@ -1465,15 +1521,17 @@ impl PdfReaderState {
                 return None;
             }
 
+            let (source_px_per_cell_x, source_px_per_cell_y) =
+                kitty_pixels_per_cell(pixel_w, pixel_h, cell_size, font_size);
+
             let source_y_px = if scroll_offset > 0 {
-                let offset_dest = f32::from(scroll_offset);
-                let source_y = (offset_dest / zoom_factor) * f32::from(font_size.1);
-                source_y.floor().max(0.0) as u32
+                kitty_source_offset_px(scroll_offset, source_px_per_cell_y, zoom_factor)
             } else {
                 0
             };
 
-            let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
+            let source_total_h_px =
+                pixel_h.unwrap_or(u32::from(cell_size.height).saturating_mul(source_px_per_cell_y));
             let available_h_px = source_total_h_px.saturating_sub(source_y_px);
             if available_h_px == 0 {
                 return None;
@@ -1485,11 +1543,12 @@ impl PdfReaderState {
                 return None;
             }
             let rows_from_available =
-                ((available_h_px as f32 * zoom_factor) / f32::from(font_size.1)).floor() as u16;
+                kitty_rows_from_available(available_h_px, source_px_per_cell_y, zoom_factor);
             let display_rows = rows_from_available.min(max_display_rows).max(1);
             let visible_source_h_px =
-                ((f32::from(display_rows) * f32::from(font_size.1)) / zoom_factor).round() as u32;
-            let visible_source_h_px = visible_source_h_px.min(available_h_px).max(1);
+                kitty_visible_source_h_px(display_rows, source_px_per_cell_y, zoom_factor)
+                    .min(available_h_px)
+                    .max(1);
 
             let (source_x_cells, visible_source_w, display_x, display_cols) = if group_fits {
                 let max_x = img_area.x.saturating_add(img_area.width);
@@ -1546,9 +1605,9 @@ impl PdfReaderState {
                     y: img_area.y + display_y_offset + page_y_offset,
                 },
                 location: DisplayLocation {
-                    x: u32::from(source_x_cells) * u32::from(font_size.0),
+                    x: u32::from(source_x_cells) * source_px_per_cell_x,
                     y: source_y_px,
-                    width: u32::from(visible_source_w) * u32::from(font_size.0),
+                    width: u32::from(visible_source_w) * source_px_per_cell_x,
                     height: visible_source_h_px,
                     columns: display_cols,
                     rows: display_rows,
@@ -1572,6 +1631,8 @@ impl PdfReaderState {
                     left_img,
                     current_page,
                     left_size,
+                    left_rendered.pixel_w,
+                    left_rendered.pixel_h,
                     left_dest_w,
                     left_dest_h,
                     group_x,
@@ -1590,6 +1651,8 @@ impl PdfReaderState {
                     right_img,
                     right_page,
                     right_size,
+                    right_rendered.pixel_w,
+                    right_rendered.pixel_h,
                     right_dest_w,
                     right_dest_h,
                     right_x,
@@ -1607,6 +1670,8 @@ impl PdfReaderState {
                 left_img,
                 current_page,
                 left_size,
+                left_rendered.pixel_w,
+                left_rendered.pixel_h,
                 left_dest_w,
                 left_dest_h,
                 group_x,
@@ -1700,27 +1765,41 @@ impl PdfReaderState {
                     let available_height = img_area.height.saturating_sub(screen_y_start);
 
                     let mut push_visible =
-                        |page_idx: usize, cell_size: CellSize, dest_h: u16, dest_w: u16| {
+                        |page_idx: usize,
+                         cell_size: CellSize,
+                         pixel_w: u32,
+                         pixel_h: u32,
+                         dest_h: u16,
+                         dest_w: u16| {
                             if cell_size.height == 0 || dest_h == 0 {
                                 return;
                             }
+                            let (_, source_px_per_cell_y) = kitty_pixels_per_cell(
+                                Some(pixel_w),
+                                Some(pixel_h),
+                                cell_size,
+                                font_size,
+                            );
                             let mut img_clip_top_px = if scroll_offset > row_start {
-                                let offset_dest = (scroll_offset - row_start) as f32;
-                                let source_y_px =
-                                    (offset_dest / zoom_factor) * f32::from(font_size.1);
-                                source_y_px.floor().max(0.0) as u32
+                                let offset_dest = (scroll_offset - row_start) as u16;
+                                kitty_source_offset_px(
+                                    offset_dest,
+                                    source_px_per_cell_y,
+                                    zoom_factor,
+                                )
                             } else {
                                 0
                             };
-                            let source_total_h_px =
-                                u32::from(cell_size.height) * u32::from(font_size.1);
+                            let source_total_h_px = pixel_h.max(1);
                             if img_clip_top_px >= source_total_h_px {
                                 img_clip_top_px = source_total_h_px.saturating_sub(1);
                             }
                             let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
-                            let rows_from_available = ((available_h_px as f32 * zoom_factor)
-                                / f32::from(font_size.1))
-                            .floor() as u16;
+                            let rows_from_available = kitty_rows_from_available(
+                                available_h_px,
+                                source_px_per_cell_y,
+                                zoom_factor,
+                            );
                             let display_rows = available_height.min(rows_from_available);
                             if display_rows == 0 {
                                 return;
@@ -1732,6 +1811,8 @@ impl PdfReaderState {
                                 display_rows,
                                 offset_dest_cells,
                                 cell_size,
+                                pixel_w,
+                                pixel_h,
                                 dest_w,
                                 dest_h,
                             });
@@ -1739,11 +1820,37 @@ impl PdfReaderState {
 
                     let left_dest_w =
                         ((f32::from(left_size.width) * zoom_factor).ceil() as u16).max(1);
-                    push_visible(left_idx, left_size, left_dest_h, left_dest_w);
+                    let left_pixel_w = rendered[left_idx]
+                        .pixel_w
+                        .unwrap_or(u32::from(left_size.width) * u32::from(font_size.0));
+                    let left_pixel_h = rendered[left_idx]
+                        .pixel_h
+                        .unwrap_or(u32::from(left_size.height) * u32::from(font_size.1));
+                    push_visible(
+                        left_idx,
+                        left_size,
+                        left_pixel_w,
+                        left_pixel_h,
+                        left_dest_h,
+                        left_dest_w,
+                    );
                     if right_idx < rendered.len() {
                         let right_dest_w =
                             ((f32::from(right_size.width) * zoom_factor).ceil() as u16).max(1);
-                        push_visible(right_idx, right_size, right_dest_h, right_dest_w);
+                        let right_pixel_w = rendered[right_idx]
+                            .pixel_w
+                            .unwrap_or(u32::from(right_size.width) * u32::from(font_size.0));
+                        let right_pixel_h = rendered[right_idx]
+                            .pixel_h
+                            .unwrap_or(u32::from(right_size.height) * u32::from(font_size.1));
+                        push_visible(
+                            right_idx,
+                            right_size,
+                            right_pixel_w,
+                            right_pixel_h,
+                            right_dest_h,
+                            right_dest_w,
+                        );
                     }
                 }
 
@@ -1777,14 +1884,21 @@ impl PdfReaderState {
                     } else {
                         0
                     };
+                    let pixel_w = rendered_page
+                        .pixel_w
+                        .unwrap_or(u32::from(cell_size.width) * u32::from(font_size.0));
+                    let pixel_h = rendered_page
+                        .pixel_h
+                        .unwrap_or(u32::from(cell_size.height) * u32::from(font_size.1));
+                    let (_, source_px_per_cell_y) =
+                        kitty_pixels_per_cell(Some(pixel_w), Some(pixel_h), cell_size, font_size);
                     let mut img_clip_top_px = if scroll_offset > page_start {
-                        let offset_dest = (scroll_offset - page_start) as f32;
-                        let source_y_px = (offset_dest / zoom_factor) * f32::from(font_size.1);
-                        source_y_px.floor().max(0.0) as u32
+                        let offset_dest = (scroll_offset - page_start) as u16;
+                        kitty_source_offset_px(offset_dest, source_px_per_cell_y, zoom_factor)
                     } else {
                         0
                     };
-                    let source_total_h_px = u32::from(cell_size.height) * u32::from(font_size.1);
+                    let source_total_h_px = pixel_h.max(1);
                     if img_clip_top_px >= source_total_h_px {
                         img_clip_top_px = source_total_h_px.saturating_sub(1);
                     }
@@ -1795,9 +1909,11 @@ impl PdfReaderState {
                         0
                     };
                     let available_h_px = source_total_h_px.saturating_sub(img_clip_top_px);
-                    let rows_from_available = ((available_h_px as f32 * zoom_factor)
-                        / f32::from(font_size.1))
-                    .floor() as u16;
+                    let rows_from_available = kitty_rows_from_available(
+                        available_h_px,
+                        source_px_per_cell_y,
+                        zoom_factor,
+                    );
                     let display_rows = available_height.min(rows_from_available);
 
                     if display_rows > 0 {
@@ -1808,6 +1924,8 @@ impl PdfReaderState {
                             display_rows,
                             offset_dest_cells,
                             cell_size,
+                            pixel_w,
+                            pixel_h,
                             dest_w,
                             dest_h,
                         });
@@ -2085,11 +2203,17 @@ impl PdfReaderState {
                 continue;
             }
 
-            let source_total_h_px = u32::from(info.cell_size.height) * u32::from(font_size.1);
+            let (source_px_per_cell_x, source_px_per_cell_y) = kitty_pixels_per_cell(
+                Some(info.pixel_w),
+                Some(info.pixel_h),
+                info.cell_size,
+                font_size,
+            );
+            let source_total_h_px = info.pixel_h.max(1);
             let (source_start_px, source_end_px) = kitty_source_y_range_from_dest_rows(
                 info.offset_dest_cells,
                 info.display_rows,
-                font_size.1,
+                source_px_per_cell_y,
                 zoom_factor,
                 source_total_h_px,
             );
@@ -2106,9 +2230,9 @@ impl PdfReaderState {
                     y: img_area.y + info.screen_y_start,
                 },
                 location: DisplayLocation {
-                    x: u32::from(source_x_cells) * u32::from(font_size.0),
+                    x: u32::from(source_x_cells) * source_px_per_cell_x,
                     y: source_start_px,
-                    width: u32::from(visible_source_w) * u32::from(font_size.0),
+                    width: u32::from(visible_source_w) * source_px_per_cell_x,
                     height: visible_source_h_px,
                     columns: display_cols,
                     rows: info.display_rows,

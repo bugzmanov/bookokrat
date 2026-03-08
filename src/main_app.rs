@@ -719,6 +719,10 @@ impl App {
             BookFormat::Pdf => {
                 self.load_pdf(&path_owned, self.test_mode)?;
             }
+            #[cfg(feature = "pdf")]
+            BookFormat::Djvu => {
+                self.load_pdf(&path_owned, self.test_mode)?;
+            }
             BookFormat::Epub | BookFormat::Html => {
                 self.load_epub(&path_owned, self.test_mode)?;
             }

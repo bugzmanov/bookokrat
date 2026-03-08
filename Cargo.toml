@@ -93,6 +93,9 @@ lru = { version = "0.12", optional = true }
 rayon = { version = "1.11.0", default-features = false, optional = true }
 base64 = { version = "0.22", optional = true }
 
+# DjVu rendering dependencies (optional, enabled with `djvu` feature)
+rdjvu = { path = "../rdjvu/rdjvu", optional = true }
+
 [target.'cfg(not(windows))'.dependencies]
 rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }
 
@@ -116,7 +119,7 @@ serial_test = "3.2"
 default = ["pdf"]
 test-utils = []
 serde = []
-pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64"]
+pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu"]
 svg = ["resvg"]
 image-bmp = ["image/bmp"]
 image-tiff = ["image/tiff"]

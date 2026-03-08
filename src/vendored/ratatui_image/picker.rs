@@ -201,6 +201,10 @@ impl Picker {
         self.font_size
     }
 
+    pub fn is_tmux(&self) -> bool {
+        self.is_tmux
+    }
+
     /// Change the default background color (transparent black).
     pub fn set_background_color<T: Into<Rgba<u8>>>(&mut self, background_color: T) {
         self.background_color = background_color.into();

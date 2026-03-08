@@ -201,11 +201,16 @@ impl BookList {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (idx, book_info) in self.book_infos.iter().enumerate() {
-            // Check if this is a PDF
+            // Check if this is a PDF or DjVu
             #[cfg(feature = "pdf")]
             let is_pdf = book_info.format == BookFormat::Pdf;
             #[cfg(not(feature = "pdf"))]
             let is_pdf = false;
+
+            #[cfg(feature = "pdf")]
+            let is_djvu = book_info.format == BookFormat::Djvu;
+            #[cfg(not(feature = "pdf"))]
+            let is_djvu = false;
 
             // Determine base style for this book (PDFs now have same color as EPUBs)
             let base_style = if Some(idx) == current_book_index {
@@ -241,9 +246,11 @@ impl BookList {
                 let mut spans = Vec::new();
                 spans.push(Span::styled(marker_text, base_style));
 
-                // Add [pdf]prefix if this is a PDF
+                // Add format prefix if this is a PDF or DjVu
                 if is_pdf {
                     spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                } else if is_djvu {
+                    spans.push(Span::styled("[djvu]", pdf_prefix_style));
                 }
 
                 let text = &book_info.display_name;
@@ -309,6 +316,8 @@ impl BookList {
                 spans.push(Span::styled(marker_text, base_style));
                 if is_pdf {
                     spans.push(Span::styled("[pdf]", pdf_prefix_style));
+                } else if is_djvu {
+                    spans.push(Span::styled("[djvu]", pdf_prefix_style));
                 }
                 spans.push(Span::styled(book_info.display_name.clone(), base_style));
                 Line::from(spans)

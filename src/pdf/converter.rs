@@ -22,7 +22,7 @@ use rayon::prelude::*;
 use crate::vendored::ratatui_image::{
     Resize,
     picker::{Picker, ProtocolType},
-    protocol::Protocol,
+    protocol::{Protocol, iterm2::Iterm2},
 };
 
 use super::kittyv2::ImageId;
@@ -113,6 +113,44 @@ impl CellSize {
     pub const fn as_tuple(self) -> (u16, u16) {
         (self.width, self.height)
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PixelDensity {
+    x: u32,
+    y: u32,
+}
+
+fn pixel_density_for_dims(
+    width_px: u32,
+    height_px: u32,
+    cell_size: CellSize,
+    picker: &Picker,
+) -> PixelDensity {
+    let (char_width, char_height) = picker.font_size();
+    let fallback_x = u32::from(char_width).max(1);
+    let fallback_y = u32::from(char_height).max(1);
+
+    let x = if cell_size.width > 0 {
+        (width_px / u32::from(cell_size.width)).max(1)
+    } else {
+        fallback_x
+    };
+    let y = if cell_size.height > 0 {
+        (height_px / u32::from(cell_size.height)).max(1)
+    } else {
+        fallback_y
+    };
+
+    PixelDensity { x, y }
+}
+
+fn pixel_density_for_image(
+    img: &DynamicImage,
+    cell_size: CellSize,
+    picker: &Picker,
+) -> PixelDensity {
+    pixel_density_for_dims(img.width(), img.height(), cell_size, picker)
 }
 
 pub enum ConvertedImage {
@@ -1566,17 +1604,14 @@ fn crop_to_viewport(
     viewport: &ViewportUpdate,
     picker: &Picker,
 ) -> (DynamicImage, CellSize) {
-    let (char_width, char_height) = picker.font_size();
-    let y_px = viewport
-        .y_offset_cells
-        .saturating_mul(u32::from(char_height));
+    let density = pixel_density_for_image(&img, cell_size, picker);
+    let y_px = viewport.y_offset_cells.saturating_mul(density.y);
     let mut area_cell_height = cell_size.height;
     let mut area_cell_width = cell_size.width;
 
     if y_px < img.height() {
         area_cell_height = viewport.viewport_height_cells;
-        let viewport_px =
-            u32::from(viewport.viewport_height_cells).saturating_mul(u32::from(char_height));
+        let viewport_px = u32::from(viewport.viewport_height_cells).saturating_mul(density.y);
         let max_height = img.height().saturating_sub(y_px);
         let crop_height = viewport_px.min(max_height).max(1);
         img = img.crop_imm(0, y_px, img.width(), crop_height);
@@ -1597,11 +1632,8 @@ fn crop_to_viewport(
         && cell_size.width > viewport.viewport_width_cells
     {
         area_cell_width = viewport.viewport_width_cells;
-        let x_px = viewport
-            .x_offset_cells
-            .saturating_mul(u32::from(char_width));
-        let target_w_px =
-            u32::from(viewport.viewport_width_cells).saturating_mul(u32::from(char_width));
+        let x_px = viewport.x_offset_cells.saturating_mul(density.x);
+        let target_w_px = u32::from(viewport.viewport_width_cells).saturating_mul(density.x);
         if target_w_px < img.width() {
             let x_px = x_px.min(img.width().saturating_sub(1));
             let available = img.width().saturating_sub(x_px);
@@ -1613,24 +1645,76 @@ fn crop_to_viewport(
 }
 
 fn normalize_for_protocol(img: &mut DynamicImage, cell_size: CellSize, picker: &Picker) {
-    if picker.protocol_type() != ProtocolType::Kitty {
-        let (char_width, char_height) = picker.font_size();
-        let desired_w_px = u32::from(cell_size.width).saturating_mul(u32::from(char_width));
-        let desired_h_px = u32::from(cell_size.height).saturating_mul(u32::from(char_height));
-        if img.width() != desired_w_px || img.height() != desired_h_px {
-            let target_width = desired_w_px.max(1);
-            let target_height = desired_h_px.max(1);
-            match resize_exact_fast(img, target_width, target_height) {
-                Ok(resized) => *img = resized,
-                Err(_) => {
-                    *img = img.resize_exact(
-                        target_width,
-                        target_height,
-                        image::imageops::FilterType::Nearest,
-                    );
-                }
+    if matches!(
+        picker.protocol_type(),
+        ProtocolType::Kitty | ProtocolType::Iterm2
+    ) {
+        return;
+    }
+
+    let (char_width, char_height) = picker.font_size();
+    let desired_w_px = u32::from(cell_size.width).saturating_mul(u32::from(char_width));
+    let desired_h_px = u32::from(cell_size.height).saturating_mul(u32::from(char_height));
+    if img.width() != desired_w_px || img.height() != desired_h_px {
+        let target_width = desired_w_px.max(1);
+        let target_height = desired_h_px.max(1);
+        match resize_exact_fast(img, target_width, target_height) {
+            Ok(resized) => *img = resized,
+            Err(_) => {
+                *img = img.resize_exact(
+                    target_width,
+                    target_height,
+                    image::imageops::FilterType::Lanczos3,
+                );
             }
         }
+    }
+}
+
+fn pad_to_pixel_cell_bounds(
+    img: DynamicImage,
+    cell_size: CellSize,
+    density: PixelDensity,
+) -> DynamicImage {
+    let target_width = u32::from(cell_size.width).saturating_mul(density.x);
+    let target_height = u32::from(cell_size.height).saturating_mul(density.y);
+
+    if img.width() == target_width && img.height() == target_height {
+        return img;
+    }
+
+    let rgb = img.to_rgb8();
+    let bg = *rgb.get_pixel(0, 0);
+    let mut padded = image::ImageBuffer::from_pixel(target_width, target_height, bg);
+
+    let src_width = rgb.width();
+    let copy_width = src_width.min(target_width) as usize;
+    let copy_height = rgb.height().min(target_height);
+    for y in 0..copy_height {
+        let src_row_start = (y * src_width) as usize * 3;
+        let dst_row_start = (y * target_width) as usize * 3;
+        padded.as_mut()[dst_row_start..dst_row_start + copy_width * 3]
+            .copy_from_slice(&rgb.as_raw()[src_row_start..src_row_start + copy_width * 3]);
+    }
+
+    DynamicImage::ImageRgb8(padded)
+}
+
+fn encode_fixed_area_protocol(
+    img: DynamicImage,
+    area: Rect,
+    picker: &Picker,
+) -> Result<Protocol, PipelineError> {
+    match picker.protocol_type() {
+        ProtocolType::Iterm2 => Ok(Protocol::ITerm2(
+            Iterm2::new(img, area, picker.is_tmux())
+                .map_err(|e| pipeline_error(format!("Couldn't encode iTerm2 image: {e}")))?,
+        )),
+        _ => picker.new_protocol(img, area, Resize::None).map_err(|e| {
+            pipeline_error(format!(
+                "Image conversion failed; unable to render DynamicImage into a ratatui buffer: {e}"
+            ))
+        }),
     }
 }
 
@@ -1684,7 +1768,7 @@ fn resize_exact_fast(
     let src = fir::Image::from_vec_u8(src_nz_width, src_nz_height, src_buf, fir::PixelType::U8x3)
         .map_err(|e| pipeline_error(format!("Fast resize source error: {e}")))?;
     let mut dst = fir::Image::new(dst_nz_width, dst_nz_height, fir::PixelType::U8x3);
-    let mut resizer = fir::Resizer::new(fir::ResizeAlg::Nearest);
+    let mut resizer = fir::Resizer::new(fir::ResizeAlg::Convolution(fir::FilterType::Lanczos3));
     resizer
         .resize(&src.view(), &mut dst.view_mut())
         .map_err(|e| pipeline_error(format!("Fast resize error: {e}")))?;
@@ -1740,13 +1824,10 @@ fn render_viewport_tiles(
     picker: &Picker,
 ) -> Result<ConvertedImage, PipelineError> {
     let decoded = take_decoded(cached)?;
-    let (char_width, char_height) = picker.font_size();
-    let tile_height_px = u32::from(char_height);
-    let viewport_y_px = viewport
-        .y_offset_cells
-        .saturating_mul(u32::from(char_height));
-    let viewport_h_px =
-        u32::from(viewport.viewport_height_cells).saturating_mul(u32::from(char_height));
+    let density = pixel_density_for_image(&decoded, cached_cell_size(cached), picker);
+    let tile_height_px = density.y.max(1);
+    let viewport_y_px = viewport.y_offset_cells.saturating_mul(tile_height_px);
+    let viewport_h_px = u32::from(viewport.viewport_height_cells).saturating_mul(tile_height_px);
     let image_height = decoded.height();
     let max_height = image_height.saturating_sub(viewport_y_px);
     let visible_h_px = viewport_h_px.min(max_height).max(1);
@@ -1757,10 +1838,8 @@ fn render_viewport_tiles(
         .img_data
         .width_cell
         .min(viewport.viewport_width_cells);
-    let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
-    let x_offset_px = viewport
-        .x_offset_cells
-        .saturating_mul(u32::from(char_width));
+    let tile_w_px = u32::from(tile_w_cells).saturating_mul(density.x);
+    let x_offset_px = viewport.x_offset_cells.saturating_mul(density.x);
 
     let start_tile = viewport_y_px / tile_height_px;
     let end_tile = (viewport_y_px + visible_h_px).div_ceil(tile_height_px);
@@ -1776,8 +1855,8 @@ fn render_viewport_tiles(
         }
 
         let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
-        let tile_h_cells = ((tile_actual_h_px as f32) / f32::from(char_height)).ceil() as u16;
-        let tile_y_cells = (tile_y_px / u32::from(char_height)) as i32;
+        let tile_h_cells = ((tile_actual_h_px as f32) / density.y as f32).ceil() as u16;
+        let tile_y_cells = (tile_y_px / density.y.max(1)) as i32;
         let viewport_y_cells = viewport.y_offset_cells as i32;
         let offset_cells = tile_y_cells - viewport_y_cells;
         if offset_cells < 0 || offset_cells >= i32::from(viewport.viewport_height_cells) {
@@ -1799,40 +1878,40 @@ fn render_viewport_tiles(
         };
 
         let protocol = if !tile_has_overlay {
-            // No overlays on this tile - can use cache
             if let Some(existing) = cached.tile_cache.get(&tile_idx) {
                 cached_count += 1;
                 Arc::clone(existing)
             } else {
                 encoded_count += 1;
                 let tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
-                // Pad to exact cell boundaries so Resize::None can be used
-                let tile_img =
-                    pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
-                let new_protocol = picker.new_protocol(tile_img, tile_area, Resize::None).map_err(
-                    |e| {
-                        pipeline_error(format!(
-                            "Image conversion failed; unable to render DynamicImage into a ratatui buffer: {e}"
-                        ))
-                    },
-                )?;
+                let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
+                    pad_to_pixel_cell_bounds(
+                        tile_img,
+                        CellSize::new(tile_w_cells, tile_h_cells),
+                        density,
+                    )
+                } else {
+                    pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
+                };
+                let new_protocol = encode_fixed_area_protocol(tile_img, tile_area, picker)?;
                 let arc = Arc::new(new_protocol);
                 cached.tile_cache.insert(tile_idx, Arc::clone(&arc));
                 arc
             }
         } else {
-            // This tile has overlays - must re-encode (don't cache overlay versions)
             dynamic_count += 1;
             let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
             apply_overlays_dynamic(&mut tile_img, &local);
-            // Pad to exact cell boundaries so Resize::None can be used
-            let tile_img =
-                pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
-            Arc::new(picker.new_protocol(tile_img, tile_area, Resize::None).map_err(|e| {
-                pipeline_error(format!(
-                    "Image conversion failed; unable to render DynamicImage into a ratatui buffer: {e}"
-                ))
-            })?)
+            let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
+                pad_to_pixel_cell_bounds(
+                    tile_img,
+                    CellSize::new(tile_w_cells, tile_h_cells),
+                    density,
+                )
+            } else {
+                pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
+            };
+            Arc::new(encode_fixed_area_protocol(tile_img, tile_area, picker)?)
         };
 
         tiles.push(TiledProtocol {
@@ -1872,18 +1951,15 @@ fn render_specific_tiles(
     overlays: &OverlaySet,
     picker: &Picker,
 ) -> Result<Vec<TiledProtocol>, PipelineError> {
-    let (char_width, char_height) = picker.font_size();
-    let tile_height_px = u32::from(char_height);
+    let density = pixel_density_for_image(decoded, cell_size, picker);
+    let tile_height_px = density.y.max(1);
     let image_height = decoded.height();
     let viewport_y_cells = viewport.y_offset_cells as i32;
     let viewport_height_cells = i32::from(viewport.viewport_height_cells);
 
-    // Constrain tile width to viewport so iTerm2 images don't overflow
     let tile_w_cells = cell_size.width.min(viewport.viewport_width_cells);
-    let tile_w_px = u32::from(tile_w_cells).saturating_mul(u32::from(char_width));
-    let x_offset_px = viewport
-        .x_offset_cells
-        .saturating_mul(u32::from(char_width));
+    let tile_w_px = u32::from(tile_w_cells).saturating_mul(density.x);
+    let x_offset_px = viewport.x_offset_cells.saturating_mul(density.x);
 
     let mut tiles = Vec::new();
     for &tile_idx in tile_indices {
@@ -1892,23 +1968,25 @@ fn render_specific_tiles(
             continue;
         }
 
-        let tile_y_cells = (tile_y_px / u32::from(char_height)) as i32;
+        let tile_y_cells = (tile_y_px / density.y.max(1)) as i32;
         let offset_cells = tile_y_cells - viewport_y_cells;
         if offset_cells < 0 || offset_cells >= viewport_height_cells {
             continue;
         }
 
         let tile_actual_h_px = tile_height_px.min(image_height - tile_y_px);
-        let tile_h_cells = ((tile_actual_h_px as f32) / f32::from(char_height)).ceil() as u16;
+        let tile_h_cells = ((tile_actual_h_px as f32) / density.y as f32).ceil() as u16;
 
         let crop_x = x_offset_px.min(decoded.width().saturating_sub(1));
         let crop_w = tile_w_px.min(decoded.width().saturating_sub(crop_x));
         let mut tile_img = decoded.crop_imm(crop_x, tile_y_px, crop_w, tile_actual_h_px);
         let local = overlays.for_tile(crop_x, crop_w, tile_y_px, tile_actual_h_px);
         apply_overlays_dynamic(&mut tile_img, &local);
-        // Pad to exact cell boundaries so Resize::None can be used
-        let tile_img =
-            pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker);
+        let tile_img = if picker.protocol_type() == ProtocolType::Iterm2 {
+            pad_to_pixel_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), density)
+        } else {
+            pad_to_cell_bounds(tile_img, CellSize::new(tile_w_cells, tile_h_cells), picker)
+        };
 
         let tile_area = Rect {
             x: 0,
@@ -1916,9 +1994,7 @@ fn render_specific_tiles(
             width: tile_w_cells,
             height: tile_h_cells,
         };
-        let protocol = picker
-            .new_protocol(tile_img, tile_area, Resize::None)
-            .map_err(|e| pipeline_error(format!("Couldn't encode tile: {e}")))?;
+        let protocol = encode_fixed_area_protocol(tile_img, tile_area, picker)?;
 
         tiles.push(TiledProtocol {
             protocol: Arc::new(protocol),
@@ -1985,6 +2061,19 @@ fn encode_protocol(
                 cell_size,
             })
         }
+        ProtocolType::Iterm2 => {
+            let area = Rect {
+                x: 0,
+                y: 0,
+                width: cell_size.width,
+                height: cell_size.height,
+            };
+            let density = pixel_density_for_image(&img, cell_size, picker);
+            let img = pad_to_pixel_cell_bounds(img, cell_size, density);
+            Ok(ConvertedImage::Generic(encode_fixed_area_protocol(
+                img, area, picker,
+            )?))
+        }
         _ => Ok(ConvertedImage::Generic({
             let area = Rect {
                 x: 0,
@@ -1993,12 +2082,7 @@ fn encode_protocol(
                 height: cell_size.height,
             };
             let img = pad_to_cell_bounds(img, cell_size, picker);
-            // After padding to cell bounds, we can use Resize::None
-            picker.new_protocol(img, area, Resize::None).map_err(|e| {
-                pipeline_error(format!(
-                    "Image conversion failed; unable to render DynamicImage into a ratatui buffer: {e}"
-                ))
-            })?
+            encode_fixed_area_protocol(img, area, picker)?
         })),
     }
 }

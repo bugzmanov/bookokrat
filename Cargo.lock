@@ -382,6 +382,7 @@ dependencies = [
  "rand",
  "ratatui",
  "rayon",
+ "rdjvu",
  "regex",
  "resvg",
  "roxmltree 0.18.1",
@@ -2892,6 +2893,72 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
+
+[[package]]
+name = "rdjvu"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-core",
+ "rdjvu-document",
+ "rdjvu-render",
+]
+
+[[package]]
+name = "rdjvu-bzz"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-zp",
+]
+
+[[package]]
+name = "rdjvu-core"
+version = "0.1.0"
+
+[[package]]
+name = "rdjvu-document"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-bzz",
+ "rdjvu-core",
+ "rdjvu-iff",
+ "rdjvu-iw44",
+ "rdjvu-jb2",
+]
+
+[[package]]
+name = "rdjvu-iff"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-core",
+]
+
+[[package]]
+name = "rdjvu-iw44"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-core",
+ "rdjvu-zp",
+]
+
+[[package]]
+name = "rdjvu-jb2"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-core",
+ "rdjvu-zp",
+]
+
+[[package]]
+name = "rdjvu-render"
+version = "0.1.0"
+dependencies = [
+ "rdjvu-core",
+ "rdjvu-document",
+]
+
+[[package]]
+name = "rdjvu-zp"
+version = "0.1.0"
 
 [[package]]
 name = "redox_syscall"
