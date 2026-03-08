@@ -1567,19 +1567,19 @@ impl App {
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     fn scroll_full_screen_down(&mut self, screen_height: usize) {
         self.text_reader.scroll_full_screen_down(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     fn scroll_full_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_full_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     /// Handle a mouse event with optional batching for scroll events
