@@ -1245,10 +1245,10 @@ fn render_djvu_page(
         .saturating_mul(DJVU_INTERNAL_RENDER_SCALE)
         .min(page.display_height().max(output_h));
 
-    let (mut pixels, width_px, height_px) =
-        render_djvu_page_rgb(&page, page_num, target_w, target_h)?;
-
     let themed_rendering = params.black >= 0 && params.white >= 0;
+
+    let (mut pixels, width_px, height_px) =
+        render_djvu_page_rgb(&page, page_num, target_w, target_h, themed_rendering)?;
     if themed_rendering {
         djvu_tint_rgb(&mut pixels, params.white, params.black);
     }
@@ -1277,14 +1277,20 @@ fn render_djvu_page_rgb(
     page_num: usize,
     target_w: u32,
     target_h: u32,
+    themed: bool,
 ) -> Result<(Vec<u8>, u32, u32), WorkerFault> {
     let native_w = page.display_width();
     let native_h = page.display_height();
 
-    let pixmap = if target_w == native_w && target_h == native_h {
+    // Normal (white bg): strong boldness to counteract perceptual thinning of
+    // dark strokes on bright backgrounds.  Themed/inverted: no boost needed —
+    // light-on-dark text already appears at correct weight.
+    let boldness = if themed { 0.0 } else { 3.0 };
+
+    let pixmap = if target_w >= native_w && target_h >= native_h {
         page.render()
     } else {
-        page.render_to_size(target_w, target_h)
+        page.render_aa(target_w, target_h, boldness)
     }
     .map_err(|e| WorkerFault::generic(format!("DjVu render page {page_num}: {e}")))?;
 
