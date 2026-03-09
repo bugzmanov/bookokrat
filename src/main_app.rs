@@ -436,6 +436,21 @@ impl App {
 
         let book_images = BookImages::new(image_storage.clone());
 
+        #[cfg(any(test, feature = "test-utils"))]
+        let terminal_size =
+            if let Some((width, height)) = crate::test_utils::take_next_test_terminal_size() {
+                debug!("Using test terminal size: {width}x{height}");
+                Rect::new(0, 0, width, height)
+            } else {
+                crate::test_utils::clear_current_test_terminal_size();
+                if let Ok((width, height)) = crossterm::terminal::size() {
+                    debug!("Initial terminal size: {width}x{height}");
+                    Rect::new(0, 0, width, height)
+                } else {
+                    Rect::new(0, 0, 80, 24)
+                }
+            };
+        #[cfg(not(any(test, feature = "test-utils")))]
         let terminal_size = if let Ok((width, height)) = crossterm::terminal::size() {
             debug!("Initial terminal size: {width}x{height}");
             Rect::new(0, 0, width, height)
@@ -1593,6 +1608,9 @@ impl App {
         event_source: Option<&mut dyn crate::event_source::EventSource>,
     ) {
         use std::time::Duration;
+
+        #[cfg(any(test, feature = "test-utils"))]
+        self.sync_terminal_size_from_test_context();
 
         let is_scroll_event = matches!(
             initial_mouse_event.kind,
@@ -3947,6 +3965,9 @@ impl App {
     ) -> Option<AppAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        #[cfg(any(test, feature = "test-utils"))]
+        self.sync_terminal_size_from_test_context();
+
         let _ = self.text_reader.dismiss_error_hud();
 
         // If comment input is active, route all input to the text area
@@ -5328,6 +5349,19 @@ impl App {
         self.text_reader.get_last_copied_text()
     }
 
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_terminal_size(&self) -> Rect {
+        self.terminal_size
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn sync_terminal_size_from_test_context(&mut self) {
+        if let Some((width, height)) = crate::test_utils::current_test_terminal_size() {
+            self.terminal_size = Rect::new(0, 0, width, height);
+        }
+    }
+
     /// Poll PDF render service for completed renders and update state
     /// Returns true if any renders were processed
     #[cfg(feature = "pdf")]
@@ -5779,6 +5813,9 @@ where
     let mut last_tick = std::time::Instant::now();
     let mut fps_counter = FPSCounter::new();
     let mut first_render = true; // Ensure we always render at least once on startup
+    if let Ok(area) = terminal.size() {
+        app.terminal_size = area.into();
+    }
     app.sync_terminal_title();
     loop {
         let mut events_processed = 0;

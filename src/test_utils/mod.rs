@@ -1,6 +1,31 @@
+use std::cell::Cell;
+
 pub mod simple_fake_books;
 
+thread_local! {
+    static NEXT_TEST_TERMINAL_SIZE: Cell<Option<(u16, u16)>> = const { Cell::new(None) };
+    static CURRENT_TEST_TERMINAL_SIZE: Cell<Option<(u16, u16)>> = const { Cell::new(None) };
+}
+
+pub fn set_next_test_terminal_size(width: u16, height: u16) {
+    NEXT_TEST_TERMINAL_SIZE.with(|size| size.set(Some((width, height))));
+    CURRENT_TEST_TERMINAL_SIZE.with(|size| size.set(Some((width, height))));
+}
+
+pub fn take_next_test_terminal_size() -> Option<(u16, u16)> {
+    NEXT_TEST_TERMINAL_SIZE.with(|size| size.take())
+}
+
+pub fn current_test_terminal_size() -> Option<(u16, u16)> {
+    CURRENT_TEST_TERMINAL_SIZE.with(|size| size.get())
+}
+
+pub fn clear_current_test_terminal_size() {
+    CURRENT_TEST_TERMINAL_SIZE.with(|size| size.set(None));
+}
+
 pub mod test_helpers {
+    use super::set_next_test_terminal_size;
     use super::simple_fake_books::create_test_books_in_dir;
     use crate::event_source::{Event, KeyCode, KeyEvent, KeyModifiers, SimulatedEventSource};
     use ratatui::Terminal;
@@ -129,6 +154,8 @@ pub mod test_helpers {
                 std::env::set_var("COLORTERM", "truecolor");
             }
         });
+
+        set_next_test_terminal_size(width, height);
 
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -281,6 +308,8 @@ pub mod test_helpers {
 #[cfg(test)]
 mod tests {
     use super::test_helpers::*;
+    use crate::App;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     #[test]
     fn test_scenario_builder() {
@@ -295,5 +324,35 @@ mod tests {
         // Verify the events were created correctly
         let events = scenario.events;
         assert_eq!(events.len(), 6);
+    }
+
+    #[test]
+    fn test_app_uses_test_terminal_size_before_first_draw() {
+        let _terminal = create_test_terminal(123, 45);
+        let app =
+            App::new_with_config(Some("tests/testdata"), Some("/dev/null"), false, None, None);
+
+        assert_eq!(app.testing_terminal_size().width, 123);
+        assert_eq!(app.testing_terminal_size().height, 45);
+    }
+
+    #[test]
+    fn test_app_syncs_test_terminal_size_when_input_arrives_before_first_draw() {
+        let mut app =
+            App::new_with_config(Some("tests/testdata"), Some("/dev/null"), false, None, None);
+        let _terminal = create_test_terminal(77, 31);
+
+        app.handle_key_event_with_screen_height(
+            KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers: KeyModifiers::empty(),
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            },
+            None,
+        );
+
+        assert_eq!(app.testing_terminal_size().width, 77);
+        assert_eq!(app.testing_terminal_size().height, 31);
     }
 }

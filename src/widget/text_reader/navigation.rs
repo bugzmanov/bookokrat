@@ -59,7 +59,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
-        let scroll_amount = screen_height - 1;
+        let scroll_amount = screen_height.saturating_sub(1);
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
         self.highlight_visual_line = Some(0);
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
@@ -70,10 +70,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_down(&mut self, screen_height: usize) {
-        let scroll_amount = screen_height - 1;
+        let scroll_amount = screen_height.saturating_sub(1);
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
-        self.highlight_visual_line = Some(screen_height - 1);
+        self.highlight_visual_line = Some(screen_height.saturating_sub(1));
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
             self.search_state.current_match_index = None;
@@ -360,5 +360,22 @@ impl VimNavMotions for crate::markdown_text_reader::MarkdownTextReader {
     fn handle_upper_g(&mut self) {
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = max_offset;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::markdown_text_reader::MarkdownTextReader;
+
+    #[test]
+    fn full_page_scroll_down_is_noop_for_zero_height() {
+        let mut reader = MarkdownTextReader::new_without_image_support();
+        reader.total_wrapped_lines = 10;
+        reader.visible_height = 0;
+
+        reader.scroll_full_screen_down(0);
+
+        assert_eq!(reader.scroll_offset, 0);
+        assert_eq!(reader.highlight_visual_line, Some(0));
     }
 }

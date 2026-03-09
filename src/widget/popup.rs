@@ -9,7 +9,7 @@ pub trait Popup {
     fn popup_height(&self, default: u16) -> u16 {
         let popup_border_lines = 2;
         if let Some(popup_area) = self.get_last_popup_area() {
-            popup_area.height - popup_border_lines
+            popup_area.height.saturating_sub(popup_border_lines)
         } else {
             default
         }
@@ -25,5 +25,30 @@ pub trait Popup {
         } else {
             true
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Popup;
+    use ratatui::layout::Rect;
+
+    struct TestPopup {
+        area: Option<Rect>,
+    }
+
+    impl Popup for TestPopup {
+        fn get_last_popup_area(&self) -> Option<Rect> {
+            self.area
+        }
+    }
+
+    #[test]
+    fn popup_height_saturates_when_popup_is_shorter_than_borders() {
+        let popup = TestPopup {
+            area: Some(Rect::new(0, 0, 10, 1)),
+        };
+
+        assert_eq!(popup.popup_height(20), 0);
     }
 }

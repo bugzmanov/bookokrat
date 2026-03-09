@@ -626,12 +626,16 @@ impl VimNavMotions for BookStat {
 
     fn handle_ctrl_f(&mut self) {
         self.list_state.scroll_down_by(self.popup_height(20));
-        *self.list_state.offset_mut() = self.list_state.selected().unwrap();
+        if let Some(selected) = self.list_state.selected() {
+            *self.list_state.offset_mut() = selected;
+        }
     }
 
     fn handle_ctrl_b(&mut self) {
         self.list_state.scroll_up_by(self.popup_height(20));
-        *self.list_state.offset_mut() = self.list_state.selected().unwrap();
+        if let Some(selected) = self.list_state.selected() {
+            *self.list_state.offset_mut() = selected;
+        }
     }
 
     fn handle_gg(&mut self) {

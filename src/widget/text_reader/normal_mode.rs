@@ -585,7 +585,7 @@ impl MarkdownTextReader {
         if !self.normal_mode.active {
             return;
         }
-        let scroll_amount = screen_height - 1;
+        let scroll_amount = screen_height.saturating_sub(1);
         let max_line = self.raw_text_lines.len().saturating_sub(1);
         let mut new_line = (self.normal_mode.cursor.line + scroll_amount).min(max_line);
         // Skip image lines
@@ -600,7 +600,7 @@ impl MarkdownTextReader {
         if !self.normal_mode.active {
             return;
         }
-        let scroll_amount = screen_height - 1;
+        let scroll_amount = screen_height.saturating_sub(1);
         let mut new_line = self.normal_mode.cursor.line.saturating_sub(scroll_amount);
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
@@ -2102,5 +2102,22 @@ impl MarkdownTextReader {
         self.apply_highlight_with_predicate(line_idx, spans, palette, |line, col| {
             self.is_in_visual_selection(line, col)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::markdown_text_reader::MarkdownTextReader;
+
+    #[test]
+    fn full_page_down_is_noop_for_zero_height() {
+        let mut reader = MarkdownTextReader::new_without_image_support();
+        reader.normal_mode.active = true;
+        reader.raw_text_lines = vec!["line".to_string()];
+
+        reader.normal_mode_full_page_down(0);
+
+        assert_eq!(reader.normal_mode.cursor.line, 0);
+        assert_eq!(reader.scroll_offset, 0);
     }
 }
