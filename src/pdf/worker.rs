@@ -30,7 +30,7 @@ pub(crate) fn is_djvu_path(path: &Path) -> bool {
 const TITLE_RGB: (u8, u8, u8) = (0x66, 0x99, 0xCC);
 const TITLE_LUMA_DARK_MAX: u8 = 90;
 const TITLE_LUMA_LIGHT_MIN: u8 = 180;
-const DJVU_INTERNAL_RENDER_SCALE: u32 = 2;
+const DJVU_INTERNAL_RENDER_SCALE: u32 = 1;
 
 fn align_raster_to_cells(
     page_bounds: (f32, f32),

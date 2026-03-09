@@ -69,6 +69,32 @@ fn kitty_pixels_per_cell(
     (px_per_cell_x, px_per_cell_y)
 }
 
+/// Accurately map a cell range to a pixel range using proportional mapping.
+///
+/// Avoids the integer-truncation issue in `pixels_per_cell * cells` by dividing
+/// the actual pixel dimension proportionally. When `cell_start + cell_count`
+/// covers the full `total_cells`, the returned width equals `total_pixels`
+/// exactly, preventing right-margin cropping in the Kitty graphics protocol.
+fn kitty_cell_range_to_pixels(
+    cell_start: u16,
+    cell_count: u16,
+    total_cells: u16,
+    total_pixels: u32,
+) -> (u32, u32) {
+    if total_cells == 0 {
+        return (0, total_pixels);
+    }
+    let start_px =
+        (u64::from(cell_start) * u64::from(total_pixels) / u64::from(total_cells)) as u32;
+    let end_cells = cell_start.saturating_add(cell_count);
+    let end_px = if end_cells >= total_cells {
+        total_pixels
+    } else {
+        (u64::from(end_cells) * u64::from(total_pixels) / u64::from(total_cells)) as u32
+    };
+    (start_px, end_px.saturating_sub(start_px))
+}
+
 fn kitty_source_offset_px(offset_dest_cells: u16, px_per_cell_y: u32, zoom_factor: f32) -> u32 {
     if zoom_factor <= 0.0 || !zoom_factor.is_finite() {
         return 0;
@@ -1409,13 +1435,24 @@ impl PdfReaderState {
                 x: img_area.x + display_x_offset,
                 y: img_area.y + display_y_offset,
             },
-            location: DisplayLocation {
-                x: u32::from(source_x_cells) * source_px_per_cell_x,
-                y: source_y_px,
-                width: u32::from(visible_source_w) * source_px_per_cell_x,
-                height: visible_source_h_px,
-                columns: display_cols,
-                rows: display_rows,
+            location: {
+                let actual_pw = rendered_page
+                    .pixel_w
+                    .unwrap_or(u32::from(cell_size.width) * source_px_per_cell_x);
+                let (sx, sw) = kitty_cell_range_to_pixels(
+                    source_x_cells,
+                    visible_source_w,
+                    cell_size.width,
+                    actual_pw,
+                );
+                DisplayLocation {
+                    x: sx,
+                    y: source_y_px,
+                    width: sw,
+                    height: visible_source_h_px,
+                    columns: display_cols,
+                    rows: display_rows,
+                }
             },
         };
 
@@ -1604,13 +1641,23 @@ impl PdfReaderState {
                     x: display_x,
                     y: img_area.y + display_y_offset + page_y_offset,
                 },
-                location: DisplayLocation {
-                    x: u32::from(source_x_cells) * source_px_per_cell_x,
-                    y: source_y_px,
-                    width: u32::from(visible_source_w) * source_px_per_cell_x,
-                    height: visible_source_h_px,
-                    columns: display_cols,
-                    rows: display_rows,
+                location: {
+                    let actual_pw = pixel_w
+                        .unwrap_or(u32::from(cell_size.width) * source_px_per_cell_x);
+                    let (sx, sw) = kitty_cell_range_to_pixels(
+                        source_x_cells,
+                        visible_source_w,
+                        cell_size.width,
+                        actual_pw,
+                    );
+                    DisplayLocation {
+                        x: sx,
+                        y: source_y_px,
+                        width: sw,
+                        height: visible_source_h_px,
+                        columns: display_cols,
+                        rows: display_rows,
+                    }
                 },
             })
         };
@@ -2203,7 +2250,7 @@ impl PdfReaderState {
                 continue;
             }
 
-            let (source_px_per_cell_x, source_px_per_cell_y) = kitty_pixels_per_cell(
+            let (_source_px_per_cell_x, source_px_per_cell_y) = kitty_pixels_per_cell(
                 Some(info.pixel_w),
                 Some(info.pixel_h),
                 info.cell_size,
@@ -2222,6 +2269,12 @@ impl PdfReaderState {
                 .max(1)
                 .min(source_total_h_px.saturating_sub(source_start_px));
 
+            let (sx, sw) = kitty_cell_range_to_pixels(
+                source_x_cells,
+                visible_source_w,
+                info.cell_size.width,
+                info.pixel_w,
+            );
             images_to_display.push(ImageRequest {
                 image: img,
                 page: info.page_idx,
@@ -2230,9 +2283,9 @@ impl PdfReaderState {
                     y: img_area.y + info.screen_y_start,
                 },
                 location: DisplayLocation {
-                    x: u32::from(source_x_cells) * source_px_per_cell_x,
+                    x: sx,
                     y: source_start_px,
-                    width: u32::from(visible_source_w) * source_px_per_cell_x,
+                    width: sw,
                     height: visible_source_h_px,
                     columns: display_cols,
                     rows: info.display_rows,
