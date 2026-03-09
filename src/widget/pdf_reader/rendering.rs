@@ -1642,8 +1642,8 @@ impl PdfReaderState {
                     y: img_area.y + display_y_offset + page_y_offset,
                 },
                 location: {
-                    let actual_pw = pixel_w
-                        .unwrap_or(u32::from(cell_size.width) * source_px_per_cell_x);
+                    let actual_pw =
+                        pixel_w.unwrap_or(u32::from(cell_size.width) * source_px_per_cell_x);
                     let (sx, sw) = kitty_cell_range_to_pixels(
                         source_x_cells,
                         visible_source_w,
