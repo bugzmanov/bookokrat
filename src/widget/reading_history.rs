@@ -2,6 +2,7 @@ use crate::bookmarks::Bookmarks;
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use chrono::{DateTime, Local, TimeZone};
 use log::debug;
 use ratatui::{
@@ -224,17 +225,11 @@ impl ReadingHistory {
         }
         false
     }
+}
 
-    /// Check if the given coordinates are outside the popup area
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
+impl Popup for ReadingHistory {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 

@@ -558,7 +558,6 @@ impl MarkdownTextReader {
         }
         let scroll_amount = screen_height / 2;
         let max_line = self.raw_text_lines.len().saturating_sub(1);
-
         let mut new_line = (self.normal_mode.cursor.line + scroll_amount).min(max_line);
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
@@ -573,7 +572,6 @@ impl MarkdownTextReader {
             return;
         }
         let scroll_amount = screen_height / 2;
-
         let mut new_line = self.normal_mode.cursor.line.saturating_sub(scroll_amount);
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
@@ -587,12 +585,13 @@ impl MarkdownTextReader {
         if !self.normal_mode.active {
             return;
         }
+        let scroll_amount = screen_height - 1;
         let max_line = self.raw_text_lines.len().saturating_sub(1);
-
-        let mut new_line = (self.normal_mode.cursor.line + screen_height).min(max_line);
+        let mut new_line = (self.normal_mode.cursor.line + scroll_amount).min(max_line);
+        // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = (self.scroll_offset + screen_height).min(self.get_max_scroll_offset());
+        self.scroll_offset = (self.scroll_offset + scroll_amount).min(self.get_max_scroll_offset());
 
         self.clamp_column_to_line_length();
     }
@@ -601,11 +600,12 @@ impl MarkdownTextReader {
         if !self.normal_mode.active {
             return;
         }
-
-        let mut new_line = self.normal_mode.cursor.line.saturating_sub(screen_height);
+        let scroll_amount = screen_height - 1;
+        let mut new_line = self.normal_mode.cursor.line.saturating_sub(scroll_amount);
+        // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = self.scroll_offset.saturating_sub(screen_height);
+        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
 
         self.clamp_column_to_line_length();
     }

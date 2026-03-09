@@ -7,6 +7,8 @@ pub mod lookup_popup;
 pub mod navigation_panel;
 #[cfg(feature = "pdf")]
 pub mod pdf_reader;
+pub mod popup;
 pub mod reading_history;
 pub mod settings_popup;
 pub mod text_reader;
+pub mod theme_selector;

@@ -1,6 +1,7 @@
 use crate::inputs::KeySeq;
 use crate::search::{SearchMode, SearchState, find_matches_in_text};
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use codepage_437::{BorrowFromCp437, CP437_CONTROL};
 use ratatui::{
     Frame,
@@ -307,56 +308,32 @@ impl HelpPopup {
                 None
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize / 2).max(1)
-                } else {
-                    10
-                };
+                let page_size = (self.popup_height(10) / 2).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize / 2).max(1)
-                } else {
-                    10
-                };
+                let page_size = (self.popup_height(10) / 2).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
             KeyCode::PageDown => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_down(page_size);
                 None
             }
             KeyCode::PageUp => {
-                let page_size = if let Some(area) = self.last_popup_area {
-                    (area.height as usize).max(1)
-                } else {
-                    20
-                };
+                let page_size = (self.popup_height(20)).max(1) as usize;
                 self.scroll_page_up(page_size);
                 None
             }
@@ -383,17 +360,11 @@ impl HelpPopup {
             .saturating_sub(half_page)
             .min(self.total_lines.saturating_sub(1));
     }
+}
 
-    /// Check if the given coordinates are outside the popup area
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
+impl Popup for HelpPopup {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 

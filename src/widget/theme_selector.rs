@@ -3,6 +3,7 @@ use crate::main_app::VimNavMotions;
 use crate::theme::{
     all_theme_names, current_theme, current_theme_index, set_theme_by_index_and_save,
 };
+use crate::widget::popup::Popup;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -143,17 +144,6 @@ impl ThemeSelector {
         false
     }
 
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
-    }
-
     pub fn handle_key(
         &mut self,
         key: crossterm::event::KeyEvent,
@@ -212,6 +202,12 @@ impl ThemeSelector {
             }
             _ => None,
         }
+    }
+}
+
+impl Popup for ThemeSelector {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 

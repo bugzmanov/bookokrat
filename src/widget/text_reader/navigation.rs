@@ -59,17 +59,20 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
-        self.scroll_offset = self.scroll_offset.saturating_sub(screen_height);
+        let scroll_amount = screen_height - 1;
+        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
         self.highlight_visual_line = Some(0);
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
+        // Clear current match when manually scrolling so next 'n' finds from new position
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
             self.search_state.current_match_index = None;
         }
     }
 
     pub fn scroll_full_screen_down(&mut self, screen_height: usize) {
+        let scroll_amount = screen_height - 1;
         let max_offset = self.get_max_scroll_offset();
-        self.scroll_offset = (self.scroll_offset + screen_height).min(max_offset);
+        self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
         self.highlight_visual_line = Some(screen_height - 1);
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {

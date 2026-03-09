@@ -6,6 +6,7 @@ use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use anyhow::Result;
 use crossterm::event::KeyModifiers;
 use epub::doc::EpubDoc;
@@ -583,17 +584,11 @@ impl BookStat {
         }
         false
     }
+}
 
-    /// Check if the given coordinates are outside the popup area
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
+impl Popup for BookStat {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 
@@ -620,35 +615,23 @@ impl VimNavMotions for BookStat {
     }
 
     fn handle_ctrl_d(&mut self) {
-        // Move down half screen
-        let half_height = 10; // Approximate half of popup height
-        let current = self.list_state.selected().unwrap_or(0);
-        let max_pos = self.chapter_stats.len().saturating_sub(1);
-        let new_pos = (current + half_height).min(max_pos);
-        self.list_state.select(Some(new_pos));
+        let half_height = self.popup_height(10) / 2;
+        self.list_state.scroll_down_by(half_height);
     }
 
     fn handle_ctrl_u(&mut self) {
-        // Move up half screen
-        let half_height = 10; // Approximate half of popup height
-        let current = self.list_state.selected().unwrap_or(0);
-        let new_pos = current.saturating_sub(half_height);
-        self.list_state.select(Some(new_pos));
+        let half_height = self.popup_height(10) / 2;
+        self.list_state.scroll_up_by(half_height);
     }
 
     fn handle_ctrl_f(&mut self) {
-        let full_height = 20;
-        let current = self.list_state.selected().unwrap_or(0);
-        let max_pos = self.chapter_stats.len().saturating_sub(1);
-        let new_pos = (current + full_height).min(max_pos);
-        self.list_state.select(Some(new_pos));
+        self.list_state.scroll_down_by(self.popup_height(20));
+        *self.list_state.offset_mut() = self.list_state.selected().unwrap();
     }
 
     fn handle_ctrl_b(&mut self) {
-        let full_height = 20;
-        let current = self.list_state.selected().unwrap_or(0);
-        let new_pos = current.saturating_sub(full_height);
-        self.list_state.select(Some(new_pos));
+        self.list_state.scroll_up_by(self.popup_height(20));
+        *self.list_state.offset_mut() = self.list_state.selected().unwrap();
     }
 
     fn handle_gg(&mut self) {

@@ -24,6 +24,7 @@ use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
+use crate::widget::popup::Popup;
 use image::GenericImageView;
 use log::warn;
 
@@ -1567,19 +1568,19 @@ impl App {
     fn scroll_half_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_half_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     fn scroll_full_screen_down(&mut self, screen_height: usize) {
         self.text_reader.scroll_full_screen_down(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     fn scroll_full_screen_up(&mut self, screen_height: usize) {
         self.text_reader.scroll_full_screen_up(screen_height);
         self.save_bookmark();
-        self.update_toc_state();
+        self.update_toc_state(); // This will update active section
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -4790,6 +4791,11 @@ impl App {
             KeyCode::Char('n') if !self.is_in_search_mode() => {
                 if self.is_main_panel(MainPanel::Content) {
                     self.text_reader.toggle_normal_mode();
+                }
+            }
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(visible_height) = screen_height {
+                    self.scroll_full_screen_up(visible_height);
                 }
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {

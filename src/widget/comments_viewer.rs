@@ -6,6 +6,7 @@ use crate::markdown::Inline;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
+use crate::widget::popup::Popup;
 use epub::doc::EpubDoc;
 use ratatui::{
     Frame,
@@ -1845,17 +1846,6 @@ impl CommentsViewer {
         false
     }
 
-    pub fn is_outside_popup_area(&self, x: u16, y: u16) -> bool {
-        if let Some(popup_area) = self.last_popup_area {
-            x < popup_area.x
-                || x >= popup_area.x + popup_area.width
-                || y < popup_area.y
-                || y >= popup_area.y + popup_area.height
-        } else {
-            true
-        }
-    }
-
     pub fn selected_comment(&self) -> Option<&CommentEntry> {
         self.rendered_entries.get(self.selected_index)
     }
@@ -1950,6 +1940,12 @@ impl CommentsViewer {
         }
         self.selected_index = self.selected_index.saturating_sub(1);
         self.scroll_to_selected();
+    }
+}
+
+impl Popup for CommentsViewer {
+    fn get_last_popup_area(&self) -> Option<Rect> {
+        return self.last_popup_area;
     }
 }
 
