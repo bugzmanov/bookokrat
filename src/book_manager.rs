@@ -26,6 +26,8 @@ pub enum BookFormat {
     Html,
     #[cfg(feature = "pdf")]
     Pdf,
+    #[cfg(feature = "pdf")]
+    Djvu,
 }
 
 #[derive(Clone)]
@@ -94,6 +96,8 @@ impl BookManager {
                     "html" | "htm" => Some(BookFormat::Html),
                     #[cfg(feature = "pdf")]
                     "pdf" => Some(BookFormat::Pdf),
+                    #[cfg(feature = "pdf")]
+                    "djvu" | "djv" => Some(BookFormat::Djvu),
                     _ => None,
                 }?;
                 let path_str = path.to_str()?.to_string();
@@ -144,6 +148,8 @@ impl BookManager {
                 Some(BookFormat::Epub) => Some(BookFormat::Epub),
                 #[cfg(feature = "pdf")]
                 Some(BookFormat::Pdf) => Some(BookFormat::Pdf),
+                #[cfg(feature = "pdf")]
+                Some(BookFormat::Djvu) => Some(BookFormat::Djvu),
                 _ => None,
             };
 
@@ -622,6 +628,8 @@ impl BookManager {
                     match f {
                         #[cfg(feature = "pdf")]
                         BookFormat::Pdf => 0,
+                        #[cfg(feature = "pdf")]
+                        BookFormat::Djvu => 0,
                         BookFormat::Epub => 1,
                         BookFormat::Html => 2,
                     }
@@ -664,6 +672,8 @@ impl BookManager {
             "html" | "htm" => Some(BookFormat::Html),
             #[cfg(feature = "pdf")]
             "pdf" => Some(BookFormat::Pdf),
+            #[cfg(feature = "pdf")]
+            "djvu" | "djv" => Some(BookFormat::Djvu),
             _ => None,
         }
     }
@@ -675,6 +685,11 @@ impl BookManager {
     #[cfg(feature = "pdf")]
     pub fn is_pdf_file(&self, path: &str) -> bool {
         Self::detect_format(path) == Some(BookFormat::Pdf)
+    }
+
+    #[cfg(feature = "pdf")]
+    pub fn is_djvu_file(&self, path: &str) -> bool {
+        Self::detect_format(path) == Some(BookFormat::Djvu)
     }
 }
 

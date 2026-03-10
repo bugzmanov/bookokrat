@@ -17,10 +17,18 @@ pub struct CacheKey {
     pub area_width: u16,
     /// Viewport height
     pub area_height: u16,
+    /// Terminal cell width in pixels
+    pub cell_width: u16,
+    /// Terminal cell height in pixels
+    pub cell_height: u16,
     /// Scale factor (stored as millionths for stable hashing)
     pub scale_millionths: u32,
     /// Whether images are inverted
     pub invert_images: bool,
+    /// Foreground tint color
+    pub black: i32,
+    /// Background tint color
+    pub white: i32,
 }
 
 impl CacheKey {
@@ -31,8 +39,12 @@ impl CacheKey {
             page,
             area_width: params.area.width,
             area_height: params.area.height,
+            cell_width: params.cell_size.width,
+            cell_height: params.cell_size.height,
             scale_millionths: (params.scale * 1_000_000.0) as u32,
             invert_images: params.invert_images,
+            black: params.black,
+            white: params.white,
         }
     }
 }

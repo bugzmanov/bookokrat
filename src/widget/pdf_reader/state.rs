@@ -100,6 +100,14 @@ pub struct PageSearchMatch {
     pub length: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct ActiveSearchHighlight {
+    pub page: usize,
+    pub query: String,
+    pub line_index: Option<usize>,
+    pub line_y_bounds: Option<(f32, f32)>,
+}
+
 /// Page search state for vim-style / search in normal mode
 #[derive(Default)]
 pub struct PageSearchState {
@@ -346,8 +354,9 @@ pub struct PdfReaderState {
     pub kitty_visible_pages: HashSet<usize>,
     /// Whether Kitty delete-by-range is safe on this terminal
     pub kitty_delete_range_supported: bool,
-    /// Pending search highlight: (page, query) to apply when page data arrives
-    pub pending_search_highlight: Option<(usize, String)>,
+    /// Active PDF/DJVU search highlight to (re)apply when page data arrives
+    /// or rerenders after a geometry change.
+    pub pending_search_highlight: Option<ActiveSearchHighlight>,
     /// Transient HUD message for the bottom title area
     pub hud_message: Option<HudMessage>,
     /// Page search state for vim-style / search in normal mode
@@ -493,7 +502,7 @@ impl PdfReaderState {
         } else {
             "original"
         };
-        format!("PDF rendering: {rendering}. Images: {images}")
+        format!("PDF / DJVU rendering: {rendering}. Images: {images}")
     }
 
     pub fn set_doc_title(&mut self, title: Option<String>) {

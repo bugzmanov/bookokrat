@@ -10,6 +10,7 @@ use mupdf::Document;
 use super::TocEntry;
 use super::cache::{CacheKey, PageCache};
 use super::parsing::page_numbers;
+use super::parsing::toc::TocTarget;
 use super::request::{PageSelectionBounds, RenderRequest, RenderResponse, RequestId};
 use super::state::{Command, Effect, RenderState};
 use super::types::PageData;
@@ -119,6 +120,10 @@ impl RenderService {
     }
 
     fn load_document_info(doc_path: &Path) -> Option<DocumentInfo> {
+        if super::worker::is_djvu_path(doc_path) {
+            return Self::load_djvu_document_info(doc_path);
+        }
+
         let doc = Document::open(doc_path.to_string_lossy().as_ref()).ok()?;
         let page_count = doc.page_count().ok()? as usize;
 
@@ -139,6 +144,27 @@ impl RenderService {
             title,
             toc,
             page_number_samples,
+        })
+    }
+
+    fn load_djvu_document_info(doc_path: &Path) -> Option<DocumentInfo> {
+        let doc = rdjvu::Document::open(doc_path).ok()?;
+        let page_count = doc.page_count();
+
+        if page_count == 0 {
+            return None;
+        }
+
+        let toc = doc
+            .bookmarks()
+            .map(|bookmarks| flatten_djvu_bookmarks(&bookmarks, 0, page_count))
+            .unwrap_or_default();
+
+        Some(DocumentInfo {
+            page_count,
+            title: None,
+            toc,
+            page_number_samples: Vec::new(),
         })
     }
 
@@ -403,4 +429,55 @@ impl Drop for RenderService {
     fn drop(&mut self) {
         self.shutdown();
     }
+}
+
+fn flatten_djvu_bookmarks(
+    bookmarks: &[rdjvu::Bookmark],
+    level: usize,
+    page_count: usize,
+) -> Vec<TocEntry> {
+    let mut entries = Vec::new();
+
+    for bookmark in bookmarks {
+        let title = bookmark.title.trim();
+        if title.is_empty() {
+            continue;
+        }
+
+        entries.push(TocEntry {
+            title: title.to_string(),
+            level,
+            target: djvu_bookmark_target(&bookmark.url, page_count),
+        });
+
+        entries.extend(flatten_djvu_bookmarks(
+            &bookmark.children,
+            level + 1,
+            page_count,
+        ));
+    }
+
+    entries
+}
+
+fn djvu_bookmark_target(url: &str, page_count: usize) -> TocTarget {
+    let trimmed = url.trim();
+
+    let parse_page = |value: &str| {
+        value
+            .parse::<usize>()
+            .ok()
+            .and_then(|page| page.checked_sub(1))
+            .filter(|&page| page < page_count)
+    };
+
+    if let Some(page) = trimmed.strip_prefix('#').and_then(parse_page) {
+        return TocTarget::InternalPage(page);
+    }
+
+    if let Some(page) = parse_page(trimmed) {
+        return TocTarget::InternalPage(page);
+    }
+
+    TocTarget::External(trimmed.to_string())
 }

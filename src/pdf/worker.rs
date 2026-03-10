@@ -1,4 +1,4 @@
-//! PDF render worker - runs in separate thread(s)
+//! PDF/DjVu render worker - runs in separate thread(s)
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -15,9 +15,46 @@ use super::request::{
 };
 use super::types::{CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData};
 
+enum DocumentBackend {
+    Pdf(Document),
+    Djvu(rdjvu::Document),
+}
+
+pub(crate) fn is_djvu_path(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        let lower = e.to_lowercase();
+        lower == "djvu" || lower == "djv"
+    })
+}
+
 const TITLE_RGB: (u8, u8, u8) = (0x66, 0x99, 0xCC);
 const TITLE_LUMA_DARK_MAX: u8 = 90;
 const TITLE_LUMA_LIGHT_MIN: u8 = 180;
+const DJVU_INTERNAL_RENDER_SCALE: u32 = 1;
+
+fn align_raster_to_cells(
+    page_bounds: (f32, f32),
+    mag: f32,
+    cell_dims: (f32, f32),
+) -> (f32, f32, f32) {
+    let (page_width, page_height) = page_bounds;
+    let (cell_width, cell_height) = cell_dims;
+
+    // Snap the raster to whole terminal cells without changing the page aspect
+    // ratio. Distorting the page at this stage makes text strokes look uneven.
+    let width_cells = ((page_width * mag) / cell_width).floor().max(1.0);
+    let height_cells = ((page_height * mag) / cell_height).floor().max(1.0);
+
+    let width_mag = (width_cells * cell_width) / page_width;
+    let height_mag = (height_cells * cell_height) / page_height;
+    let aligned_mag = width_mag.min(height_mag);
+
+    let output_width = (((page_width * aligned_mag) / cell_width).floor().max(1.0)) * cell_width;
+    let output_height =
+        (((page_height * aligned_mag) / cell_height).floor().max(1.0)) * cell_height;
+
+    (aligned_mag, output_width, output_height)
+}
 
 /// Pre-computed rasterization parameters for a page
 struct RasterSpec {
@@ -36,8 +73,6 @@ impl RasterSpec {
     ) -> Self {
         let (page_width, page_height) = page_bounds;
         let (view_width, view_height) = viewport_px;
-        let (cell_width, cell_height) = cell_dims;
-
         let base_mag = if page_width / page_height > view_width / view_height {
             view_height / page_height
         } else {
@@ -45,31 +80,20 @@ impl RasterSpec {
         };
 
         let mut mag = base_mag * user_scale;
-        let mut out_width = page_width * mag;
-        let mut out_height = page_height * mag;
+        let out_width = page_width * mag;
+        let out_height = page_height * mag;
 
         let max_dim = out_width.max(out_height);
         if max_dim > KITTY_MAX_DIMENSION {
             let reduction = KITTY_MAX_DIMENSION / max_dim;
             mag *= reduction;
-            out_width *= reduction;
-            out_height *= reduction;
         }
 
-        // Align output dimensions to cell boundaries for Resize::None optimization
-        // This ensures tiles don't need resizing, significantly improving scroll performance
-        let aligned_width = (out_width / cell_width).floor() * cell_width;
-        let aligned_height = (out_height / cell_height).ceil() * cell_height;
-
-        // Adjust magnification to match the aligned dimensions
-        let align_scale_width = aligned_width / out_width;
-        let align_scale_height = aligned_height / out_height;
-        let align_scale = align_scale_width.min(align_scale_height);
-        mag *= align_scale;
+        let (mag, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
 
         Self {
-            output_width: aligned_width,
-            output_height: aligned_height,
+            output_width,
+            output_height,
             transform: Matrix::new_scale(mag, mag),
             mag,
         }
@@ -273,14 +297,27 @@ pub fn render_worker(
     responses: Sender<RenderResponse>,
     cache: Arc<Mutex<PageCache>>,
 ) {
-    let doc = match Document::open(doc_path.to_string_lossy().as_ref()) {
-        Ok(d) => d,
-        Err(e) => {
-            let _ = responses.send(RenderResponse::Error {
-                id: RequestId::new(0),
-                error: WorkerFault::Pdf(e),
-            });
-            return;
+    let backend = if is_djvu_path(doc_path) {
+        match rdjvu::Document::open(doc_path) {
+            Ok(d) => DocumentBackend::Djvu(d),
+            Err(e) => {
+                let _ = responses.send(RenderResponse::Error {
+                    id: RequestId::new(0),
+                    error: WorkerFault::generic(format!("DjVu: {e}")),
+                });
+                return;
+            }
+        }
+    } else {
+        match Document::open(doc_path.to_string_lossy().as_ref()) {
+            Ok(d) => DocumentBackend::Pdf(d),
+            Err(e) => {
+                let _ = responses.send(RenderResponse::Error {
+                    id: RequestId::new(0),
+                    error: WorkerFault::Pdf(e),
+                });
+                return;
+            }
         }
     };
 
@@ -288,11 +325,14 @@ pub fn render_worker(
         match request {
             RenderRequest::Page { id, page, params }
             | RenderRequest::Prefetch { id, page, params } => {
-                handle_page_request(&doc, id, page, &params, &cache, &responses);
+                handle_page_request_backend(&backend, id, page, &params, &cache, &responses);
             }
 
             RenderRequest::ExtractText { id, bounds, params } => {
-                let text = extract_text(&doc, &bounds, &params);
+                let text = match &backend {
+                    DocumentBackend::Pdf(doc) => extract_text(doc, &bounds, &params),
+                    DocumentBackend::Djvu(_) => String::new(),
+                };
                 let _ = responses.send(RenderResponse::ExtractedText { id, text });
             }
 
@@ -301,6 +341,24 @@ pub fn render_worker(
             }
 
             RenderRequest::Shutdown => break,
+        }
+    }
+}
+
+fn handle_page_request_backend(
+    backend: &DocumentBackend,
+    id: RequestId,
+    page_num: usize,
+    params: &RenderParams,
+    cache: &Arc<Mutex<PageCache>>,
+    responses: &Sender<RenderResponse>,
+) {
+    match backend {
+        DocumentBackend::Pdf(doc) => {
+            handle_page_request(doc, id, page_num, params, cache, responses);
+        }
+        DocumentBackend::Djvu(doc) => {
+            handle_djvu_page_request(doc, id, page_num, params, cache, responses);
         }
     }
 }
@@ -1107,4 +1165,467 @@ fn extract_text(
     }
 
     text.trim().to_string()
+}
+
+// ============================================================
+// DjVu rendering
+// ============================================================
+
+fn handle_djvu_page_request(
+    doc: &rdjvu::Document,
+    id: RequestId,
+    page_num: usize,
+    params: &RenderParams,
+    cache: &Arc<Mutex<PageCache>>,
+    responses: &Sender<RenderResponse>,
+) {
+    let key = CacheKey::from_params(page_num, params);
+
+    let cached = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&key);
+    if let Some(cached) = cached {
+        let _ = responses.send(RenderResponse::Page {
+            id,
+            page: page_num,
+            data: Arc::clone(&cached),
+        });
+        return;
+    }
+
+    match render_djvu_page(doc, page_num, params) {
+        Ok(data) => {
+            let cached = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(key, data);
+            let _ = responses.send(RenderResponse::Page {
+                id,
+                page: page_num,
+                data: Arc::clone(&cached),
+            });
+        }
+        Err(e) => {
+            let _ = responses.send(RenderResponse::Error { id, error: e });
+        }
+    }
+}
+
+fn render_djvu_page(
+    doc: &rdjvu::Document,
+    page_num: usize,
+    params: &RenderParams,
+) -> Result<PageData, WorkerFault> {
+    let page = doc
+        .page(page_num)
+        .map_err(|e| WorkerFault::generic(format!("DjVu page {page_num}: {e}")))?;
+
+    let viewport_px = (
+        f32::from(params.area.width) * f32::from(params.cell_size.width),
+        f32::from(params.area.height) * f32::from(params.cell_size.height),
+    );
+
+    let page_width = page.display_width() as f32;
+    let page_height = page.display_height() as f32;
+    let page_bounds = (page_width, page_height);
+    let cell_dims = (
+        f32::from(params.cell_size.width),
+        f32::from(params.cell_size.height),
+    );
+
+    let spec = DjvuRasterSpec::compute(page_bounds, viewport_px, params.scale, cell_dims);
+
+    let output_w = spec.output_width as u32;
+    let output_h = spec.output_height as u32;
+    let target_w = output_w
+        .saturating_mul(DJVU_INTERNAL_RENDER_SCALE)
+        .min(page.display_width().max(output_w));
+    let target_h = output_h
+        .saturating_mul(DJVU_INTERNAL_RENDER_SCALE)
+        .min(page.display_height().max(output_h));
+
+    let themed_rendering = params.black >= 0 && params.white >= 0;
+
+    let (mut pixels, width_px, height_px) =
+        render_djvu_page_rgb(&page, page_num, target_w, target_h, themed_rendering)?;
+    if themed_rendering {
+        djvu_tint_rgb(&mut pixels, params.white, params.black);
+    }
+
+    let actual_scale_x = if page_width > 0.0 {
+        width_px as f32 / page_width
+    } else {
+        1.0
+    };
+    let actual_scale_y = if page_height > 0.0 {
+        height_px as f32 / page_height
+    } else {
+        1.0
+    };
+    let actual_scale = (actual_scale_x + actual_scale_y) * 0.5;
+
+    Ok(PageData {
+        img_data: ImageData {
+            pixels,
+            width_px,
+            height_px,
+            width_cell: (spec.output_width / f32::from(params.cell_size.width)) as u16,
+            height_cell: (spec.output_height / f32::from(params.cell_size.height)) as u16,
+        },
+        page_num,
+        scale_factor: actual_scale,
+        requested_scale: params.scale,
+        render_area_width_cells: params.area.width,
+        render_area_height_cells: params.area.height,
+        line_bounds: extract_djvu_line_bounds_with_scales(
+            &page,
+            page_height,
+            actual_scale_x,
+            actual_scale_y,
+        ),
+        link_rects: Vec::new(),
+        page_height_px: height_px as f32,
+    })
+}
+
+fn render_djvu_page_rgb(
+    page: &rdjvu::Page<'_>,
+    page_num: usize,
+    target_w: u32,
+    target_h: u32,
+    themed: bool,
+) -> Result<(Vec<u8>, u32, u32), WorkerFault> {
+    let native_w = page.display_width();
+    let native_h = page.display_height();
+
+    // Normal (white bg): strong boldness to counteract perceptual thinning of
+    // dark strokes on bright backgrounds.  Themed/inverted: no boost needed —
+    // light-on-dark text already appears at correct weight.
+    let boldness = if themed { 0.0 } else { 3.0 };
+
+    let pixmap = if target_w >= native_w && target_h >= native_h {
+        page.render()
+    } else {
+        page.render_aa(target_w, target_h, boldness)
+    }
+    .map_err(|e| WorkerFault::generic(format!("DjVu render page {page_num}: {e}")))?;
+
+    Ok((djvu_pixmap_to_rgb(&pixmap), pixmap.width, pixmap.height))
+}
+
+/// Tint RGB pixel data, matching MuPDF `pixmap.tint(black, white)` semantics:
+/// original black pixels → `black` color, original white pixels → `white` color.
+/// Called as `tint(params.white, params.black)` — so foreground replaces black,
+/// background replaces white.
+fn djvu_tint_rgb(pixels: &mut [u8], black: i32, white: i32) {
+    let br = ((black >> 16) & 0xFF) as i32;
+    let bg = ((black >> 8) & 0xFF) as i32;
+    let bb = (black & 0xFF) as i32;
+    let wr = ((white >> 16) & 0xFF) as i32;
+    let wg = ((white >> 8) & 0xFF) as i32;
+    let wb = (white & 0xFF) as i32;
+
+    for px in pixels.chunks_exact_mut(3) {
+        let r = px[0] as i32;
+        let g = px[1] as i32;
+        let b = px[2] as i32;
+        let luma = (r * 77 + g * 150 + b * 29) >> 8;
+
+        px[0] = (br + (wr - br) * luma / 255) as u8;
+        px[1] = (bg + (wg - bg) * luma / 255) as u8;
+        px[2] = (bb + (wb - bb) * luma / 255) as u8;
+    }
+}
+
+fn djvu_pixmap_to_rgb(pixmap: &rdjvu::Pixmap) -> Vec<u8> {
+    let pixel_count = pixmap.width as usize * pixmap.height as usize;
+    let mut out = Vec::with_capacity(pixel_count * 3);
+    for i in 0..pixel_count {
+        let base = i * 4;
+        out.push(pixmap.data[base]);
+        out.push(pixmap.data[base + 1]);
+        out.push(pixmap.data[base + 2]);
+    }
+    out
+}
+
+pub(crate) fn extract_djvu_line_bounds(
+    page: &rdjvu::Page<'_>,
+    page_height: f32,
+    scale: f32,
+) -> Vec<LineBounds> {
+    extract_djvu_line_bounds_with_scales(page, page_height, scale, scale)
+}
+
+fn extract_djvu_line_bounds_with_scales(
+    page: &rdjvu::Page<'_>,
+    page_height: f32,
+    scale_x: f32,
+    scale_y: f32,
+) -> Vec<LineBounds> {
+    use rdjvu::TextZoneKind;
+
+    let text_layer = match page.text_layer() {
+        Ok(Some(tl)) => tl,
+        _ => return Vec::new(),
+    };
+
+    let Some(ref root) = text_layer.root else {
+        return Vec::new();
+    };
+
+    let mut bounds = Vec::new();
+
+    #[derive(Debug)]
+    struct DjvuTextSegment {
+        x0: f32,
+        x1: f32,
+        visible_start: usize,
+        visible_end: usize,
+        text: String,
+    }
+
+    fn next_block_id(next_id: &mut usize) -> usize {
+        let id = *next_id;
+        *next_id += 1;
+        id
+    }
+
+    fn push_chars_evenly(chars: &mut Vec<CharInfo>, x0: f32, x1: f32, text: &str) {
+        let char_count = text.chars().count();
+        if char_count == 0 {
+            return;
+        }
+        let width = (x1 - x0).max(0.0);
+        for (i, c) in text.chars().enumerate() {
+            chars.push(CharInfo {
+                x: x0 + width * i as f32 / char_count as f32,
+                c,
+            });
+        }
+    }
+
+    fn push_gap_chars(chars: &mut Vec<CharInfo>, gap_text: &str, gap_start: f32, gap_end: f32) {
+        let gap_chars: Vec<char> = gap_text
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect();
+        let char_count = gap_chars.len();
+        if char_count == 0 {
+            return;
+        }
+        let width = (gap_end - gap_start).max(0.0);
+        for (i, c) in gap_chars.into_iter().enumerate() {
+            chars.push(CharInfo {
+                x: gap_start + width * (i as f32 + 0.5) / char_count as f32,
+                c,
+            });
+        }
+    }
+
+    fn collect_text_segments(
+        tl: &rdjvu::TextLayer,
+        zone: &rdjvu::TextZone,
+        segments: &mut Vec<DjvuTextSegment>,
+        scale_x: f32,
+    ) -> bool {
+        match zone.kind {
+            TextZoneKind::Character => {
+                let raw_text = tl.zone_text(zone);
+                if raw_text.is_empty() || raw_text.chars().all(char::is_whitespace) {
+                    return false;
+                }
+                segments.push(DjvuTextSegment {
+                    x0: zone.x as f32 * scale_x,
+                    x1: (zone.x + zone.width) as f32 * scale_x,
+                    visible_start: zone.text_start,
+                    visible_end: zone.text_start + raw_text.len(),
+                    text: raw_text.to_string(),
+                });
+                true
+            }
+            TextZoneKind::Word => {
+                let mut found_child_segments = false;
+                for child in &zone.children {
+                    found_child_segments |= collect_text_segments(tl, child, segments, scale_x);
+                }
+                if found_child_segments {
+                    return true;
+                }
+
+                let raw_text = tl.zone_text(zone);
+                let visible_text = raw_text.trim();
+                if visible_text.is_empty() {
+                    return false;
+                }
+
+                let leading_trim = raw_text.len() - raw_text.trim_start().len();
+                let trailing_trim = raw_text.len() - raw_text.trim_end().len();
+                segments.push(DjvuTextSegment {
+                    x0: zone.x as f32 * scale_x,
+                    x1: (zone.x + zone.width) as f32 * scale_x,
+                    visible_start: zone.text_start + leading_trim,
+                    visible_end: zone.text_start + raw_text.len() - trailing_trim,
+                    text: visible_text.to_string(),
+                });
+                true
+            }
+            _ => {
+                let mut found = false;
+                for child in &zone.children {
+                    found |= collect_text_segments(tl, child, segments, scale_x);
+                }
+                found
+            }
+        }
+    }
+
+    fn collect_line_chars(
+        tl: &rdjvu::TextLayer,
+        line: &rdjvu::TextZone,
+        scale_x: f32,
+    ) -> Vec<CharInfo> {
+        let mut segments = Vec::new();
+        collect_text_segments(tl, line, &mut segments, scale_x);
+        if segments.is_empty() {
+            return Vec::new();
+        }
+
+        segments.sort_by_key(|segment| segment.visible_start);
+
+        let mut chars = Vec::new();
+        let mut prev_text_end = line.text_start;
+        let mut prev_x1: Option<f32> = None;
+
+        for segment in segments {
+            if let Some(prev_x1) = prev_x1 {
+                if prev_text_end < segment.visible_start
+                    && tl.text.is_char_boundary(prev_text_end)
+                    && tl.text.is_char_boundary(segment.visible_start)
+                {
+                    push_gap_chars(
+                        &mut chars,
+                        &tl.text[prev_text_end..segment.visible_start],
+                        prev_x1,
+                        segment.x0,
+                    );
+                }
+            }
+
+            push_chars_evenly(&mut chars, segment.x0, segment.x1, &segment.text);
+            prev_text_end = segment.visible_end;
+            prev_x1 = Some(segment.x1);
+        }
+
+        chars
+    }
+
+    fn collect(
+        tl: &rdjvu::TextLayer,
+        zone: &rdjvu::TextZone,
+        bounds: &mut Vec<LineBounds>,
+        page_h: f32,
+        scale_x: f32,
+        scale_y: f32,
+        current_block_id: Option<usize>,
+        next_id: &mut usize,
+    ) {
+        let current_block_id = match zone.kind {
+            TextZoneKind::Paragraph => Some(next_block_id(next_id)),
+            TextZoneKind::Column | TextZoneKind::Region if current_block_id.is_none() => {
+                Some(next_block_id(next_id))
+            }
+            _ => current_block_id,
+        };
+
+        if zone.kind == TextZoneKind::Line {
+            // Convert bottom-left origin to top-left origin, then scale
+            let y0 = (page_h - (zone.y + zone.height) as f32) * scale_y;
+            let y1 = (page_h - zone.y as f32) * scale_y;
+            let x0 = zone.x as f32 * scale_x;
+            let x1 = (zone.x + zone.width) as f32 * scale_x;
+
+            let chars = collect_line_chars(tl, zone, scale_x);
+
+            if !chars.is_empty() {
+                let block_id = current_block_id.unwrap_or_else(|| next_block_id(next_id));
+                bounds.push(LineBounds {
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    chars,
+                    block_id,
+                });
+            }
+            return;
+        }
+
+        for child in &zone.children {
+            collect(
+                tl,
+                child,
+                bounds,
+                page_h,
+                scale_x,
+                scale_y,
+                current_block_id,
+                next_id,
+            );
+        }
+    }
+
+    let mut next_id = 0;
+    collect(
+        &text_layer,
+        root,
+        &mut bounds,
+        page_height,
+        scale_x,
+        scale_y,
+        None,
+        &mut next_id,
+    );
+    bounds
+}
+
+struct DjvuRasterSpec {
+    output_width: f32,
+    output_height: f32,
+}
+
+impl DjvuRasterSpec {
+    fn compute(
+        page_bounds: (f32, f32),
+        viewport_px: (f32, f32),
+        user_scale: f32,
+        cell_dims: (f32, f32),
+    ) -> Self {
+        let (page_width, page_height) = page_bounds;
+        let (view_width, view_height) = viewport_px;
+        let base_mag = if page_width / page_height > view_width / view_height {
+            view_height / page_height
+        } else {
+            view_width / page_width
+        };
+
+        let mut mag = base_mag * user_scale;
+        let out_width = page_width * mag;
+        let out_height = page_height * mag;
+
+        let max_dim = out_width.max(out_height);
+        if max_dim > KITTY_MAX_DIMENSION {
+            let reduction = KITTY_MAX_DIMENSION / max_dim;
+            mag *= reduction;
+        }
+
+        let (_, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
+
+        Self {
+            output_width,
+            output_height,
+        }
+    }
 }

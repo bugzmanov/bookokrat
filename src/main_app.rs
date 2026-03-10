@@ -719,6 +719,10 @@ impl App {
             BookFormat::Pdf => {
                 self.load_pdf(&path_owned, self.test_mode)?;
             }
+            #[cfg(feature = "pdf")]
+            BookFormat::Djvu => {
+                self.load_pdf(&path_owned, self.test_mode)?;
+            }
             BookFormat::Epub | BookFormat::Html => {
                 self.load_epub(&path_owned, self.test_mode)?;
             }
@@ -5222,13 +5226,10 @@ impl App {
         self.book_search = Some(BookSearch::new(search_engine));
     }
 
-    /// Initialize search engine for PDF documents
-    /// This extracts text from all PDF pages and indexes them for search
+    /// Initialize search engine for PDF/DJVU documents
+    /// This extracts text from all pages and indexes them for search
     #[cfg(feature = "pdf")]
     fn initialize_pdf_search_engine(&mut self) {
-        use mupdf::text_page::TextBlockType;
-        use mupdf::{Document, TextPageFlags};
-
         let Some(ref doc_path) = self.pdf_document_path else {
             error!("Cannot initialize PDF search - no document path");
             return;
@@ -5236,11 +5237,33 @@ impl App {
 
         info!("Initializing PDF search engine for {doc_path:?}");
 
+        let pages = if crate::pdf::is_djvu_path(doc_path) {
+            self.extract_djvu_search_pages(doc_path)
+        } else {
+            self.extract_pdf_search_pages(doc_path)
+        };
+
+        info!("PDF search indexed {} pages", pages.len());
+
+        let mut search_engine = SearchEngine::new();
+        search_engine.process_pdf_pages(pages);
+
+        self.book_search = Some(BookSearch::new(search_engine));
+    }
+
+    #[cfg(feature = "pdf")]
+    fn extract_pdf_search_pages(
+        &self,
+        doc_path: &std::path::Path,
+    ) -> Vec<(usize, Vec<SearchLine>)> {
+        use mupdf::text_page::TextBlockType;
+        use mupdf::{Document, TextPageFlags};
+
         let doc = match Document::open(doc_path.to_string_lossy().as_ref()) {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to open PDF document for search: {e}");
-                return;
+                return Vec::new();
             }
         };
 
@@ -5282,12 +5305,77 @@ impl App {
             pages.push((page_num, lines));
         }
 
-        info!("PDF search indexed {} pages", pages.len());
+        pages
+    }
 
-        let mut search_engine = SearchEngine::new();
-        search_engine.process_pdf_pages(pages);
+    #[cfg(feature = "pdf")]
+    fn extract_djvu_search_pages(
+        &self,
+        doc_path: &std::path::Path,
+    ) -> Vec<(usize, Vec<SearchLine>)> {
+        let doc = match rdjvu::Document::open(doc_path) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to open DJVU document for search: {e}");
+                return Vec::new();
+            }
+        };
 
-        self.book_search = Some(BookSearch::new(search_engine));
+        let page_count = doc.page_count();
+        let mut pages = Vec::with_capacity(page_count);
+
+        for page_num in 0..page_count {
+            let Ok(page) = doc.page(page_num) else {
+                continue;
+            };
+
+            let mut lines: Vec<SearchLine> =
+                crate::pdf::extract_djvu_line_bounds(&page, page.display_height() as f32, 1.0)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(line_idx, line)| {
+                        let text: String = line.chars.iter().map(|ch| ch.c).collect();
+                        if text.trim().is_empty() {
+                            return None;
+                        }
+                        Some(SearchLine {
+                            text,
+                            node_index: line_idx,
+                            y_bounds: Some((line.y0, line.y1)),
+                        })
+                    })
+                    .collect();
+
+            if lines.is_empty() {
+                match page.text_layer() {
+                    Ok(Some(text_layer)) => {
+                        lines = text_layer
+                            .text
+                            .lines()
+                            .enumerate()
+                            .filter_map(|(line_idx, line)| {
+                                if line.trim().is_empty() {
+                                    return None;
+                                }
+                                Some(SearchLine {
+                                    text: line.trim_end().to_string(),
+                                    node_index: line_idx,
+                                    y_bounds: None,
+                                })
+                            })
+                            .collect();
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!("Failed to extract text layer for DJVU page {page_num}: {e}");
+                    }
+                }
+            }
+
+            pages.push((page_num, lines));
+        }
+
+        pages
     }
 
     fn open_book_search(&mut self, clear_input: bool) {
@@ -5439,8 +5527,8 @@ impl App {
     fn jump_to_pdf_search_result(
         &mut self,
         page_index: usize,
-        _line_index: usize,
-        _line_y_bounds: (f32, f32),
+        line_index: usize,
+        line_y_bounds: (f32, f32),
         query: &str,
     ) {
         let toc_height = self.get_navigation_panel_area().height as usize;
@@ -5449,7 +5537,12 @@ impl App {
         };
 
         // Use the jump_to_search_result method which handles navigation + selection
-        let action = pdf_reader.jump_to_search_result(page_index, query);
+        let action = pdf_reader.jump_to_search_result(
+            page_index,
+            query,
+            Some(line_index),
+            Some(line_y_bounds),
+        );
 
         // Process the resulting action using apply_input_action
         let _outcome = pdf_reader.apply_input_action(

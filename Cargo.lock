@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "bookokrat"
-version = "0.3.7"
+version = "0.3.8"
 dependencies = [
  "anstyle",
  "anstyle-svg",
@@ -361,6 +361,7 @@ dependencies = [
  "codepage-437",
  "crossterm",
  "dirs 5.0.1",
+ "djvu",
  "epub",
  "fast_image_resize",
  "flate2",
@@ -941,6 +942,15 @@ checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.10.0",
  "objc2",
+]
+
+[[package]]
+name = "djvu"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b61586a33f85858095c659ce3a5c810adca1f14f023939df847a765b4d07bc8"
+dependencies = [
+ "self_cell",
 ]
 
 [[package]]
@@ -3109,6 +3119,12 @@ name = "sdd"
 version = "3.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
+
+[[package]]
+name = "self_cell"
+version = "1.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b12e76d157a900eb52e81bc6e9f3069344290341720e9178cde2407113ac8d89"
 
 [[package]]
 name = "semver"

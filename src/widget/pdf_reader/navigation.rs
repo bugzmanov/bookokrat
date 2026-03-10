@@ -21,7 +21,9 @@ use crate::pdf::{
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
 
-use super::state::{CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT};
+use super::state::{
+    ActiveSearchHighlight, CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT,
+};
 use super::types::{PageJumpMode, PendingScroll};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
 use crate::settings::{
@@ -181,6 +183,9 @@ impl PdfReaderState {
 
             if let Some(tx) = conversion_tx {
                 let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
+                if self.pending_search_highlight.is_some() {
+                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+                }
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
                 if let Some(rects) = comment_rects_to_send {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
@@ -215,6 +220,9 @@ impl PdfReaderState {
 
             if let Some(tx) = conversion_tx {
                 let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
+                if self.pending_search_highlight.is_some() {
+                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+                }
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
                 if let Some(rects) = comment_rects_to_send {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
@@ -765,7 +773,13 @@ impl PdfReaderState {
     }
 
     /// Jump to a search result, navigating to the page and selecting the exact match
-    pub fn jump_to_search_result(&mut self, page: usize, query: &str) -> InputAction {
+    pub fn jump_to_search_result(
+        &mut self,
+        page: usize,
+        query: &str,
+        line_index: Option<usize>,
+        line_y_bounds: Option<(f32, f32)>,
+    ) -> InputAction {
         self.page = page;
         self.last_render.rect = Rect::default();
         if self.is_kitty {
@@ -783,12 +797,14 @@ impl PdfReaderState {
         // Find the exact match in the page's line_bounds
         let selection_rects = self.find_text_selection_rects(page, query);
 
-        // If no rects found (page data not yet available), store as pending
-        if selection_rects.is_empty() {
-            self.pending_search_highlight = Some((page, query.to_string()));
-        } else {
-            self.pending_search_highlight = None;
-        }
+        // Keep the semantic search target so the highlight can be recomputed
+        // after zen / zoom / viewport-triggered rerenders.
+        self.pending_search_highlight = Some(ActiveSearchHighlight {
+            page,
+            query: query.to_string(),
+            line_index,
+            line_y_bounds,
+        });
 
         InputAction::CommentNavJump {
             page,
@@ -804,8 +820,6 @@ impl PdfReaderState {
         page: usize,
         query: &str,
     ) -> Vec<crate::pdf::SelectionRect> {
-        use crate::pdf::SelectionRect;
-
         let Some(rendered) = self.rendered.get(page) else {
             return Vec::new();
         };
@@ -819,50 +833,148 @@ impl PdfReaderState {
         let mut rects = Vec::new();
 
         for line in &rendered.line_bounds {
-            // Build the line text as characters (lowercased for comparison)
-            let line_chars: Vec<char> = line.chars.iter().map(|c| c.c).collect();
-            let line_lower: Vec<char> = line_chars.iter().flat_map(|c| c.to_lowercase()).collect();
+            rects.extend(Self::selection_rects_for_query_in_line(
+                page,
+                line,
+                &query_lower,
+                query_len,
+            ));
+        }
 
-            // Find all occurrences of the query in this line (character-based search)
-            let mut search_start = 0;
-            while search_start + query_len <= line_lower.len() {
-                // Check if query matches at this position
-                let matches = line_lower[search_start..search_start + query_len]
-                    .iter()
-                    .zip(query_lower.iter())
-                    .all(|(a, b)| a == b);
+        rects
+    }
 
-                if matches {
-                    let abs_start = search_start;
-                    let abs_end = search_start + query_len;
+    pub fn find_active_search_highlight_rects(
+        &self,
+        highlight: &ActiveSearchHighlight,
+    ) -> Vec<crate::pdf::SelectionRect> {
+        let rects = self.find_text_selection_rects(highlight.page, &highlight.query);
+        if !rects.is_empty() {
+            return rects;
+        }
 
-                    // Get character positions for the match
-                    if abs_start < line.chars.len() && abs_end <= line.chars.len() {
-                        let start_x = line.chars[abs_start].x;
-                        // For end x, use next char's x or line's x1
-                        let end_x = if abs_end < line.chars.len() {
-                            line.chars[abs_end].x
-                        } else {
-                            line.x1
-                        };
+        self.find_search_selection_rects_fallback(highlight)
+    }
 
-                        rects.push(SelectionRect {
-                            page,
-                            topleft_x: start_x.round() as u32,
-                            topleft_y: line.y0.round() as u32,
-                            bottomright_x: end_x.round() as u32,
-                            bottomright_y: line.y1.round() as u32,
-                        });
-                    }
+    fn selection_rects_for_query_in_line(
+        page: usize,
+        line: &crate::pdf::LineBounds,
+        query_lower: &[char],
+        query_len: usize,
+    ) -> Vec<crate::pdf::SelectionRect> {
+        use crate::pdf::SelectionRect;
 
-                    search_start = abs_start + 1;
-                } else {
-                    search_start += 1;
+        if query_len == 0 || line.chars.is_empty() {
+            return Vec::new();
+        }
+
+        let line_chars: Vec<char> = line.chars.iter().map(|c| c.c).collect();
+        let line_lower: Vec<char> = line_chars.iter().flat_map(|c| c.to_lowercase()).collect();
+        let mut rects = Vec::new();
+
+        let mut search_start = 0;
+        while search_start + query_len <= line_lower.len() {
+            let matches = line_lower[search_start..search_start + query_len]
+                .iter()
+                .zip(query_lower.iter())
+                .all(|(a, b)| a == b);
+
+            if matches {
+                let abs_start = search_start;
+                let abs_end = search_start + query_len;
+
+                if abs_start < line.chars.len() && abs_end <= line.chars.len() {
+                    let start_x = line.chars[abs_start].x;
+                    let end_x = if abs_end < line.chars.len() {
+                        line.chars[abs_end].x
+                    } else {
+                        line.x1
+                    };
+
+                    rects.push(SelectionRect {
+                        page,
+                        topleft_x: start_x.round() as u32,
+                        topleft_y: line.y0.round() as u32,
+                        bottomright_x: end_x.round() as u32,
+                        bottomright_y: line.y1.round() as u32,
+                    });
                 }
+
+                search_start = abs_start + 1;
+            } else {
+                search_start += 1;
             }
         }
 
         rects
+    }
+
+    fn find_search_selection_rects_fallback(
+        &self,
+        highlight: &ActiveSearchHighlight,
+    ) -> Vec<crate::pdf::SelectionRect> {
+        use crate::pdf::SelectionRect;
+
+        let Some(rendered) = self.rendered.get(highlight.page) else {
+            return Vec::new();
+        };
+
+        if rendered.line_bounds.is_empty() {
+            return Vec::new();
+        }
+
+        let candidate_idx = highlight
+            .line_index
+            .filter(|&idx| idx < rendered.line_bounds.len())
+            .or_else(|| {
+                let (target_y0, target_y1) = highlight.line_y_bounds?;
+                let scale = rendered.scale_factor.unwrap_or(1.0);
+                let scaled_y0 = target_y0 * scale;
+                let scaled_y1 = target_y1 * scale;
+                let target_center = (scaled_y0 + scaled_y1) / 2.0;
+
+                let mut best_idx = None;
+                let mut best_overlap = -1.0f32;
+                let mut best_dist = f32::MAX;
+
+                for (idx, line) in rendered.line_bounds.iter().enumerate() {
+                    let overlap = (line.y1.min(scaled_y1) - line.y0.max(scaled_y0)).max(0.0);
+                    let center = (line.y0 + line.y1) / 2.0;
+                    let dist = (center - target_center).abs();
+
+                    if overlap > best_overlap
+                        || ((overlap - best_overlap).abs() < f32::EPSILON && dist < best_dist)
+                    {
+                        best_idx = Some(idx);
+                        best_overlap = overlap;
+                        best_dist = dist;
+                    }
+                }
+
+                best_idx
+            });
+
+        let Some(line_idx) = candidate_idx else {
+            return Vec::new();
+        };
+
+        let line = &rendered.line_bounds[line_idx];
+        let query_lower: Vec<char> = highlight.query.to_lowercase().chars().collect();
+        let query_len = query_lower.len();
+
+        let rects =
+            Self::selection_rects_for_query_in_line(highlight.page, line, &query_lower, query_len);
+        if !rects.is_empty() {
+            return rects;
+        }
+
+        vec![SelectionRect {
+            page: highlight.page,
+            topleft_x: line.x0.round() as u32,
+            topleft_y: line.y0.round() as u32,
+            bottomright_x: line.x1.round() as u32,
+            bottomright_y: line.y1.round() as u32,
+        }]
     }
 
     fn calculate_page_offset(&self, target_page: usize) -> u32 {
@@ -3721,7 +3833,7 @@ impl PdfReaderState {
         } else {
             // Normal/visual mode requires actual Kitty terminal, not just Kitty protocol
             if self.is_iterm {
-                self.set_error_hud("PDF normal mode is not supported in iTerm".to_string());
+                self.set_error_hud("PDF / DJVU normal mode is not supported in iTerm".to_string());
                 return Some(InputAction::Redraw);
             }
             if !self.is_kitty {
@@ -4831,6 +4943,9 @@ impl PdfReaderState {
                     }
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                if self.pending_search_highlight.is_some() {
+                    send_conversion(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+                }
                 self.last_sent_viewport = None;
                 if let Some(vp) = viewport {
                     if let Some(cmd) = self.viewport_command(vp) {
@@ -4881,7 +4996,7 @@ impl PdfReaderState {
             InputAction::ToggleInvertImages => {
                 if !self.themed_rendering {
                     self.set_hud_message(
-                        "Image inversion is only available in PDF themed mode (I - to toggle)"
+                        "Image inversion is only available in PDF / DJVU themed mode (I - to toggle)"
                             .to_string(),
                         crate::widget::hud_message::HudMode::Error,
                         std::time::Duration::from_secs(2),
@@ -4935,6 +5050,7 @@ impl PdfReaderState {
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::SelectionChanged(rects) => {
+                self.pending_search_highlight = None;
                 if !self.is_kitty {
                     self.force_redraw();
                 }
