@@ -1253,6 +1253,18 @@ fn render_djvu_page(
         djvu_tint_rgb(&mut pixels, params.white, params.black);
     }
 
+    let actual_scale_x = if page_width > 0.0 {
+        width_px as f32 / page_width
+    } else {
+        1.0
+    };
+    let actual_scale_y = if page_height > 0.0 {
+        height_px as f32 / page_height
+    } else {
+        1.0
+    };
+    let actual_scale = (actual_scale_x + actual_scale_y) * 0.5;
+
     Ok(PageData {
         img_data: ImageData {
             pixels,
@@ -1262,11 +1274,16 @@ fn render_djvu_page(
             height_cell: (spec.output_height / f32::from(params.cell_size.height)) as u16,
         },
         page_num,
-        scale_factor: spec.mag,
+        scale_factor: actual_scale,
         requested_scale: params.scale,
         render_area_width_cells: params.area.width,
         render_area_height_cells: params.area.height,
-        line_bounds: Vec::new(),
+        line_bounds: extract_djvu_line_bounds_with_scales(
+            &page,
+            page_height,
+            actual_scale_x,
+            actual_scale_y,
+        ),
         link_rects: Vec::new(),
         page_height_px: height_px as f32,
     })
@@ -1333,10 +1350,250 @@ fn djvu_pixmap_to_rgb(pixmap: &rdjvu::Pixmap) -> Vec<u8> {
     out
 }
 
+pub(crate) fn extract_djvu_line_bounds(
+    page: &rdjvu::Page<'_>,
+    page_height: f32,
+    scale: f32,
+) -> Vec<LineBounds> {
+    extract_djvu_line_bounds_with_scales(page, page_height, scale, scale)
+}
+
+fn extract_djvu_line_bounds_with_scales(
+    page: &rdjvu::Page<'_>,
+    page_height: f32,
+    scale_x: f32,
+    scale_y: f32,
+) -> Vec<LineBounds> {
+    use rdjvu::TextZoneKind;
+
+    let text_layer = match page.text_layer() {
+        Ok(Some(tl)) => tl,
+        _ => return Vec::new(),
+    };
+
+    let Some(ref root) = text_layer.root else {
+        return Vec::new();
+    };
+
+    let mut bounds = Vec::new();
+
+    #[derive(Debug)]
+    struct DjvuTextSegment {
+        x0: f32,
+        x1: f32,
+        visible_start: usize,
+        visible_end: usize,
+        text: String,
+    }
+
+    fn next_block_id(next_id: &mut usize) -> usize {
+        let id = *next_id;
+        *next_id += 1;
+        id
+    }
+
+    fn push_chars_evenly(chars: &mut Vec<CharInfo>, x0: f32, x1: f32, text: &str) {
+        let char_count = text.chars().count();
+        if char_count == 0 {
+            return;
+        }
+        let width = (x1 - x0).max(0.0);
+        for (i, c) in text.chars().enumerate() {
+            chars.push(CharInfo {
+                x: x0 + width * i as f32 / char_count as f32,
+                c,
+            });
+        }
+    }
+
+    fn push_gap_chars(chars: &mut Vec<CharInfo>, gap_text: &str, gap_start: f32, gap_end: f32) {
+        let gap_chars: Vec<char> = gap_text
+            .chars()
+            .filter(|c| !c.is_control())
+            .map(|c| if c.is_whitespace() { ' ' } else { c })
+            .collect();
+        let char_count = gap_chars.len();
+        if char_count == 0 {
+            return;
+        }
+        let width = (gap_end - gap_start).max(0.0);
+        for (i, c) in gap_chars.into_iter().enumerate() {
+            chars.push(CharInfo {
+                x: gap_start + width * (i as f32 + 0.5) / char_count as f32,
+                c,
+            });
+        }
+    }
+
+    fn collect_text_segments(
+        tl: &rdjvu::TextLayer,
+        zone: &rdjvu::TextZone,
+        segments: &mut Vec<DjvuTextSegment>,
+        scale_x: f32,
+    ) -> bool {
+        match zone.kind {
+            TextZoneKind::Character => {
+                let raw_text = tl.zone_text(zone);
+                if raw_text.is_empty() || raw_text.chars().all(char::is_whitespace) {
+                    return false;
+                }
+                segments.push(DjvuTextSegment {
+                    x0: zone.x as f32 * scale_x,
+                    x1: (zone.x + zone.width) as f32 * scale_x,
+                    visible_start: zone.text_start,
+                    visible_end: zone.text_start + raw_text.len(),
+                    text: raw_text.to_string(),
+                });
+                true
+            }
+            TextZoneKind::Word => {
+                let mut found_child_segments = false;
+                for child in &zone.children {
+                    found_child_segments |= collect_text_segments(tl, child, segments, scale_x);
+                }
+                if found_child_segments {
+                    return true;
+                }
+
+                let raw_text = tl.zone_text(zone);
+                let visible_text = raw_text.trim();
+                if visible_text.is_empty() {
+                    return false;
+                }
+
+                let leading_trim = raw_text.len() - raw_text.trim_start().len();
+                let trailing_trim = raw_text.len() - raw_text.trim_end().len();
+                segments.push(DjvuTextSegment {
+                    x0: zone.x as f32 * scale_x,
+                    x1: (zone.x + zone.width) as f32 * scale_x,
+                    visible_start: zone.text_start + leading_trim,
+                    visible_end: zone.text_start + raw_text.len() - trailing_trim,
+                    text: visible_text.to_string(),
+                });
+                true
+            }
+            _ => {
+                let mut found = false;
+                for child in &zone.children {
+                    found |= collect_text_segments(tl, child, segments, scale_x);
+                }
+                found
+            }
+        }
+    }
+
+    fn collect_line_chars(
+        tl: &rdjvu::TextLayer,
+        line: &rdjvu::TextZone,
+        scale_x: f32,
+    ) -> Vec<CharInfo> {
+        let mut segments = Vec::new();
+        collect_text_segments(tl, line, &mut segments, scale_x);
+        if segments.is_empty() {
+            return Vec::new();
+        }
+
+        segments.sort_by_key(|segment| segment.visible_start);
+
+        let mut chars = Vec::new();
+        let mut prev_text_end = line.text_start;
+        let mut prev_x1: Option<f32> = None;
+
+        for segment in segments {
+            if let Some(prev_x1) = prev_x1 {
+                if prev_text_end < segment.visible_start
+                    && tl.text.is_char_boundary(prev_text_end)
+                    && tl.text.is_char_boundary(segment.visible_start)
+                {
+                    push_gap_chars(
+                        &mut chars,
+                        &tl.text[prev_text_end..segment.visible_start],
+                        prev_x1,
+                        segment.x0,
+                    );
+                }
+            }
+
+            push_chars_evenly(&mut chars, segment.x0, segment.x1, &segment.text);
+            prev_text_end = segment.visible_end;
+            prev_x1 = Some(segment.x1);
+        }
+
+        chars
+    }
+
+    fn collect(
+        tl: &rdjvu::TextLayer,
+        zone: &rdjvu::TextZone,
+        bounds: &mut Vec<LineBounds>,
+        page_h: f32,
+        scale_x: f32,
+        scale_y: f32,
+        current_block_id: Option<usize>,
+        next_id: &mut usize,
+    ) {
+        let current_block_id = match zone.kind {
+            TextZoneKind::Paragraph => Some(next_block_id(next_id)),
+            TextZoneKind::Column | TextZoneKind::Region if current_block_id.is_none() => {
+                Some(next_block_id(next_id))
+            }
+            _ => current_block_id,
+        };
+
+        if zone.kind == TextZoneKind::Line {
+            // Convert bottom-left origin to top-left origin, then scale
+            let y0 = (page_h - (zone.y + zone.height) as f32) * scale_y;
+            let y1 = (page_h - zone.y as f32) * scale_y;
+            let x0 = zone.x as f32 * scale_x;
+            let x1 = (zone.x + zone.width) as f32 * scale_x;
+
+            let chars = collect_line_chars(tl, zone, scale_x);
+
+            if !chars.is_empty() {
+                let block_id = current_block_id.unwrap_or_else(|| next_block_id(next_id));
+                bounds.push(LineBounds {
+                    x0,
+                    y0,
+                    x1,
+                    y1,
+                    chars,
+                    block_id,
+                });
+            }
+            return;
+        }
+
+        for child in &zone.children {
+            collect(
+                tl,
+                child,
+                bounds,
+                page_h,
+                scale_x,
+                scale_y,
+                current_block_id,
+                next_id,
+            );
+        }
+    }
+
+    let mut next_id = 0;
+    collect(
+        &text_layer,
+        root,
+        &mut bounds,
+        page_height,
+        scale_x,
+        scale_y,
+        None,
+        &mut next_id,
+    );
+    bounds
+}
+
 struct DjvuRasterSpec {
     output_width: f32,
     output_height: f32,
-    mag: f32,
 }
 
 impl DjvuRasterSpec {
@@ -1364,12 +1621,11 @@ impl DjvuRasterSpec {
             mag *= reduction;
         }
 
-        let (mag, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
+        let (_, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
 
         Self {
             output_width,
             output_height,
-            mag,
         }
     }
 }

@@ -269,18 +269,16 @@ pub(crate) fn apply_render_responses(
 
                 // Check for pending search highlight (after info borrow ends)
                 if has_line_bounds {
-                    if let Some((pending_page, ref query)) =
-                        pdf_reader.pending_search_highlight.clone()
-                    {
-                        if pending_page == page {
-                            let selection_rects = pdf_reader.find_text_selection_rects(page, query);
+                    if let Some(pending) = pdf_reader.pending_search_highlight.clone() {
+                        if pending.page == page {
+                            let selection_rects =
+                                pdf_reader.find_active_search_highlight_rects(&pending);
                             if !selection_rects.is_empty() {
                                 if let Some(tx) = conversion_tx {
                                     let _ = tx
                                         .send(ConversionCommand::UpdateSelection(selection_rects));
                                 }
                             }
-                            pdf_reader.pending_search_highlight = None;
                         }
                     }
                 }
