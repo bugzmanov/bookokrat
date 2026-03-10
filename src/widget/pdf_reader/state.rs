@@ -502,7 +502,7 @@ impl PdfReaderState {
         } else {
             "original"
         };
-        format!("PDF rendering: {rendering}. Images: {images}")
+        format!("PDF / DJVU rendering: {rendering}. Images: {images}")
     }
 
     pub fn set_doc_title(&mut self, title: Option<String>) {

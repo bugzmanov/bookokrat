@@ -183,7 +183,7 @@ impl SettingsPopup {
     }
 
     fn render_tabs(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
-        let tab_names = ["PDF Support", "Select Theme"];
+        let tab_names = ["PDF / DJVU", "Select Theme"];
 
         let mut spans = Vec::new();
         spans.push(Span::raw(" "));
@@ -226,8 +226,8 @@ impl SettingsPopup {
             };
 
             let (underline_x, underline_len) = match self.current_tab {
-                SettingsTab::PdfSupport => (1, 11), // "PDF Support" length
-                SettingsTab::Themes => (15, 12), // Position after "PDF Support   ", "Select Theme" length
+                SettingsTab::PdfSupport => (1, 10), // "PDF / DJVU" length
+                SettingsTab::Themes => (14, 12), // Position after "PDF / DJVU   ", "Select Theme" length
             };
 
             let mut underline_spans = vec![Span::raw(" ".repeat(underline_x))];
@@ -598,7 +598,7 @@ impl SettingsPopup {
                 Line::from(vec![
                     Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
                     Span::styled(
-                        "PDF viewing requires a graphics-enabled terminal.",
+                        "PDF / DJVU viewing requires a graphics-enabled terminal.",
                         Style::default().fg(palette.base_03),
                     ),
                 ]),
@@ -614,7 +614,7 @@ impl SettingsPopup {
             vec![Line::from(vec![
                 Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
                 Span::styled(
-                    "Enable PDF support to change render mode",
+                    "Enable PDF / DJVU support to change render mode",
                     Style::default().fg(palette.base_03),
                 ),
             ])]

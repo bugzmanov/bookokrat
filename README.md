@@ -1,14 +1,14 @@
 # Bookokrat
 
-Terminal EPUB/PDF reader focused on speed, smooth navigation, and Vim-style workflows.
+Terminal EPUB/PDF/DJVU reader focused on speed, smooth navigation, and Vim-style workflows.
 
 https://github.com/user-attachments/assets/0ebe61c6-4629-4bde-8bd4-50feb9a424a3
 
 ## Highlights
 
-- EPUB and PDF support in one TUI app
+- EPUB, PDF, and DJVU support in one TUI app
 - Split layout: library/TOC on the left, reader on the right
-- Fast PDF pipeline with Kitty SHM image transfer in supported terminals
+- Fast PDF/DJVU pipeline with Kitty SHM image transfer in supported terminals
 - Search, bookmarks, jump list history, reading stats
 - Inline comments/annotations with persistent storage and Markdown export
 - Image rendering, link handling, and external viewer handoff
@@ -57,7 +57,7 @@ Build from source. Requires [Rust](https://rustup.rs) and a C compiler/linker.
 sudo apt update
 sudo apt install build-essential
 
-# For PDF support:
+# For PDF / DJVU support:
 sudo apt install pkg-config libfontconfig1-dev clang libclang-dev
 ```
 
@@ -80,7 +80,7 @@ Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads
 cargo install bookokrat
 ```
 
-Build without PDF support:
+Build without PDF / DJVU support:
 
 ```bash
 cargo install bookokrat --no-default-features
@@ -97,6 +97,7 @@ Optional direct open:
 ```bash
 bookokrat path/to/book.epub
 bookokrat path/to/book.pdf
+bookokrat path/to/book.djvu
 bookokrat path/to/book.epub --zen-mode
 ```
 
@@ -108,11 +109,11 @@ Press `?` inside the app to open the built-in help.
 
 ## Terminal Notes
 
-PDF viewing requires a graphics-capable terminal.
+PDF and DJVU viewing require a graphics-capable terminal.
 
 - Best experience: Kitty, Ghostty
 - Good: iTerm2, WezTerm, Warp, Konsole (with some limitations)
-- Terminals without graphics protocol support - EPUB support without images. PDFs are not supported
+- Terminals without graphics protocol support - EPUB support without images. PDFs and DJVUs are not supported
 
 For protocol details and troubleshooting, see the in-app help (`?`) and [`readme.txt`](readme.txt).
 

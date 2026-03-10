@@ -361,6 +361,7 @@ dependencies = [
  "codepage-437",
  "crossterm",
  "dirs 5.0.1",
+ "djvu",
  "epub",
  "fast_image_resize",
  "flate2",
@@ -382,7 +383,6 @@ dependencies = [
  "rand",
  "ratatui",
  "rayon",
- "rdjvu",
  "regex",
  "resvg",
  "roxmltree 0.18.1",
@@ -942,6 +942,15 @@ checksum = "89a09f22a6c6069a18470eb92d2298acf25463f14256d24778e1230d789a2aec"
 dependencies = [
  "bitflags 2.10.0",
  "objc2",
+]
+
+[[package]]
+name = "djvu"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b61586a33f85858095c659ce3a5c810adca1f14f023939df847a765b4d07bc8"
+dependencies = [
+ "self_cell",
 ]
 
 [[package]]
@@ -2893,73 +2902,6 @@ dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
 ]
-
-[[package]]
-name = "rdjvu"
-version = "0.1.0"
-dependencies = [
- "rdjvu-core",
- "rdjvu-document",
- "rdjvu-render",
- "self_cell",
-]
-
-[[package]]
-name = "rdjvu-bzz"
-version = "0.1.0"
-dependencies = [
- "rdjvu-zp",
-]
-
-[[package]]
-name = "rdjvu-core"
-version = "0.1.0"
-
-[[package]]
-name = "rdjvu-document"
-version = "0.1.0"
-dependencies = [
- "rdjvu-bzz",
- "rdjvu-core",
- "rdjvu-iff",
- "rdjvu-iw44",
- "rdjvu-jb2",
-]
-
-[[package]]
-name = "rdjvu-iff"
-version = "0.1.0"
-dependencies = [
- "rdjvu-core",
-]
-
-[[package]]
-name = "rdjvu-iw44"
-version = "0.1.0"
-dependencies = [
- "rdjvu-core",
- "rdjvu-zp",
-]
-
-[[package]]
-name = "rdjvu-jb2"
-version = "0.1.0"
-dependencies = [
- "rdjvu-core",
- "rdjvu-zp",
-]
-
-[[package]]
-name = "rdjvu-render"
-version = "0.1.0"
-dependencies = [
- "rdjvu-core",
- "rdjvu-document",
-]
-
-[[package]]
-name = "rdjvu-zp"
-version = "0.1.0"
 
 [[package]]
 name = "redox_syscall"

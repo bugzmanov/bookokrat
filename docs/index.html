@@ -3,16 +3,16 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering</title>
+        <title>Bookokrat - Terminal EPUB, PDF &amp; DJVU Reader with Full HTML Rendering</title>
 
         <!-- SEO Meta Tags -->
         <meta
             name="description"
-            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal."
+            content="Full-featured terminal EPUB, PDF, and DJVU reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Read technical books without leaving your terminal."
         />
         <meta
             name="keywords"
-            content="epub reader, pdf reader, terminal epub reader, terminal pdf reader, tui epub, tui pdf, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application"
+            content="epub reader, pdf reader, djvu reader, terminal epub reader, terminal pdf reader, terminal djvu reader, tui epub, tui pdf, tui djvu, command line ebook reader, rust epub reader, vim keybindings, mathml rendering, technical book reader, terminal application"
         />
         <meta name="author" content="Rafael Bagmanov" />
         <meta name="robots" content="index, follow" />
@@ -20,25 +20,25 @@
 
         <!-- Open Graph Meta Tags (Facebook, LinkedIn) -->
         <meta property="og:type" content="website" />
-        <meta property="og:title" content="Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering" />
+        <meta property="og:title" content="Bookokrat - Terminal EPUB, PDF &amp; DJVU Reader with Full HTML Rendering" />
         <meta
             property="og:description"
-            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal."
+            content="Full-featured terminal EPUB, PDF, and DJVU reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support. Read technical books without leaving your terminal."
         />
         <meta property="og:url" content="https://github.com/bugzmanov/bookokrat" />
         <meta property="og:image" content="https://bugzmanov.github.io/bookokrat/help.png" />
-        <meta property="og:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing help overlay" />
+        <meta property="og:image:alt" content="Bookokrat terminal EPUB/PDF/DJVU reader demo showing help overlay" />
         <meta property="og:site_name" content="Bookokrat" />
 
         <!-- Twitter Card Meta Tags -->
         <meta name="twitter:card" content="summary_large_image" />
-        <meta name="twitter:title" content="Bookokrat - Terminal EPUB &amp; PDF Reader with Full HTML Rendering" />
+        <meta name="twitter:title" content="Bookokrat - Terminal EPUB, PDF &amp; DJVU Reader with Full HTML Rendering" />
         <meta
             name="twitter:description"
-            content="Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support."
+            content="Full-featured terminal EPUB, PDF, and DJVU reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, and mouse support."
         />
         <meta name="twitter:image" content="https://bugzmanov.github.io/bookokrat/help.png" />
-        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB/PDF reader demo showing help overlay" />
+        <meta name="twitter:image:alt" content="Bookokrat terminal EPUB/PDF/DJVU reader demo showing help overlay" />
 
         <!-- Additional SEO -->
         <meta name="theme-color" content="#0b0d0f" />
@@ -53,7 +53,7 @@
           "name": "Bookokrat",
           "applicationCategory": "DeveloperApplication",
           "operatingSystem": "Linux, macOS, Windows",
-          "description": "Full-featured terminal EPUB and PDF reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
+          "description": "Full-featured terminal EPUB, PDF, and DJVU reader with complete HTML/EPUB rendering, inline images, MathML support, vim keybindings, mouse support, and inline annotations. Built for reading technical books in the terminal.",
           "url": "https://github.com/bugzmanov/bookokrat",
           "downloadUrl": "https://crates.io/crates/bookokrat",
           "softwareVersion": "0.3.4",
@@ -72,7 +72,7 @@
             "name": "Rust"
           },
           "codeRepository": "https://github.com/bugzmanov/bookokrat",
-          "keywords": "epub reader, pdf reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
+          "keywords": "epub reader, pdf reader, djvu reader, terminal, tui, command line, rust, vim keybindings, mathml, technical books, ebook reader",
           "screenshot": "https://bugzmanov.github.io/bookokrat/help.png",
           "featureList": [
             "Complete EPUB/HTML rendering with html5ever parser",
@@ -80,8 +80,8 @@
             "MathML rendering to ASCII art",
             "Syntax-highlighted code blocks",
             "Table rendering",
-            "PDF reader with page/scroll render modes",
-            "PDF table of contents and annotations",
+            "PDF and DJVU reader with page/scroll render modes",
+            "PDF and DJVU table of contents and annotations",
             "Vim keybindings (j/k, gg/G, /, Ctrl+o/i)",
             "Comprehensive mouse support",
             "Inline annotations with Markdown export",
@@ -590,13 +590,13 @@
                     <div>
                         <div class="tag-row">
                             <span class="tag">EPUB + HTML</span>
-                            <span class="tag">PDF MODE</span>
+                            <span class="tag">PDF / DJVU</span>
                             <span class="tag">IMAGES</span>
                             <span class="tag">MATHML</span>
                         </div>
-                        <h1>READ PDF/EPUB BOOKS IN THE TERMINAL</h1>
+                        <h1>READ EPUB, PDF, AND DJVU BOOKS IN THE TERMINAL</h1>
                         <p>
-                            Bookokrat renders EPUB and PDF content with real layouts, images,
+                            Bookokrat renders EPUB, PDF, and DJVU content with real layouts, images,
                             and math. Built for readers who live in the terminal.
                         </p>
                         <div class="cta-row">
@@ -636,7 +636,7 @@
                     <div class="section-header">
                         <h2 class="section-title">Demos</h2>
                         <p class="section-desc">
-                            EPUB and PDF, captured in the terminal.
+                            EPUB and PDF demos from the same reader that also supports DJVU.
                         </p>
                     </div>
                     <div class="media-grid">
@@ -690,7 +690,7 @@
                             <p>Proper layout: tables, lists, images, and code blocks.</p>
                         </div>
                         <div class="feature-card">
-                            <h4>PDF modes</h4>
+                            <h4>PDF / DJVU</h4>
                             <p>Page and scroll views with TOC and fast navigation.</p>
                         </div>
                         <div class="feature-card">
@@ -723,8 +723,8 @@
                         </p>
                     </div>
                     <div class="terminal-note">
-                        PDF rendering requires a graphics-capable terminal. If images render,
-                        PDF pages will too. EPUB works everywhere.
+                        PDF and DJVU rendering require a graphics-capable terminal. If images render,
+                        those pages will too. EPUB works everywhere.
                     </div>
                 </div>
             </section>
@@ -745,7 +745,7 @@
                             <div class="install-body">
                                 <ul>
                                     <li>Prereqs: Homebrew installed.</li>
-                                    <li>PDF support is enabled by default.</li>
+                                    <li>PDF and DJVU support are enabled by default.</li>
                                 </ul>
                             </div>
                         </details>
@@ -808,8 +808,8 @@
                                     <li>Linux (Fedora/RHEL): <code>sudo dnf install gcc make</code>.</li>
                                     <li>macOS: <code>xcode-select --install</code>.</li>
                                     <li>Windows: Visual Studio Build Tools with C++ workload.</li>
-                                    <li>PDF builds on Linux: <code>pkg-config</code>, <code>libfontconfig1-dev</code>, <code>clang</code>, <code>libclang-dev</code>.</li>
-                                    <li>Without PDF: <code>cargo install bookokrat --no-default-features</code>.</li>
+                                    <li>PDF/DJVU builds on Linux: <code>pkg-config</code>, <code>libfontconfig1-dev</code>, <code>clang</code>, <code>libclang-dev</code>.</li>
+                                    <li>Without PDF/DJVU: <code>cargo install bookokrat --no-default-features</code>.</li>
                                 </ul>
                             </div>
                         </details>
@@ -825,15 +825,15 @@
                     </div>
                     <div class="faq">
                         <details>
-                            <summary>Is PDF support enabled by default?</summary>
+                            <summary>Is PDF / DJVU support enabled by default?</summary>
                             <p class="section-desc" style="margin-top: 0.75rem;">
-                                Yes. To build without PDF support use <code>--no-default-features</code>.
+                                Yes. To build without PDF / DJVU support use <code>--no-default-features</code>.
                             </p>
                         </details>
                         <details>
                             <summary>What do I need to build from source?</summary>
                             <p class="section-desc" style="margin-top: 0.75rem;">
-                                A C compiler and standard build tools. For PDF builds on Linux, install
+                                A C compiler and standard build tools. For PDF / DJVU builds on Linux, install
                                 <code>pkg-config</code>, <code>libfontconfig1-dev</code>, and <code>libclang-dev</code>.
                             </p>
                         </details>

@@ -3833,7 +3833,7 @@ impl PdfReaderState {
         } else {
             // Normal/visual mode requires actual Kitty terminal, not just Kitty protocol
             if self.is_iterm {
-                self.set_error_hud("PDF normal mode is not supported in iTerm".to_string());
+                self.set_error_hud("PDF / DJVU normal mode is not supported in iTerm".to_string());
                 return Some(InputAction::Redraw);
             }
             if !self.is_kitty {
@@ -4996,7 +4996,7 @@ impl PdfReaderState {
             InputAction::ToggleInvertImages => {
                 if !self.themed_rendering {
                     self.set_hud_message(
-                        "Image inversion is only available in PDF themed mode (I - to toggle)"
+                        "Image inversion is only available in PDF / DJVU themed mode (I - to toggle)"
                             .to_string(),
                         crate::widget::hud_message::HudMode::Error,
                         std::time::Duration::from_secs(2),

@@ -471,7 +471,7 @@ mod tests {
             let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
                 offset_dest_cells,
                 display_rows,
-                font_h,
+                u32::from(font_h),
                 zoom,
                 source_total_h_px,
             );
@@ -505,7 +505,7 @@ mod tests {
             let (start_px, end_px) = kitty_source_y_range_from_dest_rows(
                 offset_dest_cells,
                 display_rows,
-                font_h,
+                u32::from(font_h),
                 zoom,
                 source_total_h_px,
             );
@@ -3573,12 +3573,15 @@ impl PdfReaderState {
                         Style::default().fg(fg).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled("]", Style::default().fg(accent)),
-                    Span::styled("  PDF", Style::default().fg(muted)),
+                    Span::styled("  PDF / DJVU", Style::default().fg(muted)),
                 ]),
                 super::types::PageJumpMode::Pdf => Line::from(vec![
                     Span::styled("  Content  ", Style::default().fg(muted)),
                     Span::styled("[", Style::default().fg(accent)),
-                    Span::styled("PDF", Style::default().fg(fg).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "PDF / DJVU",
+                        Style::default().fg(fg).add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled("]", Style::default().fg(accent)),
                 ]),
             };
