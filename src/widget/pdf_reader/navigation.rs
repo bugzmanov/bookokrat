@@ -30,7 +30,11 @@ use crate::settings::{
     PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
 };
 use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
-use pprof::ProfilerGuard;
+
+#[cfg(feature = "profile")]
+type ProfilerSlot = pprof::ProfilerGuard<'static>;
+#[cfg(not(feature = "profile"))]
+type ProfilerSlot = ();
 
 pub struct InputResponse {
     pub action: Option<InputAction>,
@@ -4888,7 +4892,7 @@ impl PdfReaderState {
         last_bookmark_save: &mut std::time::Instant,
         table_of_contents: &mut TableOfContents,
         toc_height: usize,
-        profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>,
+        profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerSlot>>>,
     ) -> InputOutcome {
         let send_conversion = |cmd: crate::pdf::ConversionCommand| {
             if let Some(tx) = conversion_tx {
@@ -4991,7 +4995,7 @@ impl PdfReaderState {
                 }
             }
             InputAction::ToggleProfiling => {
-                toggle_profiling(profiler);
+                toggle_profiling(profiler, notifications);
             }
             InputAction::ToggleInvertImages => {
                 if !self.themed_rendering {
@@ -5173,23 +5177,35 @@ impl PdfReaderState {
     }
 }
 
-fn toggle_profiling(profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerGuard<'static>>>>) {
-    let mut profiler_lock = profiler.lock().unwrap();
+fn toggle_profiling(
+    profiler: &std::sync::Arc<std::sync::Mutex<Option<ProfilerSlot>>>,
+    _notifications: &mut crate::notification::NotificationManager,
+) {
+    #[cfg(feature = "profile")]
+    {
+        let mut profiler_lock = profiler.lock().unwrap();
 
-    if profiler_lock.is_none() {
-        log::debug!("Profiling started");
-        *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
-    } else {
-        log::debug!("Profiling stopped and saved");
+        if profiler_lock.is_none() {
+            log::debug!("Profiling started");
+            *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
+        } else {
+            log::debug!("Profiling stopped and saved");
 
-        if let Some(guard) = profiler_lock.take() {
-            if let Ok(report) = guard.report().build() {
-                let file = std::fs::File::create("flamegraph.svg").unwrap();
-                report.flamegraph(file).unwrap();
-            } else {
-                log::debug!("Could not build profile report");
+            if let Some(guard) = profiler_lock.take() {
+                if let Ok(report) = guard.report().build() {
+                    let file = std::fs::File::create("flamegraph.svg").unwrap();
+                    report.flamegraph(file).unwrap();
+                } else {
+                    log::debug!("Could not build profile report");
+                }
             }
         }
+    }
+
+    #[cfg(not(feature = "profile"))]
+    {
+        let _ = profiler;
+        _notifications.warn("Profiling requires a build with the `profile` feature");
     }
 }
 

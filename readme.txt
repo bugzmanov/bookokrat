@@ -38,7 +38,7 @@
     ▸ Reader normal mode with motions, counts, visual selection, and yanks
     ▸ Full keyboard and mouse control
     ▸ External EPUB reader integration
-    ▸ Performance profiling overlay
+    ▸ Performance profiling overlay (optional `profile` feature)
     ▸ Book statistics popup
     ▸ Settings popup for PDF support and render mode (Space+s / Ctrl+s)
     ▸ Multiple built-in color themes (Oceanic Next, Catppuccin, Kanagawa)
@@ -142,7 +142,7 @@
 │  d             Delete comment under cursor                                  │
 │  ss            Toggle raw HTML view (EPUB/HTML only)                        │
 │  Enter         Open image popup (when cursor on image)                      │
-│  p             Toggle performance profiler overlay                          │
+│  p             Toggle performance profiler overlay (`profile` builds)       │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -271,7 +271,7 @@ PDF annotations require a graphics-capable terminal.
       • Windows: Calibre
 
   [PERFORMANCE PROFILING]
-    Press 'p' to toggle the performance profiler overlay:
+    Press 'p' to toggle the performance profiler overlay in `profile` builds:
       • FPS (frames per second)
       • Frame timing statistics
       • Rendering performance metrics

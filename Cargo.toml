@@ -55,7 +55,7 @@ textwrap = "0.16"
 better-panic = "0.3"
 human-panic = "2.0"
 libc = "0.2"
-pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"] }
+pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"], optional = true }
 arboard = { version = "3.4", features = ["wayland-data-control"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tempfile = "3.8"
@@ -120,6 +120,7 @@ default = ["pdf"]
 test-utils = []
 serde = []
 pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu"]
+profile = ["dep:pprof"]
 svg = ["resvg"]
 image-bmp = ["image/bmp"]
 image-tiff = ["image/tiff"]

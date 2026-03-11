@@ -59,7 +59,6 @@ use crossterm::execute;
 use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
-use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -67,6 +66,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+
+#[cfg(feature = "profile")]
+type ProfilerSlot = pprof::ProfilerGuard<'static>;
+#[cfg(not(feature = "profile"))]
+type ProfilerSlot = ();
 
 struct EpubBook {
     file: String,
@@ -139,7 +143,7 @@ pub struct App {
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
     terminal_size: Rect,
-    profiler: Arc<Mutex<Option<ProfilerGuard<'static>>>>,
+    profiler: Arc<Mutex<Option<ProfilerSlot>>>,
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
@@ -651,23 +655,32 @@ impl App {
         self.profiler.lock().unwrap().is_some()
     }
 
-    fn toggle_profiling(&self) {
-        let mut profiler_lock = self.profiler.lock().unwrap();
+    fn toggle_profiling(&mut self) {
+        #[cfg(feature = "profile")]
+        {
+            let mut profiler_lock = self.profiler.lock().unwrap();
 
-        if profiler_lock.is_none() {
-            debug!("Profiling started");
-            *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
-        } else {
-            debug!("Profiling stopped and saved");
+            if profiler_lock.is_none() {
+                debug!("Profiling started");
+                *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
+            } else {
+                debug!("Profiling stopped and saved");
 
-            if let Some(guard) = profiler_lock.take() {
-                if let Ok(report) = guard.report().build() {
-                    let file = std::fs::File::create("flamegraph.svg").unwrap();
-                    report.flamegraph(file).unwrap();
-                } else {
-                    debug!("Could not build profile report");
+                if let Some(guard) = profiler_lock.take() {
+                    if let Ok(report) = guard.report().build() {
+                        let file = std::fs::File::create("flamegraph.svg").unwrap();
+                        report.flamegraph(file).unwrap();
+                    } else {
+                        debug!("Could not build profile report");
+                    }
                 }
             }
+        }
+
+        #[cfg(not(feature = "profile"))]
+        {
+            self.notifications
+                .warn("Profiling requires a build with the `profile` feature");
         }
     }
 
