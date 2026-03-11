@@ -532,7 +532,7 @@ impl App {
             last_terminal_title: None,
         };
 
-        // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
+        // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
         crate::settings::fix_incompatible_pdf_settings();
 
         let is_first_time_user = app.bookmarks.get_most_recent().is_none();

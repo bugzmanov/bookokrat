@@ -374,7 +374,7 @@ impl SettingsPopup {
             Style::default().fg(palette.base_03)
         };
         let scroll_suffix = if !self.supports_scroll_mode {
-            Some("Kitty only")
+            Some("Kitty protocol")
         } else {
             Some("continuous scroll")
         };
@@ -630,7 +630,7 @@ impl SettingsPopup {
             vec![Line::from(vec![
                 Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
                 Span::styled(
-                    "Scroll mode requires Kitty or Ghostty terminal",
+                    "Scroll mode requires Kitty graphics protocol",
                     Style::default().fg(palette.base_03),
                 ),
             ])]

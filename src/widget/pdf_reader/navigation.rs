@@ -3835,7 +3835,7 @@ impl PdfReaderState {
             self.normal_mode.deactivate();
             Some(InputAction::ExitNormalMode)
         } else {
-            // Normal/visual mode requires actual Kitty terminal, not just Kitty protocol
+            // Normal/visual mode requires Kitty protocol, with iTerm still blocked.
             if self.is_iterm {
                 self.set_error_hud("PDF / DJVU normal mode is not supported in iTerm".to_string());
                 return Some(InputAction::Redraw);
