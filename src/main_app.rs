@@ -54,7 +54,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
@@ -5930,6 +5932,12 @@ where
         while event_source.poll(Duration::from_millis(0))? && events_processed < 50 {
             let event = event_source.read()?;
             events_processed += 1;
+
+            // On Windows, crossterm emits both Press and Release key events.
+            // Ignore Release (and Repeat) to prevent double-processing.
+            if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Press) {
+                continue;
+            }
 
             // Route events to PDF handler when in PDF mode AND (focused on PDF content OR popup is active)
             #[cfg(feature = "pdf")]
