@@ -20,3 +20,4 @@ flamegraph.svg
 .claude/
 .agentastic/
 result/
+*.djvu
