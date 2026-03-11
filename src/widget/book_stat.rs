@@ -1,8 +1,7 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
-use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
+use crate::parsing::html_to_markdown::{HtmlToMarkdownConverter, extract_chapter_title};
 use crate::parsing::markdown_renderer::MarkdownRenderer;
-use crate::parsing::text_generator::TextGenerator;
 use crate::parsing::toc_parser::TocParser;
 use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
@@ -298,7 +297,7 @@ impl BookStat {
         }
 
         // Fallback: extract title from HTML content
-        if let Some(title) = TextGenerator::extract_chapter_title(content) {
+        if let Some(title) = extract_chapter_title(content) {
             return Some(title);
         }
 

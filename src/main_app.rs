@@ -12,7 +12,7 @@ use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
 use crate::notification::NotificationManager;
-use crate::parsing::text_generator::TextGenerator;
+use crate::parsing::html_to_markdown::extract_chapter_title;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
@@ -1555,7 +1555,7 @@ impl App {
         if let Some(book) = &mut self.current_book {
             let (content, title) = match book.epub.get_current_str() {
                 Some((raw_html, _mime)) => {
-                    let title = TextGenerator::extract_chapter_title(&raw_html);
+                    let title = extract_chapter_title(&raw_html);
                     (raw_html, title)
                 }
                 None => {
@@ -5223,7 +5223,7 @@ impl App {
         for chapter_index in 0..doc.get_num_chapters() {
             if doc.set_current_chapter(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
-                    let title = TextGenerator::extract_chapter_title(&raw_html)
+                    let title = extract_chapter_title(&raw_html)
                         .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
 
                     let markdown_doc = converter.convert(&raw_html);

@@ -30,6 +30,120 @@ fn fix_html_for_parser(html: &str) -> String {
     BROKEN_END_TAG_RE.replace_all(&fixed, "</$1").into_owned()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HtmlTitlePreference {
+    TitleThenH1,
+    HeadingsThenTitle,
+}
+
+pub fn extract_html_title(html: &str, preference: HtmlTitlePreference) -> Option<String> {
+    let preprocessed = fix_html_for_parser(html);
+    let dom = parse_document(RcDom::default(), Default::default())
+        .from_utf8()
+        .read_from(&mut preprocessed.as_bytes())
+        .ok()?;
+
+    match preference {
+        HtmlTitlePreference::TitleThenH1 => extract_document_title(&dom.document)
+            .or_else(|| find_first_element_text(&dom.document, &["h1"])),
+        HtmlTitlePreference::HeadingsThenTitle => {
+            find_first_element_text(&dom.document, &["h1", "h2", "h3"])
+                .or_else(|| extract_document_title(&dom.document))
+        }
+    }
+}
+
+pub fn extract_chapter_title(html: &str) -> Option<String> {
+    let title = extract_html_title(html, HtmlTitlePreference::HeadingsThenTitle)?;
+    if title.len() < 100 { Some(title) } else { None }
+}
+
+fn extract_document_title(node: &Rc<markup5ever_rcdom::Node>) -> Option<String> {
+    let head = find_first_element(node, "head")?;
+    find_first_element_text(&head, &["title"])
+}
+
+fn find_first_element_text(
+    node: &Rc<markup5ever_rcdom::Node>,
+    tag_names: &[&str],
+) -> Option<String> {
+    let element = find_first_element_matching(node, &|tag_name| {
+        tag_names
+            .iter()
+            .any(|candidate| tag_name.eq_ignore_ascii_case(candidate))
+    })?;
+
+    let mut text = String::new();
+    collect_title_text(&element, &mut text);
+
+    let normalized = normalize_title_whitespace(&text);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn find_first_element(
+    node: &Rc<markup5ever_rcdom::Node>,
+    tag_name: &str,
+) -> Option<Rc<markup5ever_rcdom::Node>> {
+    find_first_element_matching(node, &|candidate| candidate.eq_ignore_ascii_case(tag_name))
+}
+
+fn find_first_element_matching(
+    node: &Rc<markup5ever_rcdom::Node>,
+    predicate: &impl Fn(&str) -> bool,
+) -> Option<Rc<markup5ever_rcdom::Node>> {
+    if let NodeData::Element { name, .. } = &node.data {
+        if predicate(name.local.as_ref()) {
+            return Some(node.clone());
+        }
+    }
+
+    for child in node.children.borrow().iter() {
+        if let Some(found) = find_first_element_matching(child, predicate) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn collect_title_text(node: &Rc<markup5ever_rcdom::Node>, output: &mut String) {
+    match &node.data {
+        NodeData::Text { contents } => {
+            output.push_str(&contents.borrow());
+        }
+        NodeData::Element { name, .. } => {
+            let tag_name = name.local.as_ref();
+            if tag_name.eq_ignore_ascii_case("script")
+                || tag_name.eq_ignore_ascii_case("style")
+                || tag_name.eq_ignore_ascii_case("template")
+            {
+                return;
+            }
+
+            if tag_name.eq_ignore_ascii_case("br") {
+                output.push(' ');
+            }
+
+            for child in node.children.borrow().iter() {
+                collect_title_text(child, output);
+            }
+        }
+        _ => {
+            for child in node.children.borrow().iter() {
+                collect_title_text(child, output);
+            }
+        }
+    }
+}
+
+fn normalize_title_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Strategy for content collection mode
 #[derive(Debug, Clone)]
 enum ContentCollectionMode {
@@ -4789,6 +4903,67 @@ The protocol operates on multiple layers:
         } else {
             panic!("oops 2");
         }
+    }
+
+    #[test]
+    fn test_extract_html_title_ignores_comments_and_handles_title_attributes() {
+        let html = r#"
+<html>
+<head>
+    <!-- <title>Commented Out Title</title> -->
+    <TITLE id="page-title" >
+        The   Real Title
+    </TITLE>
+    <script>
+        const ignored = "<title>Script Title</title>";
+    </script>
+</head>
+<body>
+    <H1 class="main">Heading Title</H1>
+</body>
+</html>
+"#;
+
+        assert_eq!(
+            extract_html_title(html, HtmlTitlePreference::TitleThenH1),
+            Some("The Real Title".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_chapter_title_handles_case_whitespace_and_nested_tags() {
+        let html = r#"
+<html>
+<body>
+    <H1  class="main" >
+        Hello <span>World</span><br/>Again
+    </H1>
+</body>
+</html>
+"#;
+
+        assert_eq!(
+            extract_chapter_title(html),
+            Some("Hello World Again".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_chapter_title_ignores_commented_out_heading() {
+        let html = r#"
+<html>
+<body>
+    <!-- <h1>Wrong Title</h1> -->
+    <Title>Fallback Document Title</Title>
+    <h1>Real <span>Heading</span></h1>
+</body>
+</html>
+"#;
+
+        assert_eq!(
+            extract_chapter_title(html),
+            Some("Real Heading".to_string())
+        );
     }
 
     #[test]
