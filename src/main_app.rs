@@ -12,7 +12,7 @@ use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
 use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
 use crate::notification::NotificationManager;
-use crate::parsing::text_generator::TextGenerator;
+use crate::parsing::html_to_markdown::extract_chapter_title;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
@@ -54,12 +54,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
-use pprof::ProfilerGuard;
 use ratatui::{
     Terminal,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -67,6 +68,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+
+#[cfg(feature = "profile")]
+type ProfilerSlot = pprof::ProfilerGuard<'static>;
+#[cfg(not(feature = "profile"))]
+type ProfilerSlot = ();
 
 struct EpubBook {
     file: String,
@@ -139,7 +145,7 @@ pub struct App {
     reading_history: Option<ReadingHistory>,
     image_popup: Option<ImagePopup>,
     terminal_size: Rect,
-    profiler: Arc<Mutex<Option<ProfilerGuard<'static>>>>,
+    profiler: Arc<Mutex<Option<ProfilerSlot>>>,
     book_stat: BookStat,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
@@ -528,7 +534,7 @@ impl App {
             last_terminal_title: None,
         };
 
-        // Fix incompatible PDF settings (e.g., Scroll mode in non-Kitty terminal)
+        // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
         crate::settings::fix_incompatible_pdf_settings();
 
         let is_first_time_user = app.bookmarks.get_most_recent().is_none();
@@ -651,23 +657,32 @@ impl App {
         self.profiler.lock().unwrap().is_some()
     }
 
-    fn toggle_profiling(&self) {
-        let mut profiler_lock = self.profiler.lock().unwrap();
+    fn toggle_profiling(&mut self) {
+        #[cfg(feature = "profile")]
+        {
+            let mut profiler_lock = self.profiler.lock().unwrap();
 
-        if profiler_lock.is_none() {
-            debug!("Profiling started");
-            *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
-        } else {
-            debug!("Profiling stopped and saved");
+            if profiler_lock.is_none() {
+                debug!("Profiling started");
+                *profiler_lock = Some(pprof::ProfilerGuard::new(1000).unwrap());
+            } else {
+                debug!("Profiling stopped and saved");
 
-            if let Some(guard) = profiler_lock.take() {
-                if let Ok(report) = guard.report().build() {
-                    let file = std::fs::File::create("flamegraph.svg").unwrap();
-                    report.flamegraph(file).unwrap();
-                } else {
-                    debug!("Could not build profile report");
+                if let Some(guard) = profiler_lock.take() {
+                    if let Ok(report) = guard.report().build() {
+                        let file = std::fs::File::create("flamegraph.svg").unwrap();
+                        report.flamegraph(file).unwrap();
+                    } else {
+                        debug!("Could not build profile report");
+                    }
                 }
             }
+        }
+
+        #[cfg(not(feature = "profile"))]
+        {
+            self.notifications
+                .warn("Profiling requires a build with the `profile` feature");
         }
     }
 
@@ -1542,7 +1557,7 @@ impl App {
         if let Some(book) = &mut self.current_book {
             let (content, title) = match book.epub.get_current_str() {
                 Some((raw_html, _mime)) => {
-                    let title = TextGenerator::extract_chapter_title(&raw_html);
+                    let title = extract_chapter_title(&raw_html);
                     (raw_html, title)
                 }
                 None => {
@@ -5210,7 +5225,7 @@ impl App {
         for chapter_index in 0..doc.get_num_chapters() {
             if doc.set_current_chapter(chapter_index) {
                 if let Some((raw_html, _mime)) = doc.get_current_str() {
-                    let title = TextGenerator::extract_chapter_title(&raw_html)
+                    let title = extract_chapter_title(&raw_html)
                         .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
 
                     let markdown_doc = converter.convert(&raw_html);
@@ -5917,6 +5932,12 @@ where
         while event_source.poll(Duration::from_millis(0))? && events_processed < 50 {
             let event = event_source.read()?;
             events_processed += 1;
+
+            // On Windows, crossterm emits both Press and Release key events.
+            // Ignore Release (and Repeat) to prevent double-processing.
+            if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Press) {
+                continue;
+            }
 
             // Route events to PDF handler when in PDF mode AND (focused on PDF content OR popup is active)
             #[cfg(feature = "pdf")]

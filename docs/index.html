@@ -810,6 +810,9 @@
                                     <li>Windows: Visual Studio Build Tools with C++ workload.</li>
                                     <li>PDF/DJVU builds on Linux: <code>pkg-config</code>, <code>libfontconfig1-dev</code>, <code>clang</code>, <code>libclang-dev</code>.</li>
                                     <li>Without PDF/DJVU: <code>cargo install bookokrat --no-default-features</code>.</li>
+                                    <li>Windows: PDF/DJVU might not work in PowerShell. Consider using <a href="https://wezfurlong.org/wezterm/" style="color:var(--accent)">WezTerm</a> for image support.</li>
+                                    <li>Windows: for full Kitty protocol support, consider WSL with <a href="https://ghostty.org/" style="color:var(--accent)">Ghostty</a> or <a href="https://sw.kovidgoyal.net/kitty/" style="color:var(--accent)">Kitty</a>.</li>
+                                    <li>Windows: if MuPDF fails to build, disable PDF/DJVU: <code>cargo install bookokrat --no-default-features</code>.</li>
                                 </ul>
                             </div>
                         </details>
@@ -841,6 +844,9 @@
                             <summary>Does it work on Windows?</summary>
                             <p class="section-desc" style="margin-top: 0.75rem;">
                                 Yes, via Cargo. Install the Visual Studio Build Tools with C++ workload.
+                                PDF/DJVU might not work in PowerShell.
+                                For full Kitty protocol support, consider WSL with Ghostty or Kitty.
+                                If MuPDF fails to build, use <code>--no-default-features</code> to disable PDF/DJVU.
                             </p>
                         </details>
                     </div>

@@ -1,3 +1,4 @@
+use crate::parsing::html_to_markdown::{HtmlTitlePreference, extract_html_title};
 #[cfg(feature = "pdf")]
 use crate::settings::is_pdf_enabled;
 use crate::settings::{BookSortOrder, get_book_sort_order};
@@ -434,8 +435,7 @@ impl BookManager {
             .and_then(|name| name.to_str())
             .unwrap_or("HTML Document");
 
-        let title = self
-            .extract_html_title(html_content)
+        let title = extract_html_title(html_content, HtmlTitlePreference::TitleThenH1)
             .unwrap_or_else(|| filename.to_string());
 
         let temp_file =
@@ -558,30 +558,6 @@ impl BookManager {
                 Err(format!("Failed to open created EPUB: {e}"))
             }
         }
-    }
-
-    fn extract_html_title(&self, content: &str) -> Option<String> {
-        // Try to extract title from <title> tag or <h1> tag
-        if let Some(start) = content.find("<title>") {
-            if let Some(end) = content[start + 7..].find("</title>") {
-                let title = &content[start + 7..start + 7 + end];
-                return Some(title.trim().to_string());
-            }
-        }
-
-        if let Some(start) = content.find("<h1") {
-            if let Some(tag_end) = content[start..].find('>') {
-                let content_start = start + tag_end + 1;
-                if let Some(end) = content[content_start..].find("</h1>") {
-                    let title = &content[content_start..content_start + end];
-                    // Remove any HTML tags from the title
-                    let clean_title = title.replace(['<', '>'], "");
-                    return Some(clean_title.trim().to_string());
-                }
-            }
-        }
-
-        None
     }
 
     pub fn refresh_books(&mut self) {

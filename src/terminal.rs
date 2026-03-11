@@ -103,7 +103,7 @@ pub fn detect_terminal_with_picker(picker: &mut Picker) -> TerminalCapabilities 
 
     apply_protocol_overrides(&mut caps, Some(picker));
     caps.supports_graphics = protocol_supports_graphics(caps.protocol);
-    caps.pdf = derive_pdf_capabilities(&caps);
+    refresh_pdf_capabilities(&mut caps);
 
     caps
 }
@@ -115,14 +115,26 @@ pub fn detect_terminal_with_probe() -> TerminalCapabilities {
     static PROBED_CAPS: OnceLock<TerminalCapabilities> = OnceLock::new();
     PROBED_CAPS
         .get_or_init(|| {
-            let caps = detect_terminal();
-            if caps.protocol.is_some() {
-                return caps;
+            let mut caps = detect_terminal();
+            if caps.protocol.is_none() {
+                caps = match crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
+                    Ok(mut picker) => detect_terminal_with_picker(&mut picker),
+                    Err(_) => caps,
+                };
             }
-            match crate::vendored::ratatui_image::picker::Picker::from_query_stdio() {
-                Ok(mut picker) => detect_terminal_with_picker(&mut picker),
-                Err(_) => caps,
+
+            #[cfg(feature = "pdf")]
+            if matches!(
+                caps.kind,
+                TerminalKind::Other(_) | TerminalKind::Unknown | TerminalKind::Tmux
+            ) && matches!(caps.protocol, Some(GraphicsProtocol::Kitty))
+            {
+                let _ = probe_kitty_shm_support(&caps);
+                let _ = probe_kitty_delete_range_support(&caps);
             }
+
+            refresh_pdf_capabilities(&mut caps);
+            caps
         })
         .clone()
 }
@@ -156,9 +168,15 @@ pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
 
     apply_protocol_overrides(&mut caps, None);
     caps.supports_graphics = protocol_supports_graphics(caps.protocol) || supports_graphics;
-    caps.pdf = derive_pdf_capabilities(&caps);
+    refresh_pdf_capabilities(&mut caps);
 
     caps
+}
+
+fn refresh_pdf_capabilities(caps: &mut TerminalCapabilities) {
+    let supports_kitty_shm = cached_kitty_shm_support(caps.protocol);
+    let supports_kitty_delete_range = cached_kitty_delete_range_support(caps.protocol);
+    caps.pdf = derive_pdf_capabilities(caps, supports_kitty_shm, supports_kitty_delete_range);
 }
 
 fn detect_kind(env: &TerminalEnv) -> TerminalKind {
@@ -490,7 +508,11 @@ pub fn choose_epub_protocol(picker: &Picker, caps: &TerminalCapabilities) -> Pro
     }
 }
 
-fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
+fn derive_pdf_capabilities(
+    caps: &TerminalCapabilities,
+    supports_kitty_shm: Option<bool>,
+    supports_kitty_delete_range: Option<bool>,
+) -> PdfCapabilities {
     let mut supported = caps.supports_graphics;
     let mut blocked_reason = None;
 
@@ -515,8 +537,12 @@ fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
         caps.protocol,
         Some(GraphicsProtocol::Kitty) | Some(GraphicsProtocol::Iterm2)
     );
-    let supports_scroll_mode = matches!(caps.kind, TerminalKind::Kitty | TerminalKind::Ghostty)
-        && matches!(caps.protocol, Some(GraphicsProtocol::Kitty));
+    let supports_scroll_mode = matches!(caps.protocol, Some(GraphicsProtocol::Kitty))
+        && caps.kind != TerminalKind::ITerm
+        && match caps.kind {
+            TerminalKind::Kitty | TerminalKind::Ghostty => true,
+            _ => supports_kitty_shm == Some(true),
+        };
     let supports_normal_mode = caps.kind != TerminalKind::ITerm;
 
     PdfCapabilities {
@@ -525,10 +551,56 @@ fn derive_pdf_capabilities(caps: &TerminalCapabilities) -> PdfCapabilities {
         supports_comments,
         supports_scroll_mode,
         supports_normal_mode,
-        supports_kitty_shm: None,
-        supports_kitty_delete_range: None,
+        supports_kitty_shm,
+        supports_kitty_delete_range,
     }
 }
+
+fn cached_kitty_shm_support(protocol: Option<GraphicsProtocol>) -> Option<bool> {
+    if env::var("BOOKOKRAT_DISABLE_KITTY_SHM").is_ok()
+        && matches!(protocol, Some(GraphicsProtocol::Kitty))
+    {
+        return Some(false);
+    }
+
+    if !matches!(protocol, Some(GraphicsProtocol::Kitty)) {
+        return None;
+    }
+
+    #[cfg(feature = "pdf")]
+    {
+        PROBED_KITTY_SHM_SUPPORT.get().copied().unwrap_or(None)
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    {
+        None
+    }
+}
+
+fn cached_kitty_delete_range_support(protocol: Option<GraphicsProtocol>) -> Option<bool> {
+    if !matches!(protocol, Some(GraphicsProtocol::Kitty)) {
+        return None;
+    }
+
+    #[cfg(feature = "pdf")]
+    {
+        PROBED_KITTY_DELETE_RANGE_SUPPORT
+            .get()
+            .copied()
+            .unwrap_or(None)
+    }
+
+    #[cfg(not(feature = "pdf"))]
+    {
+        None
+    }
+}
+
+#[cfg(feature = "pdf")]
+static PROBED_KITTY_SHM_SUPPORT: OnceLock<Option<bool>> = OnceLock::new();
+#[cfg(feature = "pdf")]
+static PROBED_KITTY_DELETE_RANGE_SUPPORT: OnceLock<Option<bool>> = OnceLock::new();
 
 #[cfg(feature = "pdf")]
 pub fn probe_kitty_shm_support(caps: &TerminalCapabilities) -> Option<bool> {
@@ -539,14 +611,16 @@ pub fn probe_kitty_shm_support(caps: &TerminalCapabilities) -> Option<bool> {
         return None;
     }
 
-    let mode = crate::pdf::kittyv2::probe_capabilities();
-    match mode {
-        crate::pdf::kittyv2::TransferMode::SharedMemory => Some(true),
-        crate::pdf::kittyv2::TransferMode::Chunked => {
-            warn!("Kitty SHM probe failed; will use chunked transfer.");
-            Some(false)
+    *PROBED_KITTY_SHM_SUPPORT.get_or_init(|| {
+        let mode = crate::pdf::kittyv2::probe_capabilities();
+        match mode {
+            crate::pdf::kittyv2::TransferMode::SharedMemory => Some(true),
+            crate::pdf::kittyv2::TransferMode::Chunked => {
+                warn!("Kitty SHM probe failed; will use chunked transfer.");
+                Some(false)
+            }
         }
-    }
+    })
 }
 
 #[cfg(feature = "pdf")]
@@ -554,7 +628,8 @@ pub fn probe_kitty_delete_range_support(caps: &TerminalCapabilities) -> Option<b
     if !matches!(caps.protocol, Some(GraphicsProtocol::Kitty)) {
         return None;
     }
-    Some(crate::pdf::kittyv2::probe_delete_range_support())
+    *PROBED_KITTY_DELETE_RANGE_SUPPORT
+        .get_or_init(|| Some(crate::pdf::kittyv2::probe_delete_range_support()))
 }
 
 #[cfg(feature = "pdf")]

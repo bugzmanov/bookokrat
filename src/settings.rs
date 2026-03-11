@@ -60,7 +60,7 @@ pub enum LookupDisplay {
     FireAndForget,
 }
 
-/// PDF render mode for Kitty terminals
+/// PDF render mode for terminals with Kitty graphics protocol
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PdfRenderMode {
@@ -695,12 +695,12 @@ pub fn get_lookup_display() -> LookupDisplay {
 }
 
 /// Called on app startup to fix incompatible settings when switching terminals
-/// (e.g., from Kitty to WezTerm with Scroll mode selected)
+/// (e.g., from a Kitty-protocol terminal to one without Kitty graphics)
 pub fn fix_incompatible_pdf_settings() {
     let caps = crate::terminal::detect_terminal_with_probe();
     let current_mode = get_pdf_render_mode();
 
-    // If user switched from Kitty to non-Kitty terminal with Scroll mode, silently fix it
+    // If user switched away from Kitty protocol with Scroll mode selected, silently fix it.
     if !caps.pdf.supports_scroll_mode && current_mode == PdfRenderMode::Scroll {
         if let Ok(mut settings) = SETTINGS.write() {
             settings.pdf_render_mode = PdfRenderMode::Page;

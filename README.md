@@ -74,6 +74,11 @@ xcode-select --install
 **Windows:**
 Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) with the \"Desktop development with C++\" workload.
 
+> **Windows notes:**
+> - PDF/DJVU might not work in Windows PowerShell.
+> - For full Kitty graphics protocol support, consider using WSL with [Ghostty](https://ghostty.org/) or [Kitty](https://sw.kovidgoyal.net/kitty/).
+> - If MuPDF fails to build, disable PDF/DJVU support: `cargo install bookokrat --no-default-features`
+
 </details>
 
 ```bash
