@@ -31,9 +31,10 @@ fn ensure_test_report_initialized() {
 }
 
 fn create_test_app_isolated() -> (App, TempDir) {
-    // Reset theme and margin to defaults to prevent leaking from other tests
+    // Reset theme, margin, and justify to defaults to prevent leaking from other tests
     set_theme_by_index(0);
     set_margin(0);
+    bookokrat::settings::set_justify_text(false);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let app = App::new_with_config(
         Some("tests/testdata"),
@@ -4936,5 +4937,85 @@ fn test_ctrl_l_force_redraw_svg() {
         std::path::Path::new("tests/snapshots/ctrl_l_force_redraw_recovered.svg"),
         "test_ctrl_l_force_redraw_svg_recovered",
         create_test_failure_handler("test_ctrl_l_force_redraw_svg_recovered"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_justify_text_on_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Zen mode for full-width text
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    app.press_key(crossterm::event::KeyCode::Tab);
+
+    // Enable justify via Space+j
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_justify_text_on.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output,
+        std::path::Path::new("tests/snapshots/justify_text_on.svg"),
+        "test_justify_text_on_svg",
+        create_test_failure_handler("test_justify_text_on_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_justify_text_off_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Zen mode for full-width text
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    app.press_key(crossterm::event::KeyCode::Tab);
+
+    // Enable justify then disable — toggle twice
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_justify_text_off.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output,
+        std::path::Path::new("tests/snapshots/justify_text_off.svg"),
+        "test_justify_text_off_svg",
+        create_test_failure_handler("test_justify_text_off_svg"),
     );
 }

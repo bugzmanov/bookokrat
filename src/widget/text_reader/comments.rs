@@ -898,6 +898,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(comment_header);
         *total_height += 1;
@@ -927,6 +928,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             });
             self.raw_text_lines.push(quoted_line);
             *total_height += 1;
@@ -948,6 +950,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1022,7 +1025,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let total_len = {
             let (last_idx, last_cs, last_ccs) = relevant.last().unwrap();
             let last_line = &self.rendered_content.lines[*last_idx];
-            let content_len = last_line.raw_text.chars().count().saturating_sub(*last_ccs);
+            let content_len = canonical_content_len(last_line, *last_ccs);
             last_cs + content_len
         };
 
@@ -1030,9 +1033,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             relevant.iter().find(|(idx, _, _)| *idx == point.line).map(
                 |(idx, canon_start, col_start)| {
                     let line = &self.rendered_content.lines[*idx];
-                    let content_len = line.raw_text.chars().count().saturating_sub(*col_start);
-                    let rel = point.column.saturating_sub(*col_start).min(content_len);
-                    canon_start + rel
+                    let content_len = canonical_content_len(line, *col_start);
+                    let visual_rel = point.column.saturating_sub(*col_start);
+                    let rel = if let Some(ref jmap) = line.justify_map {
+                        jmap.get(visual_rel)
+                            .copied()
+                            .unwrap_or_else(|| jmap.last().copied().map(|v| v + 1).unwrap_or(0))
+                            as usize
+                    } else {
+                        visual_rel
+                    };
+                    canon_start + rel.min(content_len)
                 },
             )
         };
@@ -1070,5 +1081,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     #[doc(hidden)]
     pub fn testing_rendered_lines(&self) -> &[RenderedLine] {
         self.rendered_content.lines.as_slice()
+    }
+}
+
+/// Get the canonical (unjustified) content length for a rendered line.
+fn canonical_content_len(line: &RenderedLine, col_start: usize) -> usize {
+    if let Some(ref jmap) = line.justify_map {
+        jmap.last().copied().map(|v| v as usize + 1).unwrap_or(0)
+    } else {
+        line.raw_text.chars().count().saturating_sub(col_start)
     }
 }

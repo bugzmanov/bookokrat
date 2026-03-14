@@ -58,6 +58,7 @@
 │  Space+t       Open theme selector                                          │
 │  Space+s       Open settings (PDF support + render mode)                    │
 │  + / -         Increase / decrease content margins                          │
+│  Space+j       Toggle text justification (EPUB)                             │
 │  Space+h       Toggle reading history popup                                 │
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
@@ -99,9 +100,9 @@
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
 │  i (PDF)       Toggle image inversion (themed mode only; saved per book)    │
-│  I (PDF)       Switch between original PDF rendering and themed style        │
-│                (saved per book).                                             │
-│                Themed style is the default.                                  │
+│  I (PDF)       Switch between original PDF rendering and themed style       │
+│                (saved per book).                                            │
+│                Themed style is the default.                                 │
 │                In original rendering mode, i has no visual effect.          │
 │  n             Toggle normal mode                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
