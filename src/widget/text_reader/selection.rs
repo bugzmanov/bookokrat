@@ -227,12 +227,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .extract_selected_text(&self.raw_text_lines)
         {
             self.last_copied_text = Some(selected_text.clone());
-            use arboard::Clipboard;
-            let mut clipboard =
-                Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
-            clipboard
-                .set_text(selected_text)
-                .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
+            crate::clipboard::copy_to_clipboard(&selected_text)?;
             Ok(())
         } else {
             Err("No text selected".to_string())
@@ -240,9 +235,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn copy_chapter_to_clipboard(&mut self) -> Result<(), String> {
-        use arboard::Clipboard;
-        let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
         let text = if self.show_raw_html {
             self.raw_html_content
                 .as_ref()
@@ -252,19 +244,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             self.raw_text_lines.join("\n")
         };
         self.last_copied_text = Some(text.clone());
-        clipboard
-            .set_text(text)
-            .map_err(|e| format!("Failed to copy to clipboard: {e}"))
+        crate::clipboard::copy_to_clipboard(&text)
     }
 
     pub fn copy_to_clipboard(&mut self, text: String) -> Result<(), String> {
         self.last_copied_text = Some(text.clone());
-        use arboard::Clipboard;
-        let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
-        clipboard
-            .set_text(text)
-            .map_err(|e| format!("Failed to copy to clipboard: {e}"))
+        crate::clipboard::copy_to_clipboard(&text)
     }
 
     //for debuggin purposes
@@ -284,12 +269,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         self.last_copied_text = Some(debug_output.clone());
-        use arboard::Clipboard;
-        let mut clipboard =
-            Clipboard::new().map_err(|e| format!("Failed to access clipboard: {e}"))?;
-        clipboard
-            .set_text(debug_output)
-            .map_err(|e| format!("Failed to copy to clipboard: {e}"))?;
+        crate::clipboard::copy_to_clipboard(&debug_output)?;
 
         Ok(())
     }

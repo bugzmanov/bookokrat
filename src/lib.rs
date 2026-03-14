@@ -1,6 +1,7 @@
 // Export modules for use in tests
 pub mod book_manager;
 pub mod bookmarks;
+pub mod clipboard;
 pub mod color_mode;
 pub mod comments;
 pub mod export;
