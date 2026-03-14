@@ -904,6 +904,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             });
 
             self.raw_text_lines.push(wrapped_line.to_string());
@@ -935,6 +936,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             });
 
             self.raw_text_lines.push(decoration);
@@ -974,6 +976,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -1176,6 +1179,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -1851,6 +1855,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     inline_code_comments: inline_fragments,
                     canonical_content_start: None,
                     content_column_start: 0,
+                    justify_map: None,
                 };
 
                 lines.push(rendered_line);
@@ -1941,6 +1946,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 node_index: None,
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
             });
@@ -2423,6 +2429,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             };
 
             lines.push(rendered_line);
@@ -2501,6 +2508,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2864,6 +2872,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
 
         self.raw_text_lines.push(hr_line);
@@ -3068,6 +3077,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
@@ -3152,6 +3162,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -3417,17 +3428,33 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             let content_col_start = indent_width_chars + prefix_width;
 
+            let justify_map = if self.justify_text
+                && line_idx < wrapped.len() - 1
+                && wl_chars_count < available_width
+            {
+                justify_line(
+                    &mut line_spans,
+                    &mut line_links,
+                    &mut final_raw_text,
+                    content_col_start,
+                    available_width - wl_chars_count,
+                )
+            } else {
+                None
+            };
+
             lines.push(RenderedLine {
                 spans: line_spans,
                 raw_text: final_raw_text.clone(),
                 line_type: LineType::Text,
-                link_nodes: line_links, // Captured links!
+                link_nodes: line_links,
                 node_anchor: None,
                 node_index,
                 code_line: None,
                 inline_code_comments: Vec::new(),
                 canonical_content_start: canonical_base_offset.map(|base| base + plain_idx),
                 content_column_start: content_col_start,
+                justify_map,
             });
 
             self.raw_text_lines.push(final_raw_text);
@@ -3685,6 +3712,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 inline_code_comments: Vec::new(),
                 canonical_content_start: None,
                 content_column_start: 0,
+                justify_map: None,
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync
@@ -3696,6 +3724,143 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.raw_text_lines.push(String::new());
         *total_height += 1;
     }
+}
+
+/// Justify a line by distributing extra spaces between words.
+/// Modifies spans, links, and raw_text in place. Returns a justify_map
+/// mapping each visual content column to its canonical (unjustified) index.
+fn justify_line(
+    line_spans: &mut Vec<Span<'static>>,
+    line_links: &mut [LinkInfo],
+    raw_text: &mut String,
+    content_col_start: usize,
+    deficit: usize,
+) -> Option<Vec<u16>> {
+    if deficit == 0 {
+        return None;
+    }
+
+    // Find word-gap positions in the content portion of raw_text
+    let raw_chars: Vec<char> = raw_text.chars().collect();
+    let content_chars = &raw_chars[content_col_start..];
+
+    let mut gap_positions: Vec<usize> = Vec::new();
+    for (i, &ch) in content_chars.iter().enumerate() {
+        if ch == ' '
+            && i > 0
+            && content_chars[i - 1] != ' '
+            && i + 1 < content_chars.len()
+            && content_chars[i + 1] != ' '
+        {
+            gap_positions.push(i);
+        }
+    }
+
+    if gap_positions.is_empty() {
+        return None;
+    }
+
+    let num_gaps = gap_positions.len();
+    let base_extra = deficit / num_gaps;
+    let remainder = deficit % num_gaps;
+
+    // Build justify_map: for each visual content column -> canonical content index
+    let mut justify_map = Vec::new();
+    let mut gap_idx = 0;
+    for (canonical_idx, (i, &_ch)) in (0u16..).zip(content_chars.iter().enumerate()) {
+        justify_map.push(canonical_idx);
+        if gap_idx < gap_positions.len() && i == gap_positions[gap_idx] {
+            let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
+            for _ in 0..extra {
+                justify_map.push(canonical_idx);
+            }
+            gap_idx += 1;
+        }
+    }
+
+    // Now rebuild raw_text with justified content
+    let prefix_part: String = raw_chars[..content_col_start].iter().collect();
+    let mut justified_content = String::new();
+    gap_idx = 0;
+    for (i, &ch) in content_chars.iter().enumerate() {
+        justified_content.push(ch);
+        if gap_idx < gap_positions.len() && i == gap_positions[gap_idx] {
+            let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
+            for _ in 0..extra {
+                justified_content.push(' ');
+            }
+            gap_idx += 1;
+        }
+    }
+    *raw_text = format!("{}{}", prefix_part, justified_content);
+
+    // Rebuild spans with justified content: insert extra spaces at gap positions within spans
+    // We need to figure out which spans contain which content characters, and expand them.
+    let prefix_span_count = if content_col_start > 0 {
+        // Count how many leading spans are prefix/indent (their total char count == content_col_start)
+        let mut count = 0;
+        let mut chars_counted = 0;
+        for span in line_spans.iter() {
+            if chars_counted >= content_col_start {
+                break;
+            }
+            chars_counted += span.content.chars().count();
+            count += 1;
+        }
+        count
+    } else {
+        0
+    };
+
+    let mut content_char_idx = 0;
+    gap_idx = 0;
+    // Pre-compute extra spaces at each gap position for link adjustment
+    let mut extra_at_gap: Vec<(usize, usize)> = Vec::new(); // (content_char_position, extra_spaces)
+    for (gi, &gp) in gap_positions.iter().enumerate() {
+        let extra = base_extra + if gi < remainder { 1 } else { 0 };
+        extra_at_gap.push((gp, extra));
+    }
+
+    for span in line_spans.iter_mut().skip(prefix_span_count) {
+        let span_chars: Vec<char> = span.content.chars().collect();
+        let mut new_content = String::new();
+
+        for &ch in &span_chars {
+            new_content.push(ch);
+            if gap_idx < gap_positions.len() && content_char_idx == gap_positions[gap_idx] {
+                let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
+                for _ in 0..extra {
+                    new_content.push(' ');
+                }
+                gap_idx += 1;
+            }
+            content_char_idx += 1;
+        }
+
+        *span = Span::styled(new_content, span.style);
+    }
+
+    // Adjust link positions: each link's start_col and end_col need shifting
+    // based on how many extra spaces were inserted before/within them
+    for link in line_links.iter_mut() {
+        let link_content_start = link.start_col.saturating_sub(content_col_start);
+        let link_content_end = link.end_col.saturating_sub(content_col_start);
+
+        let mut shift_start = 0;
+        let mut shift_end = 0;
+        for &(gp, extra) in &extra_at_gap {
+            if gp < link_content_start {
+                shift_start += extra;
+                shift_end += extra;
+            } else if gp < link_content_end {
+                shift_end += extra;
+            }
+        }
+        link.start_col += shift_start;
+        link.end_col += shift_end;
+    }
+
+    Some(justify_map)
 }
 
 #[cfg(test)]

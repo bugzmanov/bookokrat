@@ -430,6 +430,7 @@ impl App {
         #[cfg(not(any(test, feature = "test-utils")))]
         let mut text_reader = MarkdownTextReader::new();
         text_reader.set_margin(settings::get_margin());
+        text_reader.set_justify_text(settings::is_justify_text());
         let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
 
         let cache_dir =
@@ -3639,6 +3640,21 @@ impl App {
                         debug!("Copy chapter failed: {e}");
                     } else {
                         debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " j" => {
+                if self.current_book.is_some() {
+                    let current_node = self.text_reader.get_current_node_index();
+                    let enabled = self.text_reader.toggle_justify_text();
+                    self.text_reader.restore_to_node_index(current_node);
+                    settings::set_justify_text(enabled);
+                    if enabled {
+                        self.notifications.info("Text justification: on");
+                    } else {
+                        self.notifications.info("Text justification: off");
                     }
                 }
                 self.key_sequence.clear();

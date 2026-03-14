@@ -40,6 +40,9 @@ pub struct RenderedLine {
     pub canonical_content_start: Option<usize>,
     /// Number of visual columns before actual text content (indent + prefix like "• " or "> ").
     pub content_column_start: usize,
+    /// Maps each visual content column (after content_column_start) to canonical char index.
+    /// Present only when text justification inserted extra spaces.
+    pub justify_map: Option<Vec<u16>>,
 }
 
 impl RenderedLine {
@@ -55,6 +58,7 @@ impl RenderedLine {
             inline_code_comments: Vec::new(),
             canonical_content_start: None,
             content_column_start: 0,
+            justify_map: None,
         }
     }
 }

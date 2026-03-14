@@ -129,6 +129,7 @@ fn main() -> Result<()> {
     }
 
     info!("Starting Bookokrat EPUB reader");
+    bookokrat::clipboard::init();
 
     #[cfg(feature = "pdf")]
     {

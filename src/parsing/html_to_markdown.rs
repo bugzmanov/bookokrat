@@ -558,6 +558,23 @@ impl HtmlToMarkdownConverter {
                             self.visit_node(child, document);
                         }
                     }
+                } else if self.has_only_inline_content(node) {
+                    let blocks = self.extract_formatted_content_as_blocks(node, false);
+                    for mut block_node in blocks {
+                        let should_add = match &block_node.block {
+                            Block::Paragraph { content } => !content.is_empty(),
+                            Block::CodeBlock { content, .. } => !content.trim().is_empty(),
+                            _ => true,
+                        };
+                        if should_add {
+                            if matches!(block_node.block, Block::Paragraph { .. }) {
+                                if block_node.id.is_none() {
+                                    block_node.id = div_id.clone();
+                                }
+                            }
+                            document.blocks.push(block_node);
+                        }
+                    }
                 } else {
                     for child in node.children.borrow().iter() {
                         self.visit_node(child, document);
@@ -571,9 +588,7 @@ impl HtmlToMarkdownConverter {
             "span" => {
                 let span_id = self.get_attr_value(attrs, "id");
                 let start_len = document.blocks.len();
-                for child in node.children.borrow().iter() {
-                    self.visit_node(child, document);
-                }
+                self.extract_inline_content_or_recurse(node, document);
                 if let Some(span_id) = span_id {
                     self.attach_container_id_or_insert_anchor(span_id, start_len, document);
                 }
@@ -601,10 +616,7 @@ impl HtmlToMarkdownConverter {
             }
             "strong" | "b" | "em" | "i" | "code" | "a" | "br" | "del" | "s" | "strike" | "sub"
             | "sup" => {
-                // These are handled within extract_formatted_content, skip at block level
-                for child in node.children.borrow().iter() {
-                    self.visit_node(child, document);
-                }
+                self.extract_inline_content_or_recurse(node, document);
             }
             "table" => {
                 self.handle_table(attrs, node, document);
@@ -621,9 +633,7 @@ impl HtmlToMarkdownConverter {
             // Skip li, dt, dd at this level - they're handled within their containers
             "li" | "dt" | "dd" => {}
             _ => {
-                for child in node.children.borrow().iter() {
-                    self.visit_node(child, document);
-                }
+                self.extract_inline_content_or_recurse(node, document);
             }
         }
     }
@@ -2659,6 +2669,76 @@ impl HtmlToMarkdownConverter {
             },
             0..0,
         ));
+    }
+
+    fn has_only_inline_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> bool {
+        let mut has_content = false;
+        for child in node.children.borrow().iter() {
+            match &child.data {
+                NodeData::Element { name, .. } => {
+                    let tag = name.local.as_ref();
+                    if matches!(
+                        tag,
+                        "div"
+                            | "section"
+                            | "article"
+                            | "p"
+                            | "ul"
+                            | "ol"
+                            | "table"
+                            | "blockquote"
+                            | "dl"
+                            | "hr"
+                            | "aside"
+                            | "figure"
+                            | "pre"
+                            | "h1"
+                            | "h2"
+                            | "h3"
+                            | "h4"
+                            | "h5"
+                            | "h6"
+                            | "header"
+                            | "footer"
+                            | "nav"
+                    ) {
+                        return false;
+                    }
+                    has_content = true;
+                }
+                NodeData::Text { contents } => {
+                    if !contents.borrow().trim().is_empty() {
+                        has_content = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        has_content
+    }
+
+    fn extract_inline_content_or_recurse(
+        &mut self,
+        node: &Rc<markup5ever_rcdom::Node>,
+        document: &mut Document,
+    ) {
+        if self.has_only_inline_content(node) {
+            let blocks = self.extract_formatted_content_as_blocks(node, false);
+            for block_node in blocks {
+                let should_add = match &block_node.block {
+                    Block::Paragraph { content } => !content.is_empty(),
+                    Block::CodeBlock { content, .. } => !content.trim().is_empty(),
+                    _ => true,
+                };
+                if should_add {
+                    document.blocks.push(block_node);
+                }
+            }
+        } else {
+            for child in node.children.borrow().iter() {
+                self.visit_node(child, document);
+            }
+        }
     }
 
     fn is_heading_block_element(tag: &str) -> bool {

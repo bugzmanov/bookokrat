@@ -293,7 +293,7 @@ pub(crate) fn apply_render_responses(
                 log::error!("PDF render error: {error}");
             }
             RenderResponse::ExtractedText { text, .. } => {
-                if let Err(e) = arboard::Clipboard::new().and_then(|mut c| c.set_text(&text)) {
+                if let Err(e) = crate::clipboard::copy_to_clipboard(&text) {
                     log::error!("Failed to copy to clipboard: {e}");
                 } else {
                     notifications.info(format!("Copied {} chars", text.len()));

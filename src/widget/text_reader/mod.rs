@@ -142,6 +142,9 @@ pub struct MarkdownTextReader {
     /// Content margin level (0-20), each level adds 2 columns on each side
     content_margin: u16,
 
+    /// Whether to justify text (distribute extra spaces between words)
+    justify_text: bool,
+
     /// Vim normal mode state
     normal_mode: NormalModeState,
 
@@ -272,6 +275,7 @@ impl MarkdownTextReader {
             comment_input: CommentInputState::default(),
             chapter_title: None,
             content_margin: 0,
+            justify_text: false,
             normal_mode: NormalModeState::new(),
             hud_message: None,
         }
@@ -1230,6 +1234,21 @@ impl MarkdownTextReader {
 
     pub fn get_margin(&self) -> u16 {
         self.content_margin
+    }
+
+    pub fn set_justify_text(&mut self, justify: bool) {
+        self.justify_text = justify;
+        self.cache_generation += 1;
+    }
+
+    pub fn toggle_justify_text(&mut self) -> bool {
+        self.justify_text = !self.justify_text;
+        self.cache_generation += 1;
+        self.justify_text
+    }
+
+    pub fn is_justify_text(&self) -> bool {
+        self.justify_text
     }
 
     pub fn invalidate_render_cache(&mut self) {

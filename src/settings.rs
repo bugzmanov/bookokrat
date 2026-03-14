@@ -137,6 +137,9 @@ pub struct Settings {
     pub custom_themes: Vec<YamlTheme>,
 
     #[serde(default)]
+    pub justify_text: bool,
+
+    #[serde(default)]
     pub book_sort_order: BookSortOrder,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -176,6 +179,7 @@ impl Default for Settings {
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
+            justify_text: false,
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
@@ -400,6 +404,7 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
             "pdf_settings_configured".into(),
             format!("{}", settings.pdf_settings_configured),
         ),
+        ("justify_text".into(), format!("{}", settings.justify_text)),
         (
             "book_sort_order".into(),
             match settings.book_sort_order {
@@ -441,6 +446,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByName => "by_name",
         BookSortOrder::ByType => "by_type",
     };
+    content.push_str(&format!("justify_text: {}\n", settings.justify_text));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     content.push('\n');
 
@@ -665,6 +671,17 @@ pub fn is_pdf_settings_configured() -> bool {
 pub fn set_pdf_settings_configured(configured: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.pdf_settings_configured = configured;
+    }
+    save_settings();
+}
+
+pub fn is_justify_text() -> bool {
+    SETTINGS.read().map(|s| s.justify_text).unwrap_or(false)
+}
+
+pub fn set_justify_text(justify: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.justify_text = justify;
     }
     save_settings();
 }

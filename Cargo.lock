@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "bookokrat"
-version = "0.3.8"
+version = "0.3.9"
 dependencies = [
  "anstyle",
  "anstyle-svg",
