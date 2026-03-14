@@ -5019,3 +5019,67 @@ fn test_justify_text_off_svg() {
         create_test_failure_handler("test_justify_text_off_svg"),
     );
 }
+
+#[test]
+#[parallel]
+fn test_div_with_inline_content_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("div_inline_test.html");
+    let content = r#"<?xml version='1.0' encoding='utf-8'?>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head><title>Inline Content Test</title></head>
+<body>
+<div class="title"><span class="first-letter">S</span>teve Jobs had difficulty figuring out how to position the machine he was building.</div>
+<div class="separator">_____________</div>
+<span class="body-text">This is a top-level span acting as a paragraph with <em>emphasis</em> inside.</span>
+<em>This entire paragraph is emphasized at block level.</em>
+<strong>Bold text at block level should also render.</strong>
+<div class="body-text">Foremost among the workstation manufacturers was a company called <span class="italic">Sun Microsystems</span>, based in Mountain View, California.</div>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        Some("/dev/null"),
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    app.press_key(crossterm::event::KeyCode::Enter);
+    app.press_key(crossterm::event::KeyCode::Tab);
+
+    // Zen mode for clean view
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_div_with_inline_content.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output,
+        std::path::Path::new("tests/snapshots/div_with_inline_content.svg"),
+        "test_div_with_inline_content_svg",
+        create_test_failure_handler("test_div_with_inline_content_svg"),
+    );
+}
