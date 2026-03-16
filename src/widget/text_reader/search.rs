@@ -47,12 +47,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
-    /// Get searchable content (visible lines as text)
+    /// Get searchable content (visible lines as text, with justification spaces removed)
     pub fn get_visible_text(&self) -> Vec<String> {
         self.rendered_content
             .lines
             .iter()
-            .map(|line| line.raw_text.clone())
+            .map(|line| line.unjustified_raw_text())
             .collect()
     }
 
@@ -79,13 +79,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return line_spans;
         }
 
-        // Get the raw text for this line to calculate positions
-        let _raw_text = self
-            .rendered_content
-            .lines
-            .get(line_idx)
-            .map(|l| l.raw_text.clone())
-            .unwrap_or_default();
+        // Remap highlight ranges from unjustified to justified positions if needed
+        let rendered_line = self.rendered_content.lines.get(line_idx);
+        let line_matches: Vec<_> = if rendered_line.is_some_and(|l| l.justify_map.is_some()) {
+            let rl = rendered_line.unwrap();
+            line_matches
+                .into_iter()
+                .map(|m| {
+                    let remapped: Vec<(usize, usize)> = m
+                        .highlight_ranges
+                        .iter()
+                        .map(|(s, e)| {
+                            (
+                                rl.unjustified_to_justified_pos(*s),
+                                rl.unjustified_to_justified_pos(*e),
+                            )
+                        })
+                        .collect();
+                    (m, remapped)
+                })
+                .collect()
+        } else {
+            line_matches
+                .into_iter()
+                .map(|m| {
+                    let ranges = m.highlight_ranges.clone();
+                    (m, ranges)
+                })
+                .collect()
+        };
 
         let mut result_spans = Vec::new();
         let mut char_offset = 0;
@@ -100,8 +122,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let mut segments = vec![];
             let mut last_pos = 0;
 
-            for match_item in &line_matches {
-                for (highlight_start, highlight_end) in &match_item.highlight_ranges {
+            for (_match_item, highlight_ranges) in &line_matches {
+                for (highlight_start, highlight_end) in highlight_ranges {
                     // Check if this highlight overlaps with the current span
                     if *highlight_end > char_offset && *highlight_start < span_end {
                         // Calculate relative positions within the span (character indices)
