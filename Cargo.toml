@@ -116,7 +116,7 @@ tempfile = "3.8"
 serial_test = "3.2"
 
 [features]
-default = ["pdf"]
+default = ["pdf", "svg"]
 test-utils = []
 serde = []
 pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu"]
