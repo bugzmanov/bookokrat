@@ -3764,13 +3764,18 @@ fn justify_line(
     let base_extra = deficit / num_gaps;
     let remainder = deficit % num_gaps;
 
+    // Distribute remainder spaces evenly across gaps (Bresenham-style)
+    let extras: Vec<usize> = (0..num_gaps)
+        .map(|i| base_extra + (remainder * (i + 1)) / num_gaps - (remainder * i) / num_gaps)
+        .collect();
+
     // Build justify_map: for each visual content column -> canonical content index
     let mut justify_map = Vec::new();
     let mut gap_idx = 0;
     for (canonical_idx, (i, &_ch)) in (0u16..).zip(content_chars.iter().enumerate()) {
         justify_map.push(canonical_idx);
         if gap_idx < gap_positions.len() && i == gap_positions[gap_idx] {
-            let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
+            let extra = extras[gap_idx];
             for _ in 0..extra {
                 justify_map.push(canonical_idx);
             }
@@ -3785,8 +3790,7 @@ fn justify_line(
     for (i, &ch) in content_chars.iter().enumerate() {
         justified_content.push(ch);
         if gap_idx < gap_positions.len() && i == gap_positions[gap_idx] {
-            let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
-            for _ in 0..extra {
+            for _ in 0..extras[gap_idx] {
                 justified_content.push(' ');
             }
             gap_idx += 1;
@@ -3817,8 +3821,7 @@ fn justify_line(
     // Pre-compute extra spaces at each gap position for link adjustment
     let mut extra_at_gap: Vec<(usize, usize)> = Vec::new(); // (content_char_position, extra_spaces)
     for (gi, &gp) in gap_positions.iter().enumerate() {
-        let extra = base_extra + if gi < remainder { 1 } else { 0 };
-        extra_at_gap.push((gp, extra));
+        extra_at_gap.push((gp, extras[gi]));
     }
 
     for span in line_spans.iter_mut().skip(prefix_span_count) {
@@ -3828,8 +3831,7 @@ fn justify_line(
         for &ch in &span_chars {
             new_content.push(ch);
             if gap_idx < gap_positions.len() && content_char_idx == gap_positions[gap_idx] {
-                let extra = base_extra + if gap_idx < remainder { 1 } else { 0 };
-                for _ in 0..extra {
+                for _ in 0..extras[gap_idx] {
                     new_content.push(' ');
                 }
                 gap_idx += 1;
