@@ -4941,7 +4941,7 @@ fn test_ctrl_l_force_redraw_svg() {
 }
 
 #[test]
-#[parallel]
+#[serial]
 fn test_justify_text_on_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
@@ -4980,7 +4980,7 @@ fn test_justify_text_on_svg() {
 }
 
 #[test]
-#[parallel]
+#[serial]
 fn test_justify_text_off_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
@@ -5021,7 +5021,7 @@ fn test_justify_text_off_svg() {
 }
 
 #[test]
-#[parallel]
+#[serial]
 fn test_search_with_justified_text_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
