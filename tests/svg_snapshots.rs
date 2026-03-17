@@ -4941,7 +4941,7 @@ fn test_ctrl_l_force_redraw_svg() {
 }
 
 #[test]
-#[parallel]
+#[serial]
 fn test_justify_text_on_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
@@ -4980,7 +4980,7 @@ fn test_justify_text_on_svg() {
 }
 
 #[test]
-#[parallel]
+#[serial]
 fn test_justify_text_off_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
@@ -5017,6 +5017,89 @@ fn test_justify_text_off_svg() {
         std::path::Path::new("tests/snapshots/justify_text_off.svg"),
         "test_justify_text_off_svg",
         create_test_failure_handler("test_justify_text_off_svg"),
+    );
+}
+
+#[test]
+#[serial]
+fn test_search_with_justified_text_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 30);
+
+    // Content with paragraphs long enough to trigger justification.
+    // The phrase "the quick brown fox" must appear in a line that gets justified
+    // (i.e. not the last wrapped line of a paragraph).
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Justify Search Test</title></head>
+<body>
+<h1>Animals</h1>
+<p>Once upon a time the quick brown fox jumped over the lazy dog while the sun was setting behind the hills and the birds were singing their evening songs in the distance quietly.</p>
+<p>In the meadow below the quick brown fox found a stream where the water sparkled under the fading light and the frogs began their nightly chorus among the reeds and stones.</p>
+</body>
+</html>
+"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("justify_search.html"), content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+
+    // Zen mode for full-width text, then focus content panel
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('z'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    app.press_key(crossterm::event::KeyCode::Tab);
+
+    // Enable justify via Space+j
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    // Initial draw to establish justified content
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Search for a multi-word phrase that spans a justified gap
+    app.press_key(crossterm::event::KeyCode::Char('/'));
+    for ch in "quick brown fox".chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_search_justified_text.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output,
+        std::path::Path::new("tests/snapshots/search_justified_text.svg"),
+        "test_search_with_justified_text_svg",
+        create_test_failure_handler("test_search_with_justified_text_svg"),
     );
 }
 

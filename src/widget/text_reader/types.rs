@@ -61,6 +61,48 @@ impl RenderedLine {
             justify_map: None,
         }
     }
+
+    /// Returns the raw_text with justification spaces removed.
+    /// When no justify_map is present, returns raw_text as-is.
+    pub fn unjustified_raw_text(&self) -> String {
+        let Some(ref jmap) = self.justify_map else {
+            return self.raw_text.clone();
+        };
+        let raw_chars: Vec<char> = self.raw_text.chars().collect();
+        let ccs = self.content_column_start;
+        if ccs >= raw_chars.len() {
+            return self.raw_text.clone();
+        }
+        let mut result: String = raw_chars[..ccs].iter().collect();
+        let mut prev_canonical: Option<u16> = None;
+        for (i, &ch) in raw_chars[ccs..].iter().enumerate() {
+            let canonical = jmap.get(i).copied().unwrap_or(i as u16);
+            if prev_canonical.map_or(true, |p| canonical != p) {
+                result.push(ch);
+            }
+            prev_canonical = Some(canonical);
+        }
+        result
+    }
+
+    /// Map a char position in the unjustified text to the corresponding
+    /// position in the justified (visual) text.
+    pub fn unjustified_to_justified_pos(&self, pos: usize) -> usize {
+        let Some(ref jmap) = self.justify_map else {
+            return pos;
+        };
+        let ccs = self.content_column_start;
+        if pos <= ccs {
+            return pos;
+        }
+        let canonical = (pos - ccs) as u16;
+        for (visual_col, &canon) in jmap.iter().enumerate() {
+            if canon >= canonical {
+                return ccs + visual_col;
+            }
+        }
+        ccs + jmap.len()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
