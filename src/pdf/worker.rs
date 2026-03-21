@@ -1299,10 +1299,11 @@ fn render_djvu_page_rgb(
     let native_w = page.display_width();
     let native_h = page.display_height();
 
-    // Normal (white bg): strong boldness to counteract perceptual thinning of
-    // dark strokes on bright backgrounds.  Themed/inverted: no boost needed —
-    // light-on-dark text already appears at correct weight.
-    let boldness = if themed { 0.0 } else { 3.0 };
+    // Boldness boosts contrast during anti-aliased downscaling (darkens
+    // intermediate tones).  Useful for text but destructive on photographs:
+    // the curve crushes mid-tones to near-black, leaving only highlights,
+    // which appears as light patches on photo-only pages.  Disabled for now.
+    let boldness = 0.0;
 
     let pixmap = if target_w >= native_w && target_h >= native_h {
         page.render()
