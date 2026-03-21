@@ -44,6 +44,7 @@ pub struct RenderService {
 pub struct DocumentInfo {
     pub page_count: usize,
     pub title: Option<String>,
+    pub author: Option<String>,
     pub toc: Vec<TocEntry>,
     pub page_number_samples: Vec<(usize, i32)>,
 }
@@ -136,12 +137,18 @@ impl RenderService {
             .ok()
             .filter(|t| !t.is_empty());
 
+        let author = doc
+            .metadata(mupdf::MetadataName::Author)
+            .ok()
+            .filter(|a| !a.is_empty());
+
         let toc = super::parsing::toc::extract_toc(&doc, page_count);
         let page_number_samples = page_numbers::collect_page_number_samples(&doc, page_count);
 
         Some(DocumentInfo {
             page_count,
             title,
+            author,
             toc,
             page_number_samples,
         })
@@ -163,6 +170,7 @@ impl RenderService {
         Some(DocumentInfo {
             page_count,
             title: None,
+            author: None,
             toc,
             page_number_samples: Vec::new(),
         })

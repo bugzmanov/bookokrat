@@ -2757,6 +2757,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,
+            book_title: None,
+            book_author: None,
+            absolute_path: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2777,6 +2780,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,
+            book_title: None,
+            book_author: None,
+            absolute_path: None,
         };
         books_map.insert(book_path, bookmark);
     }

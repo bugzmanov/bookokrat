@@ -864,6 +864,7 @@ impl App {
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
         let path_owned = path.to_string();
 
+        self.book_manager.add_external_book(path);
         self.save_bookmark_with_throttle(true);
 
         match format {
@@ -1000,6 +1001,15 @@ impl App {
             doc.get_num_chapters(),
             doc.get_current_chapter()
         );
+
+        // Cache book metadata in bookmarks
+        let epub_title = doc.mdata("title").map(|m| m.value.clone());
+        let epub_author = doc.mdata("creator").map(|m| m.value.clone());
+        let abs_path = std::fs::canonicalize(path)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
+        self.bookmarks
+            .set_metadata(path, epub_title, epub_author, abs_path);
 
         // Clear jump list when opening a new book (jump list is per-book)
         self.jump_list.clear();
@@ -1167,11 +1177,22 @@ impl App {
             .as_ref()
             .map_or_else(Vec::new, |info| info.toc.clone());
 
+        let doc_author = doc_info.as_ref().and_then(|info| info.author.clone());
+
         info!(
-            "PDF loaded: {} pages, title: {:?}",
+            "PDF loaded: {} pages, title: {:?}, author: {:?}",
             page_count,
-            doc_title.as_deref().unwrap_or("(none)")
+            doc_title.as_deref().unwrap_or("(none)"),
+            doc_author.as_deref().unwrap_or("(none)")
         );
+
+        // Cache PDF metadata in bookmarks
+        let abs_path = std::fs::canonicalize(path)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
+        self.bookmarks
+            .set_metadata(path, doc_title.clone(), doc_author, abs_path);
+
         // is_iterm = actual iTerm terminal (for feature restrictions like normal mode)
         let is_iterm = caps.kind == crate::terminal::TerminalKind::ITerm;
         let supports_comments = caps.pdf.supports_comments;
@@ -3401,7 +3422,7 @@ impl App {
                     "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
-                    "j/k/Scroll: Navigate | Enter/DblClick: Open | ESC: Close"
+                    "j/k/Scroll: Navigate | Tab: Switch Tab | Enter/DblClick: Open | ESC: Close"
                 }
                 FocusedPanel::Popup(PopupWindow::BookStats) => {
                     "j/k/Ctrl+d/u/Scroll: Scroll | Enter/DblClick: Jump | ESC: Close"
@@ -3535,6 +3556,14 @@ impl App {
 
     pub fn set_test_mode(&mut self, enabled: bool) {
         self.test_mode = enabled;
+    }
+
+    pub fn show_all_libraries_history(&mut self) {
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+        self.reading_history = Some(ReadingHistory::new_all_libraries(&self.bookmarks));
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus
@@ -4265,6 +4294,13 @@ impl App {
                             self.set_main_panel_focus(MainPanel::Content);
                             self.reading_history = None;
                             let _ = self.open_book_for_reading(book_index);
+                        }
+                    }
+                    ReadingHistoryAction::OpenBookAbsolute { path } => {
+                        self.set_main_panel_focus(MainPanel::Content);
+                        self.reading_history = None;
+                        if let Err(e) = self.open_book_for_reading_by_path(&path) {
+                            self.show_error(format!("Failed to open book: {e}"));
                         }
                     }
                 }
