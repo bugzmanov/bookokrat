@@ -11,7 +11,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState},
+    widgets::{
+        Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState,
+    },
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -44,6 +47,7 @@ pub struct ReadingHistory {
     all_items: Option<Vec<HistoryItem>>,
     all_state: ListState,
     last_popup_area: Option<Rect>,
+    last_list_area: Option<Rect>,
 }
 
 #[derive(Clone)]
@@ -51,10 +55,7 @@ struct HistoryItem {
     date: DateTime<Local>,
     title: String,
     path: String,
-    chapter: usize,
-    total_chapters: usize,
     book_progress: Option<f32>,
-    is_pdf: bool,
     exists: bool,
     absolute_path: Option<String>,
 }
@@ -82,18 +83,12 @@ fn items_from_bookmarks(bookmarks: &Bookmarks) -> Vec<HistoryItem> {
                 .book_title
                 .clone()
                 .unwrap_or_else(|| title_from_path(&key));
-            let is_pdf = bookmark.pdf_page.is_some();
-            let chapter = bookmark.pdf_page.or(bookmark.chapter_index).unwrap_or(0);
-            let total_chapters = bookmark.total_chapters.unwrap_or(0);
 
             HistoryItem {
                 date,
                 title,
                 path: key,
-                chapter,
-                total_chapters,
                 book_progress: bookmark.book_progress,
-                is_pdf,
                 exists: true,
                 absolute_path: bookmark.absolute_path.clone(),
             }
@@ -154,9 +149,6 @@ fn collect_all_library_items() -> Vec<HistoryItem> {
                 .book_title
                 .clone()
                 .unwrap_or_else(|| title_from_path(key));
-            let is_pdf = bookmark.pdf_page.is_some();
-            let chapter = bookmark.pdf_page.or(bookmark.chapter_index).unwrap_or(0);
-            let total_chapters = bookmark.total_chapters.unwrap_or(0);
             let exists = Path::new(&resolved_path).exists();
 
             by_path.insert(
@@ -167,10 +159,7 @@ fn collect_all_library_items() -> Vec<HistoryItem> {
                         date: local_time,
                         title,
                         path: resolved_path,
-                        chapter,
-                        total_chapters,
                         book_progress: bookmark.book_progress,
-                        is_pdf,
                         exists,
                         absolute_path: bookmark.absolute_path.clone(),
                     },
@@ -191,40 +180,31 @@ fn title_from_path(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
-fn format_date(date: &DateTime<Local>, now: &DateTime<Local>) -> String {
-    if date.year() == now.year() {
-        let hour = date.hour();
-        let (h12, ampm) = if hour == 0 {
-            (12, "am")
-        } else if hour < 12 {
-            (hour, "am")
-        } else if hour == 12 {
-            (12, "pm")
-        } else {
-            (hour - 12, "pm")
-        };
-        format!(
-            "{:>2}:{:02}{} {} {:>2}",
-            h12,
-            date.minute(),
-            ampm,
-            date.format("%b"),
-            date.day()
-        )
+fn format_time(date: &DateTime<Local>) -> String {
+    let hour = date.hour();
+    let (h12, ampm) = if hour == 0 {
+        (12, "am")
+    } else if hour < 12 {
+        (hour, "am")
+    } else if hour == 12 {
+        (12, "pm")
     } else {
-        format!("{} {:>2}, {}", date.format("%b"), date.day(), date.year())
-    }
+        (hour - 12, "pm")
+    };
+    format!("{:>2}:{:02}{}", h12, date.minute(), ampm)
 }
 
-fn format_chapter(item: &HistoryItem) -> String {
-    if item.total_chapters > 0 {
-        if item.is_pdf {
-            format!("[p{}/{}]", item.chapter + 1, item.total_chapters)
-        } else {
-            format!("[{}/{}]", item.chapter + 1, item.total_chapters)
-        }
+fn date_group_key(date: &DateTime<Local>) -> (i32, u32, u32) {
+    (date.year(), date.month(), date.day())
+}
+
+fn format_date_group(date: &DateTime<Local>, now: &DateTime<Local>) -> String {
+    if date.year() == now.year() && date.month() == now.month() && date.day() == now.day() {
+        "Today".to_string()
+    } else if date.year() == now.year() {
+        format!("{} {:>2}", date.format("%b"), date.day())
     } else {
-        String::new()
+        format!("{} {:>2}, {}", date.format("%b"), date.day(), date.year())
     }
 }
 
@@ -244,6 +224,7 @@ impl ReadingHistory {
             all_items: None,
             all_state: ListState::default(),
             last_popup_area: None,
+            last_list_area: None,
         }
     }
 
@@ -267,6 +248,7 @@ impl ReadingHistory {
             all_items: Some(all_items),
             all_state,
             last_popup_area: None,
+            last_list_area: None,
         }
     }
 
@@ -315,75 +297,151 @@ impl ReadingHistory {
 
         f.render_widget(Clear, popup_area);
 
-        let active_style = Style::default()
-            .fg(palette.base_05)
-            .bg(palette.base_02)
-            .add_modifier(Modifier::BOLD);
-        let inactive_style = Style::default().fg(palette.base_04);
-
-        let (current_style, all_style) = if self.current_tab == HistoryTab::CurrentLibrary {
-            (active_style, inactive_style)
-        } else {
-            (inactive_style, active_style)
-        };
-
-        let title_line = Line::from(vec![
-            Span::styled(" Current Library ", current_style),
-            Span::raw("  "),
-            Span::styled(" All Libraries ", all_style),
-            Span::raw("  "),
-            Span::styled("[Tab] switch", Style::default().fg(palette.base_03)),
-        ]);
+        let hints = " Tab switch  j/k navigate  Enter select  Esc close ";
 
         let block = Block::default()
-            .title(title_line)
+            .title(" Reading History ")
+            .title_bottom(Line::from(hints).right_aligned())
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette.popup_border_color()))
             .style(Style::default().bg(palette.base_00));
         let inner = block.inner(popup_area);
         f.render_widget(block, popup_area);
 
-        self.render_list(f, inner);
+        let padded = Rect {
+            x: inner.x + 2,
+            y: inner.y + 1,
+            width: inner.width.saturating_sub(4),
+            height: inner.height.saturating_sub(2),
+        };
+
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2), // Tabs
+                Constraint::Min(1),    // List
+            ])
+            .split(padded);
+
+        self.render_tabs(f, main_chunks[0], &palette);
+        self.render_list(f, main_chunks[1]);
+
+        let item_count = self.active_items().len();
+        let list_height = main_chunks[1].height as usize;
+        if item_count > list_height {
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .style(Style::default().fg(palette.base_04))
+                .begin_symbol(Some("▲"))
+                .end_symbol(Some("▼"));
+            let mut scrollbar_state = ScrollbarState::new(item_count)
+                .position(self.active_state().selected().unwrap_or(0));
+            f.render_stateful_widget(
+                scrollbar,
+                popup_area.inner(ratatui::layout::Margin {
+                    vertical: 1,
+                    horizontal: 0,
+                }),
+                &mut scrollbar_state,
+            );
+        }
+    }
+
+    fn render_tabs(&self, f: &mut Frame, area: Rect, palette: &crate::theme::Base16Palette) {
+        let tab_names = ["Current Library", "All Libraries"];
+
+        let mut spans = vec![Span::raw(" ")];
+        for (idx, name) in tab_names.iter().enumerate() {
+            let is_selected = matches!(
+                (idx, self.current_tab),
+                (0, HistoryTab::CurrentLibrary) | (1, HistoryTab::AllLibraries)
+            );
+            let style = if is_selected {
+                Style::default()
+                    .fg(palette.base_06)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette.base_03)
+            };
+            spans.push(Span::styled(*name, style));
+            spans.push(Span::raw("   "));
+        }
+
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
+
+        let underline_y = area.y + 1;
+        if underline_y < area.y + area.height {
+            let underline_area = Rect {
+                x: area.x,
+                y: underline_y,
+                width: area.width,
+                height: 1,
+            };
+
+            let (underline_x, underline_len) = match self.current_tab {
+                HistoryTab::CurrentLibrary => (1, tab_names[0].len()),
+                HistoryTab::AllLibraries => (1 + tab_names[0].len() + 3, tab_names[1].len()),
+            };
+
+            let mut underline_spans = vec![Span::raw(" ".repeat(underline_x))];
+            underline_spans.push(Span::styled(
+                "─".repeat(underline_len),
+                Style::default().fg(palette.base_0d),
+            ));
+
+            f.render_widget(Paragraph::new(Line::from(underline_spans)), underline_area);
+        }
     }
 
     fn render_list(&mut self, f: &mut Frame, area: Rect) {
+        self.last_list_area = Some(area);
         let palette = current_theme();
         let now = Local::now();
 
         let list_widget = {
             let items = self.active_items();
 
-            let chapter_strs: Vec<String> = items.iter().map(|item| format_chapter(item)).collect();
-            let max_chapter_width = chapter_strs.iter().map(|s| s.len()).max().unwrap_or(0);
+            let date_labels: Vec<String> = items
+                .iter()
+                .map(|item| format_date_group(&item.date, &now))
+                .collect();
+            let max_date_width = date_labels.iter().map(|s| s.len()).max().unwrap_or(0);
 
+            let mut prev_group: Option<(i32, u32, u32)> = None;
             let list_items: Vec<ListItem> = items
                 .iter()
-                .zip(chapter_strs.iter())
-                .map(|(item, chapter_str)| {
-                    let date_str = format_date(&item.date, &now);
-                    let progress_str = if let Some(progress) = item.book_progress {
-                        format!("{:>3}%", (progress * 100.0).round() as u32)
+                .zip(date_labels.iter())
+                .map(|(item, date_label)| {
+                    let current_group = date_group_key(&item.date);
+                    let date_str = if prev_group == Some(current_group) {
+                        format!("{:width$}", "", width = max_date_width)
                     } else {
-                        "    ".to_string()
+                        format!("{:<width$}", date_label, width = max_date_width)
                     };
-                    let padded_chapter =
-                        format!("{:>width$}", chapter_str, width = max_chapter_width);
+                    prev_group = Some(current_group);
 
+                    let time_str = format_time(&item.date);
                     let title_color = if item.exists {
                         palette.base_05
                     } else {
                         palette.base_03
                     };
 
-                    ListItem::new(Line::from(vec![
-                        Span::styled(date_str, Style::default().fg(palette.base_03)),
+                    let progress_str = match item.book_progress {
+                        Some(p) => format!("{:>3}%", (p * 100.0).round() as u32),
+                        None => "    ".to_string(),
+                    };
+
+                    let spans = vec![
+                        Span::styled(date_str, Style::default().fg(palette.base_04)),
+                        Span::raw(" "),
+                        Span::styled(time_str, Style::default().fg(palette.base_03)),
                         Span::raw(" "),
                         Span::styled(progress_str, Style::default().fg(palette.base_0d)),
                         Span::raw(" "),
-                        Span::styled(padded_chapter, Style::default().fg(palette.base_03)),
-                        Span::raw(" : "),
                         Span::styled(item.title.clone(), Style::default().fg(title_color)),
-                    ]))
+                    ];
+
+                    ListItem::new(Line::from(spans))
                 })
                 .collect();
 
@@ -469,13 +527,13 @@ impl ReadingHistory {
     pub fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
         debug!("ReadingHistory: Mouse click at ({x}, {y})");
 
-        if let Some(popup_area) = self.last_popup_area {
-            if x >= popup_area.x
-                && x < popup_area.x + popup_area.width
-                && y > popup_area.y
-                && y < popup_area.y + popup_area.height - 1
+        if let Some(list_area) = self.last_list_area {
+            if x >= list_area.x
+                && x < list_area.x + list_area.width
+                && y >= list_area.y
+                && y < list_area.y + list_area.height
             {
-                let relative_y = y.saturating_sub(popup_area.y).saturating_sub(1);
+                let relative_y = y.saturating_sub(list_area.y);
                 let offset = self.active_state().offset();
                 let new_index = offset + relative_y as usize;
 

@@ -311,21 +311,119 @@ impl Bookmarks {
         author: Option<String>,
         abs_path: Option<String>,
     ) {
-        let key = match self.resolve_existing_key(path) {
-            Some(k) => k,
-            None => return,
-        };
-        if let Some(bookmark) = self.books.get_mut(&key) {
-            bookmark.book_title = title;
-            bookmark.book_author = author;
-            bookmark.absolute_path = abs_path;
-            if let Err(e) = self.save() {
-                log::error!("Failed to save bookmark metadata: {e}");
+        let key = self
+            .resolve_existing_key(path)
+            .unwrap_or_else(|| path.to_string());
+        match self.books.get_mut(&key) {
+            Some(bookmark) => {
+                bookmark.book_title = title;
+                bookmark.book_author = author;
+                bookmark.absolute_path = abs_path;
             }
+            None => {
+                self.books.insert(
+                    key,
+                    Bookmark {
+                        chapter_href: String::new(),
+                        node_index: None,
+                        last_read: chrono::Utc::now(),
+                        chapter_index: None,
+                        total_chapters: None,
+                        pdf_page: None,
+                        pdf_zoom: None,
+                        pdf_pan: None,
+                        #[cfg(feature = "pdf")]
+                        pdf_invert_images: None,
+                        #[cfg(feature = "pdf")]
+                        pdf_themed_rendering: None,
+                        book_progress: None,
+                        total_nodes: None,
+                        book_title: title,
+                        book_author: author,
+                        absolute_path: abs_path,
+                    },
+                );
+            }
+        }
+        if let Err(e) = self.save() {
+            log::error!("Failed to save bookmark metadata: {e}");
         }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Bookmark)> {
         self.books.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_metadata_before_bookmark_exists() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let path = "./book.pdf";
+
+        // This is what happens in open_pdf: set_metadata is called before save_bookmark
+        bookmarks.set_metadata(
+            path,
+            Some("My Book".to_string()),
+            Some("Author".to_string()),
+            Some("/abs/path/book.pdf".to_string()),
+        );
+
+        // Then save_bookmark is called later on scroll/navigate
+        bookmarks.update_bookmark(
+            path,
+            "1".to_string(),
+            Some(0),
+            Some(0),
+            Some(100),
+            Some(0),
+            None,
+            None,
+            Some(0.05),
+            None,
+        );
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert_eq!(bookmark.book_title.as_deref(), Some("My Book"));
+        assert_eq!(bookmark.book_author.as_deref(), Some("Author"));
+        assert_eq!(
+            bookmark.absolute_path.as_deref(),
+            Some("/abs/path/book.pdf")
+        );
+    }
+
+    #[test]
+    fn set_metadata_after_bookmark_exists() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let path = "./book.epub";
+
+        // Bookmark saved first
+        bookmarks.update_bookmark(
+            path,
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+
+        // Then metadata set
+        bookmarks.set_metadata(
+            path,
+            Some("Title".to_string()),
+            Some("Author".to_string()),
+            Some("/abs/book.epub".to_string()),
+        );
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert_eq!(bookmark.book_title.as_deref(), Some("Title"));
+        assert_eq!(bookmark.absolute_path.as_deref(), Some("/abs/book.epub"));
     }
 }
