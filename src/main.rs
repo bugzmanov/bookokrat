@@ -33,19 +33,31 @@ struct CliArgs {
     file_path: Option<String>,
     zen_mode: bool,
     test_mode: bool,
+    continue_reading: bool,
 }
 
 fn parse_args() -> Result<CliArgs> {
     let mut file_path = None;
     let mut zen_mode = false;
     let mut test_mode = false;
+    let mut continue_reading = false;
 
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--zen-mode" => zen_mode = true,
             "--test-mode" => test_mode = true,
+            "--continue" | "-c" => continue_reading = true,
             "--help" | "-h" => {
-                println!("Usage: bookokrat [FILE.epub] [--zen-mode] [--test-mode]");
+                println!("Usage: bookokrat [FILE.epub] [--zen-mode] [--test-mode] [--continue]");
+                println!();
+                println!("Options:");
+                println!(
+                    "  --continue, -c   Open the most recently read book across all libraries"
+                );
+                println!("  --zen-mode       Start in zen mode (hide sidebar)");
+                println!("  --test-mode      Start in test mode");
+                println!("  --help, -h       Show this help message");
+                println!("  --version, -V    Show version");
                 std::process::exit(0);
             }
             "--version" | "-V" => {
@@ -68,7 +80,48 @@ fn parse_args() -> Result<CliArgs> {
         file_path,
         zen_mode,
         test_mode,
+        continue_reading,
     })
+}
+
+/// Scan all library bookmarks and return the absolute path of the most recently read book.
+fn find_most_recent_book() -> Option<String> {
+    let libraries_dir = library::libraries_data_dir().ok()?;
+    if !libraries_dir.exists() {
+        return None;
+    }
+
+    let mut most_recent: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
+
+    for entry in std::fs::read_dir(&libraries_dir).ok()?.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let bookmarks_file = entry.path().join("bookmarks.json");
+        let bookmarks_path = bookmarks_file.to_string_lossy().to_string();
+        let bookmarks = match bookokrat::bookmarks::Bookmarks::load_from_file(&bookmarks_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        if let Some((_, bookmark)) = bookmarks.get_most_recent() {
+            let path = bookmark
+                .absolute_path
+                .clone()
+                .filter(|p| Path::new(p).exists());
+
+            if let Some(abs_path) = path {
+                let dominated = most_recent
+                    .as_ref()
+                    .is_some_and(|(t, _)| *t >= bookmark.last_read);
+                if !dominated {
+                    most_recent = Some((bookmark.last_read, abs_path));
+                }
+            }
+        }
+    }
+
+    most_recent.map(|(_, path)| path)
 }
 
 fn main() -> Result<()> {
@@ -221,7 +274,16 @@ fn main() -> Result<()> {
     );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
-    if let Some(path) = args.file_path.as_deref() {
+    if args.continue_reading {
+        if let Some(path) = find_most_recent_book() {
+            if let Err(err) = app.open_book_for_reading_by_path(&path) {
+                error!("Failed to open most recent book: {err}");
+                panic_handler::restore_terminal();
+                eprintln!("Error: failed to open {path}: {err}");
+                std::process::exit(1);
+            }
+        }
+    } else if let Some(path) = args.file_path.as_deref() {
         if let Err(err) = app.open_book_for_reading_by_path(path) {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();

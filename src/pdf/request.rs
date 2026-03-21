@@ -114,6 +114,7 @@ pub enum RenderResponse {
     DocumentInfo {
         page_count: usize,
         title: Option<String>,
+        author: Option<String>,
         toc: Vec<TocEntry>,
         page_number_samples: Vec<(usize, i32)>,
     },

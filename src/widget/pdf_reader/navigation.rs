@@ -5243,17 +5243,24 @@ pub(crate) fn save_pdf_bookmark(
         .as_ref()
         .map(|z| z.cell_pan_from_left)
         .or(Some(pdf_reader.non_kitty_pan_offset as u16));
+    let total_pages = pdf_reader.rendered.len().max(1);
+    let book_progress = if total_pages > 0 {
+        Some((page + 1) as f32 / total_pages as f32)
+    } else {
+        None
+    };
     bookmarks.update_bookmark_pdf(
         &pdf_reader.name,
         chapter_href,
         Some(scroll_position),
         None,
-        Some(pdf_reader.rendered.len().max(1)),
+        Some(total_pages),
         Some(page),
         zoom_factor,
         pan_position,
         Some(pdf_reader.invert_images),
         Some(pdf_reader.themed_rendering),
+        book_progress,
     );
 
     let now = std::time::Instant::now();

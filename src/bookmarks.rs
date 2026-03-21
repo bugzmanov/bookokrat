@@ -34,6 +34,21 @@ pub struct Bookmark {
     #[cfg(feature = "pdf")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_themed_rendering: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_progress: Option<f32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub total_nodes: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_title: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_author: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub absolute_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -181,6 +196,8 @@ impl Bookmarks {
         pdf_page: Option<usize>,
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -193,6 +210,8 @@ impl Bookmarks {
             pdf_pan,
             None,
             None,
+            book_progress,
+            total_nodes,
         );
     }
 
@@ -210,6 +229,7 @@ impl Bookmarks {
         pdf_pan: Option<u16>,
         pdf_invert_images: Option<bool>,
         pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -222,6 +242,8 @@ impl Bookmarks {
             pdf_pan,
             pdf_invert_images,
             pdf_themed_rendering,
+            book_progress,
+            None,
         );
     }
 
@@ -240,10 +262,18 @@ impl Bookmarks {
         #[cfg(feature = "pdf")] pdf_themed_rendering: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_invert_images: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         let key = self
             .resolve_existing_key(path)
             .unwrap_or_else(|| path.to_string());
+
+        let existing = self.books.get(&key);
+        let book_title = existing.and_then(|b| b.book_title.clone());
+        let book_author = existing.and_then(|b| b.book_author.clone());
+        let absolute_path = existing.and_then(|b| b.absolute_path.clone());
+
         self.books.insert(
             key,
             Bookmark {
@@ -259,12 +289,38 @@ impl Bookmarks {
                 pdf_invert_images,
                 #[cfg(feature = "pdf")]
                 pdf_themed_rendering,
+                book_progress,
+                total_nodes,
+                book_title,
+                book_author,
+                absolute_path,
             },
         );
 
         if !self.books.is_empty() && self.file_path.is_some() {
             if let Err(e) = self.save() {
                 log::error!("Failed to save bookmark: {e}");
+            }
+        }
+    }
+
+    pub fn set_metadata(
+        &mut self,
+        path: &str,
+        title: Option<String>,
+        author: Option<String>,
+        abs_path: Option<String>,
+    ) {
+        let key = match self.resolve_existing_key(path) {
+            Some(k) => k,
+            None => return,
+        };
+        if let Some(bookmark) = self.books.get_mut(&key) {
+            bookmark.book_title = title;
+            bookmark.book_author = author;
+            bookmark.absolute_path = abs_path;
+            if let Err(e) = self.save() {
+                log::error!("Failed to save bookmark metadata: {e}");
             }
         }
     }
