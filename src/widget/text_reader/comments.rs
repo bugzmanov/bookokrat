@@ -169,43 +169,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        let node_idx = (start.line..=end.line).find_map(|idx| {
-            self.rendered_content
-                .lines
-                .get(idx)
-                .and_then(|line| line.node_index)
-        });
-
-        if let Some(found_node_idx) = node_idx {
-            for idx in start.line..=end.line {
-                if let Some(line) = self.rendered_content.lines.get(idx) {
-                    if let Some(line_node_idx) = line.node_index {
-                        if line_node_idx != found_node_idx {
-                            return None;
-                        }
-                    }
-                }
-            }
-        }
-
         let mut has_code = false;
         let mut min_code = usize::MAX;
         let mut max_code = 0;
+        let mut code_node_idx = None;
 
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(meta) = &line.code_line {
-                    if node_idx.is_none_or(|found_node_idx| meta.node_index == found_node_idx) {
+                    if code_node_idx.is_none_or(|found_node_idx| meta.node_index == found_node_idx)
+                    {
+                        code_node_idx = Some(meta.node_index);
                         has_code = true;
                         min_code = min_code.min(meta.line_index);
                         max_code = max_code.max(meta.line_index);
+                    } else {
+                        return None;
                     }
                 }
             }
         }
 
         if has_code {
-            if let Some(found_node_idx) = node_idx {
+            if let Some(found_node_idx) = code_node_idx {
                 return Some(CommentTarget::code_block(
                     found_node_idx,
                     (min_code, max_code),
@@ -214,136 +200,54 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
-        // Check if selection is within a list item and extract the item index + path
-        let list_item_info = (start.line..=end.line).find_map(|idx| {
-            self.rendered_content.lines.get(idx).and_then(|line| {
-                if let LineType::ListItem {
-                    item_index,
-                    list_path,
-                    ..
-                } = &line.line_type
-                {
-                    Some((*item_index, list_path.clone()))
-                } else {
-                    None
-                }
-            })
-        });
-
-        if let Some((item_index, list_path)) = list_item_info {
-            let node_idx = node_idx.or_else(|| {
-                self.rendered_content.lines.iter().find_map(|line| {
-                    if let LineType::ListItem {
-                        list_path: line_path,
-                        ..
-                    } = &line.line_type
-                    {
-                        if line_path.as_slice() == list_path.as_slice() {
-                            return line.node_index;
-                        }
+        let mut selected_segment: Option<AnnotatableSegment> = None;
+        for idx in start.line..=end.line {
+            if let Some(segment) = self
+                .rendered_content
+                .lines
+                .get(idx)
+                .and_then(|line| line.annotatable_segment.clone())
+            {
+                if let Some(existing) = &selected_segment {
+                    if *existing != segment {
+                        return None;
                     }
-                    None
-                })
-            })?;
-
-            let list_word_range = if list_path.is_empty() {
-                self.compute_canonical_word_range(node_idx, start, end, |l| {
-                    matches!(
-                        &l.line_type,
-                        LineType::ListItem {
-                            list_path,
-                            item_index: li_idx,
-                            ..
-                        } if list_path.is_empty() && *li_idx == item_index
-                    )
-                })
-            } else {
-                self.compute_canonical_word_range(node_idx, start, end, |l| {
-                    matches!(
-                        &l.line_type,
-                        LineType::ListItem {
-                            list_path: lp,
-                            ..
-                        } if lp.as_slice() == list_path.as_slice()
-                    )
-                })
-            };
-            if list_path.is_empty() {
-                return Some(CommentTarget::list_item(
-                    node_idx,
-                    item_index,
-                    list_word_range,
-                ));
+                } else {
+                    selected_segment = Some(segment);
+                }
             }
-            return Some(CommentTarget::list_item_with_path(
-                node_idx,
+        }
+
+        let segment = selected_segment?;
+        let word_range =
+            self.compute_canonical_word_range(segment.node_index, start, end, |line| {
+                line.annotatable_segment.as_ref() == Some(&segment)
+            });
+
+        Some(match segment.target {
+            AnnotatableTarget::Paragraph => {
+                CommentTarget::paragraph(segment.node_index, word_range)
+            }
+            AnnotatableTarget::ListItem {
+                item_index,
                 list_path,
-                list_word_range,
-            ));
-        }
-
-        // Check if selection is within a definition list item and extract the item index
-        let definition_item_info = (start.line..=end.line).find_map(|idx| {
-            self.rendered_content.lines.get(idx).and_then(|line| {
-                if let LineType::DefinitionListItem {
-                    item_index,
-                    is_term,
-                } = &line.line_type
-                {
-                    Some((*item_index, *is_term))
+            } => {
+                if list_path.is_empty() {
+                    CommentTarget::list_item(segment.node_index, item_index, word_range)
                 } else {
-                    None
+                    CommentTarget::list_item_with_path(segment.node_index, list_path, word_range)
                 }
-            })
-        });
-
-        if let Some((item_index, is_term)) = definition_item_info {
-            let node_idx = node_idx?;
-            let word_range = self.compute_canonical_word_range(node_idx, start, end, |l| {
-                matches!(
-                    &l.line_type,
-                    LineType::DefinitionListItem {
-                        item_index: di,
-                        is_term: it,
-                    } if *di == item_index && *it == is_term
-                )
-            });
-            return Some(CommentTarget::definition_item(
-                node_idx, item_index, is_term, word_range,
-            ));
-        }
-
-        // Check if selection is within a blockquote paragraph and extract the paragraph index
-        let quote_paragraph_info = (start.line..=end.line).find_map(|idx| {
-            self.rendered_content.lines.get(idx).and_then(|line| {
-                if let LineType::QuoteParagraph { paragraph_index } = &line.line_type {
-                    Some(*paragraph_index)
-                } else {
-                    None
-                }
-            })
-        });
-
-        if let Some(paragraph_index) = quote_paragraph_info {
-            let node_idx = node_idx?;
-            let word_range = self.compute_canonical_word_range(node_idx, start, end, |l| {
-                matches!(
-                    &l.line_type,
-                    LineType::QuoteParagraph {
-                        paragraph_index: pi,
-                    } if *pi == paragraph_index
-                )
-            });
-            return Some(CommentTarget::quote_paragraph(
-                node_idx,
-                paragraph_index,
-                word_range,
-            ));
-        }
-
-        let node_idx = node_idx?;
-        let word_range = self.compute_canonical_word_range(node_idx, start, end, |_| true);
-        Some(CommentTarget::paragraph(node_idx, word_range))
+            }
+            AnnotatableTarget::QuoteParagraph { paragraph_index } => {
+                CommentTarget::quote_paragraph(segment.node_index, paragraph_index, word_range)
+            }
+            AnnotatableTarget::DefinitionItem {
+                item_index,
+                is_term,
+            } => {
+                CommentTarget::definition_item(segment.node_index, item_index, is_term, word_range)
+            }
+        })
     }
 
     /// Handle input events when in comment mode
@@ -899,6 +803,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(comment_header);
         *total_height += 1;
@@ -929,6 +834,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: None,
                 content_column_start: 0,
                 justify_map: None,
+                annotatable_segment: None,
             });
             self.raw_text_lines.push(quoted_line);
             *total_height += 1;
@@ -951,6 +857,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;

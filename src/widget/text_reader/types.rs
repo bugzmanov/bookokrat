@@ -25,6 +25,28 @@ pub struct RenderedContent {
     pub generation: u64, // For cache validation
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AnnotatableTarget {
+    Paragraph,
+    ListItem {
+        item_index: usize,
+        list_path: Vec<usize>,
+    },
+    QuoteParagraph {
+        paragraph_index: usize,
+    },
+    DefinitionItem {
+        item_index: usize,
+        is_term: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnnotatableSegment {
+    pub node_index: usize,
+    pub target: AnnotatableTarget,
+}
+
 #[derive(Clone)]
 pub struct RenderedLine {
     pub spans: Vec<Span<'static>>,
@@ -43,6 +65,7 @@ pub struct RenderedLine {
     /// Maps each visual content column (after content_column_start) to canonical char index.
     /// Present only when text justification inserted extra spaces.
     pub justify_map: Option<Vec<u16>>,
+    pub annotatable_segment: Option<AnnotatableSegment>,
 }
 
 impl RenderedLine {
@@ -59,6 +82,7 @@ impl RenderedLine {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         }
     }
 

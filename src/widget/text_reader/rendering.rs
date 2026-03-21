@@ -26,6 +26,69 @@ pub struct RenderingContext {
     pub links: Vec<LinkInfo>,
 }
 
+#[derive(Clone, Default)]
+struct PrefixFrame {
+    insertion_col: usize,
+    first_line: Vec<LinePrefix>,
+    continuation: Vec<LinePrefix>,
+    every_line: Vec<LinePrefix>,
+}
+
+#[derive(Clone)]
+struct LinePrefix {
+    raw: String,
+    spans: Vec<Span<'static>>,
+    width: usize,
+}
+
+impl PrefixFrame {
+    fn with_insertion_col(mut self, insertion_col: usize) -> Self {
+        self.insertion_col = insertion_col;
+        self
+    }
+
+    fn with_first_line(mut self, prefix: LinePrefix) -> Self {
+        self.first_line.push(prefix);
+        self
+    }
+
+    fn with_continuation(mut self, prefix: LinePrefix) -> Self {
+        self.continuation.push(prefix);
+        self
+    }
+
+    fn with_every_line(mut self, prefix: LinePrefix) -> Self {
+        self.every_line.push(prefix);
+        self
+    }
+
+    fn applied(&self, line_idx: usize) -> LinePrefix {
+        let mut spans = Vec::new();
+        let mut raw = String::new();
+        let mut width = 0;
+
+        for prefix in &self.every_line {
+            spans.extend(prefix.spans.clone());
+            raw.push_str(&prefix.raw);
+            width += prefix.width;
+        }
+
+        let line_specific = if line_idx == 0 {
+            &self.first_line
+        } else {
+            &self.continuation
+        };
+
+        for prefix in line_specific {
+            spans.extend(prefix.spans.clone());
+            raw.push_str(&prefix.raw);
+            width += prefix.width;
+        }
+
+        LinePrefix { raw, spans, width }
+    }
+}
+
 #[allow(dead_code)]
 impl RenderingContext {
     pub fn new() -> Self {
@@ -187,6 +250,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
+                    indent,
                     node_index,
                 );
             }
@@ -839,6 +903,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
+        indent: usize,
         node_index: Option<usize>,
     ) {
         let heading_text = Self::text_to_string(content);
@@ -849,7 +914,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             heading_text.clone()
         };
 
-        let wrapped = textwrap::wrap(&display_text, width);
+        let indent_str = "  ".repeat(indent);
+        let indent_width = indent_str.chars().count();
+        let wrapped = textwrap::wrap(&display_text, width.saturating_sub(indent_width).max(1));
 
         let heading_color = if is_focused {
             palette.base_0a // Yellow
@@ -869,7 +936,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Track cumulative character position for annotation ranges
         let mut cumulative_char_pos = 0;
 
-        for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
+        for wrapped_line in wrapped.iter() {
             let base_style = RatatuiStyle::default()
                 .fg(heading_color)
                 .add_modifier(base_modifiers);
@@ -888,36 +955,51 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 )
             };
 
+            let mut spans = Vec::new();
+            let mut raw_text = String::new();
+            if !indent_str.is_empty() {
+                spans.push(Span::raw(indent_str.clone()));
+                raw_text.push_str(&indent_str);
+            }
+            spans.extend(styled_spans);
+            raw_text.push_str(wrapped_line);
+
+            let canonical_start = cumulative_char_pos;
             cumulative_char_pos += line_len;
 
             lines.push(RenderedLine {
-                spans: styled_spans,
-                raw_text: wrapped_line.to_string(),
+                spans,
+                raw_text: raw_text.clone(),
                 line_type: LineType::Heading {
                     level: level.as_u8(),
                     needs_decoration: false,
                 },
                 link_nodes: vec![],
                 node_anchor: None,
-                node_index: if line_idx == 0 { node_index } else { None },
+                node_index,
                 code_line: None,
                 inline_code_comments: Vec::new(),
-                canonical_content_start: None,
-                content_column_start: 0,
+                canonical_content_start: Some(canonical_start),
+                content_column_start: indent_width,
                 justify_map: None,
+                annotatable_segment: node_index.map(|idx| AnnotatableSegment {
+                    node_index: idx,
+                    target: AnnotatableTarget::Paragraph,
+                }),
             });
 
-            self.raw_text_lines.push(wrapped_line.to_string());
+            self.raw_text_lines.push(raw_text);
             *total_height += 1;
         }
 
         // Add decoration line for H1-H3
         if matches!(level, HeadingLevel::H1 | HeadingLevel::H2) {
-            let decoration = match level {
-                HeadingLevel::H1 => "═".repeat(width),
-                HeadingLevel::H2 => "─".repeat(width),
+            let decoration_inner = match level {
+                HeadingLevel::H1 => "═".repeat(width.saturating_sub(indent_width)),
+                HeadingLevel::H2 => "─".repeat(width.saturating_sub(indent_width)),
                 _ => unreachable!(),
             };
+            let decoration = format!("{indent_str}{decoration_inner}");
 
             lines.push(RenderedLine {
                 spans: vec![Span::styled(
@@ -937,6 +1019,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: None,
                 content_column_start: 0,
                 justify_map: None,
+                annotatable_segment: None,
             });
 
             self.raw_text_lines.push(decoration);
@@ -977,6 +1060,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -995,7 +1079,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         context: RenderContext,
     ) {
-        let _paragraph_lines_start = lines.len();
+        let paragraph_lines_start = lines.len();
         if context == RenderContext::InsideContainer {
             let has_visible_content = content.iter().any(|item| match item {
                 TextOrInline::Text(t) => !t.content.trim().is_empty(),
@@ -1180,12 +1264,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: None,
                 content_column_start: 0,
                 justify_map: None,
+                annotatable_segment: None,
             });
             self.raw_text_lines.push(String::new());
             *total_height += 1;
         }
 
-        let _paragraph_lines_end = lines.len();
+        let paragraph_lines_end = lines.len();
+
+        if let Some(idx) = node_index {
+            let segment = AnnotatableSegment {
+                node_index: idx,
+                target: AnnotatableTarget::Paragraph,
+            };
+            Self::assign_annotatable_segment(
+                &mut lines[paragraph_lines_start..paragraph_lines_end],
+                Some(&segment),
+            );
+        }
 
         // Render any comments for this paragraph
         self.render_node_comments(
@@ -1856,6 +1952,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     canonical_content_start: None,
                     content_column_start: 0,
                     justify_map: None,
+                    annotatable_segment: None,
                 };
 
                 lines.push(rendered_line);
@@ -1949,6 +2046,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 justify_map: None,
                 code_line: None,
                 inline_code_comments: Vec::new(),
+                annotatable_segment: None,
             });
             self.raw_text_lines.push(raw_text);
             *total_height += 1;
@@ -2000,6 +2098,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     format!("{num}. ")
                 }
             };
+            let prefix_width = prefix.chars().count();
+            let indent_width_chars = "  ".repeat(indent).chars().count();
+            let marker_frame = PrefixFrame::default()
+                .with_insertion_col(indent_width_chars)
+                .with_first_line(Self::plain_prefix(prefix.clone()))
+                .with_continuation(Self::plain_prefix(" ".repeat(prefix_width)));
+            let item_segment = node_index.map(|node_idx| AnnotatableSegment {
+                node_index: node_idx,
+                target: AnnotatableTarget::ListItem {
+                    item_index: idx,
+                    list_path: item_line_path.clone(),
+                },
+            });
 
             let mut first_block_line_count = 0;
 
@@ -2014,6 +2125,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         {
                             let canonical_len = Self::text_to_string(content).chars().count();
                             let lines_before = lines.len();
+                            let raw_lines_before = self.raw_text_lines.len();
                             let canon_offset = if list_path.is_empty() {
                                 Some(*global_char_pos)
                             } else {
@@ -2023,10 +2135,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 content,
                                 lines,
                                 total_height,
-                                width,
+                                width.saturating_sub(prefix_width),
                                 palette,
                                 is_focused,
-                                Some(&prefix),
+                                None,
                                 indent,
                                 node_index,
                                 canon_offset,
@@ -2043,6 +2155,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 }
                                 line.node_index = node_index;
                             }
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
+                            self.apply_prefix_frame_to_lines(
+                                &mut lines[lines_before..],
+                                raw_lines_before,
+                                &marker_frame,
+                            );
                             if !list_path.is_empty() {
                                 item_char_pos += canonical_len;
                             }
@@ -2073,6 +2194,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             };
 
                             let lines_before = lines.len();
+                            let raw_lines_before = self.raw_text_lines.len();
 
                             let canon_offset = if list_path.is_empty() {
                                 Some(*global_char_pos)
@@ -2081,10 +2203,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             };
                             self.render_text_spans(
                                 &styled_spans,
-                                Some(&prefix),
+                                None,
                                 lines,
                                 total_height,
-                                width,
+                                width.saturating_sub(prefix_width),
                                 indent,
                                 false,
                                 None,
@@ -2102,6 +2224,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 };
                                 line.node_index = node_index;
                             }
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
+                            self.apply_prefix_frame_to_lines(
+                                &mut lines[lines_before..],
+                                raw_lines_before,
+                                &marker_frame,
+                            );
                             if !list_path.is_empty() {
                                 item_char_pos += canonical_len;
                             }
@@ -2112,12 +2243,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             items: nested_items,
                         } => {
                             let lines_before = lines.len();
+                            let raw_lines_before = self.raw_text_lines.len();
                             self.render_list(
                                 nested_kind,
                                 nested_items,
                                 lines,
                                 total_height,
-                                width,
+                                width.saturating_sub(prefix_width),
                                 palette,
                                 is_focused,
                                 indent + 1,
@@ -2126,21 +2258,87 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 global_char_pos,
                             );
                             first_block_line_count = lines.len() - lines_before;
+                            self.apply_prefix_frame_to_lines(
+                                &mut lines[lines_before..],
+                                raw_lines_before,
+                                &marker_frame,
+                            );
                         }
-                        _ => {
+                        MarkdownBlock::Table {
+                            header,
+                            rows,
+                            alignment,
+                        } => {
                             let lines_before = lines.len();
-                            self.render_node(
-                                block_node,
+                            self.render_table(
+                                header,
+                                rows,
+                                alignment,
                                 lines,
                                 total_height,
                                 width,
                                 palette,
                                 is_focused,
-                                indent + 1,
+                                node_index,
+                            );
+                            first_block_line_count = lines.len() - lines_before;
+                        }
+                        _ => {
+                            let lines_before = lines.len();
+                            let raw_lines_before = self.raw_text_lines.len();
+                            let canon_offset = if list_path.is_empty() {
+                                *global_char_pos
+                            } else {
+                                item_char_pos
+                            };
+                            self.render_node(
+                                block_node,
+                                lines,
+                                total_height,
+                                width.saturating_sub(prefix_width),
+                                palette,
+                                is_focused,
+                                indent,
                                 None,
                                 RenderContext::InsideContainer,
                             );
                             first_block_line_count = lines.len() - lines_before;
+                            for line in lines[lines_before..].iter_mut() {
+                                line.node_index = node_index;
+                                line.line_type = LineType::ListItem {
+                                    kind: kind.clone(),
+                                    indent,
+                                    item_index: idx,
+                                    list_path: item_line_path.clone(),
+                                };
+                            }
+                            Self::offset_canonical_positions(
+                                &mut lines[lines_before..],
+                                canon_offset,
+                            );
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
+                            for line in lines[lines_before..].iter_mut() {
+                                Self::apply_underlines_to_rendered_line(
+                                    line,
+                                    &item_annotation_ranges,
+                                    underline_color,
+                                );
+                            }
+                            self.apply_prefix_frame_to_lines(
+                                &mut lines[lines_before..],
+                                raw_lines_before,
+                                &marker_frame,
+                            );
+                            let advanced = Self::max_canonical_end(&lines[lines_before..])
+                                .map(|max_end| max_end.saturating_sub(canon_offset))
+                                .unwrap_or(0);
+                            if !list_path.is_empty() {
+                                item_char_pos += advanced;
+                            }
+                            *global_char_pos += advanced;
                         }
                     }
                 } else {
@@ -2178,6 +2376,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 }
                                 line.node_index = node_index;
                             }
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
                             if !list_path.is_empty() {
                                 item_char_pos += canonical_len;
                             }
@@ -2233,6 +2435,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 };
                                 line.node_index = node_index;
                             }
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
                             if !list_path.is_empty() {
                                 item_char_pos += canonical_len;
                             }
@@ -2256,7 +2462,30 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 global_char_pos,
                             );
                         }
+                        MarkdownBlock::Table {
+                            header,
+                            rows,
+                            alignment,
+                        } => {
+                            self.render_table(
+                                header,
+                                rows,
+                                alignment,
+                                lines,
+                                total_height,
+                                width,
+                                palette,
+                                is_focused,
+                                node_index,
+                            );
+                        }
                         _ => {
+                            let lines_before = lines.len();
+                            let canon_offset = if list_path.is_empty() {
+                                *global_char_pos
+                            } else {
+                                item_char_pos
+                            };
                             self.render_node(
                                 block_node,
                                 lines,
@@ -2268,6 +2497,37 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 None,
                                 RenderContext::InsideContainer,
                             );
+                            for line in lines[lines_before..].iter_mut() {
+                                line.node_index = node_index;
+                                line.line_type = LineType::ListItem {
+                                    kind: kind.clone(),
+                                    indent,
+                                    item_index: idx,
+                                    list_path: item_line_path.clone(),
+                                };
+                            }
+                            Self::offset_canonical_positions(
+                                &mut lines[lines_before..],
+                                canon_offset,
+                            );
+                            Self::assign_annotatable_segment(
+                                &mut lines[lines_before..],
+                                item_segment.as_ref(),
+                            );
+                            for line in lines[lines_before..].iter_mut() {
+                                Self::apply_underlines_to_rendered_line(
+                                    line,
+                                    &item_annotation_ranges,
+                                    underline_color,
+                                );
+                            }
+                            let advanced = Self::max_canonical_end(&lines[lines_before..])
+                                .map(|max_end| max_end.saturating_sub(canon_offset))
+                                .unwrap_or(0);
+                            if !list_path.is_empty() {
+                                item_char_pos += advanced;
+                            }
+                            *global_char_pos += advanced;
                         }
                     }
                 }
@@ -2430,6 +2690,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: None,
                 content_column_start: 0,
                 justify_map: None,
+                annotatable_segment: None,
             };
 
             lines.push(rendered_line);
@@ -2509,6 +2770,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(String::new());
         *total_height += 1;
@@ -2654,6 +2916,209 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    fn plain_prefix(raw: impl Into<String>) -> LinePrefix {
+        let raw = raw.into();
+        let width = raw.chars().count();
+        let spans = if raw.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::raw(raw.clone())]
+        };
+        LinePrefix { raw, spans, width }
+    }
+
+    fn styled_prefix(raw: impl Into<String>, style: RatatuiStyle) -> LinePrefix {
+        let raw = raw.into();
+        let width = raw.chars().count();
+        let spans = if raw.is_empty() {
+            Vec::new()
+        } else {
+            vec![Span::styled(raw.clone(), style)]
+        };
+        LinePrefix { raw, spans, width }
+    }
+
+    fn insert_text_at_column(text: &str, insert_at: usize, prefix: &str) -> String {
+        let split_at = insert_at.min(text.chars().count());
+        let mut result = String::with_capacity(text.len() + prefix.len());
+        let mut inserted = false;
+
+        for (idx, ch) in text.chars().enumerate() {
+            if idx == split_at {
+                result.push_str(prefix);
+                inserted = true;
+            }
+            result.push(ch);
+        }
+
+        if !inserted {
+            result.push_str(prefix);
+        }
+
+        result
+    }
+
+    fn split_spans_at_column(
+        spans: &[Span<'static>],
+        split_at: usize,
+    ) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        let mut seen = 0usize;
+
+        for span in spans {
+            let content = span.content.as_ref();
+            let span_len = content.chars().count();
+
+            if seen >= split_at {
+                after.push(span.clone());
+            } else if seen + span_len <= split_at {
+                before.push(span.clone());
+            } else {
+                let local_split = split_at - seen;
+                let before_text: String = content.chars().take(local_split).collect();
+                let after_text: String = content.chars().skip(local_split).collect();
+
+                if !before_text.is_empty() {
+                    before.push(Span::styled(before_text, span.style));
+                }
+                if !after_text.is_empty() {
+                    after.push(Span::styled(after_text, span.style));
+                }
+            }
+
+            seen += span_len;
+        }
+
+        (before, after)
+    }
+
+    fn apply_prefix_frame_to_lines(
+        &mut self,
+        lines: &mut [RenderedLine],
+        raw_lines_start: usize,
+        frame: &PrefixFrame,
+    ) {
+        for (line_idx, line) in lines.iter_mut().enumerate() {
+            let prefix = frame.applied(line_idx);
+            if prefix.width == 0 {
+                continue;
+            }
+
+            let insertion_col = frame.insertion_col.min(line.raw_text.chars().count());
+            let (mut before_spans, after_spans) =
+                Self::split_spans_at_column(&line.spans, insertion_col);
+            before_spans.extend(prefix.spans.clone());
+            before_spans.extend(after_spans);
+            line.spans = before_spans;
+            line.raw_text = Self::insert_text_at_column(&line.raw_text, insertion_col, &prefix.raw);
+
+            if insertion_col <= line.content_column_start {
+                line.content_column_start += prefix.width;
+            }
+
+            for link in &mut line.link_nodes {
+                if link.start_col >= insertion_col {
+                    link.start_col += prefix.width;
+                    link.end_col += prefix.width;
+                }
+            }
+
+            if let Some(raw_line) = self.raw_text_lines.get_mut(raw_lines_start + line_idx) {
+                *raw_line = line.raw_text.clone();
+            }
+        }
+    }
+
+    fn assign_annotatable_segment(
+        lines: &mut [RenderedLine],
+        segment: Option<&AnnotatableSegment>,
+    ) {
+        for line in lines {
+            if line.canonical_content_start.is_some() {
+                line.annotatable_segment = segment.cloned();
+            }
+        }
+    }
+
+    fn segment_from_line_type(
+        node_index: usize,
+        line_type: &LineType,
+    ) -> Option<AnnotatableSegment> {
+        let target = match line_type {
+            LineType::Heading { .. } => AnnotatableTarget::Paragraph,
+            LineType::ListItem {
+                item_index,
+                list_path,
+                ..
+            } => AnnotatableTarget::ListItem {
+                item_index: *item_index,
+                list_path: list_path.clone(),
+            },
+            LineType::DefinitionListItem {
+                item_index,
+                is_term,
+            } => AnnotatableTarget::DefinitionItem {
+                item_index: *item_index,
+                is_term: *is_term,
+            },
+            LineType::QuoteParagraph { paragraph_index } => AnnotatableTarget::QuoteParagraph {
+                paragraph_index: *paragraph_index,
+            },
+            _ => return None,
+        };
+
+        Some(AnnotatableSegment { node_index, target })
+    }
+
+    fn offset_canonical_positions(lines: &mut [RenderedLine], canonical_offset: usize) {
+        for line in lines {
+            if let Some(start) = &mut line.canonical_content_start {
+                *start += canonical_offset;
+            }
+        }
+    }
+
+    fn line_canonical_end(line: &RenderedLine) -> Option<usize> {
+        line.canonical_content_start.map(|start| {
+            let content_len = if let Some(ref jmap) = line.justify_map {
+                jmap.last().copied().map(|v| v as usize + 1).unwrap_or(0)
+            } else {
+                line.raw_text
+                    .chars()
+                    .count()
+                    .saturating_sub(line.content_column_start)
+            };
+            start + content_len
+        })
+    }
+
+    fn max_canonical_end(lines: &[RenderedLine]) -> Option<usize> {
+        lines.iter().filter_map(Self::line_canonical_end).max()
+    }
+
+    fn apply_underlines_to_rendered_line(
+        line: &mut RenderedLine,
+        annotation_ranges: &[(usize, usize)],
+        underline_color: Color,
+    ) {
+        let Some(char_offset) = line.canonical_content_start else {
+            return;
+        };
+
+        let split_at = line.content_column_start.min(line.raw_text.chars().count());
+        let (mut prefix_spans, mut content_spans) =
+            Self::split_spans_at_column(&line.spans, split_at);
+        Self::apply_underlines_to_line_spans(
+            &mut content_spans,
+            annotation_ranges,
+            underline_color,
+            char_offset,
+        );
+        prefix_spans.extend(content_spans);
+        line.spans = prefix_spans;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_quote(
         &mut self,
@@ -2666,7 +3131,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         indent: usize,
         node_index: Option<usize>,
     ) {
-        let lines_before_quote = lines.len();
+        // Left border takes 2 chars ("│ ")
+        let border_width = 2;
+        let inner_width = width.saturating_sub(border_width);
+        let indent_width = "  ".repeat(indent).chars().count();
 
         // Collect annotation ranges for this quote (for underline styling)
         let annotation_ranges = self.get_annotation_ranges(node_index);
@@ -2677,14 +3145,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Track paragraph index within the quote
         let mut quote_para_idx = 0;
 
-        // Render quote content with "> " prefix
+        let quote_color = if is_focused {
+            palette.base_03
+        } else {
+            palette.base_02
+        };
+        let border_style = RatatuiStyle::default().fg(quote_color);
+        let quote_frame = PrefixFrame::default()
+            .with_insertion_col(indent_width)
+            .with_every_line(Self::styled_prefix("│ ", border_style));
+
+        // Render quote content (border injected through a shared prefix frame)
         for node in content {
+            let lines_before_block = lines.len();
+            let raw_text_lines_before = self.raw_text_lines.len();
+
             match &node.block {
                 MarkdownBlock::Paragraph {
                     content: para_content,
                 } if Self::content_has_image(para_content) => {
                     let canonical_len = Self::text_to_string(para_content).chars().count();
-                    let lines_before_para = lines.len();
                     let current_para_idx = quote_para_idx;
                     quote_para_idx += 1;
 
@@ -2692,26 +3172,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         para_content,
                         lines,
                         total_height,
-                        width,
+                        inner_width,
                         palette,
                         is_focused,
-                        Some("> "),
+                        None,
                         indent,
                         node_index,
                         Some(cumulative_char_pos),
                     );
 
-                    let quote_color = if is_focused {
-                        palette.base_03
-                    } else {
-                        palette.base_02
-                    };
-                    for line in lines[lines_before_para..].iter_mut() {
+                    let segment = node_index.map(|idx| AnnotatableSegment {
+                        node_index: idx,
+                        target: AnnotatableTarget::QuoteParagraph {
+                            paragraph_index: current_para_idx,
+                        },
+                    });
+                    for line in lines[lines_before_block..].iter_mut() {
                         line.node_index = node_index;
                         if !matches!(line.line_type, LineType::ImagePlaceholder { .. }) {
                             line.line_type = LineType::QuoteParagraph {
                                 paragraph_index: current_para_idx,
                             };
+                            line.annotatable_segment = segment.clone();
                             for span in &mut line.spans {
                                 let new_style =
                                     span.style.fg(quote_color).add_modifier(Modifier::ITALIC);
@@ -2725,11 +3207,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     content: para_content,
                 } => {
                     let canonical_len = Self::text_to_string(para_content).chars().count();
-                    let lines_before_para = lines.len();
                     let current_para_idx = quote_para_idx;
                     quote_para_idx += 1;
 
-                    // Render the rich text content with "> " prefix
+                    // Render the rich text content
                     let mut content_rich_spans = Vec::new();
                     for item in para_content.iter() {
                         content_rich_spans
@@ -2737,12 +3218,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
 
                     // Apply quote styling to all rich spans
-                    let quote_color = if is_focused {
-                        palette.base_03
-                    } else {
-                        palette.base_02
-                    };
-
                     let styled_rich_spans: Vec<RichSpan> = content_rich_spans
                         .into_iter()
                         .map(|rich_span| match rich_span {
@@ -2769,54 +3244,83 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                     self.render_text_spans(
                         &underlined_spans,
-                        Some("> "),
+                        None,
                         lines,
                         total_height,
-                        width,
+                        inner_width,
                         indent,
                         false, // don't add empty line after
                         node_index,
                         Some(cumulative_char_pos),
                     );
 
-                    for line in lines[lines_before_para..].iter_mut() {
+                    let segment = node_index.map(|idx| AnnotatableSegment {
+                        node_index: idx,
+                        target: AnnotatableTarget::QuoteParagraph {
+                            paragraph_index: current_para_idx,
+                        },
+                    });
+                    for line in lines[lines_before_block..].iter_mut() {
                         line.node_index = node_index;
                         line.line_type = LineType::QuoteParagraph {
                             paragraph_index: current_para_idx,
                         };
+                        line.annotatable_segment = segment.clone();
                     }
                     cumulative_char_pos += canonical_len;
                 }
                 _ => {
-                    let lines_before_block = lines.len();
                     self.render_node(
                         node,
                         lines,
                         total_height,
-                        width,
+                        inner_width,
                         palette,
                         is_focused,
-                        indent + 1,
+                        indent,
                         None,
                         RenderContext::InsideContainer,
                     );
 
                     for line in lines[lines_before_block..].iter_mut() {
                         line.node_index = node_index;
-                        cumulative_char_pos = Self::apply_underlines_to_line_spans(
-                            &mut line.spans,
+                    }
+
+                    Self::offset_canonical_positions(
+                        &mut lines[lines_before_block..],
+                        cumulative_char_pos,
+                    );
+
+                    if let Some(idx) = node_index {
+                        for line in lines[lines_before_block..].iter_mut() {
+                            if line.annotatable_segment.is_none()
+                                && line.canonical_content_start.is_some()
+                            {
+                                line.annotatable_segment =
+                                    Self::segment_from_line_type(idx, &line.line_type);
+                            }
+                        }
+                    }
+
+                    for line in lines[lines_before_block..].iter_mut() {
+                        Self::apply_underlines_to_rendered_line(
+                            line,
                             &annotation_ranges,
                             underline_color,
-                            cumulative_char_pos,
                         );
+                    }
+
+                    if let Some(max_end) = Self::max_canonical_end(&lines[lines_before_block..]) {
+                        cumulative_char_pos = max_end;
                     }
                 }
             }
-        }
 
-        // Assign node_index to all quote lines
-        for line in lines[lines_before_quote..].iter_mut() {
-            line.node_index = node_index;
+            self.apply_prefix_frame_to_lines(
+                &mut lines[lines_before_block..],
+                raw_text_lines_before,
+                &quote_frame,
+            );
         }
 
         // Render comments for this quote if any
@@ -2873,6 +3377,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
 
         self.raw_text_lines.push(hr_line);
@@ -2895,8 +3400,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         node_index: Option<usize>,
     ) {
-        // Collect annotation ranges for this definition list (for underline styling)
-        let annotation_ranges = self.get_annotation_ranges(node_index);
         let underline_color = palette.base_0e; // Purple
 
         // Track cumulative character position for annotation ranges
@@ -2918,6 +3421,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             for term_item in item.term.iter() {
                 term_rich_spans.extend(self.render_text_or_inline(term_item, palette, is_focused));
             }
+            let term_annotation_ranges =
+                self.get_annotation_ranges_for_definition_item(node_index, idx, true);
 
             // Apply bold styling to all term rich spans
             let styled_term_rich_spans: Vec<RichSpan> = term_rich_spans
@@ -2940,7 +3445,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             // Apply annotation underlines to the term
             let (final_term_spans, _) = Self::apply_annotation_underlines_with_offset(
                 styled_term_rich_spans,
-                &annotation_ranges,
+                &term_annotation_ranges,
                 underline_color,
                 cumulative_char_pos,
             );
@@ -2961,6 +3466,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 Some(cumulative_char_pos),
             );
 
+            let segment = node_index.map(|node_idx| AnnotatableSegment {
+                node_index: node_idx,
+                target: AnnotatableTarget::DefinitionItem {
+                    item_index: idx,
+                    is_term: true,
+                },
+            });
             for line in lines[lines_before_term..].iter_mut() {
                 line.node_index = node_index;
                 line.line_type = LineType::DefinitionListItem {
@@ -2968,12 +3480,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_term: true,
                 };
             }
+            Self::assign_annotatable_segment(&mut lines[lines_before_term..], segment.as_ref());
             cumulative_char_pos += canonical_len;
 
             // Render each definition (dd) - as blocks with indentation
             for definition_blocks in &item.definitions {
                 for block_node in definition_blocks {
                     let lines_before_def = lines.len();
+                    let definition_annotation_ranges =
+                        self.get_annotation_ranges_for_definition_item(node_index, idx, false);
 
                     self.render_node(
                         block_node,
@@ -2994,16 +3509,31 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             item_index: idx,
                             is_term: false,
                         };
-                        // Align canonical_content_start with the underline coordinate space
-                        // (apply_underlines_to_line_spans counts all chars including indent)
-                        line.canonical_content_start =
-                            Some(cumulative_char_pos + line.content_column_start);
-                        cumulative_char_pos = Self::apply_underlines_to_line_spans(
-                            &mut line.spans,
-                            &annotation_ranges,
+                    }
+                    Self::offset_canonical_positions(
+                        &mut lines[lines_before_def..],
+                        cumulative_char_pos,
+                    );
+                    let segment = node_index.map(|node_idx| AnnotatableSegment {
+                        node_index: node_idx,
+                        target: AnnotatableTarget::DefinitionItem {
+                            item_index: idx,
+                            is_term: false,
+                        },
+                    });
+                    Self::assign_annotatable_segment(
+                        &mut lines[lines_before_def..],
+                        segment.as_ref(),
+                    );
+                    for line in lines[lines_before_def..].iter_mut() {
+                        Self::apply_underlines_to_rendered_line(
+                            line,
+                            &definition_annotation_ranges,
                             underline_color,
-                            cumulative_char_pos,
                         );
+                    }
+                    if let Some(max_end) = Self::max_canonical_end(&lines[lines_before_def..]) {
+                        cumulative_char_pos = max_end;
                     }
                 }
             }
@@ -3078,6 +3608,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(separator_line.clone());
         *total_height += 1;
@@ -3099,6 +3630,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         width,
                         palette,
                         is_focused,
+                        0,
                         node_index,
                     );
                 }
@@ -3163,6 +3695,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             canonical_content_start: None,
             content_column_start: 0,
             justify_map: None,
+            annotatable_segment: None,
         });
         self.raw_text_lines.push(separator_line);
         *total_height += 1;
@@ -3455,6 +3988,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: canonical_base_offset.map(|base| base + plain_idx),
                 content_column_start: content_col_start,
                 justify_map,
+                annotatable_segment: None,
             });
 
             self.raw_text_lines.push(final_raw_text);
@@ -3713,6 +4247,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: None,
                 content_column_start: 0,
                 justify_map: None,
+                annotatable_segment: None,
             });
 
             self.raw_text_lines.push(String::new()); // Keep raw_text_lines in sync
