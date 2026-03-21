@@ -34,6 +34,12 @@ pub struct Bookmark {
     #[cfg(feature = "pdf")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_themed_rendering: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_progress: Option<f32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub total_nodes: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -181,6 +187,8 @@ impl Bookmarks {
         pdf_page: Option<usize>,
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -193,6 +201,8 @@ impl Bookmarks {
             pdf_pan,
             None,
             None,
+            book_progress,
+            total_nodes,
         );
     }
 
@@ -210,6 +220,7 @@ impl Bookmarks {
         pdf_pan: Option<u16>,
         pdf_invert_images: Option<bool>,
         pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -222,6 +233,8 @@ impl Bookmarks {
             pdf_pan,
             pdf_invert_images,
             pdf_themed_rendering,
+            book_progress,
+            None,
         );
     }
 
@@ -240,6 +253,8 @@ impl Bookmarks {
         #[cfg(feature = "pdf")] pdf_themed_rendering: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_invert_images: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         let key = self
             .resolve_existing_key(path)
@@ -259,6 +274,8 @@ impl Bookmarks {
                 pdf_invert_images,
                 #[cfg(feature = "pdf")]
                 pdf_themed_rendering,
+                book_progress,
+                total_nodes,
             },
         );
 

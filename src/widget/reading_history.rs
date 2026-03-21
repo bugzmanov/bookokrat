@@ -3,7 +3,7 @@ use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::theme::current_theme;
 use crate::widget::popup::Popup;
-use chrono::{DateTime, Local, TimeZone};
+use chrono::{DateTime, Datelike, Local, TimeZone, Timelike};
 use log::debug;
 use ratatui::{
     Frame,
@@ -32,13 +32,17 @@ struct HistoryItem {
     path: String,
     chapter: usize,
     total_chapters: usize,
+    book_progress: Option<f32>,
+    is_pdf: bool,
 }
 
 impl ReadingHistory {
     pub fn new(bookmarks: &Bookmarks) -> Self {
         // Extract unique books with their most recent access time
-        let mut latest_access: HashMap<String, (DateTime<Local>, String, usize, usize)> =
-            HashMap::new();
+        let mut latest_access: HashMap<
+            String,
+            (DateTime<Local>, String, usize, usize, Option<f32>, bool),
+        > = HashMap::new();
 
         for (path, bookmark_entry) in bookmarks.iter() {
             let title = path
@@ -51,32 +55,52 @@ impl ReadingHistory {
             let local_time = Local.from_utc_datetime(&bookmark_entry.last_read.naive_utc());
 
             // Get chapter info from bookmark
+            let is_pdf = bookmark_entry.pdf_page.is_some();
             let chapter = bookmark_entry
                 .pdf_page
                 .or(bookmark_entry.chapter_index)
                 .unwrap_or(0);
             let total_chapters = bookmark_entry.total_chapters.unwrap_or(0);
+            let book_progress = bookmark_entry.book_progress;
 
             latest_access
                 .entry(path.clone())
                 .and_modify(|e| {
                     if local_time > e.0 {
-                        *e = (local_time, title.clone(), chapter, total_chapters);
+                        *e = (
+                            local_time,
+                            title.clone(),
+                            chapter,
+                            total_chapters,
+                            book_progress,
+                            is_pdf,
+                        );
                     }
                 })
-                .or_insert((local_time, title, chapter, total_chapters));
+                .or_insert((
+                    local_time,
+                    title,
+                    chapter,
+                    total_chapters,
+                    book_progress,
+                    is_pdf,
+                ));
         }
 
         // Convert to sorted list
         let mut items: Vec<HistoryItem> = latest_access
             .into_iter()
             .map(
-                |(path, (date, title, chapter, total_chapters))| HistoryItem {
-                    date,
-                    title,
-                    path,
-                    chapter,
-                    total_chapters,
+                |(path, (date, title, chapter, total_chapters, book_progress, is_pdf))| {
+                    HistoryItem {
+                        date,
+                        title,
+                        path,
+                        chapter,
+                        total_chapters,
+                        book_progress,
+                        is_pdf,
+                    }
                 },
             )
             .collect();
@@ -103,23 +127,74 @@ impl ReadingHistory {
         // Clear the background for the popup area
         f.render_widget(Clear, popup_area);
 
+        // Pre-compute chapter strings and find max width for alignment
+        let chapter_strs: Vec<String> = self
+            .items
+            .iter()
+            .map(|item| {
+                if item.total_chapters > 0 {
+                    if item.is_pdf {
+                        format!("[p{}/{}]", item.chapter + 1, item.total_chapters)
+                    } else {
+                        format!("[{}/{}]", item.chapter + 1, item.total_chapters)
+                    }
+                } else {
+                    String::new()
+                }
+            })
+            .collect();
+        let max_chapter_width = chapter_strs.iter().map(|s| s.len()).max().unwrap_or(0);
+
+        let now = Local::now();
+
         // Create list items with formatted dates
         let items: Vec<ListItem> = self
             .items
             .iter()
-            .map(|item| {
-                let date_str = item.date.format("%Y-%m-%d").to_string();
-                let progress_str = if item.total_chapters > 0 {
-                    format!(" [ {} / {} ]", item.chapter + 1, item.total_chapters)
+            .zip(chapter_strs.iter())
+            .map(|(item, chapter_str)| {
+                let date_str = if item.date.year() == now.year() {
+                    let hour = item.date.hour();
+                    let (h12, ampm) = if hour == 0 {
+                        (12, "am")
+                    } else if hour < 12 {
+                        (hour, "am")
+                    } else if hour == 12 {
+                        (12, "pm")
+                    } else {
+                        (hour - 12, "pm")
+                    };
+                    format!(
+                        "{:>2}:{:02}{} {} {:>2}",
+                        h12,
+                        item.date.minute(),
+                        ampm,
+                        item.date.format("%b"),
+                        item.date.day()
+                    )
                 } else {
-                    String::new()
+                    format!(
+                        "{} {:>2}, {}",
+                        item.date.format("%b"),
+                        item.date.day(),
+                        item.date.year()
+                    )
                 };
+                let progress_str = if let Some(progress) = item.book_progress {
+                    format!("{:>3}%", (progress * 100.0).round() as u32)
+                } else {
+                    "    ".to_string()
+                };
+                let padded_chapter = format!("{:>width$}", chapter_str, width = max_chapter_width);
 
                 ListItem::new(Line::from(vec![
                     Span::styled(date_str, Style::default().fg(current_theme().base_03)),
+                    Span::raw(" "),
+                    Span::styled(progress_str, Style::default().fg(current_theme().base_0d)),
+                    Span::raw(" "),
+                    Span::styled(padded_chapter, Style::default().fg(current_theme().base_03)),
                     Span::raw(" : "),
                     Span::styled(&item.title, Style::default().fg(current_theme().base_05)),
-                    Span::styled(progress_str, Style::default().fg(current_theme().base_03)),
                 ]))
             })
             .collect();

@@ -74,13 +74,37 @@ type ProfilerSlot = pprof::ProfilerGuard<'static>;
 #[cfg(not(feature = "profile"))]
 type ProfilerSlot = ();
 
+struct ChapterNodeCounts {
+    counts: Vec<usize>,
+    total: usize,
+}
+
+impl ChapterNodeCounts {
+    /// Create from a saved total when per-chapter counts aren't available.
+    /// Distributes nodes evenly across chapters for progress estimation.
+    fn from_total(total: usize, num_chapters: usize) -> Self {
+        let per_chapter = if num_chapters > 0 {
+            total / num_chapters
+        } else {
+            0
+        };
+        let counts = vec![per_chapter; num_chapters];
+        Self { counts, total }
+    }
+}
+
 struct EpubBook {
     file: String,
     epub: EpubDoc<BufReader<std::fs::File>>,
+    chapter_node_counts: Arc<Mutex<Option<ChapterNodeCounts>>>,
 }
 impl EpubBook {
     fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
-        Self { file, epub: doc }
+        Self {
+            file,
+            epub: doc,
+            chapter_node_counts: Arc::new(Mutex::new(None)),
+        }
     }
 
     fn total_chapters(&self) -> usize {
@@ -90,6 +114,118 @@ impl EpubBook {
     fn current_chapter(&self) -> usize {
         self.epub.get_current_chapter()
     }
+
+    /// Returns (book_progress, total_nodes) if background counting is done.
+    fn compute_book_progress(&self, current_node_index: usize) -> (Option<f32>, Option<usize>) {
+        let Ok(guard) = self.chapter_node_counts.lock() else {
+            return (None, None);
+        };
+        let Some(counts) = guard.as_ref() else {
+            return (None, None);
+        };
+        if counts.total == 0 {
+            return (Some(0.0), Some(0));
+        }
+        let current_chapter = self.epub.get_current_chapter();
+        let completed: usize = counts.counts.iter().take(current_chapter).sum();
+        let current_chapter_total = counts.counts.get(current_chapter).copied().unwrap_or(0);
+        let clamped_node = current_node_index.min(current_chapter_total);
+        let progress = (completed + clamped_node) as f32 / counts.total as f32;
+        (Some(progress.clamp(0.0, 1.0)), Some(counts.total))
+    }
+
+    fn start_node_counting(&self, saved_total_nodes: Option<usize>) {
+        if let Some(total) = saved_total_nodes {
+            if let Ok(mut slot) = self.chapter_node_counts.lock() {
+                let num_chapters = self.epub.get_num_chapters();
+                *slot = Some(ChapterNodeCounts::from_total(total, num_chapters));
+            }
+            return;
+        }
+        let path = self.file.clone();
+        let counts_slot = self.chapter_node_counts.clone();
+        std::thread::spawn(move || {
+            if let Ok(result) = Self::count_all_chapter_nodes(&path) {
+                if let Ok(mut slot) = counts_slot.lock() {
+                    *slot = Some(result);
+                }
+            }
+        });
+    }
+
+    fn count_all_chapter_nodes(path: &str) -> anyhow::Result<ChapterNodeCounts> {
+        use crate::parsing::html_to_markdown::{HtmlToMarkdownConverter, extract_chapter_title};
+
+        let mut doc = EpubDoc::new(path)?;
+        let num_chapters = doc.get_num_chapters();
+        let mut counts = Vec::with_capacity(num_chapters);
+
+        for idx in 0..num_chapters {
+            if !doc.set_current_chapter(idx) {
+                counts.push(0);
+                continue;
+            }
+            let node_count = match doc.get_current_str() {
+                Some((html, _)) => {
+                    if is_non_content_chapter(extract_chapter_title(&html).as_deref(), &html) {
+                        0
+                    } else {
+                        let mut converter = HtmlToMarkdownConverter::new();
+                        let document = converter.convert(&html);
+                        document.blocks.len()
+                    }
+                }
+                None => 0,
+            };
+            counts.push(node_count);
+        }
+
+        let total = counts.iter().sum();
+        Ok(ChapterNodeCounts { counts, total })
+    }
+}
+
+/// Detect chapters that are reference/backmatter and shouldn't count toward reading progress.
+/// Checks both the chapter title and epub:type attributes in the raw HTML.
+fn is_non_content_chapter(title: Option<&str>, html: &str) -> bool {
+    const EPUB_TYPE_PATTERNS: &[&str] = &[
+        "epub:type=\"index\"",
+        "epub:type=\"glossary\"",
+        "epub:type=\"bibliography\"",
+    ];
+    for pattern in EPUB_TYPE_PATTERNS {
+        if html.contains(pattern) {
+            return true;
+        }
+    }
+
+    if let Some(title) = title {
+        let normalized: String = title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase();
+
+        // Only match backmatter-style titles: "[Qualifier] Index/Glossary/Bibliography"
+        // e.g. "Index", "Subject Index", "Author Index", "Selected Bibliography"
+        // Must NOT match content chapters like "B-Tree Indexes", "Index Structures",
+        // "Glossary-Based Methods", "Building an Index"
+        const BACKMATTER_EXACT: &[&str] = &[
+            "index",
+            "glossary",
+            "bibliography",
+            "works cited",
+            "further reading",
+            "list of figures",
+            "list of tables",
+            "list of illustrations",
+        ];
+        if BACKMATTER_EXACT.contains(&normalized.as_str()) {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
@@ -892,8 +1028,10 @@ impl App {
 
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
+        let mut saved_total_nodes = None;
 
         if !ignore_bookmarks && let Some(bookmark) = self.bookmarks.get_bookmark(path) {
+            saved_total_nodes = bookmark.total_nodes;
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
@@ -940,6 +1078,7 @@ impl App {
         }
 
         let current_book = EpubBook::new(path.to_string(), doc);
+        current_book.start_node_counting(saved_total_nodes);
         self.switch_to_toc_mode(&current_book);
 
         self.current_book = Some(current_book);
@@ -1529,15 +1668,20 @@ impl App {
             let chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter())
                 .unwrap_or_else(|| format!("chapter_{}", book.current_chapter()));
 
+            let current_node = self.text_reader.get_current_node_index();
+            let (book_progress, total_nodes) = book.compute_book_progress(current_node);
+
             self.bookmarks.update_bookmark(
                 &book.file,
                 chapter_href,
-                Some(self.text_reader.get_current_node_index()),
+                Some(current_node),
                 Some(book.current_chapter()),
                 Some(book.total_chapters()),
                 None,
                 None,
                 None,
+                book_progress,
+                total_nodes,
             );
 
             // Only save to disk if enough time has passed or if forced
