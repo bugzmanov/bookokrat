@@ -44,6 +44,7 @@ pub enum BuiltinTheme {
     KanagawaDragon,
     RosepineMoon,
     Moonfly,
+    Nord,
 }
 
 impl BuiltinTheme {
@@ -55,6 +56,7 @@ impl BuiltinTheme {
             BuiltinTheme::KanagawaDragon => "Kanagawa Dragon",
             BuiltinTheme::RosepineMoon => "Rosepine Moon",
             BuiltinTheme::Moonfly => "Moonfly",
+            BuiltinTheme::Nord => "Nord",
         }
     }
 
@@ -66,6 +68,7 @@ impl BuiltinTheme {
             BuiltinTheme::KanagawaDragon => &KANAGAWA_DRAGON_PALETTE,
             BuiltinTheme::RosepineMoon => &ROSEPINE_MOON_PALETTE,
             BuiltinTheme::Moonfly => &MOONFLY_PALETTE,
+            BuiltinTheme::Nord => &NORD_PALETTE,
         }
     }
 
@@ -77,6 +80,7 @@ impl BuiltinTheme {
             BuiltinTheme::KanagawaDragon,
             BuiltinTheme::RosepineMoon,
             BuiltinTheme::Moonfly,
+            BuiltinTheme::Nord,
         ]
     }
 }
@@ -425,6 +429,25 @@ static MOONFLY_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette
     base_0e: smart_color(0xcf87e8), // violet - purple
     base_0f: smart_color(0xf09479), // coral - brown/extra
 });
+
+static NORD_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
+    base_00: smart_color(0x2E3440), // Polar Night darkest
+    base_01: smart_color(0x3B4252),
+    base_02: smart_color(0x434C5E),
+    base_03: smart_color(0x4C566A), // Polar Night lightest
+    base_04: smart_color(0xD8DEE9), // Snow Storm
+    base_05: smart_color(0xE5E9F0),
+    base_06: smart_color(0xECEFF4), // Snow Storm brightest
+    base_07: smart_color(0xECEFF4),
+    base_08: smart_color(0xBF616A), // Aurora red
+    base_09: smart_color(0xD08770), // Aurora orange
+    base_0a: smart_color(0xEBCB8B), // Aurora yellow
+    base_0b: smart_color(0xA3BE8C), // Aurora green
+    base_0c: smart_color(0x8FBCBB), // Frost teal
+    base_0d: smart_color(0x81A1C1), // Frost blue
+    base_0e: smart_color(0xB48EAD), // Aurora purple
+    base_0f: smart_color(0x5E81AC), // Frost dark blue
+ });
 
 // Backward compatibility alias
 #[allow(dead_code)]
