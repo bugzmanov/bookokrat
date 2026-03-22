@@ -1,5 +1,5 @@
 use bookokrat::comments::{Comment, CommentTarget};
-use bookokrat::main_app::{ChapterDirection, FPSCounter};
+use bookokrat::main_app::{ChapterDirection, FPSCounter, OpenPosition};
 use bookokrat::settings::set_margin;
 use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
@@ -144,7 +144,7 @@ fn open_test_book(app: &mut App, filename: &str) {
         .unwrap_or_else(|| panic!("test book {filename} not found in testdata"))
         .path
         .clone();
-    let _ = app.open_book_for_reading_by_path(&path);
+    let _ = app.open_book_for_reading_by_path(&path, None);
 }
 
 fn open_first_book(app: &mut App) {
@@ -155,7 +155,7 @@ fn open_first_book(app: &mut App) {
         .expect("no books found in test directory")
         .path
         .clone();
-    let _ = app.open_book_for_reading_by_path(&path);
+    let _ = app.open_book_for_reading_by_path(&path, None);
 }
 
 fn open_first_test_book(app: &mut App) {
@@ -855,6 +855,44 @@ fn test_content_view_svg() {
         std::path::Path::new("tests/snapshots/content_view.svg"),
         "test_content_view_svg",
         create_test_failure_handler("test_content_view_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_open_at_chapter_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    let path = app
+        .book_manager
+        .books
+        .iter()
+        .find(|b| b.path.ends_with("digital_frontier.epub"))
+        .expect("digital_frontier.epub not found")
+        .path
+        .clone();
+
+    // Open at chapter 3 (0-indexed = 2)
+    let _ = app.open_book_for_reading_by_path(&path, Some(OpenPosition::Chapter(2)));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_open_at_chapter.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/open_at_chapter.svg"),
+        "test_open_at_chapter_svg",
+        create_test_failure_handler("test_open_at_chapter_svg"),
     );
 }
 

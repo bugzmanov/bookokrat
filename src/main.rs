@@ -19,7 +19,7 @@ use bookokrat::event_source::KeyboardEventSource;
 #[cfg(feature = "pdf")]
 use bookokrat::inputs::UnifiedEventSource;
 use bookokrat::library;
-use bookokrat::main_app::{App, run_app_with_event_source, should_auto_load_recent};
+use bookokrat::main_app::{App, OpenPosition, run_app_with_event_source, should_auto_load_recent};
 #[cfg(feature = "pdf")]
 use bookokrat::main_app::{
     set_kitty_delete_range_support_override, set_kitty_shm_support_override,
@@ -205,7 +205,22 @@ fn main() -> Result<()> {
             }
         }
     } else if let Some(path) = args.file.as_deref() {
-        if let Err(err) = app.open_book_for_reading_by_path(path) {
+        let position = if let Some(ch) = args.chapter {
+            if ch == 0 {
+                eprintln!("Error: chapter number must be 1 or greater");
+                std::process::exit(1);
+            }
+            Some(OpenPosition::Chapter(ch - 1))
+        } else if let Some(pg) = args.page {
+            if pg == 0 {
+                eprintln!("Error: page number must be 1 or greater");
+                std::process::exit(1);
+            }
+            Some(OpenPosition::Page(pg - 1))
+        } else {
+            None
+        };
+        if let Err(err) = app.open_book_for_reading_by_path(path, position) {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();
             eprintln!("Error: failed to open {path}: {err}");

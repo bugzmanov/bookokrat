@@ -84,6 +84,12 @@ pub enum ChapterDirection {
     Previous,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OpenPosition {
+    Chapter(usize),
+    Page(usize),
+}
+
 use std::io::{BufReader, IsTerminal, stdout};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "pdf")]
@@ -737,7 +743,7 @@ impl App {
             && let Some((recent_path, _)) = app.home_bookmarks().get_most_recent()
             && app.book_manager.contains_book(&recent_path)
         {
-            if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
+            if let Err(e) = app.open_book_for_reading_by_path(&recent_path, None) {
                 error!("Failed to auto-load most recent book: {e}");
                 app.show_error(format!("Failed to auto-load recent book: {e}"));
             }
@@ -910,14 +916,18 @@ impl App {
     pub fn open_book_for_reading(&mut self, book_index: usize) -> Result<()> {
         if let Some(book_info) = self.book_manager.get_book_info(book_index) {
             let path = book_info.path.clone();
-            self.open_book_for_reading_by_path(&path)
+            self.open_book_for_reading_by_path(&path, None)
         } else {
             anyhow::bail!("Invalid book index: {}", book_index)
         }
     }
 
-    pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
-        self.open_book_for_reading_with_context(path, None)
+    pub fn open_book_for_reading_by_path(
+        &mut self,
+        path: &str,
+        position: Option<OpenPosition>,
+    ) -> Result<()> {
+        self.open_book_for_reading_with_context(path, None, position)
     }
 
     pub fn open_book_for_reading_with_source_bookmarks(
@@ -926,18 +936,19 @@ impl App {
         source_bookmarks: &str,
     ) -> Result<()> {
         let context_override = self.context_override_for_source_bookmarks(source_bookmarks)?;
-        self.open_book_for_reading_with_context(path, context_override)
+        self.open_book_for_reading_with_context(path, context_override, None)
     }
 
     fn open_book_for_reading_with_context(
         &mut self,
         path: &str,
         context_override: Option<LibraryContext>,
+        position: Option<OpenPosition>,
     ) -> Result<()> {
         self.save_bookmark_with_throttle(true);
         let previous_override = self.current_context_override.take();
         self.current_context_override = context_override;
-        match self.open_book_for_reading_by_path_inner(path) {
+        match self.open_book_for_reading_by_path_inner(path, position) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.current_context_override = previous_override;
@@ -946,30 +957,64 @@ impl App {
         }
     }
 
-    fn open_book_for_reading_by_path_inner(&mut self, path: &str) -> Result<()> {
+    fn open_book_for_reading_by_path_inner(
+        &mut self,
+        path: &str,
+        position: Option<OpenPosition>,
+    ) -> Result<()> {
         let format = BookManager::detect_format(path)
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
+
+        match (&format, &position) {
+            (BookFormat::Epub | BookFormat::Html, Some(OpenPosition::Page(_))) => {
+                anyhow::bail!("--page is not supported for EPUB files, use --chapter");
+            }
+            #[cfg(feature = "pdf")]
+            (BookFormat::Pdf | BookFormat::Djvu, Some(OpenPosition::Chapter(_))) => {
+                anyhow::bail!("--chapter is not yet supported for PDF files, use --page");
+            }
+            _ => {}
+        }
+
         let path_owned = path.to_string();
+        let skip_bookmarks = position.is_some() || self.test_mode;
 
         self.book_manager.add_external_book(path);
 
         match format {
             #[cfg(feature = "pdf")]
             BookFormat::Pdf => {
-                self.load_pdf(&path_owned, self.test_mode)?;
+                self.load_pdf(&path_owned, skip_bookmarks)?;
             }
             #[cfg(feature = "pdf")]
             BookFormat::Djvu => {
-                self.load_pdf(&path_owned, self.test_mode)?;
+                self.load_pdf(&path_owned, skip_bookmarks)?;
             }
             BookFormat::Epub | BookFormat::Html => {
-                self.load_epub(&path_owned, self.test_mode)?;
+                self.load_epub(&path_owned, skip_bookmarks)?;
             }
         }
 
         self.navigation_panel.current_book_path = Some(path_owned);
         self.focused_panel = FocusedPanel::Main(MainPanel::Content);
         self.sync_terminal_title();
+
+        match position {
+            Some(OpenPosition::Chapter(ch)) => {
+                self.navigate_to_chapter(ch)?;
+            }
+            #[cfg(feature = "pdf")]
+            Some(OpenPosition::Page(pg)) => {
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.set_page(pg);
+                }
+            }
+            #[cfg(not(feature = "pdf"))]
+            Some(OpenPosition::Page(_)) => {
+                anyhow::bail!("PDF support is not enabled");
+            }
+            None => {}
+        }
 
         Ok(())
     }
@@ -1832,7 +1877,7 @@ impl App {
                     }
                 };
 
-                match self.open_book_for_reading_with_context(&path, context_override) {
+                match self.open_book_for_reading_with_context(&path, context_override, None) {
                     Ok(()) => {
                         self.set_main_panel_focus(MainPanel::Content);
                         self.reading_history = None;
@@ -3149,7 +3194,7 @@ impl App {
         match action {
             NavigationPanelAction::Bypass => true,
             NavigationPanelAction::SelectBook { book_path } => {
-                if let Err(e) = self.open_book_for_reading_by_path(&book_path) {
+                if let Err(e) = self.open_book_for_reading_by_path(&book_path, None) {
                     error!("Failed to open book at path {book_path}: {e}");
                     self.show_error(format!("Failed to open book: {e}"));
                 }
@@ -7043,7 +7088,7 @@ mod tests {
                 None,
                 Some(dir.path().join("img_cache")),
             );
-            app.open_book_for_reading_by_path(book_a_abs.to_str().unwrap())
+            app.open_book_for_reading_by_path(book_a_abs.to_str().unwrap(), None)
                 .unwrap();
             app.handle_reading_history_action(ReadingHistoryAction::OpenBookAbsolute {
                 path: book_b_abs.to_str().unwrap().to_string(),
