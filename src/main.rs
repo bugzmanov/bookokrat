@@ -1,6 +1,7 @@
 use std::{fs::File, io::stdout, path::Path};
 
 use anyhow::Result;
+use clap::Parser;
 use crossterm::{
     event::EnableMouseCapture,
     execute,
@@ -9,6 +10,8 @@ use crossterm::{
 use log::{error, info, warn};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
+
+mod cli;
 
 // Use modules from the library crate
 #[cfg(not(feature = "pdf"))]
@@ -29,61 +32,6 @@ use bookokrat::settings;
 use bookokrat::terminal;
 use bookokrat::theme::load_custom_themes;
 
-struct CliArgs {
-    file_path: Option<String>,
-    zen_mode: bool,
-    test_mode: bool,
-    continue_reading: bool,
-}
-
-fn parse_args() -> Result<CliArgs> {
-    let mut file_path = None;
-    let mut zen_mode = false;
-    let mut test_mode = false;
-    let mut continue_reading = false;
-
-    for arg in std::env::args().skip(1) {
-        match arg.as_str() {
-            "--zen-mode" => zen_mode = true,
-            "--test-mode" => test_mode = true,
-            "--continue" | "-c" => continue_reading = true,
-            "--help" | "-h" => {
-                println!("Usage: bookokrat [FILE.epub] [--zen-mode] [--test-mode] [--continue]");
-                println!();
-                println!("Options:");
-                println!(
-                    "  --continue, -c   Open the most recently read book across all libraries"
-                );
-                println!("  --zen-mode       Start in zen mode (hide sidebar)");
-                println!("  --test-mode      Start in test mode");
-                println!("  --help, -h       Show this help message");
-                println!("  --version, -V    Show version");
-                std::process::exit(0);
-            }
-            "--version" | "-V" => {
-                println!("bookokrat {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
-            }
-            _ if arg.starts_with('-') => {
-                anyhow::bail!("Unknown option: {arg}");
-            }
-            _ => {
-                if file_path.is_some() {
-                    anyhow::bail!("Only one file path can be provided.");
-                }
-                file_path = Some(arg);
-            }
-        }
-    }
-
-    Ok(CliArgs {
-        file_path,
-        zen_mode,
-        test_mode,
-        continue_reading,
-    })
-}
-
 fn find_most_recent_book() -> Option<library::MostRecentBook> {
     let libraries_dir = library::libraries_data_dir().ok()?;
     library::find_most_recent_book_in(&libraries_dir)
@@ -93,11 +41,11 @@ fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
     panic_handler::initialize_panic_handler();
 
-    let args = parse_args()?;
+    let args = cli::Cli::parse();
 
     // Resolve library directory from file argument or CWD
     let library_dir = args
-        .file_path
+        .file
         .as_deref()
         .and_then(|p| Path::new(p).parent())
         .filter(|p| !p.as_os_str().is_empty())
@@ -135,7 +83,7 @@ fn main() -> Result<()> {
     }
 
     // Validate file argument before entering TUI
-    if let Some(ref path) = args.file_path {
+    if let Some(ref path) = args.file {
         if !Path::new(path).exists() {
             eprintln!("Error: file not found: {path}");
             std::process::exit(1);
@@ -193,7 +141,7 @@ fn main() -> Result<()> {
 
     // Create app and run it
     let book_directory = args
-        .file_path
+        .file
         .as_deref()
         .and_then(|path| Path::new(path).parent())
         .and_then(|parent| {
@@ -205,7 +153,7 @@ fn main() -> Result<()> {
         });
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent = should_auto_load_recent(
-        args.file_path.as_deref(),
+        args.file.as_deref(),
         args.test_mode,
         args.continue_reading,
     );
@@ -256,7 +204,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-    } else if let Some(path) = args.file_path.as_deref() {
+    } else if let Some(path) = args.file.as_deref() {
         if let Err(err) = app.open_book_for_reading_by_path(path) {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();
