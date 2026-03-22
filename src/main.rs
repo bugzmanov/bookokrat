@@ -12,6 +12,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
 mod cli;
+mod print;
 
 // Use modules from the library crate
 #[cfg(not(feature = "pdf"))]
@@ -42,6 +43,21 @@ fn main() -> Result<()> {
     panic_handler::initialize_panic_handler();
 
     let args = cli::Cli::parse();
+
+    // Handle subcommands before TUI setup
+    if let Some(ref command) = args.command {
+        match command {
+            cli::Command::Print {
+                file,
+                toc,
+                info,
+                chapter,
+                pages,
+            } => {
+                return print::cmd_print(file, *toc, *info, *chapter, *pages);
+            }
+        }
+    }
 
     // Resolve library directory from file argument or CWD
     let library_dir = args

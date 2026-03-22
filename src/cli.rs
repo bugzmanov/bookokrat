@@ -1,8 +1,11 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "bookokrat", version, about)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// EPUB or PDF file to open
     pub file: Option<String>,
 
@@ -25,4 +28,29 @@ pub struct Cli {
     /// Disable persistence and auto-loading
     #[arg(long)]
     pub test_mode: bool,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Print book content, TOC, or metadata to stdout
+    Print {
+        /// EPUB or PDF file
+        file: String,
+
+        /// Print table of contents
+        #[arg(long)]
+        toc: bool,
+
+        /// Print book metadata
+        #[arg(long)]
+        info: bool,
+
+        /// Chapter number to print, 1-indexed
+        #[arg(long, conflicts_with = "pages")]
+        chapter: Option<usize>,
+
+        /// Page number to print, 1-indexed
+        #[arg(long, conflicts_with = "chapter")]
+        pages: Option<usize>,
+    },
 }
