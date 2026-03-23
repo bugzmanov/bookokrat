@@ -712,7 +712,21 @@ impl PdfReaderState {
         };
 
         let palette = current_theme();
-        let mode_title = if self.page_search.is_input_active() {
+        let mode_title = if self.quick_page_jump.is_some() {
+            let border_style = Style::default().fg(border_color);
+            let digits = &self.quick_page_jump.as_ref().unwrap().digits;
+            let digits_style = Style::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(format!(" {digits} "), digits_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.page_search.is_input_active() {
             let border_style = Style::default().fg(border_color);
             let mode_style = Style::default()
                 .fg(palette.base_07)

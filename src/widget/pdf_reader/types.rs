@@ -124,6 +124,37 @@ pub struct RenderLayout {
     pub page_area: Rect,
 }
 
+/// Quick page jump state for vim-style {count}gg
+pub struct QuickPageJump {
+    /// Accumulated digits (e.g. "214")
+    pub digits: String,
+    /// When the first digit was pressed
+    pub started: std::time::Instant,
+}
+
+impl QuickPageJump {
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+    pub fn new(digit: char) -> Self {
+        Self {
+            digits: digit.to_string(),
+            started: std::time::Instant::now(),
+        }
+    }
+
+    pub fn push(&mut self, digit: char) {
+        self.digits.push(digit);
+    }
+
+    pub fn is_expired(&self) -> bool {
+        self.started.elapsed() > Self::TIMEOUT
+    }
+
+    pub fn page_number(&self) -> Option<usize> {
+        self.digits.parse::<usize>().ok().filter(|&n| n > 0)
+    }
+}
+
 /// Mode for page jump input
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PageJumpMode {

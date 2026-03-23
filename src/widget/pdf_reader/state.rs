@@ -22,7 +22,9 @@ use crate::pdf::{
 use crate::theme::{Base16Palette, theme_background};
 use crate::widget::hud_message::{HudMessage, HudMode};
 
-use super::types::{LastRender, PageJumpMode, PendingScroll, PrevFrame, RenderedInfo};
+use super::types::{
+    LastRender, PageJumpMode, PendingScroll, PrevFrame, QuickPageJump, RenderedInfo,
+};
 use crate::comments::{BookComments, CommentTarget};
 use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
 
@@ -363,6 +365,8 @@ pub struct PdfReaderState {
     pub page_search: PageSearchState,
     /// Whether file watching is enabled (auto-reload on disk change)
     pub watching: bool,
+    /// Quick page jump state for vim-style {count}gg
+    pub quick_page_jump: Option<QuickPageJump>,
 }
 
 impl PdfReaderState {
@@ -450,6 +454,7 @@ impl PdfReaderState {
             hud_message: None,
             page_search: PageSearchState::default(),
             watching: false,
+            quick_page_jump: None,
         }
     }
 
@@ -467,15 +472,24 @@ impl PdfReaderState {
     }
 
     pub fn update_hud_message(&mut self) -> bool {
+        let mut changed = false;
         if self
             .hud_message
             .as_ref()
             .is_some_and(HudMessage::is_expired)
         {
             self.hud_message = None;
-            return true;
+            changed = true;
         }
-        false
+        if self
+            .quick_page_jump
+            .as_ref()
+            .is_some_and(|q| q.is_expired())
+        {
+            self.quick_page_jump = None;
+            changed = true;
+        }
+        changed
     }
 
     pub fn dismiss_error_hud(&mut self) -> bool {
