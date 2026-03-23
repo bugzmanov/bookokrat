@@ -31,6 +31,44 @@ use log::warn;
 // Settings popup (used for themes in all modes)
 use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 
+pub struct LibraryContext {
+    bookmarks: Bookmarks,
+    comments_dir: Option<PathBuf>,
+}
+
+impl LibraryContext {
+    fn new(bookmarks: Bookmarks, comments_dir: Option<PathBuf>) -> Self {
+        Self {
+            bookmarks,
+            comments_dir,
+        }
+    }
+
+    fn load_from_bookmarks_path(bookmarks_path: &str) -> anyhow::Result<Self> {
+        let bookmarks = Bookmarks::load_from_file(bookmarks_path)?;
+        let comments_dir = std::path::Path::new(bookmarks_path)
+            .parent()
+            .map(|p| p.join("comments"));
+        Ok(Self::new(bookmarks, comments_dir))
+    }
+
+    fn bookmarks(&self) -> &Bookmarks {
+        &self.bookmarks
+    }
+
+    fn bookmarks_mut(&mut self) -> &mut Bookmarks {
+        &mut self.bookmarks
+    }
+
+    fn comments_dir(&self) -> Option<&Path> {
+        self.comments_dir.as_deref()
+    }
+
+    fn file_path(&self) -> Option<&str> {
+        self.bookmarks.file_path()
+    }
+}
+
 // PDF support (feature-gated)
 #[cfg(feature = "pdf")]
 use crate::pdf::{
@@ -269,7 +307,7 @@ pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
     text_reader: MarkdownTextReader,
-    bookmarks: Bookmarks,
+    home_context: LibraryContext,
     book_images: BookImages,
     current_book: Option<EpubBook>,
     pub focused_panel: FocusedPanel,
@@ -294,7 +332,7 @@ pub struct App {
     help_bar_area: Rect,
     zen_mode: bool,
     test_mode: bool,
-    comments_dir: Option<PathBuf>,
+    current_context_override: Option<LibraryContext>,
     pub pending_force_redraw: bool,
     #[cfg(unix)]
     pub pending_suspend: bool,
@@ -567,7 +605,10 @@ impl App {
         let mut text_reader = MarkdownTextReader::new();
         text_reader.set_margin(settings::get_margin());
         text_reader.set_justify_text(settings::is_justify_text());
-        let bookmarks = Bookmarks::load_or_ephemeral(bookmark_file);
+        let home_context = LibraryContext::new(
+            Bookmarks::load_or_ephemeral(bookmark_file),
+            comments_dir.map(|p| p.to_path_buf()),
+        );
 
         let cache_dir =
             image_cache_dir.unwrap_or_else(|| std::env::temp_dir().join("bookokrat_images"));
@@ -608,7 +649,7 @@ impl App {
             book_manager,
             navigation_panel,
             text_reader,
-            bookmarks,
+            home_context,
             book_images,
             current_book: None,
             focused_panel: FocusedPanel::Main(MainPanel::NavigationList),
@@ -633,7 +674,7 @@ impl App {
             help_bar_area: Rect::default(),
             zen_mode: false,
             test_mode: false,
-            comments_dir: comments_dir.map(|p| p.to_path_buf()),
+            current_context_override: None,
             pending_force_redraw: false,
             #[cfg(unix)]
             pending_suspend: false,
@@ -674,10 +715,10 @@ impl App {
         // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
         crate::settings::fix_incompatible_pdf_settings();
 
-        let is_first_time_user = app.bookmarks.get_most_recent().is_none();
+        let is_first_time_user = app.home_bookmarks().get_most_recent().is_none();
 
         if auto_load_recent
-            && let Some((recent_path, _)) = app.bookmarks.get_most_recent()
+            && let Some((recent_path, _)) = app.home_bookmarks().get_most_recent()
             && app.book_manager.contains_book(&recent_path)
         {
             if let Err(e) = app.open_book_for_reading_by_path(&recent_path) {
@@ -860,12 +901,32 @@ impl App {
     }
 
     pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
+        self.open_book_for_reading_with_context(path, None)
+    }
+
+    fn open_book_for_reading_with_context(
+        &mut self,
+        path: &str,
+        context_override: Option<LibraryContext>,
+    ) -> Result<()> {
+        self.save_bookmark_with_throttle(true);
+        let previous_override = self.current_context_override.take();
+        self.current_context_override = context_override;
+        match self.open_book_for_reading_by_path_inner(path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                self.current_context_override = previous_override;
+                Err(e)
+            }
+        }
+    }
+
+    fn open_book_for_reading_by_path_inner(&mut self, path: &str) -> Result<()> {
         let format = BookManager::detect_format(path)
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
         let path_owned = path.to_string();
 
         self.book_manager.add_external_book(path);
-        self.save_bookmark_with_throttle(true);
 
         match format {
             #[cfg(feature = "pdf")]
@@ -1002,14 +1063,12 @@ impl App {
             doc.get_current_chapter()
         );
 
-        // Cache book metadata in bookmarks
+        // Extract metadata early (before doc is moved)
         let epub_title = doc.mdata("title").map(|m| m.value.clone());
         let epub_author = doc.mdata("creator").map(|m| m.value.clone());
         let abs_path = std::fs::canonicalize(path)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
-        self.bookmarks
-            .set_metadata(path, epub_title, epub_author, abs_path);
 
         // Clear jump list when opening a new book (jump list is per-book)
         self.jump_list.clear();
@@ -1025,7 +1084,7 @@ impl App {
         let comments = if ignore_bookmarks {
             BookComments::new_empty()
         } else {
-            match BookComments::new(&path_buf, self.comments_dir.as_deref()) {
+            match BookComments::new(&path_buf, self.current_book_comments_dir()) {
                 Ok(c) => c,
                 Err(e) => {
                     warn!("Failed to initialize book comments: {e}");
@@ -1040,7 +1099,9 @@ impl App {
         let mut node_to_restore = None;
         let mut saved_total_nodes = None;
 
-        if !ignore_bookmarks && let Some(bookmark) = self.bookmarks.get_bookmark(path) {
+        if !ignore_bookmarks
+            && let Some(bookmark) = self.current_book_bookmarks().get_bookmark(path)
+        {
             saved_total_nodes = bookmark.total_nodes;
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
@@ -1097,6 +1158,28 @@ impl App {
         if let Some(node_idx) = node_to_restore {
             self.text_reader.restore_to_node_index(node_idx);
         }
+
+        // Save initial bookmark with metadata AFTER chapter restoration
+        if !ignore_bookmarks {
+            let book_state = self.current_book.as_ref().map(|book| {
+                let href = Self::get_chapter_href(&book.epub, book.current_chapter())
+                    .unwrap_or_else(|| format!("chapter_{}", book.current_chapter()));
+                (href, book.current_chapter(), book.total_chapters())
+            });
+            if let Some((chapter_href, current_ch, total_ch)) = book_state {
+                self.current_book_bookmarks_mut().save_initial_bookmark(
+                    path,
+                    chapter_href,
+                    Some(current_ch),
+                    Some(total_ch),
+                    None,
+                    epub_title,
+                    epub_author,
+                    abs_path,
+                );
+            }
+        }
+
         Ok(())
     }
 
@@ -1186,12 +1269,29 @@ impl App {
             doc_author.as_deref().unwrap_or("(none)")
         );
 
-        // Cache PDF metadata in bookmarks
+        // Save initial bookmark with metadata
         let abs_path = std::fs::canonicalize(path)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
-        self.bookmarks
-            .set_metadata(path, doc_title.clone(), doc_author, abs_path);
+        let restored_page = if !ignore_bookmarks {
+            self.current_book_bookmarks()
+                .get_bookmark(path)
+                .and_then(|b| b.pdf_page)
+        } else {
+            None
+        };
+        self.current_book_bookmarks_mut().save_initial_bookmark(
+            path,
+            restored_page
+                .map(|p: usize| p.to_string())
+                .unwrap_or_else(|| "0".to_string()),
+            None,
+            Some(page_count),
+            restored_page.or(Some(0)),
+            doc_title.clone(),
+            doc_author,
+            abs_path,
+        );
 
         // is_iterm = actual iTerm terminal (for feature restrictions like normal mode)
         let is_iterm = caps.kind == crate::terminal::TerminalKind::ITerm;
@@ -1201,7 +1301,7 @@ impl App {
         let bookmark = if ignore_bookmarks {
             None
         } else {
-            self.bookmarks.get_bookmark(path)
+            self.current_book_bookmarks().get_bookmark(path)
         };
         let mut initial_page = bookmark
             .and_then(|b| {
@@ -1228,7 +1328,7 @@ impl App {
             } else {
                 match crate::comments::BookComments::new(
                     std::path::Path::new(path),
-                    self.comments_dir.as_deref(),
+                    self.current_book_comments_dir(),
                 ) {
                     Ok(c) => c,
                     Err(e) => {
@@ -1424,7 +1524,10 @@ impl App {
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.pdf_pending_display,
-            &mut self.bookmarks,
+            self.current_context_override
+                .as_mut()
+                .map(LibraryContext::bookmarks_mut)
+                .unwrap_or_else(|| self.home_context.bookmarks_mut()),
             &mut self.last_bookmark_save,
             &mut self.navigation_panel.table_of_contents,
             toc_height,
@@ -1672,46 +1775,228 @@ impl App {
         self.save_bookmark_with_throttle(false);
     }
 
+    fn handle_reading_history_action(
+        &mut self,
+        action: crate::reading_history::ReadingHistoryAction,
+    ) {
+        use crate::reading_history::ReadingHistoryAction;
+        match action {
+            ReadingHistoryAction::Close => {
+                self.close_popup_to_previous();
+                self.reading_history = None;
+            }
+            ReadingHistoryAction::OpenBook { path } => {
+                if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
+                    self.set_main_panel_focus(MainPanel::Content);
+                    self.reading_history = None;
+                    let _ = self.open_book_for_reading(book_index);
+                }
+            }
+            ReadingHistoryAction::OpenBookAbsolute {
+                path,
+                source_bookmarks,
+            } => {
+                let context_override = match self
+                    .context_override_for_source_bookmarks(&source_bookmarks)
+                {
+                    Ok(context) => context,
+                    Err(e) => {
+                        self.show_error(format!("Failed to load source library bookmarks: {e}"));
+                        return;
+                    }
+                };
+
+                match self.open_book_for_reading_with_context(&path, context_override) {
+                    Ok(()) => {
+                        self.set_main_panel_focus(MainPanel::Content);
+                        self.reading_history = None;
+                    }
+                    Err(e) => {
+                        self.show_error(format!("Failed to open book: {e}"));
+                    }
+                }
+            }
+            ReadingHistoryAction::DeleteBookmark {
+                path,
+                source_bookmarks,
+            } => {
+                let is_currently_open = self.current_book.as_ref().is_some_and(|b| {
+                    b.file == path
+                        || std::fs::canonicalize(&b.file)
+                            .ok()
+                            .is_some_and(|abs| abs.to_string_lossy() == path)
+                }) || {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.pdf_document_path.as_ref().is_some_and(|p| {
+                            p.to_string_lossy() == path
+                                || std::fs::canonicalize(p)
+                                    .ok()
+                                    .is_some_and(|abs| abs.to_string_lossy() == path)
+                        })
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    false
+                };
+                if is_currently_open {
+                    self.show_warning("Cannot delete bookmark for the currently open book");
+                    return;
+                }
+
+                let removed = if let Some(context) =
+                    self.context_for_source_bookmarks_mut(source_bookmarks.as_deref())
+                {
+                    context.bookmarks_mut().remove_bookmark(&path)
+                } else if let Some(ref sb) = source_bookmarks {
+                    match LibraryContext::load_from_bookmarks_path(sb) {
+                        Ok(mut context) => context.bookmarks_mut().remove_bookmark(&path),
+                        Err(e) => {
+                            log::error!("Failed to load bookmarks for delete: {e}");
+                            false
+                        }
+                    }
+                } else {
+                    false
+                };
+                if removed {
+                    let home_bookmarks = self.home_bookmarks().clone();
+                    if let Some(ref mut history) = self.reading_history {
+                        history.reload(&home_bookmarks);
+                    }
+                }
+            }
+        }
+    }
+
+    fn home_bookmarks(&self) -> &Bookmarks {
+        self.home_context.bookmarks()
+    }
+
+    fn current_book_context(&self) -> &LibraryContext {
+        self.current_context_override
+            .as_ref()
+            .unwrap_or(&self.home_context)
+    }
+
+    fn current_book_context_mut(&mut self) -> &mut LibraryContext {
+        self.current_context_override
+            .as_mut()
+            .unwrap_or(&mut self.home_context)
+    }
+
+    fn context_for_source_bookmarks_mut(
+        &mut self,
+        source_bookmarks: Option<&str>,
+    ) -> Option<&mut LibraryContext> {
+        let is_home =
+            source_bookmarks.is_none_or(|source| self.home_context.file_path() == Some(source));
+        if is_home {
+            return Some(&mut self.home_context);
+        }
+
+        let matches_override = self
+            .current_context_override
+            .as_ref()
+            .is_some_and(|context| {
+                source_bookmarks.is_some_and(|source| context.file_path() == Some(source))
+            });
+        if matches_override {
+            return self.current_context_override.as_mut();
+        }
+
+        None
+    }
+
+    fn current_book_bookmarks(&self) -> &Bookmarks {
+        self.current_book_context().bookmarks()
+    }
+
+    fn current_book_bookmarks_mut(&mut self) -> &mut Bookmarks {
+        self.current_book_context_mut().bookmarks_mut()
+    }
+
+    fn current_book_comments_dir(&self) -> Option<&Path> {
+        self.current_book_context().comments_dir()
+    }
+
+    fn context_override_for_source_bookmarks(
+        &self,
+        source_bookmarks: &str,
+    ) -> anyhow::Result<Option<LibraryContext>> {
+        if source_bookmarks.is_empty() {
+            return Ok(None);
+        }
+        if self.home_context.file_path() == Some(source_bookmarks) {
+            return Ok(None);
+        }
+        LibraryContext::load_from_bookmarks_path(source_bookmarks).map(Some)
+    }
+
     pub fn save_bookmark_with_throttle(&mut self, force: bool) {
         // Handle PDF bookmarks
         #[cfg(feature = "pdf")]
-        if let Some(ref pdf_reader) = self.pdf_reader {
-            pdf_reader.save_bookmark_with_throttle(
-                &mut self.bookmarks,
-                &mut self.last_bookmark_save,
-                force,
-            );
-            return;
+        {
+            let App {
+                pdf_reader,
+                current_context_override,
+                home_context,
+                last_bookmark_save,
+                ..
+            } = self;
+            if let Some(pdf_reader) = pdf_reader.as_ref() {
+                let bookmarks = current_context_override
+                    .as_mut()
+                    .map(LibraryContext::bookmarks_mut)
+                    .unwrap_or_else(|| home_context.bookmarks_mut());
+                pdf_reader.save_bookmark_with_throttle(bookmarks, last_bookmark_save, force);
+                return;
+            }
         }
-
         // Handle EPUB bookmarks
-        if let Some(book) = &self.current_book {
+        let epub_state = self.current_book.as_ref().map(|book| {
             let chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter())
                 .unwrap_or_else(|| format!("chapter_{}", book.current_chapter()));
-
             let current_node = self.text_reader.get_current_node_index();
             let (book_progress, total_nodes) = book.compute_book_progress(current_node);
-
-            self.bookmarks.update_bookmark(
-                &book.file,
+            (
+                book.file.clone(),
+                chapter_href,
+                current_node,
+                book.current_chapter(),
+                book.total_chapters(),
+                book_progress,
+                total_nodes,
+            )
+        });
+        if let Some((
+            file,
+            chapter_href,
+            current_node,
+            current_ch,
+            total_ch,
+            progress,
+            total_nodes,
+        )) = epub_state
+        {
+            self.current_book_bookmarks_mut().update_bookmark(
+                &file,
                 chapter_href,
                 Some(current_node),
-                Some(book.current_chapter()),
-                Some(book.total_chapters()),
+                Some(current_ch),
+                Some(total_ch),
                 None,
                 None,
                 None,
-                book_progress,
+                progress,
                 total_nodes,
             );
 
-            // Only save to disk if enough time has passed or if forced
             let now = std::time::Instant::now();
             if force
                 || now.duration_since(self.last_bookmark_save)
                     > std::time::Duration::from_millis(500)
             {
-                if let Err(e) = self.bookmarks.save() {
+                if let Err(e) = self.current_book_bookmarks_mut().save() {
                     error!("Failed to save bookmark: {e}");
                 }
                 self.last_bookmark_save = now;
@@ -1945,6 +2230,7 @@ impl App {
                     let click_x = mouse_event.column;
                     let click_y = mouse_event.row;
 
+                    let mut action = None;
                     if let Some(ref mut history) = self.reading_history {
                         // Check if click is outside popup area - close it
                         if history.is_outside_popup_area(click_x, click_y) {
@@ -1962,16 +2248,13 @@ impl App {
                                 history.handle_mouse_click(mouse_event.column, mouse_event.row);
                             }
                             ClickType::Double => {
-                                if history.handle_mouse_click(mouse_event.column, mouse_event.row) {
-                                    if let Some(path) = history.selected_path() {
-                                        let ptmp = path.to_string();
-                                        let _ = self.open_book_for_reading_by_path(&ptmp);
-                                        self.focused_panel = FocusedPanel::Main(MainPanel::Content);
-                                        self.reading_history = None;
-                                    }
-                                }
+                                history.handle_mouse_click(mouse_event.column, mouse_event.row);
+                                action = history.selected_action_public();
                             }
                         }
+                    }
+                    if let Some(action) = action {
+                        self.handle_reading_history_action(action);
                     }
                     return;
                 }
@@ -3308,7 +3591,7 @@ impl App {
             if let FocusedPanel::Main(panel) = self.focused_panel {
                 self.previous_main_panel = panel;
             }
-            self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
+            self.reading_history = Some(ReadingHistory::new(self.home_bookmarks()));
             self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
             return true;
         }
@@ -3534,17 +3817,20 @@ impl App {
         // For PDF in Kitty mode, treat zen toggle as reopening at the same page
         // This prevents glitches when the viewport size changes dramatically
         #[cfg(feature = "pdf")]
-        if let Some(ref mut pdf_reader) = self.pdf_reader {
+        {
             let nav_width = ((self.terminal_size.width * 30) / 100).max(20);
-            pdf_reader.handle_zen_mode_toggle(
-                self.zen_mode,
-                self.terminal_size.width,
-                nav_width,
-                self.comments_dir.as_deref(),
-                self.test_mode,
-                self.pdf_conversion_tx.as_ref(),
-                self.pdf_service.as_mut(),
-            );
+            let comments_dir = self.current_book_comments_dir().map(|p| p.to_path_buf());
+            if let Some(ref mut pdf_reader) = self.pdf_reader {
+                pdf_reader.handle_zen_mode_toggle(
+                    self.zen_mode,
+                    self.terminal_size.width,
+                    nav_width,
+                    comments_dir.as_deref(),
+                    self.test_mode,
+                    self.pdf_conversion_tx.as_ref(),
+                    self.pdf_service.as_mut(),
+                );
+            }
         }
     }
 
@@ -3562,7 +3848,7 @@ impl App {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
         }
-        self.reading_history = Some(ReadingHistory::new_all_libraries(&self.bookmarks));
+        self.reading_history = Some(ReadingHistory::new_all_libraries(self.home_bookmarks()));
         self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
     }
 
@@ -3853,7 +4139,7 @@ impl App {
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
-                    self.reading_history = Some(ReadingHistory::new(&self.bookmarks));
+                    self.reading_history = Some(ReadingHistory::new(self.home_bookmarks()));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
                 }
                 self.key_sequence.clear();
@@ -4283,27 +4569,7 @@ impl App {
             };
 
             if let Some(action) = action {
-                use crate::reading_history::ReadingHistoryAction;
-                match action {
-                    ReadingHistoryAction::Close => {
-                        self.close_popup_to_previous();
-                        self.reading_history = None;
-                    }
-                    ReadingHistoryAction::OpenBook { path } => {
-                        if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
-                            self.set_main_panel_focus(MainPanel::Content);
-                            self.reading_history = None;
-                            let _ = self.open_book_for_reading(book_index);
-                        }
-                    }
-                    ReadingHistoryAction::OpenBookAbsolute { path } => {
-                        self.set_main_panel_focus(MainPanel::Content);
-                        self.reading_history = None;
-                        if let Err(e) = self.open_book_for_reading_by_path(&path) {
-                            self.show_error(format!("Failed to open book: {e}"));
-                        }
-                    }
-                }
+                self.handle_reading_history_action(action);
             }
             return None;
         }
@@ -5719,7 +5985,10 @@ impl App {
             self.pdf_conversion_tx.as_ref(),
             &mut self.navigation_panel.table_of_contents,
             toc_height,
-            &mut self.bookmarks,
+            self.current_context_override
+                .as_mut()
+                .map(LibraryContext::bookmarks_mut)
+                .unwrap_or_else(|| self.home_context.bookmarks_mut()),
             &mut self.last_bookmark_save,
         );
         // For non-Kitty protocols: wait for the page to be converted before redrawing
@@ -5761,7 +6030,10 @@ impl App {
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.notifications,
-            &mut self.bookmarks,
+            self.current_context_override
+                .as_mut()
+                .map(LibraryContext::bookmarks_mut)
+                .unwrap_or_else(|| self.home_context.bookmarks_mut()),
             &mut self.last_bookmark_save,
             &mut self.navigation_panel.table_of_contents,
             toc_height,
@@ -5815,7 +6087,10 @@ impl App {
                 self.pdf_service.as_mut(),
                 self.pdf_conversion_tx.as_ref(),
                 &mut self.notifications,
-                &mut self.bookmarks,
+                self.current_context_override
+                    .as_mut()
+                    .map(LibraryContext::bookmarks_mut)
+                    .unwrap_or_else(|| self.home_context.bookmarks_mut()),
                 &mut self.last_bookmark_save,
                 &mut self.navigation_panel.table_of_contents,
                 toc_height,
