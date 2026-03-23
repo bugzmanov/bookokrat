@@ -4231,6 +4231,66 @@ impl App {
                 self.key_sequence.clear();
                 true
             }
+            " D" => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    use crate::settings::{
+                        PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
+                    };
+                    let new_mode = match get_pdf_page_layout_mode() {
+                        PdfPageLayoutMode::Single => PdfPageLayoutMode::Dual,
+                        PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
+                    };
+                    set_pdf_page_layout_mode(new_mode);
+                    if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        if let Some(ref mut zoom) = pdf_reader.zoom {
+                            zoom.global_scroll_offset = 0;
+                        }
+                        pdf_reader.last_sent_viewport = None;
+                        pdf_reader.force_redraw();
+                        pdf_reader.set_hud_message(
+                            format!("Page layout: {}", new_mode.as_str()),
+                            crate::widget::hud_message::HudMode::Normal,
+                            std::time::Duration::from_secs(2),
+                        );
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " S" => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    if self.pdf_supports_scroll_mode {
+                        use crate::settings::{
+                            PdfRenderMode, get_pdf_render_mode, set_pdf_render_mode,
+                        };
+                        let new_mode = match get_pdf_render_mode() {
+                            PdfRenderMode::Page => PdfRenderMode::Scroll,
+                            PdfRenderMode::Scroll => PdfRenderMode::Page,
+                        };
+                        set_pdf_render_mode(new_mode);
+                        if let Some(ref mut pdf_reader) = self.pdf_reader {
+                            if let Some(ref mut zoom) = pdf_reader.zoom {
+                                zoom.global_scroll_offset = 0;
+                            }
+                            pdf_reader.last_sent_viewport = None;
+                            pdf_reader.force_redraw();
+                            pdf_reader.set_hud_message(
+                                format!("Render mode: {}", new_mode.as_str()),
+                                crate::widget::hud_message::HudMode::Normal,
+                                std::time::Duration::from_secs(2),
+                            );
+                        }
+                    } else if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        pdf_reader.set_error_hud(
+                            "Scroll mode is only supported in Kitty terminal".to_string(),
+                        );
+                    }
+                }
+                self.key_sequence.clear();
+                true
+            }
             " t" => {
                 // Handle Space->t to toggle theme selector (opens settings on Themes tab)
                 if matches!(
@@ -6031,9 +6091,9 @@ impl App {
         let Some(service) = self.pdf_service.as_ref() else {
             return;
         };
-        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+        if self.pdf_reader.is_none() {
             return;
-        };
+        }
 
         let doc_info = service.document_info().cloned();
         let doc_path = service.state().doc_path.clone();
@@ -6041,19 +6101,22 @@ impl App {
         let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
         let doc_author = doc_info.as_ref().and_then(|info| info.author.clone());
 
-        // Update title and TOC
-        pdf_reader.set_doc_title(doc_title.clone());
-        if let Some(ref info) = doc_info {
-            pdf_reader.toc_entries = info.toc.clone();
-        }
-
-        // Update bookmark metadata
+        // Update bookmark metadata (before borrowing pdf_reader mutably)
         let path_str = doc_path.to_string_lossy();
         let abs_path = std::fs::canonicalize(&doc_path)
             .ok()
             .map(|p| p.to_string_lossy().into_owned());
-        self.bookmarks
-            .set_metadata(&path_str, doc_title, doc_author, abs_path);
+        self.current_book_context_mut()
+            .bookmarks_mut()
+            .set_metadata(&path_str, doc_title.clone(), doc_author, abs_path);
+
+        let pdf_reader = self.pdf_reader.as_mut().unwrap();
+
+        // Update title and TOC
+        pdf_reader.set_doc_title(doc_title);
+        if let Some(ref info) = doc_info {
+            pdf_reader.toc_entries = info.toc.clone();
+        }
 
         // Adjust rendered vec to new page count, keeping geometry metadata
         // for existing pages so scroll offset is preserved across reload
