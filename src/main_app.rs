@@ -3685,6 +3685,25 @@ impl App {
                     false
                 }
             }
+            " w" => {
+                if self.current_book.is_some() {
+                    self.notifications
+                        .warn("Watching is only supported for PDF files".to_string());
+                    self.key_sequence.clear();
+                    true
+                } else {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.toggle_pdf_watching();
+                        self.key_sequence.clear();
+                        true
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    {
+                        false
+                    }
+                }
+            }
             " f" => {
                 // Handle Space->f to open book search (reuse existing search)
                 // Works for both EPUB and PDF
@@ -5696,7 +5715,126 @@ impl App {
             }
         }
 
+        if result.reloaded {
+            self.handle_pdf_reload();
+        }
+
         result.updated
+    }
+
+    #[cfg(feature = "pdf")]
+    fn toggle_pdf_watching(&mut self) {
+        let Some(service) = self.pdf_service.as_mut() else {
+            return;
+        };
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+
+        if crate::pdf::is_djvu_path(&service.state().doc_path) {
+            pdf_reader.set_error_hud("Watching is not supported for DjVu files".to_string());
+            return;
+        }
+
+        if service.is_watching() {
+            service.disable_watching();
+            pdf_reader.watching = false;
+            pdf_reader.set_hud_message(
+                "Watching disabled".to_string(),
+                crate::widget::hud_message::HudMode::Normal,
+                std::time::Duration::from_secs(2),
+            );
+        } else {
+            service.enable_watching();
+            pdf_reader.watching = service.is_watching();
+            let msg = if pdf_reader.watching {
+                "Watching enabled"
+            } else {
+                "Failed to enable watching"
+            };
+            pdf_reader.set_hud_message(
+                msg.to_string(),
+                crate::widget::hud_message::HudMode::Normal,
+                std::time::Duration::from_secs(2),
+            );
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn handle_pdf_reload(&mut self) {
+        let Some(service) = self.pdf_service.as_ref() else {
+            return;
+        };
+        let Some(pdf_reader) = self.pdf_reader.as_mut() else {
+            return;
+        };
+
+        let doc_info = service.document_info().cloned();
+        let doc_path = service.state().doc_path.clone();
+        let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
+        let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
+        let doc_author = doc_info.as_ref().and_then(|info| info.author.clone());
+
+        // Update title and TOC
+        pdf_reader.set_doc_title(doc_title.clone());
+        if let Some(ref info) = doc_info {
+            pdf_reader.toc_entries = info.toc.clone();
+        }
+
+        // Update bookmark metadata
+        let path_str = doc_path.to_string_lossy();
+        let abs_path = std::fs::canonicalize(&doc_path)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned());
+        self.bookmarks
+            .set_metadata(&path_str, doc_title, doc_author, abs_path);
+
+        // Adjust rendered vec to new page count, keeping geometry metadata
+        // for existing pages so scroll offset is preserved across reload
+        pdf_reader.rendered.truncate(page_count);
+        pdf_reader
+            .rendered
+            .resize_with(page_count, crate::widget::pdf_reader::RenderedInfo::default);
+
+        let target_page = if page_count == 0 {
+            0
+        } else {
+            pdf_reader.page.min(page_count - 1)
+        };
+        pdf_reader.reset_view_after_reload(target_page);
+
+        // Invalidate Kitty images
+        pdf_reader.invalidate_kitty_images();
+        pdf_reader.last_sent_viewport = None;
+
+        // Clear text selection, search state, and cached search matches
+        pdf_reader.selection.clear();
+        pdf_reader.pending_search_highlight = None;
+        pdf_reader.page_search.matches.clear();
+        pdf_reader.page_search.matches_page = usize::MAX;
+
+        // Notify converter
+        if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+            let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
+            let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+            let _ = tx.send(crate::pdf::ConversionCommand::SetPageCount(page_count));
+            let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(pdf_reader.page));
+        }
+
+        // Update page number tracker
+        if let Some(ref info) = doc_info {
+            pdf_reader.page_numbers.set_targets(page_count);
+            for &(page, number) in &info.page_number_samples {
+                pdf_reader.page_numbers.observe_sample(page, number);
+            }
+        }
+
+        // HUD message
+        pdf_reader.set_hud_message(
+            "Document reloaded".to_string(),
+            crate::widget::hud_message::HudMode::Normal,
+            std::time::Duration::from_secs(2),
+        );
     }
 
     #[cfg(not(feature = "pdf"))]

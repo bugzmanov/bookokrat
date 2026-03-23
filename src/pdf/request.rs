@@ -119,6 +119,6 @@ pub enum RenderResponse {
         page_number_samples: Vec<(usize, i32)>,
     },
 
-    /// Document was reloaded
-    Reloaded,
+    /// Document was reloaded to a specific generation
+    Reloaded { generation: u64 },
 }

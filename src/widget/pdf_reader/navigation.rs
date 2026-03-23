@@ -1917,6 +1917,22 @@ impl PdfReaderState {
         }
     }
 
+    pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
+        if page != self.page {
+            self.set_page(page);
+            return;
+        }
+
+        self.last_render.rect = Rect::default();
+        self.clear_pending_scroll();
+
+        if self.is_kitty {
+            self.clamp_kitty_scroll_offset();
+        } else {
+            self.non_kitty_scroll_offset = 0;
+        }
+    }
+
     pub fn clear_go_to_page_input(&mut self) {
         if self.go_to_page_input.is_some() {
             self.go_to_page_input = None;
