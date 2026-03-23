@@ -2,10 +2,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use flume::{Receiver, Sender};
 use mupdf::Document;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use super::TocEntry;
 use super::cache::{CacheKey, PageCache};
@@ -37,6 +40,9 @@ pub struct RenderService {
     prefetch_radius: usize,
     prefetch_in_flight: std::collections::HashSet<usize>,
     doc_info: Option<DocumentInfo>,
+    reload_generation: Arc<AtomicU64>,
+    last_applied_reload_generation: u64,
+    _watcher: Option<RecommendedWatcher>,
 }
 
 /// Document metadata
@@ -44,6 +50,7 @@ pub struct RenderService {
 pub struct DocumentInfo {
     pub page_count: usize,
     pub title: Option<String>,
+    pub author: Option<String>,
     pub toc: Vec<TocEntry>,
     pub page_number_samples: Vec<(usize, i32)>,
 }
@@ -83,23 +90,26 @@ impl RenderService {
         // by Tokio for this pattern: https://github.com/tokio-rs/tokio/discussions/3891
         let (request_tx, request_rx) = flume::unbounded();
         let (response_tx, response_rx) = flume::unbounded();
+        let reload_generation = Arc::new(AtomicU64::new(0));
+        let num_workers = num_workers.max(1);
 
         // Spawn worker threads - each clones request_rx to pull from shared queue
-        for _ in 0..num_workers.max(1) {
+        for _ in 0..num_workers {
             let path = doc_path.clone();
             let rx = request_rx.clone();
             let tx = response_tx.clone();
             let cache_clone = cache.clone();
+            let generation = reload_generation.clone();
 
             std::thread::spawn(move || {
-                render_worker(&path, rx, tx, cache_clone);
+                render_worker(&path, rx, tx, cache_clone, generation);
             });
         }
 
         // Load document metadata
         let doc_info = Self::load_document_info(&doc_path);
 
-        let mut state = RenderState::new(doc_path, cell_size, black, white);
+        let mut state = RenderState::new(doc_path.clone(), cell_size, black, white);
         if let Some(ref info) = doc_info {
             state.page_count = info.page_count;
         }
@@ -112,11 +122,75 @@ impl RenderService {
             pending_requests: HashMap::new(),
             latest_page_request: HashMap::new(),
             cache,
-            num_workers: num_workers.max(1),
+            num_workers,
             prefetch_radius,
             prefetch_in_flight: std::collections::HashSet::new(),
             doc_info,
+            reload_generation,
+            last_applied_reload_generation: 0,
+            _watcher: None,
         }
+    }
+
+    fn start_watcher(
+        doc_path: &Path,
+        reload_generation: &Arc<AtomicU64>,
+        request_tx: &Sender<RenderRequest>,
+    ) -> Option<RecommendedWatcher> {
+        if super::worker::is_djvu_path(doc_path) {
+            log::info!("File watching not supported for DjVu files");
+            return None;
+        }
+
+        let parent = doc_path.parent()?;
+        let target_name = doc_path.file_name()?.to_owned();
+        let last_reload = Arc::new(Mutex::new(Instant::now()));
+        let generation = reload_generation.clone();
+        let tx = request_tx.clone();
+
+        let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, _>| {
+            let Ok(event) = res else { return };
+
+            let dominated = matches!(
+                event.kind,
+                notify::EventKind::Access(_) | notify::EventKind::Remove(_)
+            );
+            if dominated {
+                if matches!(event.kind, notify::EventKind::Remove(_)) {
+                    log::warn!("Watched PDF file was removed");
+                }
+                return;
+            }
+
+            let hits_target = event
+                .paths
+                .iter()
+                .any(|p| p.file_name().is_some_and(|n| n == target_name));
+            if !hits_target {
+                return;
+            }
+
+            let mut last = last_reload.lock().unwrap_or_else(|e| e.into_inner());
+            if last.elapsed().as_millis() < 50 {
+                return;
+            }
+            *last = Instant::now();
+
+            generation.fetch_add(1, std::sync::atomic::Ordering::Release);
+            // Wake a worker so it detects the generation change.
+            // The worker reloads, sends Reloaded, service reschedules
+            // prefetch which wakes remaining workers.
+            let _ = tx.send(RenderRequest::Cancel(RequestId::new(0)));
+        })
+        .ok()?;
+
+        if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+            log::warn!("Failed to watch PDF parent directory: {e}");
+            return None;
+        }
+
+        log::info!("Watching for changes: {}", doc_path.display());
+        Some(watcher)
     }
 
     fn load_document_info(doc_path: &Path) -> Option<DocumentInfo> {
@@ -136,12 +210,18 @@ impl RenderService {
             .ok()
             .filter(|t| !t.is_empty());
 
+        let author = doc
+            .metadata(mupdf::MetadataName::Author)
+            .ok()
+            .filter(|a| !a.is_empty());
+
         let toc = super::parsing::toc::extract_toc(&doc, page_count);
         let page_number_samples = page_numbers::collect_page_number_samples(&doc, page_count);
 
         Some(DocumentInfo {
             page_count,
             title,
+            author,
             toc,
             page_number_samples,
         })
@@ -163,9 +243,33 @@ impl RenderService {
         Some(DocumentInfo {
             page_count,
             title: None,
+            author: None,
             toc,
             page_number_samples: Vec::new(),
         })
+    }
+
+    /// Enable file watching (auto-reload on disk change)
+    pub fn enable_watching(&mut self) {
+        if self._watcher.is_some() {
+            return;
+        }
+        self._watcher = Self::start_watcher(
+            &self.state.doc_path,
+            &self.reload_generation,
+            &self.request_tx,
+        );
+    }
+
+    /// Disable file watching
+    pub fn disable_watching(&mut self) {
+        self._watcher = None;
+    }
+
+    /// Whether file watching is currently active
+    #[must_use]
+    pub fn is_watching(&self) -> bool {
+        self._watcher.is_some()
     }
 
     /// Get document metadata
@@ -346,6 +450,7 @@ impl RenderService {
     /// Poll for completed render responses
     pub fn poll_responses(&mut self) -> Vec<RenderResponse> {
         let mut responses = vec![];
+        let mut saw_reload = false;
 
         while let Ok(response) = self.response_rx.try_recv() {
             let mut skip_response = false;
@@ -374,12 +479,40 @@ impl RenderService {
                 RenderResponse::ExtractedText { id, .. } => {
                     self.pending_requests.remove(id);
                 }
+                RenderResponse::Reloaded { generation } => {
+                    if saw_reload || *generation <= self.last_applied_reload_generation {
+                        skip_response = true;
+                    } else {
+                        saw_reload = true;
+                        self.last_applied_reload_generation = *generation;
+                        self.doc_info = Self::load_document_info(&self.state.doc_path);
+                        if let Some(ref info) = self.doc_info {
+                            self.state.page_count = info.page_count;
+                            if info.page_count > 0 {
+                                self.state.current_page =
+                                    self.state.current_page.min(info.page_count - 1);
+                            }
+                        }
+                        self.cache
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .invalidate_all();
+                        self.prefetch_in_flight.clear();
+                        self.pending_requests.clear();
+                        self.latest_page_request.clear();
+                        log::info!("Document reloaded from disk");
+                    }
+                }
                 _ => {}
             }
 
             if !skip_response {
                 responses.push(response);
             }
+        }
+
+        if saw_reload {
+            self.schedule_prefetch();
         }
 
         responses
@@ -480,4 +613,192 @@ fn djvu_bookmark_target(url: &str, page_count: usize) -> TocTarget {
     }
 
     TocTarget::External(trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn test_cell_size() -> CellSize {
+        CellSize::new(8, 16)
+    }
+
+    fn wait_for_page(service: &mut RenderService, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            let responses = service.poll_responses();
+            for r in &responses {
+                if matches!(r, RenderResponse::Page { .. }) {
+                    return true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn wait_for_reload(service: &mut RenderService, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            let responses = service.poll_responses();
+            for r in &responses {
+                if matches!(r, RenderResponse::Reloaded { .. }) {
+                    return true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    fn test_page_data(page: usize) -> Arc<PageData> {
+        Arc::new(PageData {
+            img_data: crate::pdf::types::ImageData {
+                pixels: vec![0, 0, 0],
+                width_px: 1,
+                height_px: 1,
+                width_cell: 1,
+                height_cell: 1,
+            },
+            page_num: page,
+            scale_factor: 1.0,
+            requested_scale: 1.0,
+            render_area_width_cells: 1,
+            render_area_height_cells: 1,
+            line_bounds: Vec::new(),
+            link_rects: Vec::new(),
+            page_height_px: 1.0,
+        })
+    }
+
+    fn test_service_with_response_tx(doc_path: PathBuf) -> (RenderService, Sender<RenderResponse>) {
+        let cache = Arc::new(Mutex::new(PageCache::new(5)));
+        let (request_tx, _request_rx) = flume::unbounded();
+        let (response_tx, response_rx) = flume::unbounded();
+        let doc_info = RenderService::load_document_info(&doc_path);
+        let mut state = RenderState::new(doc_path, test_cell_size(), 0, 0x00FF_FFFF);
+        if let Some(ref info) = doc_info {
+            state.page_count = info.page_count;
+        }
+
+        (
+            RenderService {
+                state,
+                request_tx,
+                response_rx,
+                next_request_id: 1,
+                pending_requests: HashMap::new(),
+                latest_page_request: HashMap::new(),
+                cache,
+                num_workers: 0,
+                prefetch_radius: 0,
+                prefetch_in_flight: std::collections::HashSet::new(),
+                doc_info,
+                reload_generation: Arc::new(AtomicU64::new(0)),
+                last_applied_reload_generation: 0,
+                _watcher: None,
+            },
+            response_tx,
+        )
+    }
+
+    #[test]
+    fn reload_picks_up_new_pdf_content() {
+        let pdf_a = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/vhs_test.pdf");
+        let pdf_b =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/di_book_toc_test.pdf");
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("test.pdf");
+        std::fs::copy(&pdf_a, &target).unwrap();
+
+        let mut service =
+            RenderService::with_config(target.clone(), test_cell_size(), 0, 0x00FF_FFFF, 2, 5, 0);
+
+        let page_count_a = service.document_info().unwrap().page_count;
+        assert_eq!(page_count_a, 20);
+
+        // Render page 0 from the original PDF
+        service.request_page(0);
+        assert!(
+            wait_for_page(&mut service, Duration::from_secs(5)),
+            "timed out waiting for initial page render"
+        );
+
+        // Replace the file with a different PDF
+        std::fs::copy(&pdf_b, &target).unwrap();
+
+        // Bump the generation counter (same as watcher would)
+        service
+            .reload_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+
+        // Request a page — workers will detect the generation change before rendering
+        service.request_page(0);
+
+        // Workers reload before processing the page request, so we should see
+        // both Reloaded and Page responses
+        assert!(
+            wait_for_reload(&mut service, Duration::from_secs(5)),
+            "timed out waiting for reload response"
+        );
+
+        // After reload, doc_info should reflect the new PDF
+        let page_count_b = service.document_info().unwrap().page_count;
+        assert_eq!(page_count_b, 538);
+
+        // Render page 0 from the reloaded PDF — should succeed
+        assert!(
+            wait_for_page(&mut service, Duration::from_secs(5)),
+            "timed out waiting for re-render after reload"
+        );
+
+        // Verify by requesting a page that only exists in the new PDF.
+        service.request_page(100);
+        assert!(
+            wait_for_page(&mut service, Duration::from_secs(5)),
+            "timed out rendering page 100 (only in new PDF)"
+        );
+    }
+
+    #[test]
+    fn duplicate_reload_generation_is_ignored_across_polls() {
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/vhs_test.pdf");
+        let (mut service, response_tx) = test_service_with_response_tx(pdf);
+
+        response_tx
+            .send(RenderResponse::Reloaded { generation: 1 })
+            .unwrap();
+        let responses = service.poll_responses();
+        assert!(matches!(
+            responses.as_slice(),
+            [RenderResponse::Reloaded { generation: 1 }]
+        ));
+
+        service.pending_requests.clear();
+        service.latest_page_request.clear();
+
+        let id = RequestId::new(42);
+        service.pending_requests.insert(id, PendingRequest::Page(0));
+        service.latest_page_request.insert(0, id);
+
+        response_tx
+            .send(RenderResponse::Reloaded { generation: 1 })
+            .unwrap();
+        response_tx
+            .send(RenderResponse::Page {
+                id,
+                page: 0,
+                data: test_page_data(0),
+            })
+            .unwrap();
+
+        let responses = service.poll_responses();
+        assert!(matches!(
+            responses.as_slice(),
+            [RenderResponse::Page { id: got_id, page: 0, .. }] if *got_id == id
+        ));
+        assert!(service.pending_requests.is_empty());
+    }
 }

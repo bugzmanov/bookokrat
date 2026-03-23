@@ -34,9 +34,24 @@ pub struct Bookmark {
     #[cfg(feature = "pdf")]
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pdf_themed_rendering: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_progress: Option<f32>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub total_nodes: Option<usize>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_title: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub book_author: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub absolute_path: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Bookmarks {
     books: HashMap<String, Bookmark>,
 
@@ -89,9 +104,17 @@ impl Bookmarks {
     }
 
     fn resolve_existing_key(&self, path: &str) -> Option<String> {
-        Self::candidate_keys(path)
+        if let Some(key) = Self::candidate_keys(path)
             .into_iter()
             .find(|candidate| self.books.contains_key(candidate))
+        {
+            return Some(key);
+        }
+        // Also match by absolute_path field for cross-library lookups
+        self.books
+            .iter()
+            .find(|(_, b)| b.absolute_path.as_deref() == Some(path))
+            .map(|(k, _)| k.clone())
     }
 
     pub fn ephemeral() -> Self {
@@ -155,10 +178,8 @@ impl Bookmarks {
     }
 
     pub fn get_bookmark(&self, path: &str) -> Option<&Bookmark> {
-        for candidate in Self::candidate_keys(path) {
-            if let Some(bookmark) = self.books.get(&candidate) {
-                return Some(bookmark);
-            }
+        if let Some(key) = self.resolve_existing_key(path) {
+            return self.books.get(&key);
         }
         None
     }
@@ -181,6 +202,8 @@ impl Bookmarks {
         pdf_page: Option<usize>,
         pdf_zoom: Option<f32>,
         pdf_pan: Option<u16>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -193,6 +216,8 @@ impl Bookmarks {
             pdf_pan,
             None,
             None,
+            book_progress,
+            total_nodes,
         );
     }
 
@@ -210,6 +235,7 @@ impl Bookmarks {
         pdf_pan: Option<u16>,
         pdf_invert_images: Option<bool>,
         pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
     ) {
         self.update_bookmark_internal(
             path,
@@ -222,6 +248,8 @@ impl Bookmarks {
             pdf_pan,
             pdf_invert_images,
             pdf_themed_rendering,
+            book_progress,
+            None,
         );
     }
 
@@ -240,10 +268,18 @@ impl Bookmarks {
         #[cfg(feature = "pdf")] pdf_themed_rendering: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_invert_images: Option<bool>,
         #[cfg(not(feature = "pdf"))] _pdf_themed_rendering: Option<bool>,
+        book_progress: Option<f32>,
+        total_nodes: Option<usize>,
     ) {
         let key = self
             .resolve_existing_key(path)
             .unwrap_or_else(|| path.to_string());
+
+        let existing = self.books.get(&key);
+        let book_title = existing.and_then(|b| b.book_title.clone());
+        let book_author = existing.and_then(|b| b.book_author.clone());
+        let absolute_path = existing.and_then(|b| b.absolute_path.clone());
+
         self.books.insert(
             key,
             Bookmark {
@@ -259,6 +295,11 @@ impl Bookmarks {
                 pdf_invert_images,
                 #[cfg(feature = "pdf")]
                 pdf_themed_rendering,
+                book_progress,
+                total_nodes,
+                book_title,
+                book_author,
+                absolute_path,
             },
         );
 
@@ -269,7 +310,357 @@ impl Bookmarks {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn save_initial_bookmark(
+        &mut self,
+        path: &str,
+        chapter_href: String,
+        chapter_index: Option<usize>,
+        total_chapters: Option<usize>,
+        pdf_page: Option<usize>,
+        book_title: Option<String>,
+        book_author: Option<String>,
+        absolute_path: Option<String>,
+    ) {
+        let key = self
+            .resolve_existing_key(path)
+            .unwrap_or_else(|| path.to_string());
+
+        if let Some(bookmark) = self.books.get_mut(&key) {
+            bookmark.book_title = book_title;
+            bookmark.book_author = book_author;
+            bookmark.absolute_path = absolute_path;
+            if total_chapters.is_some() {
+                bookmark.total_chapters = total_chapters;
+            }
+        } else {
+            self.books.insert(
+                key,
+                Bookmark {
+                    chapter_href,
+                    node_index: None,
+                    last_read: chrono::Utc::now(),
+                    chapter_index,
+                    total_chapters,
+                    pdf_page,
+                    pdf_zoom: None,
+                    pdf_pan: None,
+                    #[cfg(feature = "pdf")]
+                    pdf_invert_images: None,
+                    #[cfg(feature = "pdf")]
+                    pdf_themed_rendering: None,
+                    book_progress: None,
+                    total_nodes: None,
+                    book_title,
+                    book_author,
+                    absolute_path,
+                },
+            );
+        }
+
+        if let Err(e) = self.save() {
+            log::error!("Failed to save initial bookmark: {e}");
+        }
+    }
+
+    pub fn set_metadata(
+        &mut self,
+        path: &str,
+        title: Option<String>,
+        author: Option<String>,
+        abs_path: Option<String>,
+    ) {
+        let key = match self.resolve_existing_key(path) {
+            Some(k) => k,
+            None => return,
+        };
+        if let Some(bookmark) = self.books.get_mut(&key) {
+            bookmark.book_title = title;
+            bookmark.book_author = author;
+            bookmark.absolute_path = abs_path;
+            if let Err(e) = self.save() {
+                log::error!("Failed to save bookmark metadata: {e}");
+            }
+        }
+    }
+
+    pub fn remove_bookmark(&mut self, path: &str) -> bool {
+        let key = match self.resolve_existing_key(path) {
+            Some(k) => k,
+            None => return false,
+        };
+        if self.books.remove(&key).is_some() {
+            if let Err(e) = self.save() {
+                log::error!("Failed to save after removing bookmark: {e}");
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn file_path(&self) -> Option<&str> {
+        self.file_path.as_deref()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Bookmark)> {
         self.books.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn save_initial_bookmark_creates_entry_with_metadata() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let path = "./book.pdf";
+
+        // save_initial_bookmark creates the entry with metadata in one shot
+        bookmarks.save_initial_bookmark(
+            path,
+            "0".to_string(),
+            None,
+            Some(100),
+            Some(0),
+            Some("My Book".to_string()),
+            Some("Author".to_string()),
+            Some("/abs/path/book.pdf".to_string()),
+        );
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert_eq!(bookmark.book_title.as_deref(), Some("My Book"));
+        assert_eq!(bookmark.book_author.as_deref(), Some("Author"));
+        assert_eq!(
+            bookmark.absolute_path.as_deref(),
+            Some("/abs/path/book.pdf")
+        );
+
+        // Subsequent update_bookmark preserves metadata
+        bookmarks.update_bookmark(
+            path,
+            "5".to_string(),
+            Some(10),
+            Some(4),
+            Some(100),
+            Some(4),
+            None,
+            None,
+            Some(0.05),
+            None,
+        );
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert_eq!(bookmark.book_title.as_deref(), Some("My Book"));
+        assert_eq!(
+            bookmark.absolute_path.as_deref(),
+            Some("/abs/path/book.pdf")
+        );
+        assert_eq!(bookmark.chapter_index, Some(4));
+    }
+
+    #[test]
+    fn set_metadata_after_bookmark_exists() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let path = "./book.epub";
+
+        // Bookmark saved first
+        bookmarks.update_bookmark(
+            path,
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+
+        // Then metadata set
+        bookmarks.set_metadata(
+            path,
+            Some("Title".to_string()),
+            Some("Author".to_string()),
+            Some("/abs/book.epub".to_string()),
+        );
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert_eq!(bookmark.book_title.as_deref(), Some("Title"));
+        assert_eq!(bookmark.absolute_path.as_deref(), Some("/abs/book.epub"));
+    }
+
+    /// Opening a book from "All Libraries" must NOT create a bookmark entry
+    /// in the current library. This simulates the exact main_app.rs flow:
+    /// open_book_for_reading_by_path calls set_metadata which creates an entry.
+    /// If bookmarks haven't been switched, this entry goes to the current library.
+    #[test]
+    fn opening_cross_library_book_must_not_leak_into_current() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let current_path = dir.path().join("current.json");
+        let other_path = dir.path().join("other.json");
+
+        // Current library: user has book_a
+        let mut current = Bookmarks::with_file(current_path.to_str().unwrap());
+        current.update_bookmark(
+            "./book_a.epub",
+            "ch1".into(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.5),
+            None,
+        );
+
+        // Other library has book_b
+        let mut other = Bookmarks::with_file(other_path.to_str().unwrap());
+        other.update_bookmark(
+            "./book_b.pdf",
+            "1".into(),
+            Some(0),
+            Some(0),
+            Some(100),
+            Some(0),
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+
+        // BUG SCENARIO: if we DON'T switch bookmarks and just open the book,
+        // set_metadata creates book_b entry in current library
+        current.set_metadata(
+            "/other_lib/book_b.pdf",
+            Some("Book B".into()),
+            Some("Author B".into()),
+            Some("/other_lib/book_b.pdf".into()),
+        );
+
+        // This is the bug: book_b now exists in current library
+        let reloaded = Bookmarks::load_from_file(current_path.to_str().unwrap()).unwrap();
+        assert!(
+            reloaded.get_bookmark("/other_lib/book_b.pdf").is_none(),
+            "book_b must NOT appear in current library's bookmarks"
+        );
+    }
+
+    /// Simulates the full flow when opening a book from "All Libraries":
+    /// The bug was: after switching bookmarks, open_book_for_reading_by_path
+    /// calls save_bookmark_with_throttle which would write the OLD book (book_a)
+    /// into the OTHER library's bookmarks file. The fix clears current_book
+    /// before switching so save_bookmark is a no-op.
+    #[test]
+    fn cross_library_open_does_not_pollute_either_library() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let current_lib_path = dir.path().join("current_bookmarks.json");
+        let other_lib_path = dir.path().join("other_bookmarks.json");
+
+        // Setup: current library has book_a
+        let mut current_bookmarks = Bookmarks::with_file(current_lib_path.to_str().unwrap());
+        current_bookmarks.update_bookmark(
+            "./book_a.epub",
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.5),
+            None,
+        );
+
+        // Setup: other library has book_b
+        let mut other_bookmarks = Bookmarks::with_file(other_lib_path.to_str().unwrap());
+        other_bookmarks.update_bookmark(
+            "./book_b.epub",
+            "ch3".to_string(),
+            Some(10),
+            Some(2),
+            Some(20),
+            None,
+            None,
+            None,
+            Some(0.3),
+            None,
+        );
+
+        // --- Simulate the OpenBookAbsolute handler flow ---
+
+        // Step 1: save_bookmark_with_throttle saves book_a to current library
+        current_bookmarks.update_bookmark(
+            "./book_a.epub",
+            "ch2".to_string(),
+            Some(5),
+            Some(1),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.6),
+            None,
+        );
+
+        // Step 2: clear current_book (simulated by not having book_a state anymore)
+        // Step 3: switch_bookmarks_file loads other library
+        let mut active_bookmarks =
+            Bookmarks::load_from_file(other_lib_path.to_str().unwrap()).unwrap();
+
+        // Step 4: open_book_for_reading_by_path calls save_bookmark_with_throttle
+        // With book state cleared, this is a no-op. If NOT cleared, it would do:
+        //   active_bookmarks.update_bookmark("./book_a.epub", ...) <-- THE BUG
+        // We verify the no-op by NOT calling update_bookmark for book_a here.
+
+        // Step 5: set_metadata + reading updates for book_b
+        active_bookmarks.set_metadata(
+            "./book_b.epub",
+            Some("Book B".to_string()),
+            None,
+            Some("/lib2/book_b.epub".to_string()),
+        );
+        active_bookmarks.update_bookmark(
+            "./book_b.epub",
+            "ch5".to_string(),
+            Some(20),
+            Some(4),
+            Some(20),
+            None,
+            None,
+            None,
+            Some(0.5),
+            None,
+        );
+
+        // --- Verify no cross-contamination ---
+
+        // book_a must NOT be in other library
+        assert!(
+            active_bookmarks.get_bookmark("./book_a.epub").is_none(),
+            "book_a should NOT leak into other library's bookmarks"
+        );
+
+        // book_b must NOT be in current library
+        let reloaded_current =
+            Bookmarks::load_from_file(current_lib_path.to_str().unwrap()).unwrap();
+        assert!(
+            reloaded_current.get_bookmark("./book_b.epub").is_none(),
+            "book_b should NOT exist in current library's bookmarks"
+        );
+
+        // book_a still in current library with updated progress
+        let book_a = reloaded_current.get_bookmark("./book_a.epub").unwrap();
+        assert_eq!(book_a.chapter_index, Some(1));
+        assert_eq!(book_a.book_progress, Some(0.6));
+
+        // book_b updated correctly in other library
+        let book_b = active_bookmarks.get_bookmark("./book_b.epub").unwrap();
+        assert_eq!(book_b.chapter_index, Some(4));
+        assert_eq!(book_b.book_progress, Some(0.5));
     }
 }

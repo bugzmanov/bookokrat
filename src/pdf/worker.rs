@@ -296,8 +296,9 @@ pub fn render_worker(
     requests: Receiver<RenderRequest>,
     responses: Sender<RenderResponse>,
     cache: Arc<Mutex<PageCache>>,
+    reload_generation: Arc<std::sync::atomic::AtomicU64>,
 ) {
-    let backend = if is_djvu_path(doc_path) {
+    let mut backend = if is_djvu_path(doc_path) {
         match rdjvu::Document::open(doc_path) {
             Ok(d) => DocumentBackend::Djvu(d),
             Err(e) => {
@@ -321,7 +322,26 @@ pub fn render_worker(
         }
     };
 
+    let mut local_generation = 0u64;
+
     for request in requests {
+        // Check if document needs reloading before processing any request
+        let current_gen = reload_generation.load(std::sync::atomic::Ordering::Acquire);
+        if current_gen != local_generation {
+            match Document::open(doc_path.to_string_lossy().as_ref()) {
+                Ok(d) => {
+                    backend = DocumentBackend::Pdf(d);
+                    local_generation = current_gen;
+                    let _ = responses.send(RenderResponse::Reloaded {
+                        generation: current_gen,
+                    });
+                }
+                Err(e) => {
+                    log::warn!("Failed to reload PDF, keeping old document: {e}");
+                }
+            }
+        }
+
         match request {
             RenderRequest::Page { id, page, params }
             | RenderRequest::Prefetch { id, page, params } => {
@@ -1299,10 +1319,11 @@ fn render_djvu_page_rgb(
     let native_w = page.display_width();
     let native_h = page.display_height();
 
-    // Normal (white bg): strong boldness to counteract perceptual thinning of
-    // dark strokes on bright backgrounds.  Themed/inverted: no boost needed —
-    // light-on-dark text already appears at correct weight.
-    let boldness = if themed { 0.0 } else { 3.0 };
+    // Boldness boosts contrast during anti-aliased downscaling (darkens
+    // intermediate tones).  Useful for text but destructive on photographs:
+    // the curve crushes mid-tones to near-black, leaving only highlights,
+    // which appears as light patches on photo-only pages.  Disabled for now.
+    let boldness = 0.0;
 
     let pixmap = if target_w >= native_w && target_h >= native_h {
         page.render()

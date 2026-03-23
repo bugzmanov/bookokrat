@@ -92,6 +92,7 @@ wide = { version = "0.7", optional = true }
 lru = { version = "0.12", optional = true }
 rayon = { version = "1.11.0", default-features = false, optional = true }
 base64 = { version = "0.22", optional = true }
+notify = { version = "8", optional = true }
 
 # DjVu rendering dependencies (optional, enabled with `djvu` feature)
 rdjvu = { package = "djvu", version = "0.1.0", optional = true }
@@ -119,7 +120,7 @@ serial_test = "3.2"
 default = ["pdf", "svg"]
 test-utils = []
 serde = []
-pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu"]
+pdf = ["mupdf", "flume", "wide", "lru", "rayon", "base64", "rdjvu", "notify"]
 profile = ["dep:pprof"]
 svg = ["resvg"]
 image-bmp = ["image/bmp"]

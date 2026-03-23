@@ -24,7 +24,7 @@ use crate::vendored::ratatui_image::FontSize;
 use super::state::{
     ActiveSearchHighlight, CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT,
 };
-use super::types::{PageJumpMode, PendingScroll};
+use super::types::{PageJumpMode, PendingScroll, QuickPageJump};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
 use crate::settings::{
     PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
@@ -547,10 +547,31 @@ impl PdfReaderState {
     }
 
     fn handle_standard_key_event(&mut self, key: KeyEvent) -> Option<InputAction> {
+        // Clear expired quick page jump
+        if self
+            .quick_page_jump
+            .as_ref()
+            .is_some_and(|q| q.is_expired())
+        {
+            self.quick_page_jump = None;
+        }
+
         match key.code {
             KeyCode::Char(c) => {
                 if c == 'n' {
+                    self.quick_page_jump = None;
                     return self.toggle_normal_mode();
+                }
+
+                // Quick page jump: digits accumulate, gg confirms
+                if c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if let Some(ref mut qj) = self.quick_page_jump {
+                        qj.push(c);
+                    } else {
+                        self.quick_page_jump = Some(QuickPageJump::new(c));
+                    }
+                    self.key_seq.clear();
+                    return Some(InputAction::Redraw);
                 }
 
                 self.key_seq.push(key);
@@ -568,6 +589,9 @@ impl PdfReaderState {
                     .matches(&[KeyCode::Char('g'), KeyCode::Char('g')])
                 {
                     self.key_seq.clear();
+                    if let Some(qj) = self.quick_page_jump.take() {
+                        return self.execute_quick_page_jump(qj);
+                    }
                     return self.scroll_to_page_top();
                 }
                 if self
@@ -575,7 +599,13 @@ impl PdfReaderState {
                     .matches(&[KeyCode::Char(' '), KeyCode::Char('g')])
                 {
                     self.key_seq.clear();
+                    self.quick_page_jump = None;
                     return self.start_go_to_page_input();
+                }
+
+                // Any non-digit, non-g key clears quick page jump
+                if c != 'g' {
+                    self.quick_page_jump = None;
                 }
 
                 match c {
@@ -716,6 +746,11 @@ impl PdfReaderState {
     }
 
     fn handle_escape_key(&mut self) -> Option<InputAction> {
+        if self.quick_page_jump.is_some() {
+            self.quick_page_jump = None;
+            return Some(InputAction::Redraw);
+        }
+
         // Clear page search first if active (pressing Esc again will exit normal mode)
         if self.normal_mode.active && self.page_search.query.is_some() {
             self.page_search.clear_search();
@@ -773,6 +808,23 @@ impl PdfReaderState {
         InputAction::JumpingToPage {
             page,
             viewport: self.current_viewport_update(),
+        }
+    }
+
+    fn execute_quick_page_jump(&mut self, qj: QuickPageJump) -> Option<InputAction> {
+        let Some(page_num) = qj.page_number() else {
+            return Some(InputAction::Redraw);
+        };
+        let target = page_num.saturating_sub(1);
+        if target < self.rendered.len() {
+            Some(self.jump_to_page_action(target))
+        } else {
+            self.set_error_hud(format!(
+                "Page {} out of range (1-{})",
+                page_num,
+                self.rendered.len()
+            ));
+            Some(InputAction::Redraw)
         }
     }
 
@@ -1914,6 +1966,29 @@ impl PdfReaderState {
                     zoom.global_scroll_offset = page_offset;
                 }
             }
+        }
+    }
+
+    pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
+        if page != self.page {
+            self.set_page(page);
+            return;
+        }
+
+        self.last_render.rect = Rect::default();
+        self.clear_pending_scroll();
+
+        if self.is_kitty {
+            self.clamp_kitty_scroll_offset();
+        } else {
+            let viewport_height = self.last_render.img_area_height;
+            let full_height = self
+                .rendered
+                .get(self.page)
+                .and_then(|r| r.full_cell_size.map(|size| size.height))
+                .unwrap_or(viewport_height);
+            let max_offset = u32::from(full_height.saturating_sub(viewport_height));
+            self.non_kitty_scroll_offset = self.non_kitty_scroll_offset.min(max_offset);
         }
     }
 
@@ -5243,17 +5318,24 @@ pub(crate) fn save_pdf_bookmark(
         .as_ref()
         .map(|z| z.cell_pan_from_left)
         .or(Some(pdf_reader.non_kitty_pan_offset as u16));
+    let total_pages = pdf_reader.rendered.len().max(1);
+    let book_progress = if total_pages > 0 {
+        Some((page + 1) as f32 / total_pages as f32)
+    } else {
+        None
+    };
     bookmarks.update_bookmark_pdf(
         &pdf_reader.name,
         chapter_href,
         Some(scroll_position),
         None,
-        Some(pdf_reader.rendered.len().max(1)),
+        Some(total_pages),
         Some(page),
         zoom_factor,
         pan_position,
         Some(pdf_reader.invert_images),
         Some(pdf_reader.themed_rendering),
+        book_progress,
     );
 
     let now = std::time::Instant::now();

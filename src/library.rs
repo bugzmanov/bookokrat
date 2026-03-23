@@ -133,6 +133,13 @@ fn resolve_library_paths_with_base_dirs(
     })
 }
 
+/// Return the path to the `libraries/` directory under the data dir.
+/// Does not create any directories.
+pub fn libraries_data_dir() -> Result<PathBuf> {
+    let base_dirs = BaseDirs::from_system()?;
+    Ok(base_dirs.data_dir.join("bookokrat").join("libraries"))
+}
+
 /// Compute the XDG-compliant log file path (not per-library).
 /// Uses `state_dir` on platforms that have it, falls back to `cache_dir`.
 pub fn resolve_log_path() -> Result<PathBuf> {

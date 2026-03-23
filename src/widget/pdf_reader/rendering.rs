@@ -200,6 +200,8 @@ pub(crate) struct RenderUpdateResult {
     pub updated: bool,
     /// If a converted frame arrived, the page index it was for
     pub converted_frame_page: Option<usize>,
+    /// Document was reloaded from disk
+    pub reloaded: bool,
 }
 
 pub(crate) fn apply_render_responses(
@@ -212,6 +214,7 @@ pub(crate) fn apply_render_responses(
 ) -> RenderUpdateResult {
     let mut updated = !responses.is_empty();
     let mut converted_frame_page = None;
+    let mut reloaded = false;
     let use_kitty = pdf_reader.is_kitty;
 
     for response in responses {
@@ -299,6 +302,9 @@ pub(crate) fn apply_render_responses(
                     notifications.info(format!("Copied {} chars", text.len()));
                 }
             }
+            RenderResponse::Reloaded { .. } => {
+                reloaded = true;
+            }
             _ => {}
         }
     }
@@ -384,6 +390,7 @@ pub(crate) fn apply_render_responses(
     RenderUpdateResult {
         updated,
         converted_frame_page,
+        reloaded,
     }
 }
 
@@ -687,6 +694,11 @@ impl PdfReaderState {
         } else {
             format!("[{current_page}/{total_pages}]")
         };
+        let title_text = if self.watching {
+            format!("{title_text} [watching]")
+        } else {
+            title_text
+        };
         let title_text = if is_focused {
             format!("{title_text} • ")
         } else {
@@ -700,7 +712,21 @@ impl PdfReaderState {
         };
 
         let palette = current_theme();
-        let mode_title = if self.page_search.is_input_active() {
+        let mode_title = if self.quick_page_jump.is_some() {
+            let border_style = Style::default().fg(border_color);
+            let digits = &self.quick_page_jump.as_ref().unwrap().digits;
+            let digits_style = Style::default()
+                .fg(palette.base_07)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD);
+            Some(
+                Line::from(vec![
+                    Span::styled(line::HORIZONTAL, border_style),
+                    Span::styled(format!(" {digits} "), digits_style),
+                ])
+                .left_aligned(),
+            )
+        } else if self.page_search.is_input_active() {
             let border_style = Style::default().fg(border_color);
             let mode_style = Style::default()
                 .fg(palette.base_07)

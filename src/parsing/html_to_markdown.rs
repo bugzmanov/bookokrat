@@ -1702,6 +1702,23 @@ impl HtmlToMarkdownConverter {
                                 self.extract_formatted_content_as_blocks(child, false);
                             content.extend(para_blocks);
                         }
+                        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                            self.flush_text_as_paragraph(&mut current_text, &mut content);
+
+                            let level = match tag_name {
+                                "h1" => HeadingLevel::H1,
+                                "h2" => HeadingLevel::H2,
+                                "h3" => HeadingLevel::H3,
+                                "h4" => HeadingLevel::H4,
+                                "h5" => HeadingLevel::H5,
+                                "h6" => HeadingLevel::H6,
+                                _ => HeadingLevel::H1,
+                            };
+                            let heading_id = self.get_attr_value(attrs, "id");
+                            let heading_nodes =
+                                self.collect_heading_nodes(level, child, heading_id);
+                            content.extend(heading_nodes);
+                        }
                         "img" => {
                             if let Some(src) = self.get_attr_value(attrs, "src") {
                                 let alt_text =
