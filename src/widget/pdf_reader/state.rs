@@ -361,6 +361,8 @@ pub struct PdfReaderState {
     pub hud_message: Option<HudMessage>,
     /// Page search state for vim-style / search in normal mode
     pub page_search: PageSearchState,
+    /// Whether file watching is enabled (auto-reload on disk change)
+    pub watching: bool,
 }
 
 impl PdfReaderState {
@@ -447,6 +449,7 @@ impl PdfReaderState {
             pending_search_highlight: None,
             hud_message: None,
             page_search: PageSearchState::default(),
+            watching: false,
         }
     }
 

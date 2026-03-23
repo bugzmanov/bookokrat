@@ -200,6 +200,8 @@ pub(crate) struct RenderUpdateResult {
     pub updated: bool,
     /// If a converted frame arrived, the page index it was for
     pub converted_frame_page: Option<usize>,
+    /// Document was reloaded from disk
+    pub reloaded: bool,
 }
 
 pub(crate) fn apply_render_responses(
@@ -212,6 +214,7 @@ pub(crate) fn apply_render_responses(
 ) -> RenderUpdateResult {
     let mut updated = !responses.is_empty();
     let mut converted_frame_page = None;
+    let mut reloaded = false;
     let use_kitty = pdf_reader.is_kitty;
 
     for response in responses {
@@ -299,6 +302,9 @@ pub(crate) fn apply_render_responses(
                     notifications.info(format!("Copied {} chars", text.len()));
                 }
             }
+            RenderResponse::Reloaded { .. } => {
+                reloaded = true;
+            }
             _ => {}
         }
     }
@@ -384,6 +390,7 @@ pub(crate) fn apply_render_responses(
     RenderUpdateResult {
         updated,
         converted_frame_page,
+        reloaded,
     }
 }
 
@@ -686,6 +693,11 @@ impl PdfReaderState {
             format!("[{current_page}/{total_pages}] {chapter}")
         } else {
             format!("[{current_page}/{total_pages}]")
+        };
+        let title_text = if self.watching {
+            format!("{title_text} [watching]")
+        } else {
+            title_text
         };
         let title_text = if is_focused {
             format!("{title_text} • ")
