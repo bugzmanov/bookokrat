@@ -1981,7 +1981,14 @@ impl PdfReaderState {
         if self.is_kitty {
             self.clamp_kitty_scroll_offset();
         } else {
-            self.non_kitty_scroll_offset = 0;
+            let viewport_height = self.last_render.img_area_height;
+            let full_height = self
+                .rendered
+                .get(self.page)
+                .and_then(|r| r.full_cell_size.map(|size| size.height))
+                .unwrap_or(viewport_height);
+            let max_offset = u32::from(full_height.saturating_sub(viewport_height));
+            self.non_kitty_scroll_offset = self.non_kitty_scroll_offset.min(max_offset);
         }
     }
 

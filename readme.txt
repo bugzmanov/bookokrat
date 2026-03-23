@@ -5,16 +5,21 @@
   [LIBRARY]
     ▸ Automatic EPUB / PDF discovery in current directory
     ▸ Calibre library detection with metadata (titles, authors)
+    ▸ Libraries with multiple source directories
     ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
     ▸ Split-view interface with library browser and reader
     ▸ Hierarchical table of contents with expandable sections
     ▸ Automatic bookmarks - resume exactly where you left off
-    ▸ Reading history with quick access to recent books
+    ▸ Reading history with quick access to recent books (global across libraries)
+    ▸ Reading progress tracking per book
 
   [READING]
     ▸ EPUB: rich rendering (MathML, code, tables, images, links)
-    ▸ EPUB: adjustable content margins
+    ▸ EPUB: adjustable content margins and text justification
     ▸ PDF: true rendering with page/scroll modes + zoom (graphics terminal)
+    ▸ PDF: single/dual page layout and scroll/page mode switchers
+    ▸ PDF: auto-reload on file change (file watching)
+    ▸ PDF: quick jump to page by number
     ▸ PDF: TOC detection with printed page mapping
     ▸ Smooth scrolling + multiclick selection
     ▸ Zen mode for distraction-free reading
@@ -63,6 +68,10 @@
 │  Space+d       Show book statistics popup                                   │
 │  Space+o       Open current book in system viewer                           │
 │  Space+l       Lookup selected text (run configured shell command)          │
+│  Space+w       Toggle file watching / auto-reload (PDF)                     │
+│  Space+D       Toggle single / dual page layout (PDF)                       │
+│  Space+S       Toggle scroll / page render mode (PDF, Kitty only)           │
+│  Space+g       Jump to page number (PDF)                                    │
 │  Space+a       Open comments/annotations viewer                             │
 │  Ctrl+l        Force full screen redraw                                     │
 │  Ctrl+q        Suspend process (unix only, resume with fg)                  │
@@ -97,6 +106,7 @@
 │  h / l         Previous / next chapter                                      │
 │  Ctrl+o        Jump backward in history                                     │
 │  Ctrl+i        Jump forward in history                                      │
+│  [n]gg (PDF)   Jump to page number n (e.g. 42gg)                            │
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
 │  i (PDF)       Toggle image inversion (themed mode only; saved per book)    │
@@ -158,7 +168,7 @@
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ READING HISTORY POPUP (Space+h)                                             │
+│ READING HISTORY POPUP (Space+h) - global across all libraries               │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  j / k         Navigate entries                                             │
 │  Ctrl+d / u    Scroll page down / up                                        │
