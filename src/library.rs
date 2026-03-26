@@ -140,6 +140,54 @@ pub fn libraries_data_dir() -> Result<PathBuf> {
     Ok(base_dirs.data_dir.join("bookokrat").join("libraries"))
 }
 
+pub struct MostRecentBook {
+    pub path: String,
+    pub source_bookmarks: String,
+}
+
+/// Scan all library bookmarks under `libraries_dir` and return the most recently
+/// read book along with its source bookmarks file.
+pub fn find_most_recent_book_in(libraries_dir: &Path) -> Option<MostRecentBook> {
+    if !libraries_dir.exists() {
+        return None;
+    }
+
+    let mut most_recent: Option<(chrono::DateTime<chrono::Utc>, String, String)> = None;
+
+    for entry in std::fs::read_dir(libraries_dir).ok()?.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let bookmarks_file = entry.path().join("bookmarks.json");
+        let bookmarks_path = bookmarks_file.to_string_lossy().to_string();
+        let bookmarks = match crate::bookmarks::Bookmarks::load_from_file(&bookmarks_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+
+        if let Some((_, bookmark)) = bookmarks.get_most_recent() {
+            let path = bookmark
+                .absolute_path
+                .clone()
+                .filter(|p| Path::new(p).exists());
+
+            if let Some(abs_path) = path {
+                let dominated = most_recent
+                    .as_ref()
+                    .is_some_and(|(t, _, _)| *t >= bookmark.last_read);
+                if !dominated {
+                    most_recent = Some((bookmark.last_read, abs_path, bookmarks_path));
+                }
+            }
+        }
+    }
+
+    most_recent.map(|(_, path, source_bookmarks)| MostRecentBook {
+        path,
+        source_bookmarks,
+    })
+}
+
 /// Compute the XDG-compliant log file path (not per-library).
 /// Uses `state_dir` on platforms that have it, falls back to `cache_dir`.
 pub fn resolve_log_path() -> Result<PathBuf> {

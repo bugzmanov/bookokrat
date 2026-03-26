@@ -84,44 +84,9 @@ fn parse_args() -> Result<CliArgs> {
     })
 }
 
-/// Scan all library bookmarks and return the absolute path of the most recently read book.
-fn find_most_recent_book() -> Option<String> {
+fn find_most_recent_book() -> Option<library::MostRecentBook> {
     let libraries_dir = library::libraries_data_dir().ok()?;
-    if !libraries_dir.exists() {
-        return None;
-    }
-
-    let mut most_recent: Option<(chrono::DateTime<chrono::Utc>, String)> = None;
-
-    for entry in std::fs::read_dir(&libraries_dir).ok()?.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let bookmarks_file = entry.path().join("bookmarks.json");
-        let bookmarks_path = bookmarks_file.to_string_lossy().to_string();
-        let bookmarks = match bookokrat::bookmarks::Bookmarks::load_from_file(&bookmarks_path) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-
-        if let Some((_, bookmark)) = bookmarks.get_most_recent() {
-            let path = bookmark
-                .absolute_path
-                .clone()
-                .filter(|p| Path::new(p).exists());
-
-            if let Some(abs_path) = path {
-                let dominated = most_recent
-                    .as_ref()
-                    .is_some_and(|(t, _)| *t >= bookmark.last_read);
-                if !dominated {
-                    most_recent = Some((bookmark.last_read, abs_path));
-                }
-            }
-        }
-    }
-
-    most_recent.map(|(_, path)| path)
+    library::find_most_recent_book_in(&libraries_dir)
 }
 
 fn main() -> Result<()> {
@@ -275,11 +240,15 @@ fn main() -> Result<()> {
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
     if args.continue_reading {
-        if let Some(path) = find_most_recent_book() {
-            if let Err(err) = app.open_book_for_reading_by_path(&path) {
+        if let Some(recent) = find_most_recent_book() {
+            let result = app.open_book_for_reading_with_source_bookmarks(
+                &recent.path,
+                &recent.source_bookmarks,
+            );
+            if let Err(err) = result {
                 error!("Failed to open most recent book: {err}");
                 panic_handler::restore_terminal();
-                eprintln!("Error: failed to open {path}: {err}");
+                eprintln!("Error: failed to open {}: {err}", recent.path);
                 std::process::exit(1);
             }
         }
