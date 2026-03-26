@@ -609,10 +609,10 @@ impl PdfReaderState {
                 }
 
                 match c {
-                    'j' => self.scroll_line(ScrollDirection::Down),
-                    'k' => self.scroll_line(ScrollDirection::Up),
-                    'H' => self.pan_horizontal(ScrollDirection::Right),
-                    'L' => self.pan_horizontal(ScrollDirection::Left),
+                    'j' | 'J' => self.scroll_line(ScrollDirection::Down),
+                    'k' | 'K' => self.scroll_line(ScrollDirection::Up),
+                    'H' => self.pan_horizontal(ScrollDirection::Left),
+                    'L' => self.pan_horizontal(ScrollDirection::Right),
                     'l' => self.next_page(),
                     'h' => self.prev_page(),
                     'q' => Some(InputAction::QuitApp),
