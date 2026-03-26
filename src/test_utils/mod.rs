@@ -342,15 +342,12 @@ mod tests {
             App::new_with_config(Some("tests/testdata"), Some("/dev/null"), false, None, None);
         let _terminal = create_test_terminal(77, 31);
 
-        app.handle_key_event_with_screen_height(
-            KeyEvent {
-                code: KeyCode::Char('x'),
-                modifiers: KeyModifiers::empty(),
-                kind: KeyEventKind::Press,
-                state: KeyEventState::NONE,
-            },
-            None,
-        );
+        app.handle_key_event(KeyEvent {
+            code: KeyCode::Char('x'),
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        });
 
         assert_eq!(app.testing_terminal_size().width, 77);
         assert_eq!(app.testing_terminal_size().height, 31);

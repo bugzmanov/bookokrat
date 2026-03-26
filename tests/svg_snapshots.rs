@@ -80,15 +80,12 @@ trait TestKeyEventHandler {
 
 impl TestKeyEventHandler for App {
     fn press_key(&mut self, key: crossterm::event::KeyCode) {
-        self.handle_key_event_with_screen_height(
-            crossterm::event::KeyEvent {
-                code: key,
-                modifiers: crossterm::event::KeyModifiers::empty(),
-                kind: crossterm::event::KeyEventKind::Press,
-                state: crossterm::event::KeyEventState::NONE,
-            },
-            None,
-        );
+        self.handle_key_event(crossterm::event::KeyEvent {
+            code: key,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
     }
 
     fn press_key_with_modifiers(
@@ -96,15 +93,12 @@ impl TestKeyEventHandler for App {
         key: crossterm::event::KeyCode,
         modifiers: crossterm::event::KeyModifiers,
     ) {
-        self.handle_key_event_with_screen_height(
-            crossterm::event::KeyEvent {
-                code: key,
-                modifiers,
-                kind: crossterm::event::KeyEventKind::Press,
-                state: crossterm::event::KeyEventState::NONE,
-            },
-            None,
-        );
+        self.handle_key_event(crossterm::event::KeyEvent {
+            code: key,
+            modifiers,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: crossterm::event::KeyEventState::NONE,
+        });
     }
 
     fn press_char_times(&mut self, ch: char, times: usize) {
@@ -5176,5 +5170,182 @@ fn test_div_with_inline_content_svg() {
         std::path::Path::new("tests/snapshots/div_with_inline_content.svg"),
         "test_div_with_inline_content_svg",
         create_test_failure_handler("test_div_with_inline_content_svg"),
+    );
+}
+
+/// Helper: open book in zen mode, draw once, Ctrl+F, draw, Ctrl+B, draw.
+/// Returns (svg_start, svg_after_ctrl_f, svg_after_ctrl_b).
+fn full_screen_scroll_roundtrip(
+    terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+    app: &mut App,
+    zen: bool,
+) -> (String, String, String) {
+    open_first_test_book(app);
+
+    if zen {
+        app.press_key_with_modifiers(
+            crossterm::event::KeyCode::Char('z'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+    }
+
+    // Draw once to initialize visible_height
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // In non-zen mode, scroll past the empty first lines
+    if !zen {
+        for _ in 0..2 {
+            app.press_key(crossterm::event::KeyCode::Char('j'));
+        }
+    }
+
+    // Draw start state
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_start = terminal_to_svg(terminal);
+
+    // Ctrl+F
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('f'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    app.testing_expire_highlights();
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_after_ctrl_f = terminal_to_svg(terminal);
+
+    // Ctrl+B
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::CONTROL,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    app.testing_expire_highlights();
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_after_ctrl_b = terminal_to_svg(terminal);
+
+    (svg_start, svg_after_ctrl_f, svg_after_ctrl_b)
+}
+
+#[test]
+#[parallel]
+fn test_zen_ctrl_f_page_down_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+    let (_, svg_after_ctrl_f, _) = full_screen_scroll_roundtrip(&mut terminal, &mut app, true);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_zen_ctrl_f_page_down.svg",
+        &svg_after_ctrl_f,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_after_ctrl_f,
+        std::path::Path::new("tests/snapshots/zen_ctrl_f_page_down.svg"),
+        "test_zen_ctrl_f_page_down_svg",
+        create_test_failure_handler("test_zen_ctrl_f_page_down_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_zen_ctrl_b_returns_to_start_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+    let (svg_start, _, svg_after_ctrl_b) =
+        full_screen_scroll_roundtrip(&mut terminal, &mut app, true);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_zen_ctrl_b_returns_to_start.svg",
+        &svg_after_ctrl_b,
+    )
+    .unwrap();
+
+    assert_eq!(
+        svg_start, svg_after_ctrl_b,
+        "Ctrl+F then Ctrl+B in zen mode must return to the exact same view"
+    );
+
+    assert_svg_snapshot(
+        svg_after_ctrl_b,
+        std::path::Path::new("tests/snapshots/zen_ctrl_b_returns_to_start.svg"),
+        "test_zen_ctrl_b_returns_to_start_svg",
+        create_test_failure_handler("test_zen_ctrl_b_returns_to_start_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_non_zen_ctrl_f_page_down_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+    let (_, svg_after_ctrl_f, _) = full_screen_scroll_roundtrip(&mut terminal, &mut app, false);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_non_zen_ctrl_f_page_down.svg",
+        &svg_after_ctrl_f,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_after_ctrl_f,
+        std::path::Path::new("tests/snapshots/non_zen_ctrl_f_page_down.svg"),
+        "test_non_zen_ctrl_f_page_down_svg",
+        create_test_failure_handler("test_non_zen_ctrl_f_page_down_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_non_zen_ctrl_b_returns_to_start_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+    let (svg_start, _, svg_after_ctrl_b) =
+        full_screen_scroll_roundtrip(&mut terminal, &mut app, false);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_non_zen_ctrl_b_returns_to_start.svg",
+        &svg_after_ctrl_b,
+    )
+    .unwrap();
+
+    assert_eq!(
+        svg_start, svg_after_ctrl_b,
+        "Ctrl+F then Ctrl+B in non-zen mode must return to the exact same view"
+    );
+
+    assert_svg_snapshot(
+        svg_after_ctrl_b,
+        std::path::Path::new("tests/snapshots/non_zen_ctrl_b_returns_to_start.svg"),
+        "test_non_zen_ctrl_b_returns_to_start_svg",
+        create_test_failure_handler("test_non_zen_ctrl_b_returns_to_start_svg"),
     );
 }
