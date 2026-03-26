@@ -904,6 +904,15 @@ impl App {
         self.open_book_for_reading_with_context(path, None)
     }
 
+    pub fn open_book_for_reading_with_source_bookmarks(
+        &mut self,
+        path: &str,
+        source_bookmarks: &str,
+    ) -> Result<()> {
+        let context_override = self.context_override_for_source_bookmarks(source_bookmarks)?;
+        self.open_book_for_reading_with_context(path, context_override)
+    }
+
     fn open_book_for_reading_with_context(
         &mut self,
         path: &str,
@@ -6900,4 +6909,121 @@ where
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::reading_history::ReadingHistoryAction;
+    use crate::simple_fake_books::{FakeBookConfig, create_fake_epub_file};
+
+    /// Regression test for https://github.com/bugzmanov/bookokrat/issues/104
+    ///
+    /// User report:
+    /// 1. A PDF in the current directory opens
+    /// 2. Press Space+h, open an old ebook from another library
+    /// 3. Press q to quit
+    /// 4. Run `bookokrat -c` → opens the PDF instead of the ebook
+    #[test]
+    fn continue_reading_opens_wrong_book_after_cross_library_history() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        let book_a_path = dir.path().join("book_a.epub");
+        let book_b_path = dir.path().join("book_b.epub");
+        create_fake_epub_file(
+            &book_a_path,
+            &FakeBookConfig {
+                title: "Book A".into(),
+                chapter_count: 3,
+                words_per_chapter: 50,
+            },
+        )
+        .unwrap();
+        create_fake_epub_file(
+            &book_b_path,
+            &FakeBookConfig {
+                title: "Book B".into(),
+                chapter_count: 3,
+                words_per_chapter: 50,
+            },
+        )
+        .unwrap();
+        let book_a_abs = std::fs::canonicalize(&book_a_path).unwrap();
+        let book_b_abs = std::fs::canonicalize(&book_b_path).unwrap();
+
+        let libraries_dir = dir.path().join("libraries");
+        let home_lib_dir = libraries_dir.join("home_lib");
+        let other_lib_dir = libraries_dir.join("other_lib");
+        std::fs::create_dir_all(&home_lib_dir).unwrap();
+        std::fs::create_dir_all(&other_lib_dir).unwrap();
+
+        let home_bm_path = home_lib_dir.join("bookmarks.json");
+        let other_bm_path = other_lib_dir.join("bookmarks.json");
+
+        // Other library has book_b (previously read)
+        let mut other_bm = crate::bookmarks::Bookmarks::with_file(other_bm_path.to_str().unwrap());
+        other_bm.save_initial_bookmark(
+            book_b_abs.to_str().unwrap(),
+            "chapter_1".into(),
+            Some(0),
+            Some(3),
+            None,
+            Some("Book B".into()),
+            None,
+            Some(book_b_abs.to_str().unwrap().to_string()),
+        );
+
+        // --- Session 1: open book_a, Space+h → book_b, quit ---
+        {
+            let mut app = App::new_with_config(
+                Some(dir.path().to_str().unwrap()),
+                Some(home_bm_path.to_str().unwrap()),
+                false,
+                None,
+                Some(dir.path().join("img_cache")),
+            );
+            app.open_book_for_reading_by_path(book_a_abs.to_str().unwrap())
+                .unwrap();
+            app.handle_reading_history_action(ReadingHistoryAction::OpenBookAbsolute {
+                path: book_b_abs.to_str().unwrap().to_string(),
+                source_bookmarks: other_bm_path.to_str().unwrap().to_string(),
+            });
+            app.save_bookmark_with_throttle(true);
+        }
+
+        // --- Session 2: `bookokrat -c` ---
+        {
+            let mut app = App::new_with_config(
+                Some(dir.path().to_str().unwrap()),
+                Some(home_bm_path.to_str().unwrap()),
+                false,
+                None,
+                Some(dir.path().join("img_cache2")),
+            );
+
+            let recent = crate::library::find_most_recent_book_in(&libraries_dir)
+                .expect("should find book_b");
+
+            // The fix: open with source_bookmarks so context_override is set
+            app.open_book_for_reading_with_source_bookmarks(&recent.path, &recent.source_bookmarks)
+                .unwrap();
+            app.save_bookmark_with_throttle(true);
+        }
+
+        // book_b's bookmark must stay in other_bm, not leak into home_bm
+        let home_bm =
+            crate::bookmarks::Bookmarks::load_from_file(home_bm_path.to_str().unwrap()).unwrap();
+        assert!(
+            home_bm.get_bookmark(book_b_abs.to_str().unwrap()).is_none(),
+            "cross-library book must not leak into home library bookmarks"
+        );
+
+        // book_b's bookmark in other_bm must have been updated (fresh timestamp)
+        let other_bm_after =
+            crate::bookmarks::Bookmarks::load_from_file(other_bm_path.to_str().unwrap()).unwrap();
+        let book_b_bm = other_bm_after
+            .get_bookmark(book_b_abs.to_str().unwrap())
+            .expect("book_b must still exist in other_bm");
+        assert!(
+            book_b_bm.chapter_index.is_some(),
+            "book_b's bookmark in other_bm must have been updated by the -c session"
+        );
+    }
+}

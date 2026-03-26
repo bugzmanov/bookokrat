@@ -447,7 +447,7 @@ static NORD_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_0d: smart_color(0x81A1C1), // Frost blue
     base_0e: smart_color(0xB48EAD), // Aurora purple
     base_0f: smart_color(0x5E81AC), // Frost dark blue
- });
+});
 
 // Backward compatibility alias
 #[allow(dead_code)]
