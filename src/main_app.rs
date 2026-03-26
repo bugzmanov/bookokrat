@@ -2056,16 +2056,18 @@ impl App {
         self.update_toc_state(); // This will update active section
     }
 
-    fn scroll_full_screen_down(&mut self, screen_height: usize) {
-        self.text_reader.scroll_full_screen_down(screen_height);
+    fn scroll_full_screen_down(&mut self) {
+        let h = self.text_reader.get_visible_height();
+        self.text_reader.scroll_full_screen_down(h);
         self.save_bookmark();
-        self.update_toc_state(); // This will update active section
+        self.update_toc_state();
     }
 
-    fn scroll_full_screen_up(&mut self, screen_height: usize) {
-        self.text_reader.scroll_full_screen_up(screen_height);
+    fn scroll_full_screen_up(&mut self) {
+        let h = self.text_reader.get_visible_height();
+        self.text_reader.scroll_full_screen_up(h);
         self.save_bookmark();
-        self.update_toc_state(); // This will update active section
+        self.update_toc_state();
     }
 
     /// Handle a mouse event with optional batching for scroll events
@@ -4354,11 +4356,7 @@ impl App {
         false
     }
 
-    fn handle_common_normal_mode_motions(
-        &mut self,
-        key: &crossterm::event::KeyEvent,
-        screen_height: Option<usize>,
-    ) -> bool {
+    fn handle_common_normal_mode_motions(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         match key.code {
@@ -4413,9 +4411,8 @@ impl App {
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_full_page_up(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_full_page_up(h);
                 true
             }
             KeyCode::Char('b') | KeyCode::Char('B') => {
@@ -4470,37 +4467,32 @@ impl App {
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_half_page_down(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_half_page_down(h);
                 true
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_half_page_up(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_half_page_up(h);
                 true
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_full_page_down(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_full_page_down(h);
                 true
             }
             KeyCode::PageDown => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_full_page_down(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_full_page_down(h);
                 true
             }
             KeyCode::PageUp => {
                 self.text_reader.clear_count();
-                if let Some(h) = screen_height {
-                    self.text_reader.normal_mode_full_page_up(h);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.text_reader.normal_mode_full_page_up(h);
                 true
             }
             KeyCode::Char('f') => {
@@ -4530,12 +4522,7 @@ impl App {
         }
     }
 
-    /// Handle a single key event with optional screen height for half-screen scrolling
-    pub fn handle_key_event_with_screen_height(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-        screen_height: Option<usize>,
-    ) -> Option<AppAction> {
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Option<AppAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
         #[cfg(any(test, feature = "test-utils"))]
@@ -5254,7 +5241,7 @@ impl App {
                         return None;
                     }
                     _ => {
-                        if self.handle_common_normal_mode_motions(&key, screen_height) {
+                        if self.handle_common_normal_mode_motions(&key) {
                             return None;
                         }
                         if self.handle_normal_mode_count_prefix(&key) {
@@ -5270,7 +5257,7 @@ impl App {
                 return None;
             }
 
-            if self.handle_common_normal_mode_motions(&key, screen_height) {
+            if self.handle_common_normal_mode_motions(&key) {
                 return None;
             }
 
@@ -5375,14 +5362,10 @@ impl App {
                 }
             }
             KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_full_screen_up(visible_height);
-                }
+                self.scroll_full_screen_up();
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_full_screen_down(visible_height);
-                }
+                self.scroll_full_screen_down();
             }
             KeyCode::Char('f') => if self.handle_key_sequence('f') {},
             KeyCode::Char('F') => if self.handle_key_sequence('F') {},
@@ -5460,24 +5443,18 @@ impl App {
                 }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_half_screen_down(visible_height);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.scroll_half_screen_down(h);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_half_screen_up(visible_height);
-                }
+                let h = self.text_reader.get_visible_height();
+                self.scroll_half_screen_up(h);
             }
             KeyCode::PageDown => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_full_screen_down(visible_height);
-                }
+                self.scroll_full_screen_down();
             }
             KeyCode::PageUp => {
-                if let Some(visible_height) = screen_height {
-                    self.scroll_full_screen_up(visible_height);
-                }
+                self.scroll_full_screen_up();
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_zen_mode();
@@ -5997,6 +5974,12 @@ impl App {
     #[allow(dead_code)]
     pub fn testing_terminal_size(&self) -> Rect {
         self.terminal_size
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_expire_highlights(&mut self) {
+        self.text_reader.update_highlight();
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -6622,11 +6605,7 @@ where
                         // When a popup is active, route key events through the standard handler
                         // so popups can be closed with ESC and other keys work correctly
                         if app.has_active_popup() {
-                            let visible_height =
-                                terminal.size().unwrap().height.saturating_sub(5) as usize;
-                            if app.handle_key_event_with_screen_height(*key, Some(visible_height))
-                                == Some(AppAction::Quit)
-                            {
+                            if app.handle_key_event(*key) == Some(AppAction::Quit) {
                                 should_quit = true;
                             }
                             continue;
@@ -6728,11 +6707,7 @@ where
                         }
                     }
                     Event::Key(key) => {
-                        let visible_height =
-                            terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                        if app.handle_key_event_with_screen_height(key, Some(visible_height))
-                            == Some(AppAction::Quit)
-                        {
+                        if app.handle_key_event(key) == Some(AppAction::Quit) {
                             should_quit = true;
                         }
                     }
@@ -6755,10 +6730,7 @@ where
                     }
                 }
                 Event::Key(key) => {
-                    let visible_height = terminal.size().unwrap().height.saturating_sub(5) as usize; // Account for borders and help bar
-                    if app.handle_key_event_with_screen_height(key, Some(visible_height))
-                        == Some(AppAction::Quit)
-                    {
+                    if app.handle_key_event(key) == Some(AppAction::Quit) {
                         should_quit = true;
                     }
                 }

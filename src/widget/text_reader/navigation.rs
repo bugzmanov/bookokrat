@@ -306,6 +306,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn get_current_chapter_file(&self) -> &Option<String> {
         &self.current_chapter_file
     }
+
+    pub fn get_visible_height(&self) -> usize {
+        self.visible_height
+    }
 }
 
 impl VimNavMotions for crate::markdown_text_reader::MarkdownTextReader {
