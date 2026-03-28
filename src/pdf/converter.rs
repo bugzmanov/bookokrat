@@ -780,6 +780,7 @@ impl ConverterEngine {
                 // Clear overlay state to prevent stale rendering after cache invalidation
                 self.cursor_rect = None;
                 self.visual_rects.clear();
+                self.selection_rects.clear();
             }
             ConversionCommand::DisplayFailed(pages) => {
                 // Clear these pages from sent_for_viewport so they can be re-sent.

@@ -35,6 +35,7 @@ fn create_test_app_isolated() -> (App, TempDir) {
     set_theme_by_index(0);
     set_margin(0);
     bookokrat::settings::set_justify_text(false);
+    bookokrat::settings::set_nav_panel_width(None);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let app = App::new_with_config(
         Some("tests/testdata"),
@@ -1497,7 +1498,7 @@ fn test_text_selection_svg() {
     // Use coordinates starting from the left margin to test margin selection
     let mouse_down = MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
-        column: 30, // Click on left margin - should start from beginning of line
+        column: 31, // Click just inside content area (col 30 is the border)
         row: 10,
         modifiers: crossterm::event::KeyModifiers::empty(),
     };
@@ -5049,6 +5050,12 @@ fn test_search_with_justified_text_svg() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(temp_dir.path().join("justify_search.html"), content).unwrap();
 
+    // Reset globals to prevent leaking from other tests
+    set_theme_by_index(0);
+    set_margin(0);
+    bookokrat::settings::set_justify_text(false);
+    bookokrat::settings::set_nav_panel_width(None);
+
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = App::new_with_config(
         Some(temp_dir.path().to_str().unwrap()),
@@ -5347,5 +5354,118 @@ fn test_non_zen_ctrl_b_returns_to_start_svg() {
         std::path::Path::new("tests/snapshots/non_zen_ctrl_b_returns_to_start.svg"),
         "test_non_zen_ctrl_b_returns_to_start_svg",
         create_test_failure_handler("test_non_zen_ctrl_b_returns_to_start_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_nav_panel_resize_shrink_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Press < twice to shrink the nav panel (3 cols each = 6 cols smaller)
+    app.press_key(crossterm::event::KeyCode::Char('<'));
+    app.press_key(crossterm::event::KeyCode::Char('<'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_nav_panel_resize_shrink.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/nav_panel_resize_shrink.svg"),
+        "test_nav_panel_resize_shrink_svg",
+        create_test_failure_handler("test_nav_panel_resize_shrink_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_nav_panel_resize_grow_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Press > twice to grow the nav panel (3 cols each = 6 cols larger)
+    app.press_key(crossterm::event::KeyCode::Char('>'));
+    app.press_key(crossterm::event::KeyCode::Char('>'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_nav_panel_resize_grow.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/nav_panel_resize_grow.svg"),
+        "test_nav_panel_resize_grow_svg",
+        create_test_failure_handler("test_nav_panel_resize_grow_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_nav_panel_resize_from_toc_focus_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+
+    // Focus is on nav panel (book list) by default after opening.
+    // Switch to TOC mode and stay focused on nav panel.
+    app.press_key(crossterm::event::KeyCode::Char('b'));
+
+    // Resize should work from nav panel focus too
+    app.press_key(crossterm::event::KeyCode::Char('>'));
+    app.press_key(crossterm::event::KeyCode::Char('>'));
+    app.press_key(crossterm::event::KeyCode::Char('>'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_nav_panel_resize_from_toc.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/nav_panel_resize_from_toc.svg"),
+        "test_nav_panel_resize_from_toc_focus_svg",
+        create_test_failure_handler("test_nav_panel_resize_from_toc_focus_svg"),
     );
 }

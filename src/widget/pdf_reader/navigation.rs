@@ -239,6 +239,39 @@ impl PdfReaderState {
         let _ = service;
     }
 
+    pub fn handle_viewport_width_change(
+        &mut self,
+        conversion_tx: Option<&flume::Sender<crate::pdf::ConversionCommand>>,
+    ) {
+        let page = self.page;
+
+        if self.is_kitty {
+            let _ = crate::pdf::kittyv2::execute_display_batch(
+                crate::pdf::kittyv2::DisplayBatch::Clear,
+            );
+        }
+
+        self.last_render.rect = ratatui::layout::Rect::default();
+
+        for rendered_info in &mut self.rendered {
+            rendered_info.img = None;
+        }
+
+        // Pixel coordinates are now stale — drop visual/mouse selection
+        self.normal_mode.exit_visual();
+        self.selection.clear();
+        if let Some(tx) = conversion_tx {
+            let _ = tx.send(crate::pdf::ConversionCommand::UpdateVisual(vec![]));
+            let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+        }
+
+        if let Some(tx) = conversion_tx {
+            let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
+            let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
+        }
+        self.last_sent_viewport = None;
+    }
+
     pub fn handle_event(&mut self, ev: &Event) -> InputResponse {
         match ev {
             Event::Key(key) => self.handle_key_event(*key),
