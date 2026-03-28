@@ -332,6 +332,8 @@ pub struct App {
     help_bar_area: Rect,
     zen_mode: bool,
     test_mode: bool,
+    nav_panel_width_override: Option<u16>,
+    resizing_nav_panel: bool,
     current_context_override: Option<LibraryContext>,
     pub pending_force_redraw: bool,
     #[cfg(unix)]
@@ -674,6 +676,8 @@ impl App {
             help_bar_area: Rect::default(),
             zen_mode: false,
             test_mode: false,
+            nav_panel_width_override: settings::get_nav_panel_width(),
+            resizing_nav_panel: false,
             current_context_override: None,
             pending_force_redraw: false,
             #[cfg(unix)]
@@ -2203,6 +2207,15 @@ impl App {
                     return;
                 }
 
+                if !self.zen_mode && !self.has_active_popup() {
+                    let border = self.nav_panel_width();
+                    let col = mouse_event.column;
+                    if border > 0 && (col == border - 1 || col == border) {
+                        self.resizing_nav_panel = true;
+                        return;
+                    }
+                }
+
                 // Check if image popup is shown first - close it on any click
                 if matches!(
                     self.focused_panel,
@@ -2469,6 +2482,12 @@ impl App {
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if self.resizing_nav_panel {
+                    self.resizing_nav_panel = false;
+                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    return;
+                }
+
                 // Block mouse up events for all popups
                 if self.has_active_popup() {
                     return;
@@ -2487,6 +2506,16 @@ impl App {
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if self.resizing_nav_panel {
+                    let new_width = (mouse_event.column).clamp(5, self.terminal_size.width / 2);
+                    self.nav_panel_width_override = Some(new_width);
+                    #[cfg(feature = "pdf")]
+                    if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+                        pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
+                    }
+                    return;
+                }
+
                 // Block drag events for all popups
                 if self.has_active_popup() {
                     return;
@@ -3053,13 +3082,28 @@ impl App {
         }
     }
 
+    fn default_nav_panel_width(&self) -> u16 {
+        (self.terminal_size.width * 30) / 100
+    }
+
     /// Calculate the navigation panel width based on stored terminal width
     fn nav_panel_width(&self) -> u16 {
         if self.zen_mode {
             0
         } else {
-            // 30% of terminal width, minimum 20 columns
-            ((self.terminal_size.width * 30) / 100).max(20)
+            self.nav_panel_width_override
+                .unwrap_or_else(|| self.default_nav_panel_width())
+        }
+    }
+
+    fn resize_nav_panel(&mut self, delta: i16) {
+        let current = self.nav_panel_width();
+        let new_width =
+            (current as i16 + delta).clamp(5, (self.terminal_size.width / 2) as i16) as u16;
+        self.nav_panel_width_override = Some(new_width);
+        #[cfg(feature = "pdf")]
+        if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+            pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
         }
     }
 
@@ -3074,9 +3118,10 @@ impl App {
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(0), Constraint::Length(3)])
             .split(self.terminal_size);
+        let nav_width = self.nav_panel_width();
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .constraints([Constraint::Length(nav_width), Constraint::Min(0)])
             .split(chunks[0]);
         main_chunks[0]
     }
@@ -3257,9 +3302,10 @@ impl App {
                 .constraints([Constraint::Min(0), Constraint::Length(3)])
                 .split(f.area());
 
+            let nav_width = self.nav_panel_width();
             let main_chunks = Layout::default()
                 .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+                .constraints([Constraint::Length(nav_width), Constraint::Min(0)])
                 .split(chunks[0]);
 
             self.navigation_panel.render(
@@ -3829,7 +3875,9 @@ impl App {
         // This prevents glitches when the viewport size changes dramatically
         #[cfg(feature = "pdf")]
         {
-            let nav_width = ((self.terminal_size.width * 30) / 100).max(20);
+            let nav_width = self
+                .nav_panel_width_override
+                .unwrap_or_else(|| self.default_nav_panel_width());
             let comments_dir = self.current_book_comments_dir().map(|p| p.to_path_buf());
             if let Some(ref mut pdf_reader) = self.pdf_reader {
                 pdf_reader.handle_zen_mode_toggle(
@@ -3902,6 +3950,18 @@ impl App {
             #[cfg(feature = "pdf")]
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.open_settings_popup();
+                true
+            }
+            KeyCode::Char('<') if !self.zen_mode && !self.has_active_popup() => {
+                self.resize_nav_panel(-3);
+                #[cfg(not(any(test, feature = "test-utils")))]
+                settings::set_nav_panel_width(self.nav_panel_width_override);
+                true
+            }
+            KeyCode::Char('>') if !self.zen_mode && !self.has_active_popup() => {
+                self.resize_nav_panel(3);
+                #[cfg(not(any(test, feature = "test-utils")))]
+                settings::set_nav_panel_width(self.nav_panel_width_override);
                 true
             }
             _ => false,
@@ -4318,6 +4378,17 @@ impl App {
                     }
                     self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+                }
+                self.key_sequence.clear();
+                true
+            }
+            " <" | " >" => {
+                self.nav_panel_width_override = None;
+                #[cfg(not(any(test, feature = "test-utils")))]
+                settings::set_nav_panel_width(None);
+                #[cfg(feature = "pdf")]
+                if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+                    pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
                 }
                 self.key_sequence.clear();
                 true
@@ -6676,7 +6747,15 @@ where
                         }
                     }
                     Event::Mouse(mouse_event) => {
-                        if app.should_route_pdf_mouse_to_ui(mouse_event) {
+                        let on_border = !app.zen_mode && {
+                            let border = app.nav_panel_width();
+                            border > 0
+                                && (mouse_event.column == border - 1
+                                    || mouse_event.column == border)
+                        };
+                        if app.resizing_nav_panel || on_border {
+                            app.handle_non_scroll_mouse_event(*mouse_event);
+                        } else if app.should_route_pdf_mouse_to_ui(mouse_event) {
                             match mouse_event.kind {
                                 MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {}
                                 MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
