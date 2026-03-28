@@ -257,6 +257,14 @@ impl PdfReaderState {
             rendered_info.img = None;
         }
 
+        // Pixel coordinates are now stale — drop visual/mouse selection
+        self.normal_mode.exit_visual();
+        self.selection.clear();
+        if let Some(tx) = conversion_tx {
+            let _ = tx.send(crate::pdf::ConversionCommand::UpdateVisual(vec![]));
+            let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
+        }
+
         if let Some(tx) = conversion_tx {
             let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
             let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
