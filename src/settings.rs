@@ -143,6 +143,9 @@ pub struct Settings {
     pub book_sort_order: BookSortOrder,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_panel_width: Option<u16>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lookup_command: Option<String>,
 
     #[serde(default)]
@@ -183,6 +186,7 @@ impl Default for Settings {
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
+            nav_panel_width: None,
         }
     }
 }
@@ -412,6 +416,13 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 BookSortOrder::ByType => "by_type".into(),
             },
         ),
+        (
+            "nav_panel_width".into(),
+            settings
+                .nav_panel_width
+                .map(|w| format!("{}", w))
+                .unwrap_or_else(|| "null".into()),
+        ),
     ]
 }
 
@@ -448,6 +459,9 @@ fn generate_settings_yaml(settings: &Settings) -> String {
     };
     content.push_str(&format!("justify_text: {}\n", settings.justify_text));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
+    if let Some(w) = settings.nav_panel_width {
+        content.push_str(&format!("nav_panel_width: {}\n", w));
+    }
     content.push('\n');
 
     if let Some(ref cmd) = settings.lookup_command {
@@ -709,6 +723,17 @@ pub fn get_lookup_display() -> LookupDisplay {
         .read()
         .map(|s| s.lookup_display)
         .unwrap_or_default()
+}
+
+pub fn get_nav_panel_width() -> Option<u16> {
+    SETTINGS.read().ok().and_then(|s| s.nav_panel_width)
+}
+
+pub fn set_nav_panel_width(width: Option<u16>) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.nav_panel_width = width;
+    }
+    save_settings();
 }
 
 /// Called on app startup to fix incompatible settings when switching terminals

@@ -7,7 +7,7 @@
     ▸ Calibre library detection with metadata (titles, authors)
     ▸ Libraries with multiple source directories
     ▸ EPUB bundle support (exploded .epub directories, Apple Books exports)
-    ▸ Split-view interface with library browser and reader
+    ▸ Split-view interface with resizable library browser and reader
     ▸ Hierarchical table of contents with expandable sections
     ▸ Automatic bookmarks - resume exactly where you left off
     ▸ Reading history with quick access to recent books (global across libraries)
@@ -73,6 +73,8 @@
 │  Space+S       Toggle scroll / page render mode (PDF, Kitty only)           │
 │  Space+g       Jump to page number (PDF)                                    │
 │  Space+a       Open comments/annotations viewer                             │
+│  < / >         Shrink / grow sidebar panel width                            │
+│  Space+< / >   Reset sidebar panel width to default                         │
 │  Ctrl+l        Force full screen redraw                                     │
 │  Ctrl+q        Suspend process (unix only, resume with fg)                  │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -218,6 +220,7 @@ Bookokrat provides full mouse integration:
   [PANELS]
     • Scroll wheel - Scroll content (smooth scrolling)
     • Single-click - Focus a panel
+    • Drag panel border - Resize sidebar width
     • Double-click (library) - Open selected book
     • Double-click (reader) - Select word under cursor
     • Triple-click (reader) - Select entire paragraph
