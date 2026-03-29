@@ -3,6 +3,8 @@ use ratatui::layout::Rect;
 
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn handle_mouse_down(&mut self, x: u16, y: u16) {
+        self.mouse_down_screen_y = Some(y);
+
         if self.is_normal_mode_active() {
             self.text_selection.clear_selection();
             self.exit_visual_mode();
@@ -43,59 +45,55 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     }
                 }
 
-                // Check if we need to auto-scroll due to dragging outside the visible area
-                const SCROLL_MARGIN: u16 = 3;
-                let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
-                let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
-
-                if needs_scroll_up {
-                    self.auto_scroll_active = true;
-                    self.auto_scroll_speed = -1.0;
-                    // Perform immediate scroll like text_reader.rs does
-                    self.perform_auto_scroll();
-                } else if needs_scroll_down {
-                    self.auto_scroll_active = true;
-                    self.auto_scroll_speed = 1.0;
-                    // Perform immediate scroll like text_reader.rs does
-                    self.perform_auto_scroll();
-                } else {
-                    self.auto_scroll_active = false;
-                }
+                self.update_auto_scroll_from_drag(y, text_area);
                 return;
             }
         }
 
         if self.text_selection.is_selecting {
             if let Some(text_area) = self.last_inner_text_area {
-                // Always try to update text selection first, regardless of auto-scroll
                 if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
                     self.text_selection.update_selection(line, column);
                 }
 
-                // Check if we need to auto-scroll due to dragging outside the visible area
-                const SCROLL_MARGIN: u16 = 3;
-                let needs_scroll_up = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
-                let needs_scroll_down = y >= text_area.y + text_area.height - SCROLL_MARGIN;
-
-                if needs_scroll_up {
-                    self.auto_scroll_active = true;
-                    self.auto_scroll_speed = -1.0;
-                    // Perform immediate scroll like text_reader.rs does
-                    self.perform_auto_scroll();
-                } else if needs_scroll_down {
-                    self.auto_scroll_active = true;
-                    self.auto_scroll_speed = 1.0;
-                    // Perform immediate scroll like text_reader.rs does
-                    self.perform_auto_scroll();
-                } else {
-                    self.auto_scroll_active = false;
-                }
+                self.update_auto_scroll_from_drag(y, text_area);
             }
+        }
+    }
+
+    fn update_auto_scroll_from_drag(&mut self, y: u16, text_area: Rect) {
+        let down_y = match self.mouse_down_screen_y {
+            Some(v) => v,
+            None => {
+                self.auto_scroll_active = false;
+                return;
+            }
+        };
+
+        const SCROLL_MARGIN: u16 = 3;
+        let in_top_margin = y <= text_area.y + SCROLL_MARGIN && self.scroll_offset > 0;
+        let in_bottom_margin = y >= text_area.y + text_area.height - SCROLL_MARGIN;
+
+        // Only auto-scroll if the user dragged vertically toward the edge
+        let dragged_up = y < down_y;
+        let dragged_down = y > down_y;
+
+        if in_top_margin && dragged_up {
+            self.auto_scroll_active = true;
+            self.auto_scroll_speed = -1.0;
+            self.perform_auto_scroll();
+        } else if in_bottom_margin && dragged_down {
+            self.auto_scroll_active = true;
+            self.auto_scroll_speed = 1.0;
+            self.perform_auto_scroll();
+        } else {
+            self.auto_scroll_active = false;
         }
     }
 
     pub fn handle_mouse_up(&mut self, x: u16, y: u16) -> Option<String> {
         self.auto_scroll_active = false;
+        self.mouse_down_screen_y = None;
 
         if self.is_normal_mode_active() {
             let text_area = self.last_inner_text_area?;

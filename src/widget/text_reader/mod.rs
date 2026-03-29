@@ -85,6 +85,7 @@ pub struct MarkdownTextReader {
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
     auto_scroll_active: bool,
     auto_scroll_speed: f32,
+    mouse_down_screen_y: Option<u16>,
 
     // Image handling
     image_picker: Option<Picker>,
@@ -250,6 +251,7 @@ impl MarkdownTextReader {
             last_inner_text_area: None,
             auto_scroll_active: false,
             auto_scroll_speed: 1.0,
+            mouse_down_screen_y: None,
             image_picker,
             embedded_images: RefCell::new(HashMap::new()),
             last_rendered_image_rects: HashMap::new(),
