@@ -18,6 +18,8 @@ pub struct BookManager {
     pub books: Vec<BookInfo>,
     scan_directory: String,
     pub library_mode: LibraryMode,
+    #[cfg(feature = "pdf")]
+    pub supports_graphics: bool,
 }
 
 /// Format of a book file
@@ -71,6 +73,8 @@ impl BookManager {
             books,
             scan_directory,
             library_mode,
+            #[cfg(feature = "pdf")]
+            supports_graphics: false,
         }
     }
 
@@ -593,11 +597,13 @@ impl BookManager {
         let mut books: Vec<BookInfo>;
         #[cfg(feature = "pdf")]
         {
-            if !is_pdf_enabled() {
+            if !is_pdf_enabled() || !self.supports_graphics {
                 books = self
                     .books
                     .iter()
-                    .filter(|book| book.format != BookFormat::Pdf)
+                    .filter(|book| {
+                        book.format != BookFormat::Pdf && book.format != BookFormat::Djvu
+                    })
                     .cloned()
                     .collect();
             } else {
@@ -691,6 +697,75 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, contents.as_bytes()).unwrap();
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn get_books_filters_pdf_and_djvu_when_pdf_disabled() {
+        use crate::settings::{is_pdf_enabled, set_pdf_enabled};
+
+        let temp_dir = TempDir::new().unwrap();
+        // Create dummy files so discover_books_in_dir picks them up
+        fs::write(temp_dir.path().join("novel.epub"), b"fake").unwrap();
+        fs::write(temp_dir.path().join("paper.pdf"), b"fake").unwrap();
+        fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+
+        let prev = is_pdf_enabled();
+        set_pdf_enabled(false);
+
+        let filtered = manager.get_books();
+        let formats: Vec<_> = filtered.iter().map(|b| b.format).collect();
+
+        set_pdf_enabled(prev);
+
+        assert!(
+            !formats.contains(&BookFormat::Pdf),
+            "PDF books should be filtered out when pdf is disabled"
+        );
+        assert!(
+            !formats.contains(&BookFormat::Djvu),
+            "DJVU books should be filtered out when pdf is disabled"
+        );
+        assert_eq!(filtered.len(), 1, "only the epub should remain");
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn get_books_filters_pdf_and_djvu_when_no_graphics_support() {
+        use crate::settings::{is_pdf_enabled, set_pdf_enabled};
+
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("novel.epub"), b"fake").unwrap();
+        fs::write(temp_dir.path().join("paper.pdf"), b"fake").unwrap();
+        fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+
+        // pdf_enabled is true (default) — simulating a user who has never toggled the setting.
+        // But the terminal doesn't support graphics, so PDFs/DJVUs should still be hidden.
+        let prev = is_pdf_enabled();
+        set_pdf_enabled(true);
+
+        let filtered = manager.get_books();
+        let formats: Vec<_> = filtered.iter().map(|b| b.format).collect();
+
+        set_pdf_enabled(prev);
+
+        // This must hold regardless of the pdf_enabled setting:
+        // a terminal without graphics cannot render PDFs/DJVUs.
+        assert!(
+            !formats.contains(&BookFormat::Pdf),
+            "PDF books should be filtered out when terminal has no graphics support"
+        );
+        assert!(
+            !formats.contains(&BookFormat::Djvu),
+            "DJVU books should be filtered out when terminal has no graphics support"
+        );
+        assert_eq!(filtered.len(), 1, "only the epub should remain");
     }
 
     #[test]

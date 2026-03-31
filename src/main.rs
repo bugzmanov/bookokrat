@@ -16,7 +16,7 @@ use bookokrat::event_source::KeyboardEventSource;
 #[cfg(feature = "pdf")]
 use bookokrat::inputs::UnifiedEventSource;
 use bookokrat::library;
-use bookokrat::main_app::{App, run_app_with_event_source};
+use bookokrat::main_app::{App, run_app_with_event_source, should_auto_load_recent};
 #[cfg(feature = "pdf")]
 use bookokrat::main_app::{
     set_kitty_delete_range_support_override, set_kitty_shm_support_override,
@@ -204,7 +204,11 @@ fn main() -> Result<()> {
             }
         });
     // In test mode: no auto-load, ephemeral bookmarks
-    let auto_load_recent = args.file_path.is_none() && !args.test_mode;
+    let auto_load_recent = should_auto_load_recent(
+        args.file_path.as_deref(),
+        args.test_mode,
+        args.continue_reading,
+    );
     let (bookmark_file, comments_dir) = if args.test_mode {
         (None, None)
     } else if let Ok(ref paths) = lib_paths {
