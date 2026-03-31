@@ -297,6 +297,14 @@ pub enum AppAction {
     Quit,
 }
 
+pub fn should_auto_load_recent(
+    file_path: Option<&str>,
+    test_mode: bool,
+    continue_reading: bool,
+) -> bool {
+    file_path.is_none() && !test_mode && !continue_reading
+}
+
 #[cfg(feature = "pdf")]
 struct PdfEventResult {
     handled: bool,
@@ -595,10 +603,17 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
-        let book_manager = match book_directory {
+        let mut book_manager = match book_directory {
             Some(dir) => BookManager::new_with_directory(dir),
             None => BookManager::new(),
         };
+
+        #[cfg(feature = "pdf")]
+        let startup_caps = crate::terminal::detect_terminal_with_probe();
+        #[cfg(feature = "pdf")]
+        {
+            book_manager.supports_graphics = startup_caps.supports_graphics;
+        }
 
         let navigation_panel = NavigationPanel::new(&book_manager);
         #[cfg(any(test, feature = "test-utils"))]
@@ -643,9 +658,6 @@ impl App {
         } else {
             Rect::new(0, 0, 80, 24)
         };
-
-        #[cfg(feature = "pdf")]
-        let startup_caps = crate::terminal::detect_terminal_with_probe();
 
         let mut app = Self {
             book_manager,
@@ -1234,6 +1246,7 @@ impl App {
             None => crate::terminal::detect_terminal_with_probe(),
         };
         self.pdf_supports_graphics = caps.supports_graphics;
+        self.book_manager.supports_graphics = caps.supports_graphics;
         self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
 
         if let Some(reason) = caps.pdf.blocked_reason.as_ref() {
@@ -7039,12 +7052,18 @@ mod tests {
             app.save_bookmark_with_throttle(true);
         }
 
-        // --- Session 2: `bookokrat -c` ---
+        // --- Session 2: simulate `bookokrat -c` startup from main.rs ---
         {
+            let auto_load_recent = should_auto_load_recent(None, false, true);
+            assert!(
+                !auto_load_recent,
+                "`bookokrat -c` must skip the home-library auto-open path"
+            );
+
             let mut app = App::new_with_config(
                 Some(dir.path().to_str().unwrap()),
                 Some(home_bm_path.to_str().unwrap()),
-                false,
+                auto_load_recent,
                 None,
                 Some(dir.path().join("img_cache2")),
             );
@@ -7052,9 +7071,13 @@ mod tests {
             let recent = crate::library::find_most_recent_book_in(&libraries_dir)
                 .expect("should find book_b");
 
-            // The fix: open with source_bookmarks so context_override is set
             app.open_book_for_reading_with_source_bookmarks(&recent.path, &recent.source_bookmarks)
                 .unwrap();
+            assert_eq!(
+                app.navigation_panel.current_book_path.as_deref(),
+                Some(book_b_abs.to_str().unwrap()),
+                "`bookokrat -c` should reopen the cross-library book"
+            );
             app.save_bookmark_with_throttle(true);
         }
 

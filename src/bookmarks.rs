@@ -330,6 +330,7 @@ impl Bookmarks {
             bookmark.book_title = book_title;
             bookmark.book_author = book_author;
             bookmark.absolute_path = absolute_path;
+            bookmark.last_read = chrono::Utc::now();
             if total_chapters.is_some() {
                 bookmark.total_chapters = total_chapters;
             }
@@ -490,6 +491,49 @@ mod tests {
         let bookmark = bookmarks.get_bookmark(path).unwrap();
         assert_eq!(bookmark.book_title.as_deref(), Some("Title"));
         assert_eq!(bookmark.absolute_path.as_deref(), Some("/abs/book.epub"));
+    }
+
+    #[test]
+    fn save_initial_bookmark_refreshes_last_read_for_existing_entry() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let path = "./book.epub";
+
+        bookmarks.save_initial_bookmark(
+            path,
+            "ch1".to_string(),
+            Some(0),
+            Some(10),
+            None,
+            Some("Title".to_string()),
+            None,
+            Some("/abs/book.epub".to_string()),
+        );
+
+        let first_last_read = bookmarks.get_bookmark(path).unwrap().last_read;
+        let refreshed_last_read = loop {
+            bookmarks.save_initial_bookmark(
+                path,
+                "ch2".to_string(),
+                Some(1),
+                Some(10),
+                None,
+                Some("Updated Title".to_string()),
+                None,
+                Some("/abs/book.epub".to_string()),
+            );
+
+            let bookmark = bookmarks.get_bookmark(path).unwrap();
+            if bookmark.last_read > first_last_read {
+                break bookmark.last_read;
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+
+        let bookmark = bookmarks.get_bookmark(path).unwrap();
+        assert!(refreshed_last_read > first_last_read);
+        assert_eq!(bookmark.book_title.as_deref(), Some("Updated Title"));
+        assert_eq!(bookmark.chapter_index, Some(0));
     }
 
     /// Opening a book from "All Libraries" must NOT create a bookmark entry
