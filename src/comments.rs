@@ -347,6 +347,8 @@ pub struct Comment {
     pub updated_at: DateTime<Utc>,
     /// The quoted/selected text that this comment refers to (primarily for PDF)
     pub quoted_text: Option<String>,
+    /// When true, this is a highlight-only annotation (no comment text, no quote block)
+    pub highlight_only: Option<bool>,
 }
 
 /// Serde representation for Text CommentTarget (EPUB format with node_index + subtarget)
@@ -370,6 +372,8 @@ struct CommentTextSerde {
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quoted_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_only: Option<bool>,
 }
 
 /// Modern format for PDF comments
@@ -385,6 +389,8 @@ struct CommentPdfSerde {
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quoted_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight_only: Option<bool>,
 }
 
 /// Legacy modern format (has node_index but no target_type, assumed to be Text)
@@ -471,6 +477,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
             content: legacy.content,
             updated_at: legacy.updated_at,
             quoted_text: None,
+            highlight_only: None,
         }
     }
 }
@@ -484,6 +491,7 @@ impl From<CommentLegacyCodeBlockSerde> for Comment {
             content: legacy.content,
             updated_at: legacy.updated_at,
             quoted_text: None,
+            highlight_only: None,
         }
     }
 }
@@ -500,6 +508,7 @@ impl From<CommentModernLegacySerde> for Comment {
             content: modern.content,
             updated_at: modern.updated_at,
             quoted_text: None,
+            highlight_only: None,
         }
     }
 }
@@ -516,6 +525,7 @@ impl From<CommentTextSerde> for Comment {
             content: text.content,
             updated_at: text.updated_at,
             quoted_text: text.quoted_text,
+            highlight_only: text.highlight_only,
         }
     }
 }
@@ -532,6 +542,7 @@ impl From<CommentPdfSerde> for Comment {
             content: pdf.content,
             updated_at: pdf.updated_at,
             quoted_text: pdf.quoted_text,
+            highlight_only: pdf.highlight_only,
         }
     }
 }
@@ -557,6 +568,7 @@ impl Serialize for Comment {
                     content: self.content.clone(),
                     updated_at: self.updated_at,
                     quoted_text: self.quoted_text.clone(),
+                    highlight_only: self.highlight_only,
                 };
                 serde.serialize(serializer)
             }
@@ -570,6 +582,7 @@ impl Serialize for Comment {
                     content: self.content.clone(),
                     updated_at: self.updated_at,
                     quoted_text: self.quoted_text.clone(),
+                    highlight_only: self.highlight_only,
                 };
                 serde.serialize(serializer)
             }
@@ -606,6 +619,7 @@ impl Comment {
             content,
             updated_at,
             quoted_text: None,
+            highlight_only: None,
         }
     }
 
@@ -623,7 +637,28 @@ impl Comment {
             content,
             updated_at,
             quoted_text,
+            highlight_only: None,
         }
+    }
+
+    pub fn new_highlight(
+        chapter_href: String,
+        target: CommentTarget,
+        updated_at: DateTime<Utc>,
+    ) -> Self {
+        Self {
+            id: generate_comment_id(),
+            chapter_href,
+            target,
+            content: String::new(),
+            updated_at,
+            quoted_text: None,
+            highlight_only: Some(true),
+        }
+    }
+
+    pub fn is_highlight_only(&self) -> bool {
+        self.highlight_only.unwrap_or(false)
     }
 
     /// Returns the node index for Text targets, or None for Pdf targets

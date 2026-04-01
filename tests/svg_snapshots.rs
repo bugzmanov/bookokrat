@@ -175,6 +175,7 @@ fn seed_sample_comments(app: &mut App) {
         content: "Launch plan looks solid.".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.testing_add_comment(Comment {
@@ -184,6 +185,7 @@ fn seed_sample_comments(app: &mut App) {
         content: "Need to revisit risk section.".to_string(),
         updated_at: base_time + chrono::Duration::minutes(5),
         quoted_text: None,
+        highlight_only: None,
     });
 
     if app
@@ -198,6 +200,7 @@ fn seed_sample_comments(app: &mut App) {
                 content: "Great anecdote here.".to_string(),
                 updated_at: base_time + chrono::Duration::minutes(10),
                 quoted_text: None,
+                highlight_only: None,
             });
         }
         let _ = app.navigate_chapter_relative(ChapterDirection::Previous);
@@ -378,6 +381,7 @@ fn test_inline_comment_rendering_svg() {
         content: "Title comment here".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Comment on first paragraph (node 1) - underline "First paragraph content here that is long" (chars 0-40)
@@ -388,6 +392,7 @@ fn test_inline_comment_rendering_svg() {
         content: "Paragraph comment here".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Switch to content panel to see the rendered text with comments
@@ -413,6 +418,90 @@ fn test_inline_comment_rendering_svg() {
         std::path::Path::new("tests/snapshots/inline_comment_rendering.svg"),
         "test_inline_comment_rendering_svg",
         create_test_failure_handler("test_inline_comment_rendering_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_highlight_vs_comment_rendering_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+
+    let html_content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Highlight Test</title></head>
+<body>
+    <h1>Highlight Test</h1>
+    <p>This paragraph has a highlight only, no comment text below it.</p>
+    <p>This paragraph has a regular comment with text shown below.</p>
+    <p>Third paragraph has no annotations at all.</p>
+</body>
+</html>"#;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "highlight_test.html".to_string());
+
+    // Highlight-only on first paragraph (node 1) - underline "has a highlight" (chars 15-30)
+    app.testing_add_comment(Comment {
+        id: "highlight-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::paragraph(1, Some((15, 30))),
+        content: String::new(),
+        updated_at: base_time,
+        quoted_text: None,
+        highlight_only: Some(true),
+    });
+
+    // Regular comment on second paragraph (node 2) - underline "has a regular" (chars 15-28)
+    app.testing_add_comment(Comment {
+        id: "comment-1".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::paragraph(2, Some((15, 28))),
+        content: "This is a regular comment.".to_string(),
+        updated_at: base_time,
+        quoted_text: None,
+        highlight_only: None,
+    });
+
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_highlight_vs_comment_rendering.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/highlight_vs_comment_rendering.svg"),
+        "test_highlight_vs_comment_rendering_svg",
+        create_test_failure_handler("test_highlight_vs_comment_rendering_svg"),
     );
 }
 
@@ -498,6 +587,7 @@ fn test_list_comment_rendering_svg() {
         content: "Unordered list comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Comment on second item of ordered list (node 1, item_index 1)
@@ -515,6 +605,7 @@ fn test_list_comment_rendering_svg() {
         content: "Ordered list comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Comment on second definition (node 2, item_index 1, is_term=false)
@@ -532,6 +623,7 @@ fn test_list_comment_rendering_svg() {
         content: "Definition list comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -630,6 +722,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         content: "Quote comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Comment on single line in code block (node 1, line 2 only - "let x = 42;")
@@ -640,6 +733,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         content: "Single line code comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     // Comment on multiple lines in code block (node 1, lines 3-4 - "let y" and "println")
@@ -650,6 +744,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         content: "Multi-line code comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -770,6 +865,7 @@ fn test_list_comment_rendering_complex_svg() {
         content: "Nested list comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.testing_add_comment(Comment {
@@ -786,6 +882,7 @@ fn test_list_comment_rendering_complex_svg() {
         content: "Second paragraph comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.testing_add_comment(Comment {
@@ -802,6 +899,7 @@ fn test_list_comment_rendering_complex_svg() {
         content: "Second and third paragraph comment".to_string(),
         updated_at: base_time,
         quoted_text: None,
+        highlight_only: None,
     });
 
     app.focused_panel = FocusedPanel::Main(MainPanel::Content);
@@ -4786,6 +4884,7 @@ fn test_list_comment_target_stable_in_zen_margin_svg() {
             content: format!("Comment on {needle}"),
             updated_at: base_time,
             quoted_text: None,
+            highlight_only: None,
         });
     }
 

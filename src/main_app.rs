@@ -5284,6 +5284,14 @@ impl App {
                         self.text_reader.clear_count();
                         return None;
                     }
+                    KeyCode::Char('m') => {
+                        if self.text_reader.start_highlight() {
+                            debug!("Added highlight from visual selection");
+                            self.show_info("Highlighted");
+                        }
+                        self.text_reader.clear_count();
+                        return None;
+                    }
                     KeyCode::Char('d') => {
                         // Delete annotation on visual selection
                         match self.text_reader.delete_comment_at_cursor() {
@@ -5565,6 +5573,15 @@ impl App {
                     && self.text_reader.start_comment_input()
                 {
                     debug!("Started comment input mode");
+                }
+            }
+            KeyCode::Char('m') => {
+                if (self.text_reader.has_text_selection()
+                    || self.text_reader.is_visual_mode_active())
+                    && self.text_reader.start_highlight()
+                {
+                    debug!("Added highlight");
+                    self.show_info("Highlighted");
                 }
             }
             KeyCode::Char('c') => {

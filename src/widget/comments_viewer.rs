@@ -1248,6 +1248,8 @@ impl CommentsViewer {
                     timestamp
                 )
             }
+        } else if comment.is_highlight_only() {
+            format!("Highlight // {timestamp}")
         } else {
             format!("Note // {timestamp}")
         };

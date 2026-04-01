@@ -141,6 +141,60 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         false
     }
 
+    /// Add a highlight (underline-only annotation with no comment text) on the current selection
+    pub fn start_highlight(&mut self) -> bool {
+        let selection_points = if self.has_text_selection() {
+            self.text_selection
+                .get_selection_range()
+                .map(|(start, end)| self.normalize_selection_points(&start, &end))
+        } else if self.is_visual_mode_active() {
+            self.get_visual_selection_range()
+                .map(|(start_line, start_col, end_line, end_col)| {
+                    let start = SelectionPoint {
+                        line: start_line,
+                        column: start_col,
+                    };
+                    let end = SelectionPoint {
+                        line: end_line,
+                        column: end_col,
+                    };
+                    self.normalize_selection_points(&start, &end)
+                })
+        } else {
+            None
+        };
+
+        let Some((norm_start, norm_end)) = selection_points else {
+            return false;
+        };
+
+        let Some(target) = self.compute_selection_target(&norm_start, &norm_end) else {
+            return false;
+        };
+
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut comments) = comments_arc.lock() {
+                if let Some(chapter_file) = &self.current_chapter_file {
+                    use chrono::Utc;
+                    let comment = Comment::new_highlight(chapter_file.clone(), target, Utc::now());
+                    if let Err(e) = comments.add_comment(comment) {
+                        warn!("Failed to add highlight: {e}");
+                        return false;
+                    }
+                    debug!("Added highlight");
+                }
+            }
+        }
+
+        self.text_selection.clear_selection();
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+        true
+    }
+
     fn init_comment_textarea(&mut self, target: CommentTarget, start_line: usize, end_line: usize) {
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("Type your comment here...");
@@ -429,6 +483,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             comment_id: target.comment_id,
                         });
                     }
+                } else {
+                    let mut results = Vec::new();
+                    self.find_highlights_on_line(line, &mut results);
+                    if let Some(first) = results.into_iter().next() {
+                        return Some(first);
+                    }
                 }
             }
         }
@@ -468,12 +528,46 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+                        // Check for highlight-only comments on this line via canonical position
+                        self.find_highlights_on_line(line, &mut results);
+                    }
                 }
             }
         }
 
         results
+    }
+
+    /// Find highlight-only comments whose word range overlaps a rendered line's canonical range
+    fn find_highlights_on_line(&self, line: &RenderedLine, results: &mut Vec<CommentSelection>) {
+        let Some(canonical_start) = line.canonical_content_start else {
+            return;
+        };
+        let Some(node_idx) = line.node_index else {
+            return;
+        };
+        let content_len = line
+            .raw_text
+            .chars()
+            .count()
+            .saturating_sub(line.content_column_start);
+        let canonical_end = canonical_start + content_len;
+
+        for comment in self.get_node_comments(Some(node_idx)) {
+            if !comment.is_highlight_only() {
+                continue;
+            }
+            if let Some((wr_start, wr_end)) = comment.target.word_range() {
+                if canonical_start < wr_end && canonical_end > wr_start {
+                    if !results.iter().any(|entry| entry.comment_id == comment.id) {
+                        results.push(CommentSelection {
+                            comment_id: comment.id.clone(),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     fn inline_code_comment_hit(
@@ -643,7 +737,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or_default()
     }
 
-    /// Get annotation (word) ranges from comments for a node - used for underline styling
+    /// Get annotation (word) ranges from all comments/highlights for a node - used for underline styling
     pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
@@ -779,6 +873,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         if !comment.is_paragraph_comment() {
+            return;
+        }
+
+        // Highlights have no quote block — only the underline
+        if comment.is_highlight_only() {
             return;
         }
 

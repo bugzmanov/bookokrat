@@ -654,6 +654,7 @@ impl PdfReaderState {
                     'p' => Some(InputAction::ToggleProfiling),
                     'x' => Some(InputAction::DumpDebugState),
                     'a' => self.start_comment_input(),
+                    'm' => self.start_highlight(),
                     'z' if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.reset_zoom_to_fit()
                     }
@@ -3292,6 +3293,47 @@ impl PdfReaderState {
         self.comment_input.read_only = false;
 
         Some(InputAction::Redraw)
+    }
+
+    fn start_highlight(&mut self) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Highlights are not supported in this terminal".to_string());
+            return Some(InputAction::Redraw);
+        }
+
+        let (target, quoted_text) = if self.normal_mode.is_visual_active() {
+            let target = self.comment_target_from_visual();
+            let text = self.extract_visual_text();
+            (target, text)
+        } else if self.selection.has_selection() {
+            let target = self.comment_target_from_selection();
+            let text = self.extract_selection_text();
+            (target, text)
+        } else {
+            (None, None)
+        };
+
+        let target = target?;
+
+        if let Some(comments_arc) = &self.book_comments {
+            if let Ok(mut locked) = comments_arc.lock() {
+                use chrono::Utc;
+                let mut comment =
+                    Comment::new_highlight(self.comments_doc_id.clone(), target, Utc::now());
+                comment.quoted_text = quoted_text;
+                let _ = locked.add_comment(comment);
+            }
+        }
+
+        self.normal_mode.exit_visual();
+        self.selection.clear();
+        self.refresh_comment_rects();
+        self.force_redraw();
+        let cursor_rect = self.get_cursor_rect();
+        Some(InputAction::CommentSaved {
+            rects: self.comment_rects.clone(),
+            cursor_rect,
+        })
     }
 
     fn handle_comment_input_key(&mut self, key: KeyEvent) -> Option<InputAction> {
