@@ -143,6 +143,11 @@ impl RenderService {
         }
 
         let parent = doc_path.parent()?;
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
         let target_name = doc_path.file_name()?.to_owned();
         let last_reload = Arc::new(Mutex::new(Instant::now()));
         let generation = reload_generation.clone();
