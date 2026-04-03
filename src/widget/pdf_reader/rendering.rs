@@ -1469,6 +1469,19 @@ impl PdfReaderState {
                     cell_size.width,
                     actual_pw,
                 );
+                log::info!(
+                    "DIAG single_page: page={} cell_size={}x{} pixel={}x{} zoom={:.3} dest={}x{} img_area={}x{}+{}+{} display_cols={} display_rows={} display_offset={}x{} source_rect=({},{},{},{}) branch={}",
+                    current_page,
+                    cell_size.width, cell_size.height,
+                    rendered_page.pixel_w.unwrap_or(0), rendered_page.pixel_h.unwrap_or(0),
+                    zoom_factor,
+                    dest_w, dest_h,
+                    img_area.width, img_area.height, img_area.x, img_area.y,
+                    display_cols, display_rows,
+                    display_x_offset, display_y_offset,
+                    sx, source_y_px, sw, visible_source_h_px,
+                    if dest_w <= img_area.width { "fits" } else { "clipped" },
+                );
                 DisplayLocation {
                     x: sx,
                     y: source_y_px,

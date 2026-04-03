@@ -446,6 +446,19 @@ pub fn render_page(
 
     let spec = RasterSpec::compute(page_bounds, viewport_px, params.scale, cell_dims);
 
+    log::info!(
+        "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
+        page_num,
+        page_bounds.0, page_bounds.1,
+        viewport_px.0, viewport_px.1,
+        params.scale,
+        params.cell_size.width, params.cell_size.height,
+        spec.mag,
+        spec.output_width, spec.output_height,
+        (spec.output_width / f32::from(params.cell_size.width)) as u16,
+        (spec.output_height / f32::from(params.cell_size.height)) as u16,
+    );
+
     let rgb = Colorspace::device_rgb();
     let mut pixmap = page.to_pixmap(&spec.transform, &rgb, false, false)?;
     let themed_rendering = params.black >= 0 && params.white >= 0;
