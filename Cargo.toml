@@ -60,7 +60,7 @@ arboard = { version = "3.4", features = ["wayland-data-control"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tempfile = "3.8"
 # Restrict image formats to reduce build time; enable more via features below.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 fast_image_resize = "3.0"
 imagesize = "0.13"
 resvg = { version = "0.45.1", optional = true }
