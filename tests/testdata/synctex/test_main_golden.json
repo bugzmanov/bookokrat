@@ -1,0 +1,132 @@
+{
+  "description": "Golden snapshot for test_main.tex - 3 pages, single input file, sections/paragraphs/formula. Generated with synctex CLI v1.5 from TeX Live 2026.",
+  "source_file": "test_main.tex",
+  "forward_search": [
+    {
+      "description": "Section header on page 1 (line 6)",
+      "query": { "file": "test_main.tex", "line": 6, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 83.955154,
+        "W": 275.527557,
+        "H": 11.955153
+      }
+    },
+    {
+      "description": "First paragraph on page 1 (line 8)",
+      "query": { "file": "test_main.tex", "line": 8, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 112.564522,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Second paragraph on page 1 (line 11)",
+      "query": { "file": "test_main.tex", "line": 11, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 141.456192,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Section header on page 2 (line 15)",
+      "query": { "file": "test_main.tex", "line": 15, "column": 1 },
+      "expected": {
+        "page": 2,
+        "h": 71.999985,
+        "v": 83.955154,
+        "W": 275.527557,
+        "H": 11.955153
+      }
+    },
+    {
+      "description": "Text on page 2 (line 17)",
+      "query": { "file": "test_main.tex", "line": 17, "column": 1 },
+      "expected": {
+        "page": 2,
+        "h": 71.999985,
+        "v": 112.564522,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Formula line on page 2 (line 19)",
+      "query": { "file": "test_main.tex", "line": 19, "column": 1 },
+      "expected": {
+        "page": 2,
+        "h": 71.999985,
+        "v": 124.685760,
+        "W": 275.527557,
+        "H": 9.474739
+      }
+    },
+    {
+      "description": "Last paragraph on page 2 (line 21)",
+      "query": { "file": "test_main.tex", "line": 21, "column": 1 },
+      "expected": {
+        "page": 2,
+        "h": 71.999985,
+        "v": 141.456192,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Section header on page 3 (line 25)",
+      "query": { "file": "test_main.tex", "line": 25, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 83.955154,
+        "W": 275.527557,
+        "H": 11.955153
+      }
+    },
+    {
+      "description": "Text on page 3 (line 27)",
+      "query": { "file": "test_main.tex", "line": 27, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 112.564522,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    }
+  ],
+  "inverse_search": [
+    {
+      "description": "Page 1 section header area",
+      "query": { "page": 1, "x": 100.0, "y": 84.0 },
+      "expected": { "file": "test_main.tex", "line": 6 }
+    },
+    {
+      "description": "Page 1 first paragraph",
+      "query": { "page": 1, "x": 150.0, "y": 112.0 },
+      "expected": { "file": "test_main.tex", "line": 8 }
+    },
+    {
+      "description": "Page 2 first text",
+      "query": { "page": 2, "x": 150.0, "y": 112.0 },
+      "expected": { "file": "test_main.tex", "line": 17 }
+    },
+    {
+      "description": "Page 2 formula",
+      "query": { "page": 2, "x": 150.0, "y": 125.0 },
+      "expected": { "file": "test_main.tex", "line": 19 }
+    },
+    {
+      "description": "Page 3 first text",
+      "query": { "page": 3, "x": 150.0, "y": 112.0 },
+      "expected": { "file": "test_main.tex", "line": 27 }
+    }
+  ]
+}

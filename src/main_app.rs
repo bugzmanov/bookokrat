@@ -381,6 +381,15 @@ pub struct App {
     pdf_supports_graphics: bool,
     #[cfg(feature = "pdf")]
     pdf_supports_scroll_mode: bool,
+    // SyncTeX support (for LaTeX ↔ PDF synchronization)
+    #[cfg(feature = "pdf")]
+    synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
+    #[cfg(feature = "pdf")]
+    #[allow(dead_code)]
+    // Held alive for its Drop cleanup (stops listener thread, removes socket)
+    synctex_listener: Option<crate::pdf::synctex::SyncTexListener>,
+    #[cfg(feature = "pdf")]
+    synctex_rx: Option<flume::Receiver<crate::pdf::synctex::SyncTexCommand>>,
     last_terminal_title: Option<String>,
 }
 
@@ -725,6 +734,12 @@ impl App {
             pdf_supports_graphics: startup_caps.supports_graphics,
             #[cfg(feature = "pdf")]
             pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
+            #[cfg(feature = "pdf")]
+            synctex_scanner: None,
+            #[cfg(feature = "pdf")]
+            synctex_listener: None,
+            #[cfg(feature = "pdf")]
+            synctex_rx: None,
             last_terminal_title: None,
         };
 
@@ -1073,6 +1088,9 @@ impl App {
             self.pdf_conversion_rx = None;
             self.pdf_pending_display = None;
             self.pdf_document_path = None;
+            self.synctex_scanner = None;
+            self.synctex_listener = None; // Drop stops thread, removes socket
+            self.synctex_rx = None;
         }
 
         let mut doc = self.book_manager.load_epub(path).map_err(|e| {
@@ -1477,11 +1495,49 @@ impl App {
 
         self.pdf_service = Some(service);
         self.pdf_reader = Some(pdf_reader);
-        self.pdf_document_path = Some(doc_path);
+        self.pdf_document_path = Some(doc_path.clone());
         self.pdf_font_size = cell_size;
         self.pdf_picker = pdf_picker;
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
+
+        // Load SyncTeX data if a companion .synctex.gz file exists
+        self.synctex_scanner = None;
+        self.synctex_listener = None;
+        self.synctex_rx = None;
+        if let Some(synctex_path) =
+            crate::pdf::synctex::SyncTexScanner::find_synctex_file(&doc_path)
+        {
+            match crate::pdf::synctex::SyncTexScanner::open(&synctex_path) {
+                Ok(scanner) => {
+                    log::info!("Loaded SyncTeX data from {}", synctex_path.display());
+                    let scanner = std::sync::Arc::new(scanner);
+                    let socket_path = crate::pdf::synctex::synctex_socket_path(&doc_path);
+                    let (tx, rx) = flume::unbounded();
+                    match crate::pdf::synctex::SyncTexListener::start(socket_path.clone(), tx) {
+                        Ok(listener) => {
+                            log::info!("SyncTeX socket: {}", socket_path.display());
+                            self.synctex_listener = Some(listener);
+                            self.synctex_rx = Some(rx);
+                            self.show_info(format!(
+                                "SyncTeX enabled (Ctrl+click or gd to jump to source, \\lv from editor)"
+                            ));
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to start SyncTeX listener: {e}");
+                            self.show_info("SyncTeX loaded but socket listener failed");
+                        }
+                    }
+                    self.synctex_scanner = Some(scanner.clone());
+                    if let Some(ref mut reader) = self.pdf_reader {
+                        reader.synctex_scanner = Some(scanner);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Failed to load SyncTeX data: {e}");
+                }
+            }
+        }
 
         // Sync initial page and scale to service so first render requests the correct page
         // at the correct zoom level. Use set_current_page_no_render to avoid triggering
@@ -4972,6 +5028,9 @@ impl App {
                                 self.pdf_conversion_rx = None;
                                 self.pdf_pending_display = None;
                                 self.pdf_document_path = None;
+                                self.synctex_scanner = None;
+                                self.synctex_listener = None;
+                                self.synctex_rx = None;
                                 // Clear current book path since the PDF is no longer available
                                 self.navigation_panel.current_book_path = None;
                                 // Switch back to book list
@@ -6091,6 +6150,7 @@ impl App {
         };
 
         let responses = service.poll_responses();
+        let render_gen = service.render_generation();
         let Some(pdf_reader) = self.pdf_reader.as_mut() else {
             return false;
         };
@@ -6102,6 +6162,7 @@ impl App {
             self.pdf_conversion_rx.as_ref(),
             self.pdf_picker.as_ref(),
             &mut self.notifications,
+            render_gen,
         );
 
         // Clear waiting flags when a frame arrives
@@ -6174,6 +6235,15 @@ impl App {
         let doc_info = service.document_info().cloned();
         let doc_path = service.state().doc_path.clone();
         let page_count = doc_info.as_ref().map_or(0, |info| info.page_count);
+
+        // Skip reload if the PDF appears truncated/corrupt (e.g., caught mid-write
+        // during LaTeX compilation). The watcher will fire again once the write
+        // completes.
+        if page_count == 0 {
+            log::info!("Skipping reload: PDF has 0 pages (likely mid-write)");
+            return;
+        }
+
         let doc_title = doc_info.as_ref().and_then(|info| info.title.clone());
         let doc_author = doc_info.as_ref().and_then(|info| info.author.clone());
 
@@ -6201,12 +6271,13 @@ impl App {
             .rendered
             .resize_with(page_count, crate::widget::pdf_reader::RenderedInfo::default);
 
-        let target_page = if page_count == 0 {
-            0
-        } else {
-            pdf_reader.page.min(page_count - 1)
-        };
-        pdf_reader.reset_view_after_reload(target_page);
+        // Clamp page to new page count but preserve scroll position.
+        // Do NOT call reset_view_after_reload / set_page — those reset the
+        // vertical scroll offset, which is exactly what we want to keep.
+        if page_count > 0 {
+            pdf_reader.page = pdf_reader.page.min(page_count - 1);
+        }
+        pdf_reader.last_render.rect = Rect::default();
 
         // Invalidate Kitty images
         pdf_reader.invalidate_kitty_images();
@@ -6234,6 +6305,23 @@ impl App {
             }
         }
 
+        // Reload SyncTeX data (the .synctex.gz may have been regenerated)
+        if let Some(synctex_path) =
+            crate::pdf::synctex::SyncTexScanner::find_synctex_file(&doc_path)
+        {
+            match crate::pdf::synctex::SyncTexScanner::open(&synctex_path) {
+                Ok(scanner) => {
+                    let scanner = std::sync::Arc::new(scanner);
+                    self.synctex_scanner = Some(scanner.clone());
+                    pdf_reader.synctex_scanner = Some(scanner);
+                    log::info!("SyncTeX data reloaded");
+                }
+                Err(e) => {
+                    log::warn!("Failed to reload SyncTeX data: {e}");
+                }
+            }
+        }
+
         // HUD message
         pdf_reader.set_hud_message(
             "Document reloaded".to_string(),
@@ -6245,6 +6333,90 @@ impl App {
     #[cfg(not(feature = "pdf"))]
     pub fn poll_pdf_renders(&mut self) -> bool {
         false
+    }
+
+    /// Poll the synctex channel for commands from editors. Returns true if a command was processed.
+    #[cfg(feature = "pdf")]
+    fn poll_synctex_commands(&mut self) -> bool {
+        let Some(ref rx) = self.synctex_rx else {
+            return false;
+        };
+        // Drain all pending commands into a vec to avoid borrow conflict
+        let cmds: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        if cmds.is_empty() {
+            return false;
+        }
+        for cmd in cmds {
+            self.handle_synctex_command(cmd);
+        }
+        true
+    }
+
+    #[cfg(feature = "pdf")]
+    fn handle_synctex_command(&mut self, cmd: crate::pdf::synctex::SyncTexCommand) {
+        match cmd {
+            crate::pdf::synctex::SyncTexCommand::Forward { file, line, column } => {
+                let Some(ref scanner) = self.synctex_scanner else {
+                    log::warn!("SyncTeX forward search but no scanner loaded");
+                    self.show_info("SyncTeX: no synctex data loaded for this PDF");
+                    return;
+                };
+                let basename = std::path::Path::new(&file)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file.clone());
+                match scanner.forward_search(&file, line, column) {
+                    Some(result) => {
+                        // SyncTeX pages are 1-indexed, internal pages are 0-indexed
+                        let page_0 = result.page.saturating_sub(1);
+                        log::info!(
+                            "SyncTeX forward: {file}:{line} -> page {} (v={:.1})",
+                            result.page,
+                            result.v
+                        );
+                        self.navigate_pdf_to_page(page_0);
+                        self.show_info(format!(
+                            "SyncTeX: {basename}:{line} -> page {}",
+                            result.page
+                        ));
+                    }
+                    None => {
+                        log::warn!("SyncTeX forward search found no result for {file}:{line}");
+                        self.show_info(format!("SyncTeX: no match for {basename}:{line}"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Handle SyncTeX inverse search result: launch editor at the source location.
+    #[cfg(feature = "pdf")]
+    fn handle_synctex_inverse(&mut self, file: &str, line: u32) {
+        let basename = std::path::Path::new(file)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| file.to_string());
+
+        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+            let cmd = editor_cmd
+                .replace("{file}", file)
+                .replace("{line}", &line.to_string())
+                .replace("{column}", "0");
+            log::info!("SyncTeX inverse: launching editor: {cmd}");
+            match std::process::Command::new("sh").arg("-c").arg(&cmd).spawn() {
+                Ok(_) => {
+                    self.show_info(format!("SyncTeX: {basename}:{line}"));
+                }
+                Err(e) => {
+                    log::error!("Failed to launch synctex editor: {e}");
+                    self.show_info(format!("SyncTeX: failed to launch editor: {e}"));
+                }
+            }
+        } else {
+            self.show_info(format!(
+                "SyncTeX: {basename}:{line} (set synctex_editor in config to open editor)"
+            ));
+        }
     }
 
     /// Navigate PDF to a specific page (from TOC navigation)
@@ -6359,20 +6531,26 @@ impl App {
         }
 
         let outcome = if let Some(action) = response.action {
-            pdf_reader.apply_input_action(
-                action,
-                self.pdf_service.as_mut(),
-                self.pdf_conversion_tx.as_ref(),
-                &mut self.notifications,
-                self.current_context_override
-                    .as_mut()
-                    .map(LibraryContext::bookmarks_mut)
-                    .unwrap_or_else(|| self.home_context.bookmarks_mut()),
-                &mut self.last_bookmark_save,
-                &mut self.navigation_panel.table_of_contents,
-                toc_height,
-                &self.profiler,
-            )
+            // Intercept SyncTeX inverse search before apply_input_action
+            if let InputAction::SyncTexInverse { ref file, line } = action {
+                self.handle_synctex_inverse(file, line);
+                InputOutcome::None
+            } else {
+                pdf_reader.apply_input_action(
+                    action,
+                    self.pdf_service.as_mut(),
+                    self.pdf_conversion_tx.as_ref(),
+                    &mut self.notifications,
+                    self.current_context_override
+                        .as_mut()
+                        .map(LibraryContext::bookmarks_mut)
+                        .unwrap_or_else(|| self.home_context.bookmarks_mut()),
+                    &mut self.last_bookmark_save,
+                    &mut self.navigation_panel.table_of_contents,
+                    toc_height,
+                    &self.profiler,
+                )
+            }
         } else {
             InputOutcome::None
         };
@@ -6923,6 +7101,10 @@ where
                 needs_redraw = true;
             }
             if pdf_renders_ready {
+                needs_redraw = true;
+            }
+            #[cfg(feature = "pdf")]
+            if app.poll_synctex_commands() {
                 needs_redraw = true;
             }
             last_tick = std::time::Instant::now();

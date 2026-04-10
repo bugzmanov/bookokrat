@@ -150,6 +150,11 @@ pub struct Settings {
 
     #[serde(default)]
     pub lookup_display: LookupDisplay,
+
+    /// Editor command for SyncTeX inverse search (PDF → source).
+    /// Placeholders: {file}, {line}, {column}
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synctex_editor: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -187,6 +192,7 @@ impl Default for Settings {
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
             nav_panel_width: None,
+            synctex_editor: None,
         }
     }
 }
@@ -561,6 +567,16 @@ const LOOKUP_COMMAND_TEMPLATE: &str = r#"# =====================================
 #   lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
 #   lookup_display: fire_and_forget
 
+# ============================================================================
+# SyncTeX inverse search: editor command to run when you Ctrl+click or press
+# 'gd' on a PDF rendered from LaTeX. Placeholders: {file}, {line}, {column}
+#
+# Example: neovim via remote socket
+#   synctex_editor: "nvim --server /tmp/nvim.sock --remote-send ':e {file}<CR>:{line}<CR>'"
+#
+# Example: open in new terminal vim
+#   synctex_editor: "vim +{line} {file}"
+
 "#;
 
 // Public API for accessing/modifying settings
@@ -734,6 +750,10 @@ pub fn set_nav_panel_width(width: Option<u16>) {
         settings.nav_panel_width = width;
     }
     save_settings();
+}
+
+pub fn get_synctex_editor() -> Option<String> {
+    SETTINGS.read().ok().and_then(|s| s.synctex_editor.clone())
 }
 
 /// Called on app startup to fix incompatible settings when switching terminals

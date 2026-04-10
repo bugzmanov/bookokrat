@@ -42,6 +42,9 @@ pub struct RenderService {
     doc_info: Option<DocumentInfo>,
     reload_generation: Arc<AtomicU64>,
     last_applied_reload_generation: u64,
+    /// Render generation: bumped when render params change (viewport, zoom, theme).
+    /// Responses with a stale generation are discarded.
+    render_generation: u64,
     _watcher: Option<RecommendedWatcher>,
 }
 
@@ -128,6 +131,7 @@ impl RenderService {
             doc_info,
             reload_generation,
             last_applied_reload_generation: 0,
+            render_generation: 0,
             _watcher: None,
         }
     }
@@ -289,6 +293,12 @@ impl RenderService {
         &self.state
     }
 
+    /// Current render generation (for discarding stale responses)
+    #[must_use]
+    pub fn render_generation(&self) -> u64 {
+        self.render_generation
+    }
+
     /// Set the current page without triggering any render effects.
     /// Use this to sync the initial page before the first render.
     pub fn set_current_page_no_render(&mut self, page: usize) {
@@ -310,6 +320,7 @@ impl RenderService {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .invalidate_all();
                     self.prefetch_in_flight.clear();
+                    self.render_generation += 1;
                 }
 
                 Effect::InvalidatePage(page) => {
@@ -347,9 +358,12 @@ impl RenderService {
         let id = self.next_id();
         let params = self.state.render_params();
 
-        let _ = self
-            .request_tx
-            .send(RenderRequest::Page { id, page, params });
+        let _ = self.request_tx.send(RenderRequest::Page {
+            id,
+            page,
+            params,
+            render_generation: self.render_generation,
+        });
         self.pending_requests.insert(id, PendingRequest::Page(page));
         self.latest_page_request.insert(page, id);
         self.prefetch_in_flight.remove(&page);
@@ -384,9 +398,12 @@ impl RenderService {
         let id = self.next_id();
         let params = self.state.render_params();
 
-        let _ = self
-            .request_tx
-            .send(RenderRequest::Prefetch { id, page, params });
+        let _ = self.request_tx.send(RenderRequest::Prefetch {
+            id,
+            page,
+            params,
+            render_generation: self.render_generation,
+        });
         self.pending_requests
             .insert(id, PendingRequest::Prefetch(page));
         self.latest_page_request.insert(page, id);
@@ -702,6 +719,7 @@ mod tests {
                 doc_info,
                 reload_generation: Arc::new(AtomicU64::new(0)),
                 last_applied_reload_generation: 0,
+                render_generation: 0,
                 _watcher: None,
             },
             response_tx,
@@ -796,6 +814,7 @@ mod tests {
                 id,
                 page: 0,
                 data: test_page_data(0),
+                render_generation: 0,
             })
             .unwrap();
 

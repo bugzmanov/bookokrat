@@ -211,6 +211,7 @@ pub(crate) fn apply_render_responses(
     conversion_rx: Option<&flume::Receiver<Result<RenderedFrame, WorkerFault>>>,
     picker: Option<&crate::vendored::ratatui_image::picker::Picker>,
     notifications: &mut NotificationManager,
+    current_render_generation: u64,
 ) -> RenderUpdateResult {
     let mut updated = !responses.is_empty();
     let mut converted_frame_page = None;
@@ -219,7 +220,18 @@ pub(crate) fn apply_render_responses(
 
     for response in responses {
         match response {
-            RenderResponse::Page { page, data, .. } => {
+            RenderResponse::Page {
+                page,
+                data,
+                render_generation,
+                ..
+            } => {
+                if render_generation < current_render_generation {
+                    log::trace!(
+                        "Discarding stale page {page} (gen {render_generation} < current {current_render_generation})"
+                    );
+                    continue;
+                }
                 log::trace!("Received page {page} data from worker");
 
                 while pdf_reader.rendered.len() <= page {
@@ -227,12 +239,30 @@ pub(crate) fn apply_render_responses(
                 }
 
                 let info = &mut pdf_reader.rendered[page];
+
+                // If new page data has different cell dimensions than the
+                // existing Kitty image, the image is stale (rendered at a
+                // different viewport size). Drop it so the converter
+                // re-creates it from the new PageData.
+                let new_cell_size =
+                    CellSize::new(data.img_data.width_cell, data.img_data.height_cell);
+                if let Some(ref existing_img) = info.img {
+                    if existing_img.cell_dimensions() != new_cell_size {
+                        log::trace!(
+                            "Dropping stale image for page {page}: \
+                             old={}x{} new={}x{}",
+                            existing_img.cell_dimensions().width,
+                            existing_img.cell_dimensions().height,
+                            new_cell_size.width,
+                            new_cell_size.height
+                        );
+                        info.img = None;
+                    }
+                }
+
                 info.pixel_w = Some(data.img_data.width_px);
                 info.pixel_h = Some(data.img_data.height_px);
-                info.full_cell_size = Some(CellSize::new(
-                    data.img_data.width_cell,
-                    data.img_data.height_cell,
-                ));
+                info.full_cell_size = Some(new_cell_size);
                 info.scale_factor = Some(data.scale_factor);
                 info.requested_scale = Some(data.requested_scale);
                 info.render_area_width_cells = Some(data.render_area_width_cells);
@@ -445,6 +475,7 @@ mod tests {
             None,
             None,
             &mut notifications,
+            0,
         );
 
         assert!(
@@ -819,7 +850,25 @@ impl PdfReaderState {
         f.render_widget(content_block, area);
 
         if let Some(service) = service.as_deref_mut() {
+            let area_changed = service.state().area != inner_area;
             service.apply_command(Command::SetArea(inner_area));
+
+            // When viewport changed, clear all stale state:
+            // - Drop Kitty images rendered for the old viewport
+            // - Clear the converter's "already sent" tracker so it re-converts
+            //   pages with fresh PageData instead of skipping them
+            if area_changed {
+                for info in self.rendered.iter_mut() {
+                    if let Some(render_w) = info.render_area_width_cells {
+                        if render_w != inner_area.width {
+                            info.img = None;
+                        }
+                    }
+                }
+                if let Some(tx) = conversion_tx {
+                    let _ = tx.send(ConversionCommand::InvalidatePageCache);
+                }
+            }
         }
 
         let layout = RenderLayout {
@@ -1472,15 +1521,30 @@ impl PdfReaderState {
                 log::info!(
                     "DIAG single_page: page={} cell_size={}x{} pixel={}x{} zoom={:.3} dest={}x{} img_area={}x{}+{}+{} display_cols={} display_rows={} display_offset={}x{} source_rect=({},{},{},{}) branch={}",
                     current_page,
-                    cell_size.width, cell_size.height,
-                    rendered_page.pixel_w.unwrap_or(0), rendered_page.pixel_h.unwrap_or(0),
+                    cell_size.width,
+                    cell_size.height,
+                    rendered_page.pixel_w.unwrap_or(0),
+                    rendered_page.pixel_h.unwrap_or(0),
                     zoom_factor,
-                    dest_w, dest_h,
-                    img_area.width, img_area.height, img_area.x, img_area.y,
-                    display_cols, display_rows,
-                    display_x_offset, display_y_offset,
-                    sx, source_y_px, sw, visible_source_h_px,
-                    if dest_w <= img_area.width { "fits" } else { "clipped" },
+                    dest_w,
+                    dest_h,
+                    img_area.width,
+                    img_area.height,
+                    img_area.x,
+                    img_area.y,
+                    display_cols,
+                    display_rows,
+                    display_x_offset,
+                    display_y_offset,
+                    sx,
+                    source_y_px,
+                    sw,
+                    visible_source_h_px,
+                    if dest_w <= img_area.width {
+                        "fits"
+                    } else {
+                        "clipped"
+                    },
                 );
                 DisplayLocation {
                     x: sx,
@@ -1795,8 +1859,14 @@ impl PdfReaderState {
             .iter()
             .find_map(|page| page.img.as_ref().map(|img| img.cell_dimensions().height));
 
-        if reference_height.is_none() && zoom.global_scroll_offset > 0 {
-            zoom.global_scroll_offset = 0;
+        if reference_height.is_none() {
+            // No pages rendered yet. Preserve scroll offset so reload doesn't
+            // jump to the top. Return early with LOADING — page images will
+            // arrive soon and we'll re-render with the preserved offset.
+            if zoom.global_scroll_offset > 0 {
+                Self::render_loading_in(frame, img_area, palette);
+                return (DisplayBatch::Clear, Some(current_page_hint), Vec::new());
+            }
         }
         let scroll_offset = zoom.global_scroll_offset;
 

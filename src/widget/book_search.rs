@@ -384,12 +384,12 @@ impl BookSearch {
         }
 
         // Make the popup use most of the screen (90% width, 80% height)
-        let popup_width = ((area.width as f32 * 0.9) as u16).max(80);
-        let popup_height = ((area.height as f32 * 0.8) as u16).max(20);
+        let popup_width = ((area.width as f32 * 0.9) as u16).max(80).min(area.width);
+        let popup_height = ((area.height as f32 * 0.8) as u16).max(20).min(area.height);
 
         let popup_area = Rect {
-            x: (area.width - popup_width) / 2,
-            y: (area.height - popup_height) / 2,
+            x: area.width.saturating_sub(popup_width) / 2,
+            y: area.height.saturating_sub(popup_height) / 2,
             width: popup_width,
             height: popup_height,
         };

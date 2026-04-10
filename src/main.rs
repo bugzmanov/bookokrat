@@ -34,6 +34,9 @@ struct CliArgs {
     zen_mode: bool,
     test_mode: bool,
     continue_reading: bool,
+    /// SyncTeX forward search: "line:column:file" format (client mode, no TUI)
+    #[cfg(feature = "pdf")]
+    synctex_forward: Option<String>,
 }
 
 fn parse_args() -> Result<CliArgs> {
@@ -41,23 +44,37 @@ fn parse_args() -> Result<CliArgs> {
     let mut zen_mode = false;
     let mut test_mode = false;
     let mut continue_reading = false;
+    #[cfg(feature = "pdf")]
+    let mut synctex_forward = None;
 
-    for arg in std::env::args().skip(1) {
+    let mut args_iter = std::env::args().skip(1);
+    while let Some(arg) = args_iter.next() {
         match arg.as_str() {
             "--zen-mode" => zen_mode = true,
             "--test-mode" => test_mode = true,
             "--continue" | "-c" => continue_reading = true,
+            #[cfg(feature = "pdf")]
+            "--synctex-forward" => {
+                synctex_forward = args_iter.next();
+                if synctex_forward.is_none() {
+                    anyhow::bail!("--synctex-forward requires an argument: LINE:COLUMN:FILE");
+                }
+            }
             "--help" | "-h" => {
-                println!("Usage: bookokrat [FILE.epub] [--zen-mode] [--test-mode] [--continue]");
+                println!("Usage: bookokrat [FILE] [OPTIONS]");
                 println!();
                 println!("Options:");
                 println!(
-                    "  --continue, -c   Open the most recently read book across all libraries"
+                    "  --continue, -c                Open the most recently read book across all libraries"
                 );
-                println!("  --zen-mode       Start in zen mode (hide sidebar)");
-                println!("  --test-mode      Start in test mode");
-                println!("  --help, -h       Show this help message");
-                println!("  --version, -V    Show version");
+                println!("  --zen-mode                    Start in zen mode (hide sidebar)");
+                println!("  --test-mode                   Start in test mode");
+                #[cfg(feature = "pdf")]
+                println!(
+                    "  --synctex-forward LINE:COL:FILE  Forward search (send to running instance)"
+                );
+                println!("  --help, -h                    Show this help message");
+                println!("  --version, -V                 Show version");
                 std::process::exit(0);
             }
             "--version" | "-V" => {
@@ -81,6 +98,8 @@ fn parse_args() -> Result<CliArgs> {
         zen_mode,
         test_mode,
         continue_reading,
+        #[cfg(feature = "pdf")]
+        synctex_forward,
     })
 }
 
@@ -89,11 +108,61 @@ fn find_most_recent_book() -> Option<library::MostRecentBook> {
     library::find_most_recent_book_in(&libraries_dir)
 }
 
+/// Handle --synctex-forward: connect to a running instance's socket and send a forward search command.
+///
+/// Format: "LINE:COLUMN:FILE" (matches the Zathura/SumatraPDF convention)
+#[cfg(feature = "pdf")]
+fn handle_synctex_forward(spec: &str, pdf_file: Option<&str>) -> Result<()> {
+    use bookokrat::pdf::synctex;
+
+    // Parse "line:column:file"
+    let parts: Vec<&str> = spec.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        anyhow::bail!("Invalid --synctex-forward format: expected LINE:COLUMN:FILE, got '{spec}'");
+    }
+    let line: u32 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid line number: '{}'", parts[0]))?;
+    let column: u32 = parts[1]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid column number: '{}'", parts[1]))?;
+    let file = parts[2];
+
+    // Determine socket path from the PDF file argument
+    let pdf_path = pdf_file
+        .ok_or_else(|| anyhow::anyhow!("--synctex-forward requires a PDF file argument"))?;
+    let socket_path = synctex::synctex_socket_path(Path::new(pdf_path));
+
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "No running Bookokrat instance found for '{}' (expected socket at {})",
+            pdf_path,
+            socket_path.display()
+        );
+    }
+
+    match synctex::send_forward_command(&socket_path, file, line, column) {
+        Ok(response) => {
+            println!("{response}");
+            Ok(())
+        }
+        Err(e) => {
+            anyhow::bail!("SyncTeX forward search failed: {e}");
+        }
+    }
+}
+
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
     panic_handler::initialize_panic_handler();
 
     let args = parse_args()?;
+
+    // SyncTeX forward search client mode: send command to running instance and exit
+    #[cfg(feature = "pdf")]
+    if let Some(ref fwd) = args.synctex_forward {
+        return handle_synctex_forward(fwd, args.file_path.as_deref());
+    }
 
     // Resolve library directory from file argument or CWD
     let library_dir = args

@@ -703,6 +703,13 @@ impl PdfReaderState {
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Option<InputAction> {
+        // Ctrl+click: SyncTeX inverse search (jump to source)
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && mouse.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            return self.handle_synctex_ctrl_click(mouse.column, mouse.row);
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollRight => self.handle_mouse_scroll(mouse, ScrollDirection::Right),
             MouseEventKind::ScrollDown => self.handle_mouse_scroll(mouse, ScrollDirection::Down),
@@ -2002,6 +2009,7 @@ impl PdfReaderState {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
         if page != self.page {
             self.set_page(page);
@@ -4278,6 +4286,9 @@ impl PdfReaderState {
                 }
                 return Some(InputAction::CursorChanged(self.get_cursor_rect(), viewport));
             }
+            if c == 'd' {
+                return self.handle_synctex_normal_mode();
+            }
             return Some(InputAction::Redraw);
         }
 
@@ -4980,6 +4991,55 @@ impl PdfReaderState {
         self.page_search.prev_match();
         self.jump_to_current_search_match()
     }
+
+    // -- SyncTeX inverse search -----------------------------------------------
+
+    /// Handle Ctrl+click for SyncTeX inverse search.
+    fn handle_synctex_ctrl_click(&mut self, col: u16, row: u16) -> Option<InputAction> {
+        let (_, font_size) = self.coord_info?;
+        let point = self.terminal_to_selection_point(col, row, font_size)?;
+        self.synctex_inverse_from_pixel(point.pdf_x, point.pdf_y, point.page)
+    }
+
+    /// Handle `gd` in normal mode for SyncTeX inverse search.
+    fn handle_synctex_normal_mode(&self) -> Option<InputAction> {
+        if !self.normal_mode.active {
+            return None;
+        }
+        let cursor = &self.normal_mode.cursor;
+        let line_bounds = self.rendered.get(cursor.page)?.line_bounds.as_slice();
+        let line = line_bounds.get(cursor.line_idx)?;
+        let char_x = line
+            .chars
+            .get(cursor.char_idx)
+            .map(|ci| ci.x)
+            .unwrap_or(line.x0);
+        let y = (line.y0 + line.y1) / 2.0;
+        self.synctex_inverse_from_pixel(char_x, y, cursor.page)
+    }
+
+    /// Convert PDF pixel coordinates to PDF points and run inverse search.
+    fn synctex_inverse_from_pixel(
+        &self,
+        pdf_x: f32,
+        pdf_y: f32,
+        page: usize,
+    ) -> Option<InputAction> {
+        let scale = self
+            .rendered
+            .get(page)
+            .and_then(|r| r.scale_factor)
+            .unwrap_or(1.0);
+        let x_pts = pdf_x as f64 / scale as f64;
+        let y_pts = pdf_y as f64 / scale as f64;
+        // SyncTeX uses 1-indexed pages
+        let scanner = self.synctex_scanner.as_ref()?;
+        let result = scanner.inverse_search(page + 1, x_pts, y_pts)?;
+        Some(InputAction::SyncTexInverse {
+            file: result.file,
+            line: result.line,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5279,6 +5339,8 @@ impl PdfReaderState {
                 // Also trigger converter dump
                 send_conversion(crate::pdf::ConversionCommand::DumpState);
             }
+            // SyncTexInverse is handled by main_app, not here
+            InputAction::SyncTexInverse { .. } => {}
         }
 
         InputOutcome::None

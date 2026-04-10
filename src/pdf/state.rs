@@ -65,8 +65,14 @@ impl RenderState {
                 if self.area != area {
                     log::info!(
                         "DIAG SetArea: old={}x{}+{}+{} new={}x{}+{}+{} scale={:.3}",
-                        self.area.width, self.area.height, self.area.x, self.area.y,
-                        area.width, area.height, area.x, area.y,
+                        self.area.width,
+                        self.area.height,
+                        self.area.x,
+                        self.area.y,
+                        area.width,
+                        area.height,
+                        area.x,
+                        area.y,
                         self.scale,
                     );
                     self.area = area;
