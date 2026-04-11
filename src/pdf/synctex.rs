@@ -447,8 +447,45 @@ pub fn synctex_socket_path(pdf_path: &Path) -> PathBuf {
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string());
+    let safe_stem: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .take(16)
+        .collect();
+    let identity = normalized_pdf_identity(pdf_path);
+    let hash = stable_path_hash(identity.as_bytes());
     let dir = std::env::temp_dir();
-    dir.join(format!("bookokrat-synctex-{stem}.sock"))
+    dir.join(format!(
+        "bookokrat-stx-{}-{hash:016x}.sock",
+        if safe_stem.is_empty() {
+            "pdf"
+        } else {
+            safe_stem.as_str()
+        }
+    ))
+}
+
+fn normalized_pdf_identity(pdf_path: &Path) -> String {
+    let resolved = std::fs::canonicalize(pdf_path).unwrap_or_else(|_| {
+        if pdf_path.is_absolute() {
+            pdf_path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(pdf_path))
+                .unwrap_or_else(|_| pdf_path.to_path_buf())
+        }
+    });
+    resolved.to_string_lossy().into_owned()
+}
+
+fn stable_path_hash(bytes: &[u8]) -> u64 {
+    // FNV-1a keeps the socket name stable across processes and platforms.
+    let mut hash = 0xcbf29ce484222325u64;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Parse a text command line into a SyncTexCommand.
@@ -525,23 +562,33 @@ impl SyncTexListener {
         shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
         _path: &Path,
     ) {
-        use std::io::BufRead;
+        use std::io::{BufRead, Write};
 
         while !shutdown.load(std::sync::atomic::Ordering::Relaxed) {
             match listener.accept() {
-                Ok((stream, _addr)) => {
+                Ok((mut stream, _addr)) => {
                     // Set blocking with a timeout for reading
                     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
-                    let reader = std::io::BufReader::new(&stream);
+                    let reader_stream = match stream.try_clone() {
+                        Ok(reader_stream) => reader_stream,
+                        Err(e) => {
+                            log::warn!("Failed to clone synctex stream: {e}");
+                            continue;
+                        }
+                    };
+                    let reader = std::io::BufReader::new(reader_stream);
 
                     for line_result in reader.lines() {
                         let Ok(line) = line_result else { break };
                         if let Some(cmd) = parse_command(&line) {
                             if tx.send(cmd).is_err() {
+                                let _ = stream.write_all(b"error channel closed\n");
                                 return;
                             }
+                            let _ = stream.write_all(b"ok\n");
                         } else {
                             log::warn!("Unknown synctex command: {line}");
+                            let _ = stream.write_all(b"error unknown command\n");
                         }
                     }
                 }
@@ -583,12 +630,7 @@ impl Drop for SyncTexListener {
 /// Send a forward search command to a running Bookokrat instance.
 ///
 /// Used by `--synctex-forward` CLI mode.
-pub fn send_forward_command(
-    socket_path: &Path,
-    file: &str,
-    line: u32,
-    column: u32,
-) -> Result<String> {
+pub fn send_forward_command(socket_path: &Path, file: &str, line: u32, column: u32) -> Result<()> {
     use std::io::Write;
 
     let mut stream = std::os::unix::net::UnixStream::connect(socket_path).with_context(|| {
@@ -606,7 +648,11 @@ pub fn send_forward_command(
 
     let mut response = String::new();
     std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut response)?;
-    Ok(response.trim().to_string())
+    match response.trim() {
+        "ok" => Ok(()),
+        "" => anyhow::bail!("SyncTeX listener closed without acknowledging the command"),
+        other => anyhow::bail!("SyncTeX listener error: {other}"),
+    }
 }
 
 #[cfg(test)]
@@ -878,10 +924,16 @@ mod tests {
     #[test]
     fn test_synctex_socket_path() {
         let path = synctex_socket_path(Path::new("/home/user/documents/thesis.pdf"));
-        assert!(
-            path.to_string_lossy()
-                .contains("bookokrat-synctex-thesis.sock")
-        );
+        let path_str = path.to_string_lossy();
+        assert!(path_str.contains("bookokrat-stx-thesis-"));
+        assert!(path_str.ends_with(".sock"));
+    }
+
+    #[test]
+    fn test_synctex_socket_path_distinguishes_same_stem_in_different_dirs() {
+        let a = synctex_socket_path(Path::new("/home/user/a/thesis.pdf"));
+        let b = synctex_socket_path(Path::new("/home/user/b/thesis.pdf"));
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -892,13 +944,7 @@ mod tests {
         let (tx, rx) = flume::unbounded();
         let listener = SyncTexListener::start(socket_path.clone(), tx).unwrap();
 
-        // Connect as a client and send a command
-        {
-            use std::io::Write;
-            let mut stream = std::os::unix::net::UnixStream::connect(&socket_path).unwrap();
-            writeln!(stream, "forward 42 1 main.tex").unwrap();
-            stream.flush().unwrap();
-        }
+        send_forward_command(&socket_path, "main.tex", 42, 1).unwrap();
 
         // Give the listener thread a moment to process
         std::thread::sleep(std::time::Duration::from_millis(200));

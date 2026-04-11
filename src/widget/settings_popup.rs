@@ -3,8 +3,8 @@ use crate::main_app::VimNavMotions;
 use crate::settings::{
     LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
     get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_pdf_enabled,
-    is_transparent_background, set_lookup_command, set_lookup_display, set_pdf_enabled,
-    set_pdf_page_layout_mode, set_pdf_render_mode, set_synctex_editor, set_transparent_background,
+    is_transparent_background, set_integrations, set_lookup_display, set_pdf_enabled,
+    set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -146,13 +146,19 @@ impl SettingsPopup {
         supports_graphics: bool,
         supports_scroll_mode: bool,
     ) -> Self {
-        let pdf_selected_idx = if supports_graphics { 0 } else { 2 };
         let current_tab = if cfg!(feature = "pdf") {
             tab
         } else {
             SettingsTab::Themes
         };
 
+        let pdf_selected_idx = Self::initial_pdf_selected_idx_from_state(
+            supports_graphics,
+            supports_scroll_mode,
+            is_pdf_enabled(),
+            get_pdf_render_mode(),
+            get_pdf_page_layout_mode(),
+        );
         let theme_names = all_theme_names();
 
         let mut lookup_command_input = crate::vendored::tui_textarea::TextArea::default();
@@ -176,7 +182,11 @@ impl SettingsPopup {
             pdf_selected_idx,
             supports_scroll_mode,
             supports_graphics,
-            theme_selected_idx: 0,
+            theme_selected_idx: Self::initial_theme_selected_idx_from_state(
+                theme_names.len(),
+                current_theme_index(),
+                is_transparent_background(),
+            ),
             theme_names,
             integrations_focus: IntegrationsFocus::LookupCommand,
             lookup_command_input,
@@ -190,6 +200,42 @@ impl SettingsPopup {
 
     fn pdf_min_selectable_idx(&self) -> usize {
         if self.supports_graphics { 0 } else { 2 }
+    }
+
+    fn initial_pdf_selected_idx_from_state(
+        supports_graphics: bool,
+        supports_scroll_mode: bool,
+        pdf_enabled: bool,
+        render_mode: PdfRenderMode,
+        layout_mode: PdfPageLayoutMode,
+    ) -> usize {
+        if !supports_graphics {
+            return 2;
+        }
+        if !pdf_enabled {
+            return 1;
+        }
+        if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
+            return 3;
+        }
+        if layout_mode == PdfPageLayoutMode::Dual {
+            return 5;
+        }
+        0
+    }
+
+    fn initial_theme_selected_idx_from_state(
+        theme_count: usize,
+        current_theme_idx: usize,
+        transparent_background: bool,
+    ) -> usize {
+        if transparent_background {
+            return theme_count + 1;
+        }
+        if theme_count == 0 {
+            return 0;
+        }
+        current_theme_idx.min(theme_count - 1)
     }
 
     fn pdf_max_selectable_idx(&self) -> usize {
@@ -1266,8 +1312,6 @@ impl SettingsPopup {
         } else {
             Some(lookup_text)
         };
-        set_lookup_command(lookup_cmd);
-        set_lookup_display(self.lookup_display_selected);
 
         let synctex_text: String = self
             .synctex_editor_input
@@ -1280,7 +1324,7 @@ impl SettingsPopup {
         } else {
             Some(synctex_text)
         };
-        set_synctex_editor(synctex_cmd);
+        set_integrations(lookup_cmd, self.lookup_display_selected, synctex_cmd);
     }
 
     pub fn handle_key(
@@ -1515,6 +1559,61 @@ impl VimNavMotions for SettingsPopup {
                 self.integrations_focus = IntegrationsFocus::TestSynctex;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_pdf_focus_prefers_disabled_when_pdf_is_off() {
+        assert_eq!(
+            SettingsPopup::initial_pdf_selected_idx_from_state(
+                true,
+                true,
+                false,
+                PdfRenderMode::Page,
+                PdfPageLayoutMode::Single
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn initial_pdf_focus_prefers_non_default_selected_options() {
+        assert_eq!(
+            SettingsPopup::initial_pdf_selected_idx_from_state(
+                true,
+                true,
+                true,
+                PdfRenderMode::Scroll,
+                PdfPageLayoutMode::Dual
+            ),
+            3
+        );
+        assert_eq!(
+            SettingsPopup::initial_pdf_selected_idx_from_state(
+                true,
+                false,
+                true,
+                PdfRenderMode::Page,
+                PdfPageLayoutMode::Dual
+            ),
+            5
+        );
+    }
+
+    #[test]
+    fn initial_theme_focus_tracks_current_theme_or_transparency() {
+        assert_eq!(
+            SettingsPopup::initial_theme_selected_idx_from_state(7, 3, false),
+            3
+        );
+        assert_eq!(
+            SettingsPopup::initial_theme_selected_idx_from_state(7, 3, true),
+            8
+        );
     }
 }
 

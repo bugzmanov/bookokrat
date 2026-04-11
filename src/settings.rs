@@ -222,6 +222,16 @@ fn find_existing_config() -> Option<PathBuf> {
 }
 
 pub fn load_settings() {
+    if let (Some(preferred), Some(legacy)) = (preferred_config_path(), legacy_config_path())
+        && preferred.exists()
+        && legacy.exists()
+    {
+        info!(
+            "Both preferred and legacy settings files exist; using {:?} and ignoring {:?}",
+            preferred, legacy
+        );
+    }
+
     if let Some(path) = find_existing_config() {
         if let Err((path, err)) = load_settings_from_path(&path) {
             eprintln!("Error: Failed to parse config file:");
@@ -259,7 +269,10 @@ fn load_settings_from_path(path: &PathBuf) -> Result<(), (PathBuf, String)> {
         (path.clone(), e.to_string())
     })?;
 
-    debug!("Loaded settings from {path:?}");
+    debug!(
+        "Loaded settings from {path:?}: {}",
+        settings_summary(&settings)
+    );
 
     if settings.version < CURRENT_VERSION {
         let migrated_content = migrate_settings(&mut settings, &content);
@@ -317,6 +330,41 @@ pub fn save_settings() {
     }
 }
 
+fn settings_backup_path(path: &Path) -> PathBuf {
+    let Some(file_name) = path.file_name() else {
+        return path.with_extension("bak");
+    };
+    let mut backup_name = file_name.to_os_string();
+    backup_name.push(".bak");
+    path.with_file_name(backup_name)
+}
+
+fn settings_summary(settings: &Settings) -> String {
+    format!(
+        "theme=\"{}\" margin={} transparent={} pdf_scale={:.3} pdf_mode={} pdf_layout={} pdf_enabled={} justify={} nav_panel_width={} lookup_command_set={} synctex_editor_set={}",
+        settings.theme,
+        settings.margin,
+        settings.transparent_background,
+        settings.pdf_scale,
+        match settings.pdf_render_mode {
+            PdfRenderMode::Page => "page",
+            PdfRenderMode::Scroll => "scroll",
+        },
+        match settings.pdf_page_layout_mode {
+            PdfPageLayoutMode::Single => "single",
+            PdfPageLayoutMode::Dual => "dual",
+        },
+        settings.pdf_enabled,
+        settings.justify_text,
+        settings
+            .nav_panel_width
+            .map(|width| width.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        settings.lookup_command.is_some(),
+        settings.synctex_editor.is_some(),
+    )
+}
+
 fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -334,6 +382,13 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
         generate_settings_yaml(settings)
     };
 
+    if path.exists() {
+        let backup_path = settings_backup_path(path);
+        if let Err(e) = fs::copy(path, &backup_path) {
+            warn!("Failed to back up settings file to {backup_path:?}: {e}");
+        }
+    }
+
     // Atomic write: write to a temp file in the same directory, then rename.
     // This prevents concurrent save_settings() calls from reading a
     // half-written file and regenerating from defaults (wiping user config).
@@ -348,14 +403,17 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
             if let Err(e) = tmp.persist(path) {
                 error!("Failed to persist settings file: {e}");
             } else {
-                debug!("Saved settings to {path:?}");
+                debug!("Saved settings to {path:?}: {}", settings_summary(settings));
             }
         }
         Err(e) => {
             error!("Failed to create settings temp file: {e}");
             // Fallback to direct write
             match fs::write(path, content) {
-                Ok(()) => debug!("Saved settings to {path:?} (direct)"),
+                Ok(()) => debug!(
+                    "Saved settings to {path:?} (direct): {}",
+                    settings_summary(settings)
+                ),
                 Err(e) => error!("Failed to save settings to {path:?}: {e}"),
             }
         }
@@ -830,6 +888,19 @@ pub fn set_synctex_editor(cmd: Option<String>) {
     save_settings();
 }
 
+pub fn set_integrations(
+    lookup_command: Option<String>,
+    lookup_display: LookupDisplay,
+    synctex_editor: Option<String>,
+) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.lookup_command = lookup_command;
+        settings.lookup_display = lookup_display;
+        settings.synctex_editor = synctex_editor;
+    }
+    save_settings();
+}
+
 /// Called on app startup to fix incompatible settings when switching terminals
 /// (e.g., from a Kitty-protocol terminal to one without Kitty graphics)
 pub fn fix_incompatible_pdf_settings() {
@@ -944,5 +1015,33 @@ my_custom_flag: true
         let themes_pos = migrated.find("# Custom Themes").unwrap();
         assert!(lookup_pos < themes_pos);
         assert_eq!(settings.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn backup_path_appends_bak_to_filename() {
+        let path = Path::new("/tmp/bookokrat/config.yaml");
+        assert_eq!(
+            settings_backup_path(path),
+            PathBuf::from("/tmp/bookokrat/config.yaml.bak")
+        );
+    }
+
+    #[test]
+    fn save_settings_creates_backup_before_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        fs::write(&path, "theme: \"Old\"\nmargin: 11\n").unwrap();
+
+        let settings = Settings {
+            theme: "New".to_string(),
+            margin: 7,
+            ..Settings::default()
+        };
+        save_settings_to_file(&settings, &path);
+
+        let backup = settings_backup_path(&path);
+        let backup_content = fs::read_to_string(backup).unwrap();
+        assert!(backup_content.contains("theme: \"Old\""));
+        assert!(backup_content.contains("margin: 11"));
     }
 }

@@ -1,4 +1,4 @@
-use std::{fs::File, io::stdout, path::Path};
+use std::{fs::OpenOptions, io::stdout, path::Path};
 
 use anyhow::Result;
 use crossterm::{
@@ -141,15 +141,8 @@ fn handle_synctex_forward(spec: &str, pdf_file: Option<&str>) -> Result<()> {
         );
     }
 
-    match synctex::send_forward_command(&socket_path, file, line, column) {
-        Ok(response) => {
-            println!("{response}");
-            Ok(())
-        }
-        Err(e) => {
-            anyhow::bail!("SyncTeX forward search failed: {e}");
-        }
-    }
+    synctex::send_forward_command(&socket_path, file, line, column)
+        .map_err(|e| anyhow::anyhow!("SyncTeX forward search failed: {e}"))
 }
 
 fn main() -> Result<()> {
@@ -187,8 +180,11 @@ fn main() -> Result<()> {
 
     // Initialize logging with html5ever DEBUG logs filtered out
     let log_file = match log_path {
-        Ok(ref p) => File::create(p)?,
-        Err(_) => File::create("bookokrat.log")?,
+        Ok(ref p) => OpenOptions::new().create(true).append(true).open(p)?,
+        Err(_) => OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("bookokrat.log")?,
     };
     WriteLogger::init(
         LevelFilter::Debug,
@@ -202,6 +198,11 @@ fn main() -> Result<()> {
     if let Err(ref e) = lib_paths {
         warn!("Failed to resolve XDG library paths, falling back to CWD: {e}");
     }
+    info!(
+        "=== Starting bookokrat {} pid={} ===",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    );
 
     // Validate file argument before entering TUI
     if let Some(ref path) = args.file_path {

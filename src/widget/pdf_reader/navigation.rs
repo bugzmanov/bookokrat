@@ -3188,6 +3188,32 @@ impl PdfReaderState {
         })
     }
 
+    pub(crate) fn apply_synctex_forward_target(
+        &mut self,
+        page: usize,
+        pdf_x_pts: f64,
+        pdf_y_pts: f64,
+    ) -> bool {
+        let Some(scale_factor) = self.rendered.get(page).and_then(|r| r.scale_factor) else {
+            return false;
+        };
+        let point = crate::pdf::SelectionPoint {
+            page,
+            pdf_x: (pdf_x_pts * f64::from(scale_factor)) as f32,
+            pdf_y: (pdf_y_pts * f64::from(scale_factor)) as f32,
+            ..Default::default()
+        };
+        let Some(cursor) = self.selection_point_to_cursor(point) else {
+            return false;
+        };
+
+        let previous_cursor = self.normal_mode.cursor;
+        self.normal_mode.cursor = cursor;
+        let _ = self.ensure_cursor_visible();
+        self.normal_mode.cursor = previous_cursor;
+        true
+    }
+
     fn find_word_bounds_at(&self, point: &crate::pdf::SelectionPoint) -> Option<(f32, f32)> {
         let cursor = self.selection_point_to_cursor(*point)?;
         let line_bounds = self
@@ -5794,6 +5820,7 @@ mod tests {
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
+    use ratatui::layout::Rect;
     use std::path::Path;
 
     fn line(y0: f32, y1: f32) -> LineBounds {
@@ -5837,6 +5864,33 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         }
+    }
+
+    fn non_kitty_reader_with_lines(lines: Vec<LineBounds>) -> PdfReaderState {
+        let mut state = PdfReaderState::new(
+            "test.pdf".to_string(),
+            false,
+            false,
+            0,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            0,
+            false,
+            false,
+            None,
+            String::new(),
+        );
+        state.rendered = vec![crate::widget::pdf_reader::RenderedInfo {
+            line_bounds: lines,
+            scale_factor: Some(1.0),
+            ..Default::default()
+        }];
+        state.coord_info = Some((Rect::new(0, 0, 80, 10), (1, 10)));
+        state.last_render.img_area_width = 80;
+        state.last_render.img_area_height = 10;
+        state
     }
 
     #[test]
@@ -6023,5 +6077,38 @@ mod tests {
             Some(_) => panic!("expected SyncTexInverse from standard gd"),
             None => panic!("expected SyncTexInverse from standard gd, got None"),
         }
+    }
+
+    #[test]
+    fn synctex_forward_target_scrolls_without_moving_visible_cursor() {
+        let mut state = non_kitty_reader_with_lines(vec![
+            LineBounds {
+                x0: 0.0,
+                y0: 10.0,
+                x1: 40.0,
+                y1: 20.0,
+                chars: vec![CharInfo { x: 2.0, c: 'a' }, CharInfo { x: 8.0, c: 'b' }],
+                block_id: 0,
+            },
+            LineBounds {
+                x0: 0.0,
+                y0: 120.0,
+                x1: 60.0,
+                y1: 130.0,
+                chars: vec![CharInfo { x: 10.0, c: 'c' }, CharInfo { x: 30.0, c: 'd' }],
+                block_id: 0,
+            },
+        ]);
+        state.normal_mode.cursor = CursorPosition {
+            page: 0,
+            line_idx: 0,
+            char_idx: 0,
+        };
+
+        assert!(state.apply_synctex_forward_target(0, 30.0, 125.0));
+        assert_eq!(state.non_kitty_scroll_offset, 3);
+        assert_eq!(state.normal_mode.cursor.page, 0);
+        assert_eq!(state.normal_mode.cursor.line_idx, 0);
+        assert_eq!(state.normal_mode.cursor.char_idx, 0);
     }
 }
