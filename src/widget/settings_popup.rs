@@ -1,9 +1,10 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
-    is_pdf_enabled, is_transparent_background, set_pdf_enabled, set_pdf_page_layout_mode,
-    set_pdf_render_mode, set_transparent_background,
+    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
+    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_pdf_enabled,
+    is_transparent_background, set_lookup_command, set_lookup_display, set_pdf_enabled,
+    set_pdf_page_layout_mode, set_pdf_render_mode, set_synctex_editor, set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -22,30 +23,80 @@ pub enum SettingsAction {
     Close,
     SettingsChanged,
     PageLayoutChanged,
+    TestLookupCommand,
+    TestSynctexEditor,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     PdfSupport,
     Themes,
+    Integrations,
 }
 
 impl SettingsTab {
     fn next(self) -> Self {
-        if !cfg!(feature = "pdf") {
-            return SettingsTab::Themes;
-        }
         match self {
             SettingsTab::PdfSupport => SettingsTab::Themes,
-            SettingsTab::Themes => SettingsTab::PdfSupport,
+            SettingsTab::Themes => SettingsTab::Integrations,
+            SettingsTab::Integrations => {
+                if cfg!(feature = "pdf") {
+                    SettingsTab::PdfSupport
+                } else {
+                    SettingsTab::Themes
+                }
+            }
         }
     }
 
     fn prev(self) -> Self {
-        if !cfg!(feature = "pdf") {
-            return SettingsTab::Themes;
+        match self {
+            SettingsTab::PdfSupport => SettingsTab::Integrations,
+            SettingsTab::Themes => {
+                if cfg!(feature = "pdf") {
+                    SettingsTab::PdfSupport
+                } else {
+                    SettingsTab::Integrations
+                }
+            }
+            SettingsTab::Integrations => SettingsTab::Themes,
         }
-        self.next() // Only 2 tabs, so next == prev
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IntegrationsFocus {
+    LookupCommand,
+    DisplayPopup,
+    DisplayFireAndForget,
+    TestLookup,
+    SynctexEditor,
+    TestSynctex,
+}
+
+impl IntegrationsFocus {
+    fn next(self) -> Self {
+        match self {
+            Self::LookupCommand => Self::DisplayPopup,
+            Self::DisplayPopup => Self::DisplayFireAndForget,
+            Self::DisplayFireAndForget => Self::TestLookup,
+            Self::TestLookup => Self::SynctexEditor,
+            Self::SynctexEditor => Self::TestSynctex,
+            Self::TestSynctex => Self::LookupCommand,
+        }
+    }
+    fn prev(self) -> Self {
+        match self {
+            Self::LookupCommand => Self::TestSynctex,
+            Self::DisplayPopup => Self::LookupCommand,
+            Self::DisplayFireAndForget => Self::DisplayPopup,
+            Self::TestLookup => Self::DisplayFireAndForget,
+            Self::SynctexEditor => Self::TestLookup,
+            Self::TestSynctex => Self::SynctexEditor,
+        }
+    }
+    fn is_text_input(self) -> bool {
+        matches!(self, Self::LookupCommand | Self::SynctexEditor)
     }
 }
 
@@ -58,6 +109,14 @@ pub struct SettingsPopup {
     // Themes tab state
     theme_selected_idx: usize,
     theme_names: Vec<String>,
+    // Integrations tab state
+    integrations_focus: IntegrationsFocus,
+    lookup_command_input: crate::vendored::tui_textarea::TextArea<'static>,
+    lookup_display_selected: LookupDisplay,
+    synctex_editor_input: crate::vendored::tui_textarea::TextArea<'static>,
+    // Click targets: stored during render for mouse hit-testing
+    tab_area: Option<Rect>,
+    content_chunks: Vec<Rect>,
     // Common
     last_popup_area: Option<Rect>,
 }
@@ -96,6 +155,22 @@ impl SettingsPopup {
 
         let theme_names = all_theme_names();
 
+        let mut lookup_command_input = crate::vendored::tui_textarea::TextArea::default();
+        lookup_command_input.set_placeholder_text("e.g. dict {}");
+        lookup_command_input.set_cursor_line_style(Style::default());
+        if let Some(cmd) = get_lookup_command() {
+            lookup_command_input.insert_str(&cmd);
+        }
+
+        let mut synctex_editor_input = crate::vendored::tui_textarea::TextArea::default();
+        synctex_editor_input.set_placeholder_text(
+            "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-n>:e {file}<CR>:{line}<CR>'",
+        );
+        synctex_editor_input.set_cursor_line_style(Style::default());
+        if let Some(cmd) = get_synctex_editor() {
+            synctex_editor_input.insert_str(&cmd);
+        }
+
         SettingsPopup {
             current_tab,
             pdf_selected_idx,
@@ -103,6 +178,12 @@ impl SettingsPopup {
             supports_graphics,
             theme_selected_idx: 0,
             theme_names,
+            integrations_focus: IntegrationsFocus::LookupCommand,
+            lookup_command_input,
+            lookup_display_selected: get_lookup_display(),
+            synctex_editor_input,
+            tab_area: None,
+            content_chunks: Vec::new(),
             last_popup_area: None,
         }
     }
@@ -123,7 +204,7 @@ impl SettingsPopup {
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
-        let popup_area = centered_rect(60, 60, area);
+        let popup_area = centered_rect(60, 70, area);
         self.last_popup_area = Some(popup_area);
 
         f.render_widget(Clear, popup_area);
@@ -131,7 +212,9 @@ impl SettingsPopup {
         let palette = current_theme();
 
         // Build footer hints string for bottom border
-        let hints = if cfg!(feature = "pdf") {
+        let hints = if self.current_tab == SettingsTab::Integrations {
+            " Tab switch tabs  ↑/↓ navigate  Enter select  Esc close "
+        } else if cfg!(feature = "pdf") {
             " Tab/h/l switch tabs  j/k navigate  Enter select  Esc close "
         } else {
             " j/k navigate  Enter select  Esc close "
@@ -166,6 +249,7 @@ impl SettingsPopup {
             .split(padded);
 
         // Render tabs
+        self.tab_area = Some(main_chunks[0]);
         self.render_tabs(f, main_chunks[0], palette);
 
         // Render content based on selected tab
@@ -179,11 +263,12 @@ impl SettingsPopup {
         match self.current_tab {
             SettingsTab::PdfSupport => self.render_pdf_tab(f, content_area, palette),
             SettingsTab::Themes => self.render_themes_tab(f, content_area, palette),
+            SettingsTab::Integrations => self.render_integrations_tab(f, content_area, palette),
         }
     }
 
     fn render_tabs(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
-        let tab_names = ["PDF / DJVU", "Select Theme"];
+        let tab_names = ["PDF / DJVU", "Select Theme", "Integrations"];
 
         let mut spans = Vec::new();
         spans.push(Span::raw(" "));
@@ -191,13 +276,15 @@ impl SettingsPopup {
         let tab_iter: Box<dyn Iterator<Item = (usize, &&str)>> = if cfg!(feature = "pdf") {
             Box::new(tab_names.iter().enumerate())
         } else {
-            Box::new(tab_names.iter().enumerate().filter(|(idx, _)| *idx == 1))
+            Box::new(tab_names.iter().enumerate().filter(|(idx, _)| *idx != 0))
         };
 
         for (idx, name) in tab_iter {
             let is_selected = matches!(
                 (idx, self.current_tab),
-                (0, SettingsTab::PdfSupport) | (1, SettingsTab::Themes)
+                (0, SettingsTab::PdfSupport)
+                    | (1, SettingsTab::Themes)
+                    | (2, SettingsTab::Integrations)
             );
 
             let style = if is_selected {
@@ -226,8 +313,9 @@ impl SettingsPopup {
             };
 
             let (underline_x, underline_len) = match self.current_tab {
-                SettingsTab::PdfSupport => (1, 10), // "PDF / DJVU" length
-                SettingsTab::Themes => (14, 12), // Position after "PDF / DJVU   ", "Select Theme" length
+                SettingsTab::PdfSupport => (1, 10),    // "PDF / DJVU"
+                SettingsTab::Themes => (14, 12),       // "Select Theme"
+                SettingsTab::Integrations => (29, 12), // "Integrations"
             };
 
             let mut underline_spans = vec![Span::raw(" ".repeat(underline_x))];
@@ -263,6 +351,8 @@ impl SettingsPopup {
                 Constraint::Min(1),    // Info message
             ])
             .split(area);
+
+        self.content_chunks = chunks.to_vec();
 
         // PDF Support options (no section header - derived from tab name)
         let radio_selected = "●";
@@ -471,6 +561,8 @@ impl SettingsPopup {
                 Constraint::Min(0),                    // remaining space
             ])
             .split(area);
+
+        self.content_chunks = chunks.to_vec();
 
         // Theme list (indices 0 to theme_names.len()-1)
         let current_theme_idx = current_theme_index();
@@ -814,6 +906,383 @@ impl SettingsPopup {
         None
     }
 
+    fn render_integrations_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+        let hint_style = Style::default().fg(palette.base_03);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // 0:  Lookup header
+                Constraint::Length(3), // 1:  Lookup command input
+                Constraint::Length(3), // 2:  Lookup hints (with blank line after first)
+                Constraint::Length(1), // 3:  Display mode header
+                Constraint::Length(1), // 4:  ● Popup
+                Constraint::Length(1), // 5:  ○ Fire and forget
+                Constraint::Length(1), // 6:  spacing
+                Constraint::Length(1), // 7:  Test lookup button
+                Constraint::Length(1), // 8:  spacing
+                Constraint::Length(1), // 9:  SyncTeX header
+                Constraint::Length(3), // 10: SyncTeX editor input
+                Constraint::Length(9), // 11: SyncTeX hints
+                Constraint::Length(1), // 12: spacing
+                Constraint::Length(1), // 13: Test synctex button
+                Constraint::Min(0),    // 14: padding
+            ])
+            .split(area);
+
+        self.content_chunks = chunks.to_vec();
+
+        // -- Dictionary Lookup section --
+        self.render_section_header(
+            f,
+            chunks[0],
+            "Dictionary Lookup (Space+l)",
+            palette,
+            palette.base_06,
+        );
+
+        let lookup_focused = self.integrations_focus == IntegrationsFocus::LookupCommand;
+        let lookup_border_color = if lookup_focused {
+            palette.base_0d
+        } else {
+            palette.base_02
+        };
+        self.lookup_command_input.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(lookup_border_color)),
+        );
+        self.lookup_command_input
+            .set_style(Style::default().fg(palette.base_05));
+        f.render_widget(&self.lookup_command_input, chunks[1]);
+
+        let lookup_hints = vec![
+            Line::from(Span::styled(
+                "  {} = selected word, e.g: dict {}",
+                hint_style,
+            )),
+            Line::from(Span::styled("", hint_style)),
+            Line::from(Span::styled(
+                "  e.g: open \"https://www.merriam-webster.com/dictionary/{}\"",
+                hint_style,
+            )),
+        ];
+        f.render_widget(Paragraph::new(lookup_hints), chunks[2]);
+
+        // Display mode (vertical radio buttons)
+        self.render_section_header(f, chunks[3], "Display mode:", palette, palette.base_04);
+
+        let radio_style = Style::default().fg(palette.base_05);
+        let popup_selected = self.lookup_display_selected == LookupDisplay::Popup;
+
+        let popup_radio = if popup_selected { "●" } else { "○" };
+        let popup_line = self.render_radio_option(
+            popup_radio,
+            "Popup (show output)",
+            None,
+            radio_style,
+            self.integrations_focus == IntegrationsFocus::DisplayPopup,
+            palette,
+        );
+        f.render_widget(Paragraph::new(popup_line), chunks[4]);
+
+        let faf_radio = if popup_selected { "○" } else { "●" };
+        let faf_line = self.render_radio_option(
+            faf_radio,
+            "Fire and forget",
+            None,
+            radio_style,
+            self.integrations_focus == IntegrationsFocus::DisplayFireAndForget,
+            palette,
+        );
+        f.render_widget(Paragraph::new(faf_line), chunks[5]);
+
+        // chunks[6] = spacing
+        self.render_test_button(
+            f,
+            chunks[7],
+            "Test",
+            "lookup word \"hello\"",
+            self.integrations_focus == IntegrationsFocus::TestLookup,
+            palette,
+        );
+
+        // chunks[8] = spacing
+
+        // -- SyncTeX section --
+        self.render_section_header(
+            f,
+            chunks[9],
+            "SyncTeX Editor (Ctrl+click, right-click / gd)",
+            palette,
+            palette.base_06,
+        );
+
+        let synctex_focused = self.integrations_focus == IntegrationsFocus::SynctexEditor;
+        let synctex_border_color = if synctex_focused {
+            palette.base_0d
+        } else {
+            palette.base_02
+        };
+        self.synctex_editor_input.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(synctex_border_color)),
+        );
+        self.synctex_editor_input
+            .set_style(Style::default().fg(palette.base_05));
+        f.render_widget(&self.synctex_editor_input, chunks[10]);
+
+        let synctex_hints = vec![
+            Line::from(Span::styled(
+                "  {file}, {line}, {column} = source location",
+                hint_style,
+            )),
+            Line::from(Span::styled("", hint_style)),
+            Line::from(Span::styled(
+                "  Neovim: start with nvim --listen /tmp/nvim.sock",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "  bookokrat → nvim (Ctrl+click, right-click / gd):",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "    nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-n>:e {file}<CR>:{line}<CR>'",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "  nvim → bookokrat (VimTeX \\lv):",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "    let g:vimtex_view_general_viewer = 'bookokrat'",
+                hint_style,
+            )),
+            Line::from(Span::styled(
+                "    let g:vimtex_view_general_options = '--synctex-forward @line:@col:@tex @pdf'",
+                hint_style,
+            )),
+        ];
+        f.render_widget(Paragraph::new(synctex_hints), chunks[11]);
+
+        // chunks[12] = spacing
+        self.render_test_button(
+            f,
+            chunks[13],
+            "Test",
+            "open /tmp/synctex_test.txt:1",
+            self.integrations_focus == IntegrationsFocus::TestSynctex,
+            palette,
+        );
+    }
+
+    fn render_test_button(
+        &self,
+        f: &mut Frame,
+        area: Rect,
+        label: &str,
+        description: &str,
+        focused: bool,
+        palette: &Base16Palette,
+    ) {
+        let btn_style = if focused {
+            Style::default()
+                .fg(palette.base_01)
+                .bg(palette.base_0d)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(palette.base_05).bg(palette.base_02)
+        };
+        let desc_style = Style::default().fg(palette.base_03);
+        let cursor = if focused {
+            Span::styled(
+                "» ",
+                Style::default()
+                    .fg(palette.base_0a)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::raw("  ")
+        };
+        let line = Line::from(vec![
+            cursor,
+            Span::styled(format!(" {label} "), btn_style),
+            Span::styled(format!("  {description}"), desc_style),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+    }
+
+    fn apply_integrations_selected(&mut self) -> Option<SettingsAction> {
+        match self.integrations_focus {
+            IntegrationsFocus::DisplayPopup => {
+                self.lookup_display_selected = LookupDisplay::Popup;
+                set_lookup_display(LookupDisplay::Popup);
+                Some(SettingsAction::SettingsChanged)
+            }
+            IntegrationsFocus::DisplayFireAndForget => {
+                self.lookup_display_selected = LookupDisplay::FireAndForget;
+                set_lookup_display(LookupDisplay::FireAndForget);
+                Some(SettingsAction::SettingsChanged)
+            }
+            IntegrationsFocus::TestLookup => {
+                self.save_integrations();
+                Some(SettingsAction::TestLookupCommand)
+            }
+            IntegrationsFocus::TestSynctex => {
+                self.save_integrations();
+                Some(SettingsAction::TestSynctexEditor)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn handle_mouse_click(&mut self, col: u16, row: u16) -> Option<SettingsAction> {
+        // Tab bar clicks
+        if let Some(tab_area) = self.tab_area {
+            if row >= tab_area.y && row < tab_area.y + tab_area.height {
+                let rel_x = col.saturating_sub(tab_area.x);
+                // Tab positions: " PDF / DJVU   Select Theme   Integrations"
+                //                  1..11         14..26          29..41
+                if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 14 {
+                    if self.current_tab == SettingsTab::Integrations {
+                        self.save_integrations();
+                    }
+                    self.current_tab = SettingsTab::PdfSupport;
+                    return None;
+                } else if rel_x >= 14 && rel_x < 29 {
+                    if self.current_tab == SettingsTab::Integrations {
+                        self.save_integrations();
+                    }
+                    self.current_tab = SettingsTab::Themes;
+                    return None;
+                } else if rel_x >= 29 {
+                    if self.current_tab == SettingsTab::Integrations {
+                        self.save_integrations();
+                    }
+                    self.current_tab = SettingsTab::Integrations;
+                    return None;
+                }
+            }
+        }
+
+        if self.content_chunks.is_empty() {
+            return None;
+        }
+
+        let chunks = &self.content_chunks;
+        let hit = |idx: usize| -> bool {
+            if let Some(r) = chunks.get(idx) {
+                col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+            } else {
+                false
+            }
+        };
+
+        match self.current_tab {
+            SettingsTab::PdfSupport => {
+                // PDF chunks: 0: enable/disable, 4: render mode, 8: page layout
+                // Sub-rows within chunk 0 (height=2): row 0 = enabled, row 1 = disabled
+                if let Some(r) = chunks.get(0) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let sub = (row - r.y) as usize;
+                        self.pdf_selected_idx = sub;
+                        return self.apply_pdf_selected();
+                    }
+                }
+                // Render mode options (chunk 4, height=2)
+                if let Some(r) = chunks.get(4) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let sub = (row - r.y) as usize;
+                        self.pdf_selected_idx = 2 + sub;
+                        return self.apply_pdf_selected();
+                    }
+                }
+                // Page layout options (chunk 8, height=2)
+                if let Some(r) = chunks.get(8) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let sub = (row - r.y) as usize;
+                        self.pdf_selected_idx = 4 + sub;
+                        return self.apply_pdf_selected();
+                    }
+                }
+            }
+            SettingsTab::Themes => {
+                // Theme list is in chunk 0 — each theme is one row
+                if let Some(r) = chunks.get(0) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let idx = (row - r.y) as usize;
+                        if idx < self.theme_names.len() {
+                            self.theme_selected_idx = idx;
+                            return self.apply_theme_selected();
+                        }
+                    }
+                }
+                // Background options in chunk 4 (height=2)
+                if let Some(r) = chunks.get(4) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let sub = (row - r.y) as usize;
+                        self.theme_selected_idx = self.theme_names.len() + sub;
+                        return self.apply_theme_selected();
+                    }
+                }
+            }
+            SettingsTab::Integrations => {
+                // 0: header, 1: input, 2: hints
+                // 3: display header, 4: popup radio, 5: faf radio
+                // 6: spacing, 7: test lookup, 8: spacing
+                // 9: synctex header, 10: input, 11: hints
+                // 12: spacing, 13: test synctex
+                if hit(1) {
+                    self.integrations_focus = IntegrationsFocus::LookupCommand;
+                } else if hit(4) {
+                    self.integrations_focus = IntegrationsFocus::DisplayPopup;
+                    return self.apply_integrations_selected();
+                } else if hit(5) {
+                    self.integrations_focus = IntegrationsFocus::DisplayFireAndForget;
+                    return self.apply_integrations_selected();
+                } else if hit(7) {
+                    self.integrations_focus = IntegrationsFocus::TestLookup;
+                    return self.apply_integrations_selected();
+                } else if hit(10) {
+                    self.integrations_focus = IntegrationsFocus::SynctexEditor;
+                } else if hit(13) {
+                    self.integrations_focus = IntegrationsFocus::TestSynctex;
+                    return self.apply_integrations_selected();
+                }
+            }
+        }
+        None
+    }
+
+    fn save_integrations(&self) {
+        let lookup_text: String = self
+            .lookup_command_input
+            .lines()
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let lookup_cmd = if lookup_text.trim().is_empty() {
+            None
+        } else {
+            Some(lookup_text)
+        };
+        set_lookup_command(lookup_cmd);
+        set_lookup_display(self.lookup_display_selected);
+
+        let synctex_text: String = self
+            .synctex_editor_input
+            .lines()
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let synctex_cmd = if synctex_text.trim().is_empty() {
+            None
+        } else {
+            Some(synctex_text)
+        };
+        set_synctex_editor(synctex_cmd);
+    }
+
     pub fn handle_key(
         &mut self,
         key: crossterm::event::KeyEvent,
@@ -821,20 +1290,79 @@ impl SettingsPopup {
     ) -> Option<SettingsAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
 
+        // When a text input is focused on the Integrations tab, route most
+        // keys to the TextArea. Only Esc, Tab, and Up/Down escape.
+        if self.current_tab == SettingsTab::Integrations && self.integrations_focus.is_text_input()
+        {
+            match key.code {
+                KeyCode::Esc => {
+                    self.save_integrations();
+                    return Some(SettingsAction::Close);
+                }
+                KeyCode::Tab => {
+                    self.save_integrations();
+                    self.current_tab = self.current_tab.next();
+                    return None;
+                }
+                KeyCode::BackTab => {
+                    self.save_integrations();
+                    self.current_tab = self.current_tab.prev();
+                    return None;
+                }
+                KeyCode::Down => {
+                    self.integrations_focus = self.integrations_focus.next();
+                    return None;
+                }
+                KeyCode::Up => {
+                    self.integrations_focus = self.integrations_focus.prev();
+                    return None;
+                }
+                KeyCode::Enter => {
+                    return None; // Don't insert newlines in single-line inputs
+                }
+                _ => {
+                    if let Some(input) = crate::inputs::text_area_utils::map_keys_to_input(key) {
+                        match self.integrations_focus {
+                            IntegrationsFocus::LookupCommand => {
+                                self.lookup_command_input.input(input);
+                            }
+                            IntegrationsFocus::SynctexEditor => {
+                                self.synctex_editor_input.input(input);
+                            }
+                            _ => {}
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+
         match key.code {
             KeyCode::Tab => {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
+                }
                 self.current_tab = self.current_tab.next();
                 None
             }
             KeyCode::BackTab => {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
+                }
                 self.current_tab = self.current_tab.prev();
                 None
             }
             KeyCode::Char('h') | KeyCode::Left => {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
+                }
                 self.current_tab = self.current_tab.prev();
                 None
             }
             KeyCode::Char('l') | KeyCode::Right => {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
+                }
                 self.current_tab = self.current_tab.next();
                 None
             }
@@ -878,10 +1406,16 @@ impl SettingsPopup {
                 self.handle_ctrl_b();
                 None
             }
-            KeyCode::Esc => Some(SettingsAction::Close),
+            KeyCode::Esc => {
+                if self.current_tab == SettingsTab::Integrations {
+                    self.save_integrations();
+                }
+                Some(SettingsAction::Close)
+            }
             KeyCode::Enter | KeyCode::Char(' ') => match self.current_tab {
                 SettingsTab::PdfSupport => self.apply_pdf_selected(),
                 SettingsTab::Themes => self.apply_theme_selected(),
+                SettingsTab::Integrations => self.apply_integrations_selected(),
             },
             _ => None,
         }
@@ -903,6 +1437,9 @@ impl VimNavMotions for SettingsPopup {
         match self.current_tab {
             SettingsTab::PdfSupport => self.pdf_next(),
             SettingsTab::Themes => self.theme_next(),
+            SettingsTab::Integrations => {
+                self.integrations_focus = self.integrations_focus.next();
+            }
         }
     }
 
@@ -910,6 +1447,9 @@ impl VimNavMotions for SettingsPopup {
         match self.current_tab {
             SettingsTab::PdfSupport => self.pdf_previous(),
             SettingsTab::Themes => self.theme_previous(),
+            SettingsTab::Integrations => {
+                self.integrations_focus = self.integrations_focus.prev();
+            }
         }
     }
 
@@ -957,6 +1497,9 @@ impl VimNavMotions for SettingsPopup {
             SettingsTab::Themes => {
                 self.theme_selected_idx = 0;
             }
+            SettingsTab::Integrations => {
+                self.integrations_focus = IntegrationsFocus::LookupCommand;
+            }
         }
     }
 
@@ -967,6 +1510,9 @@ impl VimNavMotions for SettingsPopup {
             }
             SettingsTab::Themes => {
                 self.theme_selected_idx = self.theme_max_idx();
+            }
+            SettingsTab::Integrations => {
+                self.integrations_focus = IntegrationsFocus::TestSynctex;
             }
         }
     }

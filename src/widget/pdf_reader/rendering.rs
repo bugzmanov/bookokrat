@@ -725,10 +725,11 @@ impl PdfReaderState {
         } else {
             format!("[{current_page}/{total_pages}]")
         };
-        let title_text = if self.watching {
-            format!("{title_text} [watching]")
-        } else {
-            title_text
+        let title_text = match (self.synctex_scanner.is_some(), self.watching) {
+            (true, true) => format!("{title_text} [SyncTeX: watching]"),
+            (true, false) => format!("{title_text} [SyncTeX]"),
+            (false, true) => format!("{title_text} [watching]"),
+            (false, false) => title_text,
         };
         let title_text = if is_focused {
             format!("{title_text} • ")

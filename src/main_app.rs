@@ -1520,7 +1520,7 @@ impl App {
                             self.synctex_listener = Some(listener);
                             self.synctex_rx = Some(rx);
                             self.show_info(format!(
-                                "SyncTeX enabled (Ctrl+click or gd to jump to source, \\lv from editor)"
+                                "SyncTeX enabled (Ctrl+click, right-click, or gd to jump to source, \\lv from editor)"
                             ));
                         }
                         Err(e) => {
@@ -2453,11 +2453,48 @@ impl App {
                     return;
                 }
 
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::Settings)
+                ) {
+                    if let Some(ref popup) = self.settings_popup {
+                        if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
+                            self.settings_popup = None;
+                            self.close_popup_to_previous();
+                            return;
+                        }
+                    }
+                    if let Some(ref mut popup) = self.settings_popup {
+                        if let Some(action) =
+                            popup.handle_mouse_click(mouse_event.column, mouse_event.row)
+                        {
+                            match action {
+                                SettingsAction::Close => {
+                                    self.close_popup_to_previous();
+                                    self.settings_popup = None;
+                                }
+                                SettingsAction::TestLookupCommand => {
+                                    self.execute_lookup_command("hello");
+                                }
+                                SettingsAction::TestSynctexEditor => {
+                                    self.test_synctex_editor();
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Lookup)) {
                     if let Some(ref popup) = self.lookup_popup {
                         if popup.is_outside_popup_area(mouse_event.column, mouse_event.row) {
                             self.lookup_popup = None;
-                            self.close_popup_to_previous();
+                            if self.settings_popup.is_some() {
+                                self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+                            } else {
+                                self.close_popup_to_previous();
+                            }
                         }
                     }
                     return;
@@ -5042,6 +5079,12 @@ impl App {
                             }
                         }
                     }
+                    SettingsAction::TestLookupCommand => {
+                        self.execute_lookup_command("hello");
+                    }
+                    SettingsAction::TestSynctexEditor => {
+                        self.test_synctex_editor();
+                    }
                 }
             }
             return None;
@@ -5056,7 +5099,11 @@ impl App {
 
             if let Some(LookupPopupAction::Close) = action {
                 self.lookup_popup = None;
-                self.close_popup_to_previous();
+                if self.settings_popup.is_some() {
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+                } else {
+                    self.close_popup_to_previous();
+                }
             }
             return None;
         }
@@ -6403,7 +6450,14 @@ impl App {
                 .replace("{line}", &line.to_string())
                 .replace("{column}", "0");
             log::info!("SyncTeX inverse: launching editor: {cmd}");
-            match std::process::Command::new("sh").arg("-c").arg(&cmd).spawn() {
+            match std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
                 Ok(_) => {
                     self.show_info(format!("SyncTeX: {basename}:{line}"));
                 }
@@ -6416,6 +6470,50 @@ impl App {
             self.show_info(format!(
                 "SyncTeX: {basename}:{line} (set synctex_editor in config to open editor)"
             ));
+        }
+    }
+
+    fn test_synctex_editor(&mut self) {
+        let test_file = "/tmp/synctex_test.txt";
+        if std::fs::write(test_file, "SyncTeX editor test from Bookokrat\n").is_err() {
+            self.show_error("Failed to create test file");
+            return;
+        }
+
+        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+            let cmd = editor_cmd
+                .replace("{file}", test_file)
+                .replace("{line}", "1")
+                .replace("{column}", "0");
+            log::info!("SyncTeX test: launching editor: {cmd}");
+            match std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .output()
+            {
+                Ok(output) if output.status.success() => {
+                    self.show_info("SyncTeX test: OK");
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let msg = if stderr.trim().is_empty() {
+                        format!("exit code {}", output.status.code().unwrap_or(-1))
+                    } else {
+                        stderr.trim().to_string()
+                    };
+                    log::error!("SyncTeX test failed: {msg}");
+                    self.show_error(format!("SyncTeX test: {msg}"));
+                }
+                Err(e) => {
+                    log::error!("SyncTeX test failed: {e}");
+                    self.show_error(format!("SyncTeX test: {e}"));
+                }
+            }
+        } else {
+            self.show_info("No synctex_editor configured");
         }
     }
 
