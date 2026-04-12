@@ -516,7 +516,7 @@ impl TerminalInput {
         let column = cx.saturating_sub(1);
         let row = cy.saturating_sub(1);
 
-        let modifiers = KeyModifiers::from_bits_truncate(((cb >> 2) & 0x07) as u8);
+        let modifiers = parse_mouse_modifiers(cb);
 
         let button = match cb & 0x43 {
             0 => MouseButton::Left,
@@ -662,6 +662,24 @@ fn parse_modifier_num(s: &str) -> KeyModifiers {
     mods
 }
 
+/// Parse SGR mouse modifiers from the raw button code.
+///
+/// Xterm/SGR mouse uses bit 2 = Shift, bit 3 = Alt/Meta, bit 4 = Control.
+/// `crossterm::KeyModifiers` uses a different layout, so map explicitly.
+fn parse_mouse_modifiers(cb: u16) -> KeyModifiers {
+    let mut mods = KeyModifiers::empty();
+    if cb & 4 != 0 {
+        mods |= KeyModifiers::SHIFT;
+    }
+    if cb & 8 != 0 {
+        mods |= KeyModifiers::ALT;
+    }
+    if cb & 16 != 0 {
+        mods |= KeyModifiers::CONTROL;
+    }
+    mods
+}
+
 /// Event source that uses the unified terminal input.
 pub struct UnifiedEventSource {
     input: TerminalInput,
@@ -738,6 +756,18 @@ mod tests {
         assert_eq!(parse_modifier_num("5"), KeyModifiers::CONTROL);
         assert_eq!(
             parse_modifier_num("6"),
+            KeyModifiers::SHIFT | KeyModifiers::CONTROL
+        );
+    }
+
+    #[test]
+    fn test_sgr_mouse_modifier_parsing() {
+        assert_eq!(parse_mouse_modifiers(0), KeyModifiers::empty());
+        assert_eq!(parse_mouse_modifiers(4), KeyModifiers::SHIFT);
+        assert_eq!(parse_mouse_modifiers(8), KeyModifiers::ALT);
+        assert_eq!(parse_mouse_modifiers(16), KeyModifiers::CONTROL);
+        assert_eq!(
+            parse_mouse_modifiers(4 | 16),
             KeyModifiers::SHIFT | KeyModifiers::CONTROL
         );
     }

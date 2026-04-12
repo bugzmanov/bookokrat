@@ -1,4 +1,4 @@
-use std::{fs::File, io::stdout, path::Path};
+use std::{fs::OpenOptions, io::stdout, path::Path};
 
 use anyhow::Result;
 use clap::Parser;
@@ -38,6 +38,43 @@ fn find_most_recent_book() -> Option<library::MostRecentBook> {
     library::find_most_recent_book_in(&libraries_dir)
 }
 
+/// Handle --synctex-forward: connect to a running instance's socket and send a forward search command.
+///
+/// Format: "LINE:COLUMN:FILE" (matches the Zathura/SumatraPDF convention)
+#[cfg(feature = "pdf")]
+fn handle_synctex_forward(spec: &str, pdf_file: Option<&str>) -> Result<()> {
+    use bookokrat::pdf::synctex;
+
+    // Parse "line:column:file"
+    let parts: Vec<&str> = spec.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        anyhow::bail!("Invalid --synctex-forward format: expected LINE:COLUMN:FILE, got '{spec}'");
+    }
+    let line: u32 = parts[0]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid line number: '{}'", parts[0]))?;
+    let column: u32 = parts[1]
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid column number: '{}'", parts[1]))?;
+    let file = parts[2];
+
+    // Determine socket path from the PDF file argument
+    let pdf_path = pdf_file
+        .ok_or_else(|| anyhow::anyhow!("--synctex-forward requires a PDF file argument"))?;
+    let socket_path = synctex::synctex_socket_path(Path::new(pdf_path));
+
+    if !socket_path.exists() {
+        anyhow::bail!(
+            "No running Bookokrat instance found for '{}' (expected socket at {})",
+            pdf_path,
+            socket_path.display()
+        );
+    }
+
+    synctex::send_forward_command(&socket_path, file, line, column)
+        .map_err(|e| anyhow::anyhow!("SyncTeX forward search failed: {e}"))
+}
+
 fn main() -> Result<()> {
     // Initialize panic handler first, before any other setup
     panic_handler::initialize_panic_handler();
@@ -57,6 +94,12 @@ fn main() -> Result<()> {
                 return print::cmd_print(file, *toc, *info, *chapter, *pages);
             }
         }
+    }
+
+    // SyncTeX forward search client mode: send command to running instance and exit
+    #[cfg(feature = "pdf")]
+    if let Some(ref fwd) = args.synctex_forward {
+        return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
     // Resolve library directory from file argument or CWD
@@ -82,8 +125,11 @@ fn main() -> Result<()> {
 
     // Initialize logging with html5ever DEBUG logs filtered out
     let log_file = match log_path {
-        Ok(ref p) => File::create(p)?,
-        Err(_) => File::create("bookokrat.log")?,
+        Ok(ref p) => OpenOptions::new().create(true).append(true).open(p)?,
+        Err(_) => OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("bookokrat.log")?,
     };
     WriteLogger::init(
         LevelFilter::Debug,
@@ -97,6 +143,11 @@ fn main() -> Result<()> {
     if let Err(ref e) = lib_paths {
         warn!("Failed to resolve XDG library paths, falling back to CWD: {e}");
     }
+    info!(
+        "=== Starting bookokrat {} pid={} ===",
+        env!("CARGO_PKG_VERSION"),
+        std::process::id()
+    );
 
     // Validate file argument before entering TUI
     if let Some(ref path) = args.file {
@@ -168,11 +219,8 @@ fn main() -> Result<()> {
             }
         });
     // In test mode: no auto-load, ephemeral bookmarks
-    let auto_load_recent = should_auto_load_recent(
-        args.file.as_deref(),
-        args.test_mode,
-        args.continue_reading,
-    );
+    let auto_load_recent =
+        should_auto_load_recent(args.file.as_deref(), args.test_mode, args.continue_reading);
     let (bookmark_file, comments_dir) = if args.test_mode {
         (None, None)
     } else if let Ok(ref paths) = lib_paths {

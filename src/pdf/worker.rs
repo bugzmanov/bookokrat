@@ -343,9 +343,27 @@ pub fn render_worker(
         }
 
         match request {
-            RenderRequest::Page { id, page, params }
-            | RenderRequest::Prefetch { id, page, params } => {
-                handle_page_request_backend(&backend, id, page, &params, &cache, &responses);
+            RenderRequest::Page {
+                id,
+                page,
+                params,
+                render_generation,
+            }
+            | RenderRequest::Prefetch {
+                id,
+                page,
+                params,
+                render_generation,
+            } => {
+                handle_page_request_backend(
+                    &backend,
+                    id,
+                    page,
+                    &params,
+                    &cache,
+                    &responses,
+                    render_generation,
+                );
             }
 
             RenderRequest::ExtractText { id, bounds, params } => {
@@ -372,13 +390,30 @@ fn handle_page_request_backend(
     params: &RenderParams,
     cache: &Arc<Mutex<PageCache>>,
     responses: &Sender<RenderResponse>,
+    render_generation: u64,
 ) {
     match backend {
         DocumentBackend::Pdf(doc) => {
-            handle_page_request(doc, id, page_num, params, cache, responses);
+            handle_page_request(
+                doc,
+                id,
+                page_num,
+                params,
+                cache,
+                responses,
+                render_generation,
+            );
         }
         DocumentBackend::Djvu(doc) => {
-            handle_djvu_page_request(doc, id, page_num, params, cache, responses);
+            handle_djvu_page_request(
+                doc,
+                id,
+                page_num,
+                params,
+                cache,
+                responses,
+                render_generation,
+            );
         }
     }
 }
@@ -390,6 +425,7 @@ fn handle_page_request(
     params: &RenderParams,
     cache: &Arc<Mutex<PageCache>>,
     responses: &Sender<RenderResponse>,
+    render_generation: u64,
 ) {
     let key = CacheKey::from_params(page_num, params);
 
@@ -402,6 +438,7 @@ fn handle_page_request(
             id,
             page: page_num,
             data: Arc::clone(&cached),
+            render_generation,
         });
         return;
     }
@@ -416,6 +453,7 @@ fn handle_page_request(
                 id,
                 page: page_num,
                 data: Arc::clone(&cached),
+                render_generation,
             });
         }
         Err(e) => {
@@ -449,12 +487,16 @@ pub fn render_page(
     log::info!(
         "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
         page_num,
-        page_bounds.0, page_bounds.1,
-        viewport_px.0, viewport_px.1,
+        page_bounds.0,
+        page_bounds.1,
+        viewport_px.0,
+        viewport_px.1,
         params.scale,
-        params.cell_size.width, params.cell_size.height,
+        params.cell_size.width,
+        params.cell_size.height,
         spec.mag,
-        spec.output_width, spec.output_height,
+        spec.output_width,
+        spec.output_height,
         (spec.output_width / f32::from(params.cell_size.width)) as u16,
         (spec.output_height / f32::from(params.cell_size.height)) as u16,
     );
@@ -1211,6 +1253,7 @@ fn handle_djvu_page_request(
     params: &RenderParams,
     cache: &Arc<Mutex<PageCache>>,
     responses: &Sender<RenderResponse>,
+    render_generation: u64,
 ) {
     let key = CacheKey::from_params(page_num, params);
 
@@ -1223,6 +1266,7 @@ fn handle_djvu_page_request(
             id,
             page: page_num,
             data: Arc::clone(&cached),
+            render_generation,
         });
         return;
     }
@@ -1237,6 +1281,7 @@ fn handle_djvu_page_request(
                 id,
                 page: page_num,
                 data: Arc::clone(&cached),
+                render_generation,
             });
         }
         Err(e) => {

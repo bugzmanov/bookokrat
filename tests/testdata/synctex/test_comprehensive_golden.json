@@ -1,0 +1,48 @@
+{
+  "description": "Golden snapshot for test_comprehensive.tex - 20 pages with real prose, math, code, TikZ, pgfplots, tables. Generated with synctex CLI v1.5 from TeX Live 2026.",
+  "source_file": "test_comprehensive.tex",
+  "forward_search": [
+    {
+      "description": "Introduction text (page 3, line 48)",
+      "query": { "file": "test_comprehensive.tex", "line": 48, "column": 1 },
+      "expected": { "page": 3, "h": 71.999985, "v": 82.958893, "W": 451.275604, "H": 9.962625 }
+    },
+    {
+      "description": "Code listing area (page 8, line 305)",
+      "query": { "file": "test_comprehensive.tex", "line": 305, "column": 1 },
+      "expected": { "page": 8, "h": 71.999985, "v": 85.748421, "W": 451.275604, "H": 12.752151 }
+    },
+    {
+      "description": "Real prose - distributed systems (page 18, line 785)",
+      "query": { "file": "test_comprehensive.tex", "line": 785, "column": 1 },
+      "expected": { "page": 18, "h": 71.999985, "v": 252.368210, "W": 451.275604, "H": 9.696959 }
+    }
+  ],
+  "inverse_search": [
+    {
+      "description": "Page 3 introduction text",
+      "query": { "page": 3, "x": 200.0, "y": 110.0 },
+      "expected": { "file": "test_comprehensive.tex", "line": 52 }
+    },
+    {
+      "description": "Page 6 text near diagram",
+      "query": { "page": 6, "x": 200.0, "y": 380.0 },
+      "expected": { "file": "test_comprehensive.tex", "line": 216 }
+    },
+    {
+      "description": "Page 8 code listing",
+      "query": { "page": 8, "x": 200.0, "y": 110.0 },
+      "expected": { "file": "test_comprehensive.tex", "line": 307 }
+    },
+    {
+      "description": "Page 15 real prose",
+      "query": { "page": 15, "x": 200.0, "y": 300.0 },
+      "expected": { "file": "test_comprehensive.tex", "line": 655 }
+    },
+    {
+      "description": "Page 18 distributed systems prose",
+      "query": { "page": 18, "x": 200.0, "y": 200.0 },
+      "expected": { "file": "test_comprehensive.tex", "line": 780 }
+    }
+  ]
+}

@@ -58,6 +58,105 @@ impl InputResponse {
 }
 
 impl PdfReaderState {
+    fn kitty_dual_scroll_page_slice(
+        &self,
+        page_idx: usize,
+        viewport_width: u16,
+        zoom_factor: f32,
+        cell_pan_from_left: u16,
+    ) -> Option<(u16, u16, u16)> {
+        let row_start = page_idx & !1;
+        let left_page = row_start;
+        let right_page = row_start.saturating_add(1);
+        let left_cell = self
+            .rendered
+            .get(left_page)
+            .and_then(|p| {
+                p.img
+                    .as_ref()
+                    .map(|img| img.cell_dimensions())
+                    .or(p.full_cell_size)
+            })
+            .unwrap_or(CellSize::new(0, 0));
+        let right_cell = self
+            .rendered
+            .get(right_page)
+            .and_then(|p| {
+                p.img
+                    .as_ref()
+                    .map(|img| img.cell_dimensions())
+                    .or(p.full_cell_size)
+            })
+            .unwrap_or(CellSize::new(0, 0));
+
+        let left_dest_w = ((f32::from(left_cell.width) * zoom_factor).ceil() as u16).max(1);
+        let right_dest_w = ((f32::from(right_cell.width) * zoom_factor).ceil() as u16).max(1);
+        let has_right = right_cell.width > 0 && right_cell.height > 0;
+        let gap = if has_right {
+            DUAL_PAGE_GAP_CELLS.min(viewport_width.saturating_sub(1))
+        } else {
+            0
+        };
+        let group_width = if has_right {
+            left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
+        } else {
+            left_dest_w
+        };
+
+        if group_width <= viewport_width {
+            let group_x = (viewport_width - group_width) / 2;
+            let (screen_start, screen_end) = if page_idx == left_page {
+                (group_x, group_x.saturating_add(left_dest_w))
+            } else if has_right && page_idx == right_page {
+                let start = group_x.saturating_add(left_dest_w).saturating_add(gap);
+                (start, start.saturating_add(right_dest_w))
+            } else {
+                return None;
+            };
+            return Some((screen_start, screen_end, 0));
+        }
+
+        let viewport_source_w = (f32::from(viewport_width) / zoom_factor).ceil() as u16;
+        let vis_start = cell_pan_from_left;
+        let vis_end = vis_start.saturating_add(viewport_source_w);
+        let gap_source = if has_right {
+            ((f32::from(gap) / zoom_factor).ceil() as u16).max(1)
+        } else {
+            0
+        };
+        let (page_start, page_width) = if page_idx == left_page {
+            (0u16, left_cell.width)
+        } else if has_right && page_idx == right_page {
+            (left_cell.width.saturating_add(gap_source), right_cell.width)
+        } else {
+            return None;
+        };
+        let page_end = page_start.saturating_add(page_width);
+        let inter_start = page_start.max(vis_start);
+        let inter_end = page_end.min(vis_end);
+        if inter_end <= inter_start {
+            return None;
+        }
+
+        let rel_start = inter_start.saturating_sub(vis_start);
+        let rel_end = inter_end.saturating_sub(vis_start);
+        let screen_start = (f32::from(rel_start) * zoom_factor).floor() as u16;
+        let screen_end_unclamped = (f32::from(rel_end) * zoom_factor).ceil() as u16;
+        let available_cols = viewport_width.saturating_sub(screen_start);
+        let screen_width = screen_end_unclamped
+            .saturating_sub(screen_start)
+            .min(available_cols);
+        if screen_width == 0 {
+            return None;
+        }
+
+        Some((
+            screen_start,
+            screen_start.saturating_add(screen_width),
+            inter_start.saturating_sub(page_start),
+        ))
+    }
+
     pub fn is_text_input_active(&self) -> bool {
         self.comment_input.is_active()
             || self.go_to_page_input.is_some()
@@ -635,6 +734,14 @@ impl PdfReaderState {
                     self.quick_page_jump = None;
                     return self.start_go_to_page_input();
                 }
+                if self
+                    .key_seq
+                    .matches(&[KeyCode::Char('g'), KeyCode::Char('d')])
+                {
+                    self.key_seq.clear();
+                    self.quick_page_jump = None;
+                    return self.handle_synctex_normal_mode();
+                }
 
                 // Any non-digit, non-g key clears quick page jump
                 if c != 'g' {
@@ -703,6 +810,11 @@ impl PdfReaderState {
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Option<InputAction> {
+        // SyncTeX inverse search (jump to source)
+        if Self::is_synctex_inverse_mouse_trigger(mouse) {
+            return self.handle_synctex_inverse_click(mouse.column, mouse.row);
+        }
+
         match mouse.kind {
             MouseEventKind::ScrollRight => self.handle_mouse_scroll(mouse, ScrollDirection::Right),
             MouseEventKind::ScrollDown => self.handle_mouse_scroll(mouse, ScrollDirection::Down),
@@ -749,6 +861,16 @@ impl PdfReaderState {
                 }
             }
             _ => None,
+        }
+    }
+
+    fn is_synctex_inverse_mouse_trigger(mouse: MouseEvent) -> bool {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Right) => true,
+            MouseEventKind::Down(MouseButton::Left) => {
+                mouse.modifiers.contains(KeyModifiers::CONTROL)
+            }
+            _ => false,
         }
     }
 
@@ -2002,6 +2124,7 @@ impl PdfReaderState {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
         if page != self.page {
             self.set_page(page);
@@ -2292,6 +2415,15 @@ impl PdfReaderState {
             || term_row < img_area.y
             || term_row >= img_area.y + img_area.height
         {
+            log::info!(
+                "terminal_to_selection_point: OUTSIDE img_area pos=({},{}) area=({},{} {}x{})",
+                term_col,
+                term_row,
+                img_area.x,
+                img_area.y,
+                img_area.width,
+                img_area.height
+            );
             return None;
         }
 
@@ -2475,36 +2607,35 @@ impl PdfReaderState {
                         let right_dest_w =
                             ((f32::from(right_cell.width) * zoom_factor).ceil() as u16).max(1);
                         let has_right = right_cell.height > 0 && right_cell.width > 0;
-                        let gap = if has_right {
-                            DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
-                        } else {
-                            0
-                        };
                         let row_dest_h = left_dest_h.max(right_dest_h);
                         let row_start = cumulative_y;
                         let row_end = row_start + row_dest_h;
 
                         if virtual_y >= row_start && virtual_y < row_end {
-                            let group_width = if has_right {
-                                left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
-                            } else {
-                                left_dest_w
-                            };
-                            let group_x = if group_width < img_area.width {
-                                (img_area.width - group_width) / 2
-                            } else {
-                                0
-                            };
-                            let left_x_start = group_x;
-                            let left_x_end = left_x_start.saturating_add(left_dest_w);
-                            let right_x_start = left_x_end.saturating_add(gap);
-                            let right_x_end = right_x_start.saturating_add(right_dest_w);
                             let y_in_row = virtual_y - row_start;
-                            if rel_col >= left_x_start && rel_col < left_x_end {
+                            if let Some((left_x_start, left_x_end, _)) = self
+                                .kitty_dual_scroll_page_slice(
+                                    left_idx,
+                                    img_area.width,
+                                    zoom_factor,
+                                    cell_pan_from_left,
+                                )
+                                && rel_col >= left_x_start
+                                && rel_col < left_x_end
+                            {
                                 target_page = Some((left_idx, left_dest_w));
                                 local_y = y_in_row;
                                 break;
-                            } else if has_right && rel_col >= right_x_start && rel_col < right_x_end
+                            } else if has_right
+                                && let Some((right_x_start, right_x_end, _)) = self
+                                    .kitty_dual_scroll_page_slice(
+                                        right_idx,
+                                        img_area.width,
+                                        zoom_factor,
+                                        cell_pan_from_left,
+                                    )
+                                && rel_col >= right_x_start
+                                && rel_col < right_x_end
                             {
                                 target_page = Some((right_idx, right_dest_w));
                                 local_y = y_in_row;
@@ -2557,7 +2688,7 @@ impl PdfReaderState {
             let rendered_page = self.rendered.get(page_idx)?;
             let (px_per_cell_x, px_per_cell_y) = pixels_per_cell(rendered_page);
 
-            let x_in_dest = if page_layout_mode == PdfPageLayoutMode::Dual {
+            let source_x_cells = if page_layout_mode == PdfPageLayoutMode::Dual {
                 let is_page_mode_dual = is_page_mode && page_layout_mode == PdfPageLayoutMode::Dual;
                 if is_page_mode_dual {
                     let left_page = self.page;
@@ -2600,38 +2731,49 @@ impl PdfReaderState {
                     } else {
                         0
                     };
-                    if page_idx % 2 == 0 {
+                    if page_idx == left_page {
                         if rel_col < group_x || rel_col >= group_x.saturating_add(left_dest_w) {
                             return None;
                         }
-                        rel_col - group_x
+                        f32::from(rel_col - group_x) / zoom_factor
                     } else {
                         let right_start = group_x.saturating_add(left_dest_w).saturating_add(gap);
                         if rel_col < right_start || rel_col >= right_start.saturating_add(dest_w) {
                             return None;
                         }
-                        rel_col - right_start
+                        f32::from(rel_col - right_start) / zoom_factor
                     }
+                } else if let Some((screen_start, screen_end, source_start)) = self
+                    .kitty_dual_scroll_page_slice(
+                        page_idx,
+                        img_area.width,
+                        zoom_factor,
+                        cell_pan_from_left,
+                    )
+                {
+                    if rel_col < screen_start || rel_col >= screen_end {
+                        return None;
+                    }
+                    f32::from(source_start) + f32::from(rel_col - screen_start) / zoom_factor
                 } else if dest_w <= img_area.width {
                     let x_offset = (img_area.width - dest_w) / 2;
                     if rel_col < x_offset || rel_col >= x_offset + dest_w {
                         return None;
                     }
-                    rel_col - x_offset
+                    f32::from(rel_col - x_offset) / zoom_factor
                 } else {
-                    rel_col + cell_pan_from_left
+                    f32::from(cell_pan_from_left) + f32::from(rel_col) / zoom_factor
                 }
-            } else if dest_w <= img_area.width {
-                let x_offset = (img_area.width - dest_w) / 2;
-                if rel_col < x_offset || rel_col >= x_offset + dest_w {
-                    return None;
-                }
-                rel_col - x_offset
             } else {
-                rel_col + cell_pan_from_left
+                Self::kitty_single_page_source_x_cells(
+                    rel_col,
+                    img_area.width,
+                    dest_w,
+                    zoom_factor,
+                    cell_pan_from_left,
+                )?
             };
 
-            let source_x_cells = f32::from(x_in_dest) / zoom_factor;
             let source_y_cells = page_local_y as f32 / zoom_factor;
 
             let pdf_x = source_x_cells * px_per_cell_x;
@@ -3074,6 +3216,50 @@ impl PdfReaderState {
         }
     }
 
+    fn kitty_single_page_source_x_cells(
+        rel_col: u16,
+        viewport_width: u16,
+        dest_w: u16,
+        zoom_factor: f32,
+        pan_source_cells: u16,
+    ) -> Option<f32> {
+        if dest_w <= viewport_width {
+            let x_offset = (viewport_width - dest_w) / 2;
+            if rel_col < x_offset || rel_col >= x_offset.saturating_add(dest_w) {
+                return None;
+            }
+            Some(f32::from(rel_col - x_offset) / zoom_factor)
+        } else {
+            if rel_col >= viewport_width {
+                return None;
+            }
+            Some(f32::from(pan_source_cells) + f32::from(rel_col) / zoom_factor)
+        }
+    }
+
+    fn line_index_at_or_nearest_y(line_bounds: &[crate::pdf::LineBounds], y: f32) -> Option<usize> {
+        let mut best_line = None;
+        let mut best_dist = f32::MAX;
+
+        for (idx, line) in line_bounds.iter().enumerate() {
+            if y >= line.y0 && y <= line.y1 {
+                return Some(idx);
+            }
+
+            let dist = if y < line.y0 {
+                line.y0 - y
+            } else {
+                y - line.y1
+            };
+            if dist < best_dist {
+                best_dist = dist;
+                best_line = Some(idx);
+            }
+        }
+
+        best_line
+    }
+
     fn selection_point_to_cursor(
         &self,
         point: crate::pdf::SelectionPoint,
@@ -3086,25 +3272,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let mut best_line = None;
-        let mut best_dist = f32::MAX;
-        for (idx, line) in line_bounds.iter().enumerate() {
-            if point.pdf_y >= line.y0 && point.pdf_y <= line.y1 {
-                best_line = Some(idx);
-                break;
-            }
-            let dist = if point.pdf_y < line.y0 {
-                line.y0 - point.pdf_y
-            } else {
-                point.pdf_y - line.y1
-            };
-            if dist < best_dist {
-                best_dist = dist;
-                best_line = Some(idx);
-            }
-        }
-
-        let line_idx = best_line?;
+        let line_idx = Self::line_index_at_or_nearest_y(line_bounds, point.pdf_y)?;
         let line = line_bounds.get(line_idx)?;
         if line.chars.is_empty() {
             return None;
@@ -3130,38 +3298,44 @@ impl PdfReaderState {
         })
     }
 
-    fn find_word_bounds_at(&self, point: &crate::pdf::SelectionPoint) -> Option<(f32, f32)> {
-        use crate::pdf::LineBounds;
+    pub(crate) fn apply_synctex_forward_target(
+        &mut self,
+        page: usize,
+        pdf_x_pts: f64,
+        pdf_y_pts: f64,
+    ) -> bool {
+        let Some(scale_factor) = self.rendered.get(page).and_then(|r| r.scale_factor) else {
+            return false;
+        };
+        let point = crate::pdf::SelectionPoint {
+            page,
+            pdf_x: (pdf_x_pts * f64::from(scale_factor)) as f32,
+            pdf_y: (pdf_y_pts * f64::from(scale_factor)) as f32,
+            ..Default::default()
+        };
+        let Some(cursor) = self.selection_point_to_cursor(point) else {
+            return false;
+        };
 
+        let previous_cursor = self.normal_mode.cursor;
+        self.normal_mode.cursor = cursor;
+        let _ = self.ensure_cursor_visible();
+        self.normal_mode.cursor = previous_cursor;
+        true
+    }
+
+    fn find_word_bounds_at(&self, point: &crate::pdf::SelectionPoint) -> Option<(f32, f32)> {
+        let cursor = self.selection_point_to_cursor(*point)?;
         let line_bounds = self
             .rendered
             .get(point.page)
             .map(|r| r.line_bounds.as_slice())?;
-
-        fn find_line_at_y(bounds: &[LineBounds], y: f32) -> Option<&LineBounds> {
-            bounds.iter().find(|lb| y >= lb.y0 && y <= lb.y1)
-        }
-
-        let line = find_line_at_y(line_bounds, point.pdf_y)?;
-        if line.chars.is_empty() {
-            return None;
-        }
-
-        let char_idx = line
-            .chars
-            .iter()
-            .enumerate()
-            .min_by(|(_, a), (_, b)| {
-                let dist_a = (a.x - point.pdf_x).abs();
-                let dist_b = (b.x - point.pdf_x).abs();
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(idx, _)| idx)?;
+        let line = line_bounds.get(cursor.line_idx)?;
+        let char_idx = cursor.char_idx;
 
         let is_word_char = |c: char| c.is_alphanumeric() || c == '_' || c == '-' || c == '\'';
 
+        let clicked_char = line.chars[char_idx].c;
         let mut start_idx = char_idx;
         let mut end_idx = char_idx;
 
@@ -3172,6 +3346,20 @@ impl PdfReaderState {
         while end_idx < line.chars.len() - 1 && is_word_char(line.chars[end_idx + 1].c) {
             end_idx += 1;
         }
+
+        let word: String = line.chars[start_idx..=end_idx]
+            .iter()
+            .map(|ci| ci.c)
+            .collect();
+        log::info!(
+            "find_word_bounds_at: clicked='{}' char_idx={} start_idx={} end_idx={} word='{}' line_chars={}",
+            clicked_char,
+            char_idx,
+            start_idx,
+            end_idx,
+            word,
+            line.chars.len()
+        );
 
         let start_x = line.chars[start_idx].x;
         let end_x = if end_idx + 1 < line.chars.len() {
@@ -3187,21 +3375,15 @@ impl PdfReaderState {
         &self,
         point: &crate::pdf::SelectionPoint,
     ) -> Option<(f32, f32, f32, f32)> {
-        use crate::pdf::LineBounds;
-
+        let cursor = self.selection_point_to_cursor(*point)?;
         let line_bounds = self
             .rendered
             .get(point.page)
             .map(|r| r.line_bounds.as_slice())?;
-
-        fn find_line_at_y(bounds: &[LineBounds], y: f32) -> Option<&LineBounds> {
-            bounds.iter().find(|lb| y >= lb.y0 && y <= lb.y1)
-        }
-
-        let clicked_line = find_line_at_y(line_bounds, point.pdf_y)?;
+        let clicked_line = line_bounds.get(cursor.line_idx)?;
         let block_id = clicked_line.block_id;
 
-        let paragraph_lines: Vec<&LineBounds> = line_bounds
+        let paragraph_lines: Vec<&crate::pdf::LineBounds> = line_bounds
             .iter()
             .filter(|lb| lb.block_id == block_id)
             .collect();
@@ -4278,6 +4460,9 @@ impl PdfReaderState {
                 }
                 return Some(InputAction::CursorChanged(self.get_cursor_rect(), viewport));
             }
+            if c == 'd' {
+                return self.handle_synctex_normal_mode();
+            }
             return Some(InputAction::Redraw);
         }
 
@@ -4980,6 +5165,75 @@ impl PdfReaderState {
         self.page_search.prev_match();
         self.jump_to_current_search_match()
     }
+
+    // -- SyncTeX inverse search -----------------------------------------------
+
+    /// Handle a mouse inverse-search gesture for SyncTeX.
+    fn handle_synctex_inverse_click(&mut self, col: u16, row: u16) -> Option<InputAction> {
+        let (_, font_size) = self.coord_info?;
+        let point = self.terminal_to_selection_point(col, row, font_size)?;
+        self.synctex_inverse_from_pixel(point.pdf_x, point.pdf_y, point.page)
+    }
+
+    fn synctex_inverse_anchor_from_cursor(
+        &self,
+        cursor: crate::pdf::CursorPosition,
+    ) -> Option<(f32, f32, usize)> {
+        let line_bounds = self.rendered.get(cursor.page)?.line_bounds.as_slice();
+        let line = line_bounds.get(cursor.line_idx)?;
+        let char_x = line
+            .chars
+            .get(cursor.char_idx)
+            .map(|ci| ci.x)
+            .unwrap_or(line.x0);
+        let y = (line.y0 + line.y1) / 2.0;
+        Some((char_x, y, cursor.page))
+    }
+
+    fn synctex_inverse_anchor(&self) -> Option<(f32, f32, usize)> {
+        if self.normal_mode.is_visual_active() {
+            return self.synctex_inverse_anchor_from_cursor(self.normal_mode.cursor);
+        }
+
+        if let Some((_, end)) = self.selection.get_ordered_bounds() {
+            return Some((end.pdf_x, end.pdf_y, end.page));
+        }
+
+        if !self.normal_mode.active {
+            return None;
+        }
+
+        self.synctex_inverse_anchor_from_cursor(self.normal_mode.cursor)
+    }
+
+    /// Handle `gd` in normal mode for SyncTeX inverse search.
+    fn handle_synctex_normal_mode(&self) -> Option<InputAction> {
+        let (pdf_x, pdf_y, page) = self.synctex_inverse_anchor()?;
+        self.synctex_inverse_from_pixel(pdf_x, pdf_y, page)
+    }
+
+    /// Convert PDF pixel coordinates to PDF points and run inverse search.
+    fn synctex_inverse_from_pixel(
+        &self,
+        pdf_x: f32,
+        pdf_y: f32,
+        page: usize,
+    ) -> Option<InputAction> {
+        let scale = self
+            .rendered
+            .get(page)
+            .and_then(|r| r.scale_factor)
+            .unwrap_or(1.0);
+        let x_pts = pdf_x as f64 / scale as f64;
+        let y_pts = pdf_y as f64 / scale as f64;
+        // SyncTeX uses 1-indexed pages
+        let scanner = self.synctex_scanner.as_ref()?;
+        let result = scanner.inverse_search(page + 1, x_pts, y_pts)?;
+        Some(InputAction::SyncTexInverse {
+            file: result.file,
+            line: result.line,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -5279,6 +5533,8 @@ impl PdfReaderState {
                 // Also trigger converter dump
                 send_conversion(crate::pdf::ConversionCommand::DumpState);
             }
+            // SyncTexInverse is handled by main_app, not here
+            InputAction::SyncTexInverse { .. } => {}
         }
 
         InputOutcome::None
@@ -5663,5 +5919,410 @@ fn extract_pdf_rgb(color: &ratatui::style::Color) -> (u8, u8, u8) {
     match color {
         ratatui::style::Color::Rgb(r, g, b) => (*r, *g, *b),
         _ => (0, 0, 0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PdfReaderState;
+    use crate::pdf::{CellSize, CharInfo, CursorPosition, LineBounds, SelectionPoint, VisualMode};
+    use crate::settings::{
+        PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
+        set_pdf_page_layout_mode, set_pdf_render_mode,
+    };
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
+        MouseEventKind,
+    };
+    use ratatui::layout::Rect;
+    use serial_test::serial;
+    use std::path::Path;
+
+    fn line(y0: f32, y1: f32) -> LineBounds {
+        LineBounds {
+            x0: 0.0,
+            y0,
+            x1: 10.0,
+            y1,
+            chars: vec![CharInfo { x: 1.0, c: 'x' }],
+            block_id: 0,
+        }
+    }
+
+    fn reader_with_lines(lines: Vec<LineBounds>) -> PdfReaderState {
+        let mut state = PdfReaderState::new(
+            "test.pdf".to_string(),
+            true,
+            false,
+            0,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            0,
+            false,
+            false,
+            None,
+            String::new(),
+        );
+        state.rendered = vec![crate::widget::pdf_reader::RenderedInfo {
+            line_bounds: lines,
+            ..Default::default()
+        }];
+        state
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::empty(),
+            kind: KeyEventKind::Press,
+            state: KeyEventState::empty(),
+        }
+    }
+
+    fn non_kitty_reader_with_lines(lines: Vec<LineBounds>) -> PdfReaderState {
+        let mut state = PdfReaderState::new(
+            "test.pdf".to_string(),
+            false,
+            false,
+            0,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            0,
+            false,
+            false,
+            None,
+            String::new(),
+        );
+        state.rendered = vec![crate::widget::pdf_reader::RenderedInfo {
+            line_bounds: lines,
+            scale_factor: Some(1.0),
+            ..Default::default()
+        }];
+        state.coord_info = Some((Rect::new(0, 0, 80, 10), (1, 10)));
+        state.last_render.img_area_width = 80;
+        state.last_render.img_area_height = 10;
+        state
+    }
+
+    struct PdfModeGuard {
+        render_mode: PdfRenderMode,
+        layout_mode: PdfPageLayoutMode,
+    }
+
+    impl PdfModeGuard {
+        fn set(render_mode: PdfRenderMode, layout_mode: PdfPageLayoutMode) -> Self {
+            let guard = Self {
+                render_mode: get_pdf_render_mode(),
+                layout_mode: get_pdf_page_layout_mode(),
+            };
+            set_pdf_render_mode(render_mode);
+            set_pdf_page_layout_mode(layout_mode);
+            guard
+        }
+    }
+
+    impl Drop for PdfModeGuard {
+        fn drop(&mut self) {
+            set_pdf_render_mode(self.render_mode);
+            set_pdf_page_layout_mode(self.layout_mode);
+        }
+    }
+
+    fn rendered_page(cell_width: u16, cell_height: u16) -> crate::widget::pdf_reader::RenderedInfo {
+        crate::widget::pdf_reader::RenderedInfo {
+            full_cell_size: Some(CellSize::new(cell_width, cell_height)),
+            pixel_w: Some(u32::from(cell_width) * 10),
+            pixel_h: Some(u32::from(cell_height) * 10),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn line_index_at_or_nearest_y_prefers_exact_or_nearest_line() {
+        let bounds = vec![line(10.0, 20.0), line(30.0, 40.0)];
+
+        assert_eq!(
+            PdfReaderState::line_index_at_or_nearest_y(&bounds, 15.0),
+            Some(0)
+        );
+        assert_eq!(
+            PdfReaderState::line_index_at_or_nearest_y(&bounds, 27.0),
+            Some(1)
+        );
+        assert_eq!(
+            PdfReaderState::line_index_at_or_nearest_y(&bounds, 5.0),
+            Some(0)
+        );
+        assert_eq!(
+            PdfReaderState::line_index_at_or_nearest_y(&bounds, 45.0),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn kitty_single_page_source_x_cells_keeps_pan_in_source_space() {
+        let source_x =
+            PdfReaderState::kitty_single_page_source_x_cells(78, 79, 120, 1.5, 40).unwrap();
+        assert!((source_x - 92.0).abs() < f32::EPSILON);
+
+        let centered =
+            PdfReaderState::kitty_single_page_source_x_cells(15, 79, 60, 2.0, 40).unwrap();
+        assert!((centered - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[serial]
+    fn dual_page_page_mode_selection_uses_current_spread_not_page_parity() {
+        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Dual);
+
+        let mut state = PdfReaderState::new(
+            "test.pdf".to_string(),
+            true,
+            false,
+            1,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            0,
+            false,
+            false,
+            None,
+            String::new(),
+        );
+        state.rendered = vec![
+            crate::widget::pdf_reader::RenderedInfo::default(),
+            rendered_page(10, 20),
+            rendered_page(10, 20),
+        ];
+        state.coord_info = Some((Rect::new(0, 0, 30, 20), (10, 10)));
+
+        let left = state.terminal_to_selection_point(6, 10, (10, 10)).unwrap();
+        assert_eq!(left.page, 1);
+        assert!((left.pdf_x - 20.0).abs() < f32::EPSILON);
+
+        let right = state.terminal_to_selection_point(18, 10, (10, 10)).unwrap();
+        assert_eq!(right.page, 2);
+        assert!((right.pdf_x - 20.0).abs() < f32::EPSILON);
+        assert!((right.pdf_y - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[serial]
+    fn dual_page_scroll_mode_selection_maps_right_page_x_with_dual_geometry() {
+        let _guard = PdfModeGuard::set(PdfRenderMode::Scroll, PdfPageLayoutMode::Dual);
+
+        let mut state = PdfReaderState::new(
+            "test.pdf".to_string(),
+            true,
+            false,
+            0,
+            1.0,
+            0,
+            0,
+            crate::theme::current_theme().clone(),
+            0,
+            false,
+            false,
+            None,
+            String::new(),
+        );
+        state.rendered = vec![rendered_page(30, 20), rendered_page(30, 20)];
+        state.coord_info = Some((Rect::new(0, 0, 80, 20), (10, 10)));
+
+        let right = state.terminal_to_selection_point(46, 10, (10, 10)).unwrap();
+        assert_eq!(right.page, 1);
+        assert!((right.pdf_x - 50.0).abs() < f32::EPSILON);
+        assert!((right.pdf_y - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn synctex_inverse_mouse_trigger_accepts_ctrl_left_and_right_click() {
+        let ctrl_left = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::CONTROL,
+        };
+        assert!(PdfReaderState::is_synctex_inverse_mouse_trigger(ctrl_left));
+
+        let right = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        assert!(PdfReaderState::is_synctex_inverse_mouse_trigger(right));
+
+        let plain_left = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        assert!(!PdfReaderState::is_synctex_inverse_mouse_trigger(
+            plain_left
+        ));
+    }
+
+    #[test]
+    fn synctex_inverse_anchor_prefers_mouse_selection_over_cursor() {
+        let mut state = reader_with_lines(vec![
+            LineBounds {
+                x0: 0.0,
+                y0: 10.0,
+                x1: 20.0,
+                y1: 20.0,
+                chars: vec![CharInfo { x: 2.0, c: 'a' }, CharInfo { x: 8.0, c: 'b' }],
+                block_id: 0,
+            },
+            LineBounds {
+                x0: 0.0,
+                y0: 30.0,
+                x1: 40.0,
+                y1: 40.0,
+                chars: vec![CharInfo { x: 12.0, c: 'c' }, CharInfo { x: 18.0, c: 'd' }],
+                block_id: 0,
+            },
+        ]);
+        state.normal_mode.active = true;
+        state.normal_mode.cursor = CursorPosition {
+            page: 0,
+            line_idx: 0,
+            char_idx: 0,
+        };
+        state.selection.start = Some(SelectionPoint {
+            term_col: 5,
+            term_row: 5,
+            page: 0,
+            pdf_x: 12.0,
+            pdf_y: 35.0,
+        });
+        state.selection.end = Some(SelectionPoint {
+            term_col: 8,
+            term_row: 5,
+            page: 0,
+            pdf_x: 18.0,
+            pdf_y: 35.0,
+        });
+
+        assert_eq!(state.synctex_inverse_anchor(), Some((18.0, 35.0, 0)));
+    }
+
+    #[test]
+    fn synctex_inverse_anchor_prefers_visual_cursor_over_stale_selection() {
+        let mut state = reader_with_lines(vec![LineBounds {
+            x0: 0.0,
+            y0: 10.0,
+            x1: 20.0,
+            y1: 20.0,
+            chars: vec![CharInfo { x: 2.0, c: 'a' }, CharInfo { x: 8.0, c: 'b' }],
+            block_id: 0,
+        }]);
+        state.normal_mode.active = true;
+        state.normal_mode.cursor = CursorPosition {
+            page: 0,
+            line_idx: 0,
+            char_idx: 1,
+        };
+        state.normal_mode.visual_mode = VisualMode::CharacterWise;
+        state.normal_mode.visual_anchor = Some(CursorPosition {
+            page: 0,
+            line_idx: 0,
+            char_idx: 0,
+        });
+        state.selection.start = Some(SelectionPoint {
+            term_col: 1,
+            term_row: 1,
+            page: 0,
+            pdf_x: 99.0,
+            pdf_y: 99.0,
+        });
+        state.selection.end = Some(SelectionPoint {
+            term_col: 2,
+            term_row: 1,
+            page: 0,
+            pdf_x: 100.0,
+            pdf_y: 99.0,
+        });
+
+        assert_eq!(state.synctex_inverse_anchor(), Some((8.0, 15.0, 0)));
+    }
+
+    #[test]
+    fn standard_mode_gd_uses_mouse_selection_when_normal_mode_is_off() {
+        let mut state = reader_with_lines(vec![]);
+        state.synctex_scanner = Some(std::sync::Arc::new(
+            crate::pdf::synctex::SyncTexScanner::open(Path::new(
+                "tests/testdata/synctex/test_main.synctex.gz",
+            ))
+            .unwrap(),
+        ));
+        state.selection.start = Some(SelectionPoint {
+            term_col: 10,
+            term_row: 10,
+            page: 0,
+            pdf_x: 150.0,
+            pdf_y: 112.0,
+        });
+        state.selection.end = Some(SelectionPoint {
+            term_col: 10,
+            term_row: 10,
+            page: 0,
+            pdf_x: 150.0,
+            pdf_y: 112.0,
+        });
+
+        assert!(
+            state
+                .handle_standard_key_event(key(KeyCode::Char('g')))
+                .is_none()
+        );
+
+        match state.handle_standard_key_event(key(KeyCode::Char('d'))) {
+            Some(crate::widget::pdf_reader::InputAction::SyncTexInverse { file, line }) => {
+                assert!(file.ends_with("test_main.tex"));
+                assert_eq!(line, 8);
+            }
+            Some(_) => panic!("expected SyncTexInverse from standard gd"),
+            None => panic!("expected SyncTexInverse from standard gd, got None"),
+        }
+    }
+
+    #[test]
+    fn synctex_forward_target_scrolls_without_moving_visible_cursor() {
+        let mut state = non_kitty_reader_with_lines(vec![
+            LineBounds {
+                x0: 0.0,
+                y0: 10.0,
+                x1: 40.0,
+                y1: 20.0,
+                chars: vec![CharInfo { x: 2.0, c: 'a' }, CharInfo { x: 8.0, c: 'b' }],
+                block_id: 0,
+            },
+            LineBounds {
+                x0: 0.0,
+                y0: 120.0,
+                x1: 60.0,
+                y1: 130.0,
+                chars: vec![CharInfo { x: 10.0, c: 'c' }, CharInfo { x: 30.0, c: 'd' }],
+                block_id: 0,
+            },
+        ]);
+        state.normal_mode.cursor = CursorPosition {
+            page: 0,
+            line_idx: 0,
+            char_idx: 0,
+        };
+
+        assert!(state.apply_synctex_forward_target(0, 30.0, 125.0));
+        assert_eq!(state.non_kitty_scroll_offset, 3);
+        assert_eq!(state.normal_mode.cursor.page, 0);
+        assert_eq!(state.normal_mode.cursor.line_idx, 0);
+        assert_eq!(state.normal_mode.cursor.char_idx, 0);
     }
 }
