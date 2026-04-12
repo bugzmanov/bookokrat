@@ -933,9 +933,7 @@ impl App {
     #[cfg(feature = "pdf")]
     fn clear_pdf_graphics(is_kitty: bool) {
         if is_kitty || crate::terminal_overlay::kitty_delete_overlay_hack_enabled() {
-            crate::terminal_overlay::emit_kitty_delete_all();
-            // Called outside draw(), so we need an explicit flush
-            let _ = std::io::Write::flush(&mut std::io::stdout());
+            let _ = crate::pdf::kittyv2::delete_all_images();
         }
     }
 

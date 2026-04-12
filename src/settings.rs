@@ -207,7 +207,7 @@ impl Default for Settings {
             lookup_display: LookupDisplay::default(),
             nav_panel_width: None,
             synctex_editor: None,
-            zen_mode_shortcut: ZenModeShortcut::SpaceZ,
+            zen_mode_shortcut: ZenModeShortcut::CtrlZ,
         }
     }
 }
