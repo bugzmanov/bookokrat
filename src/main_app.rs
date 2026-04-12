@@ -4094,13 +4094,17 @@ impl App {
                 true
             }
             KeyCode::Char('<') if !self.zen_mode && !self.has_active_popup() => {
+                let current_node = self.text_reader.get_current_node_index();
                 self.resize_nav_panel(-3);
+                self.text_reader.restore_to_node_index(current_node);
                 #[cfg(not(any(test, feature = "test-utils")))]
                 settings::set_nav_panel_width(self.nav_panel_width_override);
                 true
             }
             KeyCode::Char('>') if !self.zen_mode && !self.has_active_popup() => {
+                let current_node = self.text_reader.get_current_node_index();
                 self.resize_nav_panel(3);
+                self.text_reader.restore_to_node_index(current_node);
                 #[cfg(not(any(test, feature = "test-utils")))]
                 settings::set_nav_panel_width(self.nav_panel_width_override);
                 true
