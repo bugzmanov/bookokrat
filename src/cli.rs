@@ -28,6 +28,11 @@ pub struct Cli {
     /// Disable persistence and auto-loading
     #[arg(long)]
     pub test_mode: bool,
+
+    /// SyncTeX forward search: send LINE:COLUMN:FILE to a running instance
+    #[cfg(feature = "pdf")]
+    #[arg(long)]
+    pub synctex_forward: Option<String>,
 }
 
 #[derive(Subcommand)]

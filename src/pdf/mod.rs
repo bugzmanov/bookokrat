@@ -12,6 +12,7 @@ mod request;
 mod selection;
 mod service;
 mod state;
+pub mod synctex;
 mod types;
 mod worker;
 mod zoom;

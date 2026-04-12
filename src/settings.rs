@@ -1,7 +1,7 @@
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, RwLock};
 
 pub const CURRENT_VERSION: u32 = 3;
@@ -150,6 +150,11 @@ pub struct Settings {
 
     #[serde(default)]
     pub lookup_display: LookupDisplay,
+
+    /// Editor command for SyncTeX inverse search (PDF → source).
+    /// Placeholders: {file}, {line}, {column}
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synctex_editor: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -187,6 +192,7 @@ impl Default for Settings {
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
             nav_panel_width: None,
+            synctex_editor: None,
         }
     }
 }
@@ -216,8 +222,26 @@ fn find_existing_config() -> Option<PathBuf> {
 }
 
 pub fn load_settings() {
+    if let (Some(preferred), Some(legacy)) = (preferred_config_path(), legacy_config_path())
+        && preferred.exists()
+        && legacy.exists()
+    {
+        info!(
+            "Both preferred and legacy settings files exist; using {:?} and ignoring {:?}",
+            preferred, legacy
+        );
+    }
+
     if let Some(path) = find_existing_config() {
-        load_settings_from_path(&path);
+        if let Err((path, err)) = load_settings_from_path(&path) {
+            eprintln!("Error: Failed to parse config file:");
+            eprintln!("  {}", path.display());
+            eprintln!();
+            eprintln!("  {err}");
+            eprintln!();
+            eprintln!("Fix the file manually, or delete it to start fresh.");
+            std::process::exit(1);
+        }
     } else {
         let Some(path) = preferred_config_path() else {
             warn!("Could not determine config directory, using default settings");
@@ -234,33 +258,35 @@ pub fn load_settings() {
     }
 }
 
-fn load_settings_from_path(path: &PathBuf) {
-    match fs::read_to_string(path) {
-        Ok(content) => match serde_yaml::from_str::<Settings>(&content) {
-            Ok(mut settings) => {
-                debug!("Loaded settings from {path:?}");
+fn load_settings_from_path(path: &PathBuf) -> Result<(), (PathBuf, String)> {
+    let content = fs::read_to_string(path).map_err(|e| {
+        error!("Failed to read settings file {path:?}: {e}");
+        (path.clone(), e.to_string())
+    })?;
 
-                if settings.version < CURRENT_VERSION {
-                    let migrated_content = migrate_settings(&mut settings, &content);
-                    let updated = update_settings_values(&migrated_content, &settings);
-                    match fs::write(path, updated) {
-                        Ok(()) => debug!("Migrated settings in {path:?}"),
-                        Err(e) => error!("Failed to save migrated settings to {path:?}: {e}"),
-                    }
-                }
+    let mut settings = serde_yaml::from_str::<Settings>(&content).map_err(|e| {
+        error!("Failed to parse settings file {path:?}: {e}");
+        (path.clone(), e.to_string())
+    })?;
 
-                if let Ok(mut global) = SETTINGS.write() {
-                    *global = settings;
-                }
-            }
-            Err(e) => {
-                error!("Failed to parse settings file {path:?}: {e}");
-            }
-        },
-        Err(e) => {
-            error!("Failed to read settings file {path:?}: {e}");
+    debug!(
+        "Loaded settings from {path:?}: {}",
+        settings_summary(&settings)
+    );
+
+    if settings.version < CURRENT_VERSION {
+        let migrated_content = migrate_settings(&mut settings, &content);
+        let updated = update_settings_values(&migrated_content, &settings);
+        match fs::write(path, updated) {
+            Ok(()) => debug!("Migrated settings in {path:?}"),
+            Err(e) => error!("Failed to save migrated settings to {path:?}: {e}"),
         }
     }
+
+    if let Ok(mut global) = SETTINGS.write() {
+        *global = settings;
+    }
+    Ok(())
 }
 
 fn migrate_settings(settings: &mut Settings, file_content: &str) -> String {
@@ -304,6 +330,41 @@ pub fn save_settings() {
     }
 }
 
+fn settings_backup_path(path: &Path) -> PathBuf {
+    let Some(file_name) = path.file_name() else {
+        return path.with_extension("bak");
+    };
+    let mut backup_name = file_name.to_os_string();
+    backup_name.push(".bak");
+    path.with_file_name(backup_name)
+}
+
+fn settings_summary(settings: &Settings) -> String {
+    format!(
+        "theme=\"{}\" margin={} transparent={} pdf_scale={:.3} pdf_mode={} pdf_layout={} pdf_enabled={} justify={} nav_panel_width={} lookup_command_set={} synctex_editor_set={}",
+        settings.theme,
+        settings.margin,
+        settings.transparent_background,
+        settings.pdf_scale,
+        match settings.pdf_render_mode {
+            PdfRenderMode::Page => "page",
+            PdfRenderMode::Scroll => "scroll",
+        },
+        match settings.pdf_page_layout_mode {
+            PdfPageLayoutMode::Single => "single",
+            PdfPageLayoutMode::Dual => "dual",
+        },
+        settings.pdf_enabled,
+        settings.justify_text,
+        settings
+            .nav_panel_width
+            .map(|width| width.to_string())
+            .unwrap_or_else(|| "null".to_string()),
+        settings.lookup_command.is_some(),
+        settings.synctex_editor.is_some(),
+    )
+}
+
 fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
     if let Some(parent) = path.parent() {
         if !parent.exists() {
@@ -321,9 +382,41 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
         generate_settings_yaml(settings)
     };
 
-    match fs::write(path, content) {
-        Ok(()) => debug!("Saved settings to {path:?}"),
-        Err(e) => error!("Failed to save settings to {path:?}: {e}"),
+    if path.exists() {
+        let backup_path = settings_backup_path(path);
+        if let Err(e) = fs::copy(path, &backup_path) {
+            warn!("Failed to back up settings file to {backup_path:?}: {e}");
+        }
+    }
+
+    // Atomic write: write to a temp file in the same directory, then rename.
+    // This prevents concurrent save_settings() calls from reading a
+    // half-written file and regenerating from defaults (wiping user config).
+    let parent = path.parent().unwrap_or(Path::new("."));
+    match tempfile::NamedTempFile::new_in(parent) {
+        Ok(mut tmp) => {
+            use std::io::Write;
+            if let Err(e) = tmp.write_all(content.as_bytes()) {
+                error!("Failed to write settings temp file: {e}");
+                return;
+            }
+            if let Err(e) = tmp.persist(path) {
+                error!("Failed to persist settings file: {e}");
+            } else {
+                debug!("Saved settings to {path:?}: {}", settings_summary(settings));
+            }
+        }
+        Err(e) => {
+            error!("Failed to create settings temp file: {e}");
+            // Fallback to direct write
+            match fs::write(path, content) {
+                Ok(()) => debug!(
+                    "Saved settings to {path:?} (direct): {}",
+                    settings_summary(settings)
+                ),
+                Err(e) => error!("Failed to save settings to {path:?}: {e}"),
+            }
+        }
     }
 }
 
@@ -421,6 +514,29 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
             settings
                 .nav_panel_width
                 .map(|w| format!("{}", w))
+                .unwrap_or_else(|| "null".into()),
+        ),
+        (
+            "lookup_command".into(),
+            settings
+                .lookup_command
+                .as_ref()
+                .map(|c| format!("'{}'", c.replace('\'', "''")))
+                .unwrap_or_else(|| "null".into()),
+        ),
+        (
+            "lookup_display".into(),
+            match settings.lookup_display {
+                LookupDisplay::Popup => "popup".into(),
+                LookupDisplay::FireAndForget => "fire_and_forget".into(),
+            },
+        ),
+        (
+            "synctex_editor".into(),
+            settings
+                .synctex_editor
+                .as_ref()
+                .map(|c| format!("'{}'", c.replace('\'', "''")))
                 .unwrap_or_else(|| "null".into()),
         ),
     ]
@@ -560,6 +676,17 @@ const LOOKUP_COMMAND_TEMPLATE: &str = r#"# =====================================
 # Example: online dictionary in browser
 #   lookup_command: "open 'https://www.merriam-webster.com/dictionary/{}'"
 #   lookup_display: fire_and_forget
+
+# ============================================================================
+# SyncTeX inverse search: editor command to run when you Ctrl+click,
+# secondary-click, or press 'gd' on a PDF rendered from LaTeX.
+# Placeholders: {file}, {line}, {column}
+#
+# Example: neovim via remote socket
+#   synctex_editor: "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-n>:e {file}<CR>:{line}<CR>'"
+#
+# Example: open in new terminal nvim
+#   synctex_editor: "nvim +{line} {file}"
 
 "#;
 
@@ -736,6 +863,44 @@ pub fn set_nav_panel_width(width: Option<u16>) {
     save_settings();
 }
 
+pub fn get_synctex_editor() -> Option<String> {
+    SETTINGS.read().ok().and_then(|s| s.synctex_editor.clone())
+}
+
+pub fn set_lookup_command(cmd: Option<String>) {
+    if let Ok(mut s) = SETTINGS.write() {
+        s.lookup_command = cmd;
+    }
+    save_settings();
+}
+
+pub fn set_lookup_display(mode: LookupDisplay) {
+    if let Ok(mut s) = SETTINGS.write() {
+        s.lookup_display = mode;
+    }
+    save_settings();
+}
+
+pub fn set_synctex_editor(cmd: Option<String>) {
+    if let Ok(mut s) = SETTINGS.write() {
+        s.synctex_editor = cmd;
+    }
+    save_settings();
+}
+
+pub fn set_integrations(
+    lookup_command: Option<String>,
+    lookup_display: LookupDisplay,
+    synctex_editor: Option<String>,
+) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.lookup_command = lookup_command;
+        settings.lookup_display = lookup_display;
+        settings.synctex_editor = synctex_editor;
+    }
+    save_settings();
+}
+
 /// Called on app startup to fix incompatible settings when switching terminals
 /// (e.g., from a Kitty-protocol terminal to one without Kitty graphics)
 pub fn fix_incompatible_pdf_settings() {
@@ -782,10 +947,12 @@ custom_themes:
         settings.margin = 3;
         settings.pdf_scale = 1.25;
         settings.pdf_render_mode = PdfRenderMode::Scroll;
+        settings.lookup_command = Some("open dict://{}".to_string());
+        settings.lookup_display = LookupDisplay::FireAndForget;
 
         let updated = update_settings_values(existing, &settings);
 
-        assert!(updated.contains("lookup_command: \"open dict://{}\""));
+        assert!(updated.contains("lookup_command: 'open dict://{}'"));
         assert!(updated.contains("lookup_display: fire_and_forget"));
         assert!(updated.contains("custom_themes:\n  - scheme: \"Manual Theme\""));
         assert!(updated.contains("theme: \"Oceanic Next\""));
@@ -820,11 +987,12 @@ my_custom_flag: true
     #[test]
     fn targeted_update_appends_missing_app_managed_keys() {
         let existing = "lookup_command: \"dict {}\"\n";
-        let settings = Settings::default();
+        let mut settings = Settings::default();
+        settings.lookup_command = Some("dict {}".to_string());
 
         let updated = update_settings_values(existing, &settings);
 
-        assert!(updated.contains("lookup_command: \"dict {}\""));
+        assert!(updated.contains("lookup_command: 'dict {}'"));
         assert!(updated.contains("version: 3"));
         assert!(updated.contains("theme: \"Oceanic Next\""));
         assert!(updated.contains("book_sort_order: by_name"));
@@ -847,5 +1015,33 @@ my_custom_flag: true
         let themes_pos = migrated.find("# Custom Themes").unwrap();
         assert!(lookup_pos < themes_pos);
         assert_eq!(settings.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn backup_path_appends_bak_to_filename() {
+        let path = Path::new("/tmp/bookokrat/config.yaml");
+        assert_eq!(
+            settings_backup_path(path),
+            PathBuf::from("/tmp/bookokrat/config.yaml.bak")
+        );
+    }
+
+    #[test]
+    fn save_settings_creates_backup_before_overwrite() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        fs::write(&path, "theme: \"Old\"\nmargin: 11\n").unwrap();
+
+        let settings = Settings {
+            theme: "New".to_string(),
+            margin: 7,
+            ..Settings::default()
+        };
+        save_settings_to_file(&settings, &path);
+
+        let backup = settings_backup_path(&path);
+        let backup_content = fs::read_to_string(backup).unwrap();
+        assert!(backup_content.contains("theme: \"Old\""));
+        assert!(backup_content.contains("margin: 11"));
     }
 }

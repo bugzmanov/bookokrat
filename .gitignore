@@ -21,3 +21,10 @@ flamegraph.svg
 .agentastic/
 result/
 *.djvu
+
+# LaTeX build artifacts
+*.aux
+*.fdb_latexmk
+*.fls
+*.out
+*.toc

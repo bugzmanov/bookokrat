@@ -224,6 +224,10 @@ pub enum InputAction {
         white: i32,
     },
     DumpDebugState,
+    SyncTexInverse {
+        file: String,
+        line: u32,
+    },
 }
 
 /// Separator height between pages in continuous scroll
@@ -367,6 +371,8 @@ pub struct PdfReaderState {
     pub watching: bool,
     /// Quick page jump state for vim-style {count}gg
     pub quick_page_jump: Option<QuickPageJump>,
+    /// SyncTeX scanner for LaTeX source ↔ PDF position mapping
+    pub synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
 }
 
 impl PdfReaderState {
@@ -455,6 +461,7 @@ impl PdfReaderState {
             page_search: PageSearchState::default(),
             watching: false,
             quick_page_jump: None,
+            synctex_scanner: None,
         }
     }
 

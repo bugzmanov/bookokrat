@@ -171,11 +171,19 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
     log::info!(
         "DIAG kitty_display: page={} cursor=({},{}) dest_cells=({},{}) source_rect=({},{},{},{}) has_source_rect={} state={}",
         request.page,
-        cursor.0, cursor.1,
-        loc.columns, loc.rows,
-        loc.x, loc.y, loc.width, loc.height,
+        cursor.0,
+        cursor.1,
+        loc.columns,
+        loc.rows,
+        loc.x,
+        loc.y,
+        loc.width,
+        loc.height,
         has_source_rect,
-        match request.image { ImageState::Queued(_) => "Queued", ImageState::Uploaded(_) => "Uploaded" },
+        match request.image {
+            ImageState::Queued(_) => "Queued",
+            ImageState::Uploaded(_) => "Uploaded",
+        },
     );
 
     match request.image {

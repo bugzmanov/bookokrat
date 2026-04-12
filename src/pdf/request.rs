@@ -52,6 +52,8 @@ pub enum RenderRequest {
         id: RequestId,
         page: usize,
         params: RenderParams,
+        /// Render generation — responses with stale generations are discarded
+        render_generation: u64,
     },
 
     /// Extract text from selection
@@ -66,6 +68,8 @@ pub enum RenderRequest {
         id: RequestId,
         page: usize,
         params: RenderParams,
+        /// Render generation — responses with stale generations are discarded
+        render_generation: u64,
     },
 
     /// Cancel a pending request
@@ -99,6 +103,8 @@ pub enum RenderResponse {
         id: RequestId,
         page: usize,
         data: Arc<PageData>,
+        /// Render generation this page was rendered at
+        render_generation: u64,
     },
 
     /// Extracted text from selection

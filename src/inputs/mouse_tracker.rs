@@ -51,11 +51,21 @@ impl MouseTracker {
         self.last_click_time = Some(now);
         self.last_click_position = Some(position);
 
-        match self.click_count {
+        let result = match self.click_count {
             2 => ClickType::Double,
             3 => ClickType::Triple,
             _ => ClickType::Single,
-        }
+        };
+        log::info!(
+            "detect_click_type: pos=({},{}) within_time={} within_dist={} count={} -> {:?}",
+            column,
+            row,
+            is_within_time,
+            is_within_distance,
+            self.click_count,
+            result
+        );
+        result
     }
 }
 
