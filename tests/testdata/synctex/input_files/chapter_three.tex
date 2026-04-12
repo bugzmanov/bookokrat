@@ -1,0 +1,28 @@
+% !TEX root = ../test_multifile.tex
+\section{Chapter Three: Results and Discussion}
+
+In this chapter we present the experimental results and discuss their
+implications. The data collected from all three benchmark datasets are
+summarized below, followed by a detailed comparison with existing methods
+from the literature.
+
+The synthetic dataset produced exact recovery of all frequency components
+up to the Nyquist limit, confirming the correctness of our implementation.
+Peak signal-to-noise ratios exceeded 120 dB for all test cases, which is
+consistent with double-precision floating-point arithmetic.
+
+For the audio dataset, our method identified dominant frequencies within
+0.1 Hz of the ground truth values obtained from a professional spectrum
+analyzer. The total processing time for a one-hour recording sampled at
+44100 Hz was 3.2 seconds on commodity hardware, demonstrating the
+practical viability of the approach.
+
+The financial time series revealed interesting periodic patterns at
+multiple scales. Weekly and monthly cycles were clearly visible in the
+spectral decomposition. Longer-period oscillations corresponding to
+quarterly earnings reports and annual seasonal effects were also detected,
+though with lower statistical significance.
+
+We conclude that the method is both accurate and efficient for a wide range
+of signal types. Future work will investigate extensions to higher dimensions
+and adaptive windowing strategies for non-stationary signals.

@@ -38,6 +38,13 @@
     ▸ Copy text snippets or entire chapters
     ▸ Selection modes: word, paragraph, custom range
 
+  [SYNCTEX - LaTeX ↔ PDF]
+    ▸ Bidirectional sync between LaTeX source and PDF output
+    ▸ Inverse search: Ctrl+click, right-click, or gd → jump to source
+    ▸ Forward search: editor sends line:col:file → PDF scrolls to match
+    ▸ Unix socket IPC for live editor integration (VimTeX, etc.)
+    ▸ Configurable editor command with {file}, {line}, {column} placeholders
+
   [POWER USER]
     ▸ Vim-like keybindings throughout
     ▸ Reader normal mode with motions, counts, visual selection, and yanks
@@ -117,6 +124,9 @@
 │                Themed style is the default.                                 │
 │                In original rendering mode, i has no visual effect.          │
 │  n             Toggle normal mode                                           │
+│  gd (PDF)      SyncTeX inverse search: jump to LaTeX source at cursor       │
+│  Ctrl+click    SyncTeX inverse search at click position (PDF)               │
+│  Right-click   SyncTeX inverse search at click position (PDF)               │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -271,6 +281,44 @@ PDF annotations require a graphics-capable terminal.
 ===============================================================================
 
                               ADVANCED FEATURES
+
+  [SYNCTEX - LaTeX ↔ PDF SYNCHRONIZATION]
+    Bookokrat supports bidirectional SyncTeX navigation for LaTeX workflows.
+    Compile with synctex enabled (e.g. pdflatex --synctex=1) so a .synctex.gz
+    sidecar is generated alongside the PDF. SyncTeX activates automatically
+    when a matching sidecar is found.
+
+    Inverse search (PDF → source):
+      Ctrl+click, right-click on the PDF, or gd in normal mode jumps to
+      the corresponding LaTeX source line. gd also works on selected text
+      (mouse selection anchor is used). Configure which editor opens
+      in ~/.bookokrat_settings.yaml or in the Settings popup (Space+s):
+
+        synctex_editor: "nvim --server /tmp/nvim.sock --remote-send '<C-\><C-n>:e {file}<CR>:{line}<CR>'"
+
+      Placeholders: {file}, {line}, {column}
+
+    Forward search (source → PDF):
+      From your editor, run:
+
+        bookokrat --synctex-forward LINE:COLUMN:FILE path/to/document.pdf
+
+      This sends a command over a Unix socket to the running instance,
+      which scrolls the PDF to the matching position.
+
+      VimTeX setup (add to your init.vim / init.lua):
+
+        let g:vimtex_view_method = 'general'
+        let g:vimtex_view_general_cmd = 'bookokrat --synctex-forward @line:@col:@tex @pdf'
+
+      Then press \lv in Neovim to jump from source to PDF.
+
+      Generic editor setup — any editor that can shell out works:
+
+        bookokrat --synctex-forward 42:0:main.tex document.pdf
+
+    The title bar shows [SyncTeX] when active and [SyncTeX: watching]
+    when both SyncTeX and file watching are enabled.
 
   [LINK NAVIGATION]
     Following links creates a navigation breadcrumb trail. Use Ctrl+o and

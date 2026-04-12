@@ -1,0 +1,26 @@
+% !TEX root = ../test_multifile.tex
+\section{Chapter Two: Methods and Analysis}
+
+This chapter presents the methods used in our analysis. We draw on the
+foundational material from Chapter One and extend it with computational
+techniques suitable for practical applications.
+
+The primary tool is the discrete Fourier transform, defined for a sequence
+$\{x_k\}$ of length $N$ as:
+$$X_j = \sum_{k=0}^{N-1} x_k \cdot e^{-2\pi i jk / N}$$
+
+Computing this directly requires $O(N^2)$ operations, but the Fast Fourier
+Transform algorithm reduces this to $O(N \log N)$, making spectral analysis
+feasible for large datasets. We implemented the Cooley-Tukey variant, which
+recursively splits the problem into smaller subproblems.
+
+Our experimental setup consisted of three benchmark datasets. The first
+dataset contains synthetic signals with known frequency components, allowing
+us to validate correctness. The second dataset comprises real-world audio
+samples from field recordings. The third dataset is a collection of
+financial time series spanning twenty years of daily observations.
+
+For each dataset, we measured both accuracy and runtime performance. The
+results confirm that our implementation matches the theoretical complexity
+bounds while maintaining numerical stability across all input sizes tested.
+A formula in the sub-file: $a^2 + b^2 = c^2 + zzz^3$
