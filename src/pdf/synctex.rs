@@ -98,14 +98,19 @@ impl SyncTexScanner {
         let mut box_stack: Vec<BoxContext> = Vec::new();
 
         for line in content.lines() {
-            if !in_content {
-                if let Some(rest) = line.strip_prefix("Input:") {
-                    if let Some((tag_str, path)) = rest.split_once(':') {
-                        if let Ok(tag) = tag_str.parse::<u32>() {
-                            inputs.insert(tag, path.to_string());
-                        }
+            // Input: lines can appear both before Content: and interleaved
+            // between pages (pdflatex emits them lazily for \input{} files).
+            if let Some(rest) = line.strip_prefix("Input:") {
+                if let Some((tag_str, path)) = rest.split_once(':') {
+                    if let Ok(tag) = tag_str.parse::<u32>() {
+                        inputs.insert(tag, path.to_string());
                     }
-                } else if line == "Content:" {
+                }
+                continue;
+            }
+
+            if !in_content {
+                if line == "Content:" {
                     in_content = true;
                 }
                 continue;
@@ -338,8 +343,15 @@ impl SyncTexScanner {
     }
 
     fn resolve_file_tag(&self, file: &str) -> Option<u32> {
+        let normalized_query = normalize_path_str(file);
         for (&tag, path) in &self.inputs {
             if path == file || path.ends_with(file) {
+                return Some(tag);
+            }
+            let normalized_stored = normalize_path_str(path);
+            if normalized_stored == normalized_query
+                || normalized_stored.ends_with(&normalized_query)
+            {
                 return Some(tag);
             }
         }
@@ -398,6 +410,23 @@ fn parse_box(s: &str) -> Option<BoxContext> {
         height,
         depth,
     })
+}
+
+/// Remove `.` and resolve `..` path segments without filesystem access.
+fn normalize_path_str(s: &str) -> String {
+    let path = Path::new(s);
+    let mut components = Vec::new();
+    for comp in path.components() {
+        match comp {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                components.pop();
+            }
+            other => components.push(other),
+        }
+    }
+    let normalized: PathBuf = components.iter().collect();
+    normalized.to_string_lossy().into_owned()
 }
 
 fn parse_element(s: &str) -> Option<ElementData> {
@@ -960,5 +989,124 @@ mod tests {
 
         drop(listener);
         assert!(!socket_path.exists(), "Socket file should be cleaned up");
+    }
+
+    // -- test_multifile (5-page document with \input{} sub-files) -------------
+
+    #[test]
+    fn test_multifile_parse() {
+        let scanner = load_synctex("test_multifile");
+        assert_eq!(scanner.page_count(), 5);
+        let has_main = scanner
+            .inputs()
+            .values()
+            .any(|p| p.ends_with("test_multifile.tex"));
+        let has_ch1 = scanner
+            .inputs()
+            .values()
+            .any(|p| p.ends_with("input_files/chapter_one.tex"));
+        let has_ch2 = scanner
+            .inputs()
+            .values()
+            .any(|p| p.ends_with("input_files/chapter_two.tex"));
+        let has_ch3 = scanner
+            .inputs()
+            .values()
+            .any(|p| p.ends_with("input_files/chapter_three.tex"));
+        assert!(has_main, "Missing main file input");
+        assert!(has_ch1, "Missing chapter_one.tex input");
+        assert!(has_ch2, "Missing chapter_two.tex input");
+        assert!(has_ch3, "Missing chapter_three.tex input");
+    }
+
+    #[test]
+    fn test_multifile_forward_golden() {
+        let scanner = load_synctex("test_multifile");
+        let golden = load_golden("test_multifile");
+        run_forward_golden(&scanner, &golden);
+    }
+
+    #[test]
+    fn test_multifile_inverse_golden() {
+        let scanner = load_synctex("test_multifile");
+        let golden = load_golden("test_multifile");
+        run_inverse_golden(&scanner, &golden);
+    }
+
+    /// Simulates what VimTeX does: sends the absolute canonical path of
+    /// a sub-file, while synctex stores paths with `./` segments.
+    /// e.g. editor sends `/home/user/project/files/intro.tex`
+    ///      synctex has  `/home/user/project/./files/intro.tex`
+    #[test]
+    fn test_multifile_forward_absolute_path() {
+        let scanner = load_synctex("test_multifile");
+        let stored_path = scanner
+            .inputs()
+            .values()
+            .find(|p| p.ends_with("input_files/chapter_one.tex"))
+            .expect("chapter_one.tex not found in inputs");
+
+        // Build the canonical version by removing the `./` segment
+        let canonical = stored_path.replace("/./", "/");
+        assert_ne!(
+            &canonical, stored_path,
+            "Test setup: paths should differ by ./ normalization"
+        );
+
+        let result = scanner.forward_search(&canonical, 4, 1);
+        assert!(
+            result.is_some(),
+            "Forward search with canonical absolute path should find chapter_one.tex line 4, \
+             but resolve_file_tag failed to match '{}' against stored '{}'",
+            canonical,
+            stored_path
+        );
+        assert_eq!(result.unwrap().page, 1);
+    }
+
+    /// Same as above but for chapter_two (page 3).
+    #[test]
+    fn test_multifile_forward_absolute_path_chapter_two() {
+        let scanner = load_synctex("test_multifile");
+        let stored_path = scanner
+            .inputs()
+            .values()
+            .find(|p| p.ends_with("input_files/chapter_two.tex"))
+            .expect("chapter_two.tex not found in inputs");
+
+        let canonical = stored_path.replace("/./", "/");
+
+        let result = scanner.forward_search(&canonical, 4, 1);
+        assert!(
+            result.is_some(),
+            "Forward search with canonical absolute path should find chapter_two.tex line 4, \
+             but resolve_file_tag failed to match '{}' against stored '{}'",
+            canonical,
+            stored_path
+        );
+        assert_eq!(result.unwrap().page, 3);
+    }
+
+    /// Same as above but for chapter_three (page 4).
+    #[test]
+    fn test_multifile_forward_absolute_path_chapter_three() {
+        let scanner = load_synctex("test_multifile");
+        let stored_path = scanner
+            .inputs()
+            .values()
+            .find(|p| p.ends_with("input_files/chapter_three.tex"))
+            .expect("chapter_three.tex not found in inputs");
+
+        let canonical = stored_path.replace("/./", "/");
+
+        let result = scanner.forward_search(&canonical, 4, 1);
+        assert!(
+            result.is_some(),
+            "Forward search with canonical absolute path should find chapter_three.tex line 4, \
+             but resolve_file_tag failed to match '{}' against stored '{}'",
+            canonical,
+            stored_path
+        );
+        assert_eq!(result.unwrap().page, 4);
     }
 }

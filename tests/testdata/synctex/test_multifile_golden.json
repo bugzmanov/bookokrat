@@ -1,0 +1,154 @@
+{
+  "description": "Golden snapshot for test_multifile.tex - 5 pages, multi-file project with \\input{} sub-files. Tests that forward/inverse search works for content in sub-files (chapter_one.tex, chapter_two.tex, chapter_three.tex), not just main.tex. Sub-files have '% !TEX root' comments. Generated with synctex CLI v1.5 from TeX Live 2026.",
+  "source_file": "test_multifile.tex",
+  "forward_search": [
+    {
+      "description": "Main file: intro section header (line 6)",
+      "query": { "file": "test_multifile.tex", "line": 6, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 83.955154,
+        "W": 275.527557,
+        "H": 11.955153
+      }
+    },
+    {
+      "description": "Main file: intro text (line 8)",
+      "query": { "file": "test_multifile.tex", "line": 8, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 112.564522,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_one: section header (line 2)",
+      "query": { "file": "input_files/chapter_one.tex", "line": 2, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 297.979248,
+        "W": 275.527557,
+        "H": 15.302585
+      }
+    },
+    {
+      "description": "Sub-file chapter_one: first paragraph (line 4)",
+      "query": { "file": "input_files/chapter_one.tex", "line": 4, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 323.241150,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_one: second paragraph (line 6)",
+      "query": { "file": "input_files/chapter_one.tex", "line": 6, "column": 1 },
+      "expected": {
+        "page": 1,
+        "h": 71.999985,
+        "v": 366.578644,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_two: section header (line 2)",
+      "query": { "file": "input_files/chapter_two.tex", "line": 2, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 87.302589,
+        "W": 275.527557,
+        "H": 15.302585
+      }
+    },
+    {
+      "description": "Sub-file chapter_two: first paragraph (line 4)",
+      "query": { "file": "input_files/chapter_two.tex", "line": 4, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 134.482346,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_two: formula section (line 6)",
+      "query": { "file": "input_files/chapter_two.tex", "line": 6, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 163.373996,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_two: final paragraph (line 8)",
+      "query": { "file": "input_files/chapter_two.tex", "line": 8, "column": 1 },
+      "expected": {
+        "page": 3,
+        "h": 71.999985,
+        "v": 192.265656,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    },
+    {
+      "description": "Sub-file chapter_three: section header (line 2)",
+      "query": { "file": "input_files/chapter_three.tex", "line": 2, "column": 1 },
+      "expected": {
+        "page": 4,
+        "h": 71.999985,
+        "v": 87.302589,
+        "W": 275.527557,
+        "H": 15.302585
+      }
+    },
+    {
+      "description": "Sub-file chapter_three: first paragraph (line 4)",
+      "query": { "file": "input_files/chapter_three.tex", "line": 4, "column": 1 },
+      "expected": {
+        "page": 4,
+        "h": 71.999985,
+        "v": 134.482346,
+        "W": 275.527557,
+        "H": 10.626775
+      }
+    }
+  ],
+  "inverse_search": [
+    {
+      "description": "Page 1 main file text area",
+      "query": { "page": 1, "x": 150.0, "y": 112.0 },
+      "expected": { "file": "test_multifile.tex", "line": 8 }
+    },
+    {
+      "description": "Page 1 chapter_one section area",
+      "query": { "page": 1, "x": 150.0, "y": 297.0 },
+      "expected": { "file": "input_files/chapter_one.tex", "line": 2 }
+    },
+    {
+      "description": "Page 1 chapter_one text area",
+      "query": { "page": 1, "x": 150.0, "y": 323.0 },
+      "expected": { "file": "input_files/chapter_one.tex", "line": 4 }
+    },
+    {
+      "description": "Page 3 chapter_two text area",
+      "query": { "page": 3, "x": 150.0, "y": 134.0 },
+      "expected": { "file": "input_files/chapter_two.tex", "line": 4 }
+    },
+    {
+      "description": "Page 4 chapter_three text area",
+      "query": { "page": 4, "x": 150.0, "y": 134.0 },
+      "expected": { "file": "input_files/chapter_three.tex", "line": 4 }
+    }
+  ]
+}

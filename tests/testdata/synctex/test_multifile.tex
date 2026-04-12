@@ -1,0 +1,27 @@
+\documentclass[12pt]{article}
+\usepackage[a5paper, margin=1in]{geometry}
+
+\begin{document}
+
+\section{Introduction}
+
+This is the main file content on page one. It provides an overview of the entire
+document and sets the stage for the chapters that follow. The purpose of this
+project is to demonstrate how multiple input files interact with SyncTeX
+forward and inverse search capabilities.
+
+We will explore several topics across different chapters, each stored in its
+own separate file and included via the input command. This approach is standard
+practice for large LaTeX documents such as theses, books, and technical reports.
+
+\input{input_files/chapter_one}
+
+\newpage
+
+\input{input_files/chapter_two}
+
+\newpage
+
+\input{input_files/chapter_three}
+
+\end{document}

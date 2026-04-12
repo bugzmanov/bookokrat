@@ -108,6 +108,37 @@ bookokrat path/to/book.epub --zen-mode
 
 Press `?` inside the app to open the built-in help.
 
+## SyncTeX (LaTeX ↔ PDF)
+
+Bookokrat supports bidirectional SyncTeX navigation between LaTeX sources and PDF output. Compile your LaTeX document with `pdflatex --synctex=1` (or equivalent) to generate a `.synctex.gz` sidecar file. When a PDF is opened and its sidecar is found, SyncTeX activates automatically.
+
+**Inverse search** (PDF → source): Ctrl+click, right-click, or `gd` in normal mode jumps to the corresponding LaTeX source line. `gd` also works on selected text (the mouse selection anchor is used). Configure which editor to open in `~/.bookokrat_settings.yaml`:
+
+```yaml
+# Neovim via remote socket (recommended for VimTeX \lv workflow)
+synctex_editor: "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-n>:e {file}<CR>:{line}<CR>'"
+
+# Open in a new terminal nvim
+synctex_editor: "nvim +{line} {file}"
+```
+
+Placeholders: `{file}`, `{line}`, `{column}`.
+
+**Forward search** (source → PDF): From your editor, send a forward search command to the running instance via Unix socket. VimTeX setup:
+
+```vim
+let g:vimtex_view_method = 'general'
+let g:vimtex_view_general_cmd = 'bookokrat --synctex-forward @line:@col:@tex @pdf'
+```
+
+Then press `\lv` in Neovim to jump from source to PDF. Any editor that can shell out works — the generic form is:
+
+```bash
+bookokrat --synctex-forward LINE:COLUMN:FILE path/to/document.pdf
+```
+
+The `synctex_editor` setting can also be configured in the Settings popup (`Space+s`), under the Integrations tab.
+
 ## Documentation
 
 - Full usage and keyboard reference: [`readme.txt`](readme.txt)
