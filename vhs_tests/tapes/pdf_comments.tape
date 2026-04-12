@@ -26,7 +26,8 @@ return
 wait 200
 
 # Enter zen mode (required for comments in Kitty)
-ctrl z
+key space
+key z
 wait 200
 screenshot zen_before_comment
 
@@ -98,12 +99,14 @@ wait 500
 screenshot comment_2_saved
 
 # Test 1: Switch to ToC mode to verify underline preserves
-ctrl z
+key space
+key z
 wait 300
 screenshot toc_mode_underline_preserved
 
 # Back to zen mode
-ctrl z
+key space
+key z
 wait 300
 
 # Test 2: Comments overview - first go to page 1

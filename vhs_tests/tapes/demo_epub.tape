@@ -78,7 +78,8 @@ escape
 wait 250
 
 # ── Zen mode + margins ────────────────────────────────────
-ctrl z
+key space
+key z
 wait 500
 
 # Increase margins: 10x minus (50ms between each)
@@ -90,7 +91,8 @@ repeat_ctrl d 5 0.2
 wait 800
 
 # Exit zen mode
-ctrl z
+key space
+key z
 wait 600
 
 # Reduce margins back: 10x = (50ms between each)

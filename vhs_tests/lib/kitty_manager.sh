@@ -194,6 +194,17 @@ send_kitty_ctrl_key() {
     fi
 }
 
+# Send Ctrl+Shift+key to Kitty window
+send_kitty_ctrl_shift_key() {
+    local key="$1"
+
+    if [ -n "$KITTY_WINDOW_ID" ]; then
+        "$KITTY_CMD" @ --to "$KITTY_SOCKET" send-key --match "id:$KITTY_WINDOW_ID" "ctrl+shift+$key" 2>/dev/null
+    else
+        echo "WARNING: KITTY_WINDOW_ID is empty, cannot send ctrl+shift+$key" >&2
+    fi
+}
+
 # Send Escape key
 send_kitty_escape() {
     if [ -n "$KITTY_WINDOW_ID" ]; then

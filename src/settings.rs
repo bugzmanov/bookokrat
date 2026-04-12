@@ -60,6 +60,17 @@ pub enum LookupDisplay {
     FireAndForget,
 }
 
+/// Zen mode keyboard shortcut preference
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ZenModeShortcut {
+    /// Ctrl+Z toggles zen mode, Ctrl+Q suspends (legacy behavior)
+    #[default]
+    CtrlZ,
+    /// Space→Z toggles zen mode, Ctrl+Z suspends (standard behavior)
+    SpaceZ,
+}
+
 /// PDF render mode for terminals with Kitty graphics protocol
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -155,6 +166,9 @@ pub struct Settings {
     /// Placeholders: {file}, {line}, {column}
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synctex_editor: Option<String>,
+
+    #[serde(default)]
+    pub zen_mode_shortcut: ZenModeShortcut,
 }
 
 fn default_true() -> bool {
@@ -193,6 +207,7 @@ impl Default for Settings {
             lookup_display: LookupDisplay::default(),
             nav_panel_width: None,
             synctex_editor: None,
+            zen_mode_shortcut: ZenModeShortcut::SpaceZ,
         }
     }
 }
@@ -341,7 +356,7 @@ fn settings_backup_path(path: &Path) -> PathBuf {
 
 fn settings_summary(settings: &Settings) -> String {
     format!(
-        "theme=\"{}\" margin={} transparent={} pdf_scale={:.3} pdf_mode={} pdf_layout={} pdf_enabled={} justify={} nav_panel_width={} lookup_command_set={} synctex_editor_set={}",
+        "theme=\"{}\" margin={} transparent={} pdf_scale={:.3} pdf_mode={} pdf_layout={} pdf_enabled={} justify={} nav_panel_width={} lookup_command_set={} synctex_editor_set={} zen_mode_shortcut={}",
         settings.theme,
         settings.margin,
         settings.transparent_background,
@@ -362,6 +377,10 @@ fn settings_summary(settings: &Settings) -> String {
             .unwrap_or_else(|| "null".to_string()),
         settings.lookup_command.is_some(),
         settings.synctex_editor.is_some(),
+        match settings.zen_mode_shortcut {
+            ZenModeShortcut::CtrlZ => "ctrl_z",
+            ZenModeShortcut::SpaceZ => "space_z",
+        }
     )
 }
 
@@ -539,6 +558,13 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 .map(|c| format!("'{}'", c.replace('\'', "''")))
                 .unwrap_or_else(|| "null".into()),
         ),
+        (
+            "zen_mode_shortcut".into(),
+            match settings.zen_mode_shortcut {
+                ZenModeShortcut::CtrlZ => "ctrl_z".into(),
+                ZenModeShortcut::SpaceZ => "space_z".into(),
+            },
+        ),
     ]
 }
 
@@ -573,6 +599,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByName => "by_name",
         BookSortOrder::ByType => "by_type",
     };
+    let zen_str = match settings.zen_mode_shortcut {
+        ZenModeShortcut::CtrlZ => "ctrl_z",
+        ZenModeShortcut::SpaceZ => "space_z",
+    };
+    content.push_str(&format!("zen_mode_shortcut: {}\n", zen_str));
     content.push_str(&format!("justify_text: {}\n", settings.justify_text));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     if let Some(w) = settings.nav_panel_width {
@@ -884,6 +915,20 @@ pub fn set_lookup_display(mode: LookupDisplay) {
 pub fn set_synctex_editor(cmd: Option<String>) {
     if let Ok(mut s) = SETTINGS.write() {
         s.synctex_editor = cmd;
+    }
+    save_settings();
+}
+
+pub fn get_zen_mode_shortcut() -> ZenModeShortcut {
+    SETTINGS
+        .read()
+        .map(|s| s.zen_mode_shortcut)
+        .unwrap_or_default()
+}
+
+pub fn set_zen_mode_shortcut(shortcut: ZenModeShortcut) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.zen_mode_shortcut = shortcut;
     }
     save_settings();
 }

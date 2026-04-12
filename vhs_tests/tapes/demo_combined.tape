@@ -67,7 +67,8 @@ escape
 wait 1000
 
 # Zen mode + zoom + scroll
-ctrl z
+key space
+key z
 wait 500
 key -
 wait 300
@@ -105,7 +106,8 @@ return
 wait 1000
 
 # Exit zen mode
-ctrl z
+key space
+key z
 wait 500
 
 # Return to book list (via TOC back item)
@@ -153,7 +155,8 @@ repeat_ctrl d 8 0.2
 wait 500
 
 # Zen mode + margins + comment showcase
-ctrl z
+key space
+key z
 wait 500
 repeat_key - 6 0.05
 wait 200
@@ -171,7 +174,8 @@ escape
 wait 500
 escape
 wait 300
-ctrl z
+key space
+key z
 wait 500
 
 # Quit

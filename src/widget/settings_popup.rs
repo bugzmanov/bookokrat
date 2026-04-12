@@ -1,10 +1,11 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
-    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_pdf_enabled,
-    is_transparent_background, set_integrations, set_lookup_display, set_pdf_enabled,
-    set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
+    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, ZenModeShortcut, get_lookup_command,
+    get_lookup_display, get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor,
+    get_zen_mode_shortcut, is_pdf_enabled, is_transparent_background, set_integrations,
+    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
+    set_transparent_background, set_zen_mode_shortcut,
 };
 use crate::terminal;
 use crate::theme::{
@@ -29,7 +30,7 @@ pub enum SettingsAction {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
-    PdfSupport,
+    General,
     Themes,
     Integrations,
 }
@@ -37,11 +38,11 @@ pub enum SettingsTab {
 impl SettingsTab {
     fn next(self) -> Self {
         match self {
-            SettingsTab::PdfSupport => SettingsTab::Themes,
+            SettingsTab::General => SettingsTab::Themes,
             SettingsTab::Themes => SettingsTab::Integrations,
             SettingsTab::Integrations => {
                 if cfg!(feature = "pdf") {
-                    SettingsTab::PdfSupport
+                    SettingsTab::General
                 } else {
                     SettingsTab::Themes
                 }
@@ -51,10 +52,10 @@ impl SettingsTab {
 
     fn prev(self) -> Self {
         match self {
-            SettingsTab::PdfSupport => SettingsTab::Integrations,
+            SettingsTab::General => SettingsTab::Integrations,
             SettingsTab::Themes => {
                 if cfg!(feature = "pdf") {
-                    SettingsTab::PdfSupport
+                    SettingsTab::General
                 } else {
                     SettingsTab::Integrations
                 }
@@ -102,8 +103,10 @@ impl IntegrationsFocus {
 
 pub struct SettingsPopup {
     current_tab: SettingsTab,
-    // PDF tab state
-    pdf_selected_idx: usize,
+    // General tab state
+    general_selected_idx: usize,
+    zen_mode_shortcut: ZenModeShortcut,
+    // PDF section state
     supports_scroll_mode: bool,
     supports_graphics: bool,
     // Themes tab state
@@ -130,7 +133,7 @@ impl Default for SettingsPopup {
 impl SettingsPopup {
     pub fn new() -> Self {
         if cfg!(feature = "pdf") {
-            Self::new_with_tab(SettingsTab::PdfSupport)
+            Self::new_with_tab(SettingsTab::General)
         } else {
             Self::new_with_tab(SettingsTab::Themes)
         }
@@ -152,12 +155,14 @@ impl SettingsPopup {
             SettingsTab::Themes
         };
 
-        let pdf_selected_idx = Self::initial_pdf_selected_idx_from_state(
+        let zen_shortcut = get_zen_mode_shortcut();
+        let general_selected_idx = Self::initial_general_selected_idx_from_state(
             supports_graphics,
             supports_scroll_mode,
             is_pdf_enabled(),
             get_pdf_render_mode(),
             get_pdf_page_layout_mode(),
+            zen_shortcut,
         );
         let theme_names = all_theme_names();
 
@@ -179,7 +184,8 @@ impl SettingsPopup {
 
         SettingsPopup {
             current_tab,
-            pdf_selected_idx,
+            general_selected_idx,
+            zen_mode_shortcut: zen_shortcut,
             supports_scroll_mode,
             supports_graphics,
             theme_selected_idx: Self::initial_theme_selected_idx_from_state(
@@ -198,28 +204,33 @@ impl SettingsPopup {
         }
     }
 
-    fn pdf_min_selectable_idx(&self) -> usize {
-        if self.supports_graphics { 0 } else { 2 }
+    fn general_min_selectable_idx(&self) -> usize {
+        0
     }
 
-    fn initial_pdf_selected_idx_from_state(
+    fn initial_general_selected_idx_from_state(
         supports_graphics: bool,
         supports_scroll_mode: bool,
         pdf_enabled: bool,
         render_mode: PdfRenderMode,
         layout_mode: PdfPageLayoutMode,
+        zen_shortcut: ZenModeShortcut,
     ) -> usize {
-        if !supports_graphics {
-            return 2;
-        }
-        if !pdf_enabled {
+        // Zen mode shortcut: non-default → focus it
+        if zen_shortcut == ZenModeShortcut::CtrlZ {
             return 1;
         }
-        if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
-            return 3;
-        }
-        if layout_mode == PdfPageLayoutMode::Dual {
-            return 5;
+        // PDF section: non-default → focus it
+        if supports_graphics {
+            if !pdf_enabled {
+                return 3; // Disabled
+            }
+            if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
+                return 5; // Scroll
+            }
+            if layout_mode == PdfPageLayoutMode::Dual {
+                return 7; // Dual
+            }
         }
         0
     }
@@ -238,11 +249,11 @@ impl SettingsPopup {
         current_theme_idx.min(theme_count - 1)
     }
 
-    fn pdf_max_selectable_idx(&self) -> usize {
-        if !is_pdf_enabled() {
-            return 1;
+    fn general_max_selectable_idx(&self) -> usize {
+        if !is_pdf_enabled() || !self.supports_graphics {
+            return 3; // Zen (0-1) + PDF enabled/disabled (2-3)
         }
-        5
+        7
     }
 
     fn render_mode_available(&self) -> bool {
@@ -307,14 +318,14 @@ impl SettingsPopup {
         };
 
         match self.current_tab {
-            SettingsTab::PdfSupport => self.render_pdf_tab(f, content_area, palette),
+            SettingsTab::General => self.render_general_tab(f, content_area, palette),
             SettingsTab::Themes => self.render_themes_tab(f, content_area, palette),
             SettingsTab::Integrations => self.render_integrations_tab(f, content_area, palette),
         }
     }
 
     fn render_tabs(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
-        let tab_names = ["PDF / DJVU", "Select Theme", "Integrations"];
+        let tab_names = ["General", "Select Theme", "Integrations"];
 
         let mut spans = Vec::new();
         spans.push(Span::raw(" "));
@@ -328,7 +339,7 @@ impl SettingsPopup {
         for (idx, name) in tab_iter {
             let is_selected = matches!(
                 (idx, self.current_tab),
-                (0, SettingsTab::PdfSupport)
+                (0, SettingsTab::General)
                     | (1, SettingsTab::Themes)
                     | (2, SettingsTab::Integrations)
             );
@@ -359,9 +370,9 @@ impl SettingsPopup {
             };
 
             let (underline_x, underline_len) = match self.current_tab {
-                SettingsTab::PdfSupport => (1, 10),    // "PDF / DJVU"
-                SettingsTab::Themes => (14, 12),       // "Select Theme"
-                SettingsTab::Integrations => (29, 12), // "Integrations"
+                SettingsTab::General => (1, 7),        // "General"
+                SettingsTab::Themes => (11, 12),       // "Select Theme"
+                SettingsTab::Integrations => (26, 12), // "Integrations"
             };
 
             let mut underline_spans = vec![Span::raw(" ".repeat(underline_x))];
@@ -374,44 +385,101 @@ impl SettingsPopup {
         }
     }
 
-    fn render_pdf_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+    fn render_general_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
         let pdf_enabled = is_pdf_enabled();
         let current_mode = get_pdf_render_mode();
         let current_layout_mode = get_pdf_page_layout_mode();
         let effective_pdf_enabled = self.supports_graphics && pdf_enabled;
         let render_mode_available = self.render_mode_available();
 
+        let radio_selected = "●";
+        let radio_unselected = "○";
+        let is_general = self.current_tab == SettingsTab::General;
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2), // PDF Support options (Enabled/Disabled)
-                Constraint::Length(1), // spacer
-                Constraint::Length(1), // Render Mode header
-                Constraint::Length(1), // empty line
-                Constraint::Length(2), // Render Mode options
-                Constraint::Length(1), // spacer
-                Constraint::Length(1), // Page Layout header
-                Constraint::Length(1), // empty line
-                Constraint::Length(2), // Page Layout options
-                Constraint::Length(1), // spacer
-                Constraint::Min(1),    // Info message
+                Constraint::Length(1), //  0: Zen Mode header
+                Constraint::Length(2), //  1: Zen Mode options
+                Constraint::Length(1), //  2: spacer
+                Constraint::Length(1), //  3: PDF Support header
+                Constraint::Length(2), //  4: PDF Support options (Enabled/Disabled)
+                Constraint::Length(1), //  5: spacer
+                Constraint::Length(1), //  6: Render Mode header
+                Constraint::Length(1), //  7: empty line
+                Constraint::Length(2), //  8: Render Mode options
+                Constraint::Length(1), //  9: spacer
+                Constraint::Length(1), // 10: Page Layout header
+                Constraint::Length(1), // 11: empty line
+                Constraint::Length(2), // 12: Page Layout options
+                Constraint::Length(1), // 13: spacer
+                Constraint::Min(1),    // 14: Info message
             ])
             .split(area);
 
         self.content_chunks = chunks.to_vec();
 
-        // PDF Support options (no section header - derived from tab name)
-        let radio_selected = "●";
-        let radio_unselected = "○";
+        // ── Zen Mode Shortcut section ──
+        self.render_section_header(f, chunks[0], "Zen Mode Shortcut", palette, palette.base_06);
+
+        let zen_options_area = Rect {
+            x: chunks[1].x + 2,
+            y: chunks[1].y,
+            width: chunks[1].width.saturating_sub(2),
+            height: chunks[1].height,
+        };
+        let zen_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(zen_options_area);
+
+        let zen_style = Style::default().fg(palette.base_06);
+
+        let space_radio = if self.zen_mode_shortcut == ZenModeShortcut::SpaceZ {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let space_line = self.render_radio_option(
+            space_radio,
+            "Space→Z",
+            Some("Ctrl+Z suspends app"),
+            zen_style,
+            is_general && self.general_selected_idx == 0,
+            palette,
+        );
+        f.render_widget(Paragraph::new(space_line), zen_chunks[0]);
+
+        let ctrl_radio = if self.zen_mode_shortcut == ZenModeShortcut::CtrlZ {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let ctrl_line = self.render_radio_option(
+            ctrl_radio,
+            "Ctrl+Z",
+            Some("Ctrl+Q suspends app"),
+            zen_style,
+            is_general && self.general_selected_idx == 1,
+            palette,
+        );
+        f.render_widget(Paragraph::new(ctrl_line), zen_chunks[1]);
+
+        // ── PDF / DJVU section ──
+        let pdf_header_color = if self.supports_graphics {
+            palette.base_06
+        } else {
+            palette.base_03
+        };
+        self.render_section_header(f, chunks[3], "PDF / DJVU", palette, pdf_header_color);
 
         let pdf_options_area = Rect {
-            x: chunks[0].x,
-            y: chunks[0].y,
-            width: chunks[0].width,
-            height: chunks[0].height,
+            x: chunks[4].x + 2,
+            y: chunks[4].y,
+            width: chunks[4].width.saturating_sub(2),
+            height: chunks[4].height,
         };
-
-        let options_chunks = Layout::default()
+        let pdf_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Length(1)])
             .split(pdf_options_area);
@@ -431,12 +499,10 @@ impl SettingsPopup {
             "Enabled",
             None,
             enabled_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 0
-                && self.supports_graphics,
+            is_general && self.general_selected_idx == 2 && self.supports_graphics,
             palette,
         );
-        f.render_widget(Paragraph::new(enabled_line), options_chunks[0]);
+        f.render_widget(Paragraph::new(enabled_line), pdf_chunks[0]);
 
         let disabled_radio = if !effective_pdf_enabled {
             radio_selected
@@ -448,12 +514,10 @@ impl SettingsPopup {
             "Disabled",
             None,
             enabled_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 1
-                && self.supports_graphics,
+            is_general && self.general_selected_idx == 3 && self.supports_graphics,
             palette,
         );
-        f.render_widget(Paragraph::new(disabled_line), options_chunks[1]);
+        f.render_widget(Paragraph::new(disabled_line), pdf_chunks[1]);
 
         // Render Mode section header
         let render_header_color = if render_mode_available {
@@ -461,16 +525,27 @@ impl SettingsPopup {
         } else {
             palette.base_03
         };
-        self.render_section_header(f, chunks[2], "Render Mode", palette, render_header_color);
+        let render_header_area = Rect {
+            x: chunks[6].x + 2,
+            y: chunks[6].y,
+            width: chunks[6].width.saturating_sub(2),
+            height: chunks[6].height,
+        };
+        self.render_section_header(
+            f,
+            render_header_area,
+            "Render Mode",
+            palette,
+            render_header_color,
+        );
 
         // Render Mode options
         let render_options_area = Rect {
-            x: chunks[4].x + 2,
-            y: chunks[4].y,
-            width: chunks[4].width.saturating_sub(2),
-            height: chunks[4].height,
+            x: chunks[8].x + 4,
+            y: chunks[8].y,
+            width: chunks[8].width.saturating_sub(4),
+            height: chunks[8].height,
         };
-
         let render_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -492,9 +567,7 @@ impl SettingsPopup {
             "Page",
             Some("one page at a time"),
             option_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 2
-                && render_mode_available,
+            is_general && self.general_selected_idx == 4 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(page_line), render_chunks[0]);
@@ -519,8 +592,8 @@ impl SettingsPopup {
             "Scroll",
             scroll_suffix,
             scroll_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 3
+            is_general
+                && self.general_selected_idx == 5
                 && render_mode_available
                 && self.supports_scroll_mode,
             palette,
@@ -533,16 +606,27 @@ impl SettingsPopup {
         } else {
             palette.base_03
         };
-        self.render_section_header(f, chunks[6], "Page Layout", palette, layout_header_color);
+        let layout_header_area = Rect {
+            x: chunks[10].x + 2,
+            y: chunks[10].y,
+            width: chunks[10].width.saturating_sub(2),
+            height: chunks[10].height,
+        };
+        self.render_section_header(
+            f,
+            layout_header_area,
+            "Page Layout",
+            palette,
+            layout_header_color,
+        );
 
         // Page Layout options
         let layout_options_area = Rect {
-            x: chunks[8].x + 2,
-            y: chunks[8].y,
-            width: chunks[8].width.saturating_sub(2),
-            height: chunks[8].height,
+            x: chunks[12].x + 4,
+            y: chunks[12].y,
+            width: chunks[12].width.saturating_sub(4),
+            height: chunks[12].height,
         };
-
         let layout_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(1), Constraint::Length(1)])
@@ -564,9 +648,7 @@ impl SettingsPopup {
             "Single",
             Some("one page"),
             layout_option_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 4
-                && render_mode_available,
+            is_general && self.general_selected_idx == 6 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(single_line), layout_chunks[0]);
@@ -581,16 +663,14 @@ impl SettingsPopup {
             "Dual",
             Some("two pages"),
             layout_option_style,
-            self.current_tab == SettingsTab::PdfSupport
-                && self.pdf_selected_idx == 5
-                && render_mode_available,
+            is_general && self.general_selected_idx == 7 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(dual_line), layout_chunks[1]);
 
         // Info message
         let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
-        f.render_widget(Paragraph::new(info_lines), chunks[10]);
+        f.render_widget(Paragraph::new(info_lines), chunks[14]);
     }
 
     fn render_themes_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
@@ -736,7 +816,7 @@ impl SettingsPopup {
                 Line::from(vec![
                     Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
                     Span::styled(
-                        "PDF / DJVU viewing requires a graphics-enabled terminal.",
+                        "PDF/DJVU viewing requires a graphics-enabled terminal.",
                         Style::default().fg(palette.base_03),
                     ),
                 ]),
@@ -752,7 +832,7 @@ impl SettingsPopup {
             vec![Line::from(vec![
                 Span::styled("ⓘ ", Style::default().fg(palette.base_03)),
                 Span::styled(
-                    "Enable PDF / DJVU support to change render mode",
+                    "Enable PDF/DJVU support to change render mode",
                     Style::default().fg(palette.base_03),
                 ),
             ])]
@@ -812,49 +892,47 @@ impl SettingsPopup {
         Line::from(spans)
     }
 
-    fn pdf_next(&mut self) {
-        let min_idx = self.pdf_min_selectable_idx();
-        let max_idx = self.pdf_max_selectable_idx();
-        let mut next_idx = self.pdf_selected_idx;
+    fn general_next(&mut self) {
+        let min_idx = self.general_min_selectable_idx();
+        let max_idx = self.general_max_selectable_idx();
+        let mut next_idx = self.general_selected_idx;
         for _ in 0..=max_idx {
             next_idx = if next_idx >= max_idx {
                 min_idx
             } else {
                 next_idx + 1
             };
-            if self.is_pdf_idx_selectable(next_idx) {
-                self.pdf_selected_idx = next_idx;
+            if self.is_general_idx_selectable(next_idx) {
+                self.general_selected_idx = next_idx;
                 break;
             }
         }
     }
 
-    fn pdf_previous(&mut self) {
-        let min_idx = self.pdf_min_selectable_idx();
-        let max_idx = self.pdf_max_selectable_idx();
-        let mut prev_idx = self.pdf_selected_idx;
+    fn general_previous(&mut self) {
+        let min_idx = self.general_min_selectable_idx();
+        let max_idx = self.general_max_selectable_idx();
+        let mut prev_idx = self.general_selected_idx;
         for _ in 0..=max_idx {
             prev_idx = if prev_idx <= min_idx {
                 max_idx
             } else {
                 prev_idx - 1
             };
-            if self.is_pdf_idx_selectable(prev_idx) {
-                self.pdf_selected_idx = prev_idx;
+            if self.is_general_idx_selectable(prev_idx) {
+                self.general_selected_idx = prev_idx;
                 break;
             }
         }
     }
 
-    fn is_pdf_idx_selectable(&self, idx: usize) -> bool {
-        if !self.supports_graphics {
-            return false;
-        }
+    fn is_general_idx_selectable(&self, idx: usize) -> bool {
         match idx {
-            0 | 1 => true,
-            2 => self.render_mode_available(),
-            3 => self.render_mode_available() && self.supports_scroll_mode,
-            4 | 5 => self.render_mode_available(),
+            0 | 1 => true,                     // Zen mode shortcut options
+            2 | 3 => self.supports_graphics,   // PDF enabled/disabled
+            4 => self.render_mode_available(), // Page mode
+            5 => self.render_mode_available() && self.supports_scroll_mode, // Scroll mode
+            6 | 7 => self.render_mode_available(), // Page layout
             _ => false,
         }
     }
@@ -880,44 +958,64 @@ impl SettingsPopup {
         }
     }
 
-    fn apply_pdf_selected(&self) -> Option<SettingsAction> {
-        match self.pdf_selected_idx {
-            0 if self.supports_graphics => {
+    fn apply_general_selected(&mut self) -> Option<SettingsAction> {
+        match self.general_selected_idx {
+            // Zen mode shortcut
+            0 => {
+                if self.zen_mode_shortcut != ZenModeShortcut::SpaceZ {
+                    self.zen_mode_shortcut = ZenModeShortcut::SpaceZ;
+                    set_zen_mode_shortcut(ZenModeShortcut::SpaceZ);
+                    return Some(SettingsAction::SettingsChanged);
+                }
+                None
+            }
+            1 => {
+                if self.zen_mode_shortcut != ZenModeShortcut::CtrlZ {
+                    self.zen_mode_shortcut = ZenModeShortcut::CtrlZ;
+                    set_zen_mode_shortcut(ZenModeShortcut::CtrlZ);
+                    return Some(SettingsAction::SettingsChanged);
+                }
+                None
+            }
+            // PDF enabled/disabled
+            2 if self.supports_graphics => {
                 if !is_pdf_enabled() {
                     set_pdf_enabled(true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            1 if self.supports_graphics => {
+            3 if self.supports_graphics => {
                 if is_pdf_enabled() {
                     set_pdf_enabled(false);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            2 if self.render_mode_available() => {
+            // Render mode
+            4 if self.render_mode_available() => {
                 if get_pdf_render_mode() != PdfRenderMode::Page {
                     set_pdf_render_mode(PdfRenderMode::Page);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            3 if self.render_mode_available() && self.supports_scroll_mode => {
+            5 if self.render_mode_available() && self.supports_scroll_mode => {
                 if get_pdf_render_mode() != PdfRenderMode::Scroll {
                     set_pdf_render_mode(PdfRenderMode::Scroll);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            4 if self.render_mode_available() => {
+            // Page layout
+            6 if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Single {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Single);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
-            5 if self.render_mode_available() => {
+            7 if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
@@ -1187,21 +1285,21 @@ impl SettingsPopup {
         if let Some(tab_area) = self.tab_area {
             if row >= tab_area.y && row < tab_area.y + tab_area.height {
                 let rel_x = col.saturating_sub(tab_area.x);
-                // Tab positions: " PDF / DJVU   Select Theme   Integrations"
-                //                  1..11         14..26          29..41
-                if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 14 {
+                // Tab positions: " General   Select Theme   Integrations"
+                //                  1..8       11..23          26..38
+                if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 11 {
                     if self.current_tab == SettingsTab::Integrations {
                         self.save_integrations();
                     }
-                    self.current_tab = SettingsTab::PdfSupport;
+                    self.current_tab = SettingsTab::General;
                     return None;
-                } else if rel_x >= 14 && rel_x < 29 {
+                } else if rel_x >= 11 && rel_x < 26 {
                     if self.current_tab == SettingsTab::Integrations {
                         self.save_integrations();
                     }
                     self.current_tab = SettingsTab::Themes;
                     return None;
-                } else if rel_x >= 29 {
+                } else if rel_x >= 26 {
                     if self.current_tab == SettingsTab::Integrations {
                         self.save_integrations();
                     }
@@ -1225,30 +1323,37 @@ impl SettingsPopup {
         };
 
         match self.current_tab {
-            SettingsTab::PdfSupport => {
-                // PDF chunks: 0: enable/disable, 4: render mode, 8: page layout
-                // Sub-rows within chunk 0 (height=2): row 0 = enabled, row 1 = disabled
-                if let Some(r) = chunks.get(0) {
+            SettingsTab::General => {
+                // Chunk 1: zen mode options (height=2), indices 0-1
+                if let Some(r) = chunks.get(1) {
                     if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
                         let sub = (row - r.y) as usize;
-                        self.pdf_selected_idx = sub;
-                        return self.apply_pdf_selected();
+                        self.general_selected_idx = sub;
+                        return self.apply_general_selected();
                     }
                 }
-                // Render mode options (chunk 4, height=2)
+                // Chunk 4: PDF enabled/disabled (height=2), indices 2-3
                 if let Some(r) = chunks.get(4) {
                     if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
                         let sub = (row - r.y) as usize;
-                        self.pdf_selected_idx = 2 + sub;
-                        return self.apply_pdf_selected();
+                        self.general_selected_idx = 2 + sub;
+                        return self.apply_general_selected();
                     }
                 }
-                // Page layout options (chunk 8, height=2)
+                // Chunk 8: render mode options (height=2), indices 4-5
                 if let Some(r) = chunks.get(8) {
                     if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
                         let sub = (row - r.y) as usize;
-                        self.pdf_selected_idx = 4 + sub;
-                        return self.apply_pdf_selected();
+                        self.general_selected_idx = 4 + sub;
+                        return self.apply_general_selected();
+                    }
+                }
+                // Chunk 12: page layout options (height=2), indices 6-7
+                if let Some(r) = chunks.get(12) {
+                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
+                        let sub = (row - r.y) as usize;
+                        self.general_selected_idx = 6 + sub;
+                        return self.apply_general_selected();
                     }
                 }
             }
@@ -1457,7 +1562,7 @@ impl SettingsPopup {
                 Some(SettingsAction::Close)
             }
             KeyCode::Enter | KeyCode::Char(' ') => match self.current_tab {
-                SettingsTab::PdfSupport => self.apply_pdf_selected(),
+                SettingsTab::General => self.apply_general_selected(),
                 SettingsTab::Themes => self.apply_theme_selected(),
                 SettingsTab::Integrations => self.apply_integrations_selected(),
             },
@@ -1479,7 +1584,7 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_j(&mut self) {
         match self.current_tab {
-            SettingsTab::PdfSupport => self.pdf_next(),
+            SettingsTab::General => self.general_next(),
             SettingsTab::Themes => self.theme_next(),
             SettingsTab::Integrations => {
                 self.integrations_focus = self.integrations_focus.next();
@@ -1489,7 +1594,7 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_k(&mut self) {
         match self.current_tab {
-            SettingsTab::PdfSupport => self.pdf_previous(),
+            SettingsTab::General => self.general_previous(),
             SettingsTab::Themes => self.theme_previous(),
             SettingsTab::Integrations => {
                 self.integrations_focus = self.integrations_focus.prev();
@@ -1535,8 +1640,8 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_gg(&mut self) {
         match self.current_tab {
-            SettingsTab::PdfSupport => {
-                self.pdf_selected_idx = self.pdf_min_selectable_idx();
+            SettingsTab::General => {
+                self.general_selected_idx = self.general_min_selectable_idx();
             }
             SettingsTab::Themes => {
                 self.theme_selected_idx = 0;
@@ -1549,8 +1654,8 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_upper_g(&mut self) {
         match self.current_tab {
-            SettingsTab::PdfSupport => {
-                self.pdf_selected_idx = self.pdf_max_selectable_idx();
+            SettingsTab::General => {
+                self.general_selected_idx = self.general_max_selectable_idx();
             }
             SettingsTab::Themes => {
                 self.theme_selected_idx = self.theme_max_idx();
@@ -1567,40 +1672,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initial_pdf_focus_prefers_disabled_when_pdf_is_off() {
+    fn initial_general_focus_prefers_disabled_when_pdf_is_off() {
         assert_eq!(
-            SettingsPopup::initial_pdf_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_idx_from_state(
                 true,
                 true,
                 false,
                 PdfRenderMode::Page,
-                PdfPageLayoutMode::Single
+                PdfPageLayoutMode::Single,
+                ZenModeShortcut::SpaceZ,
             ),
-            1
+            3 // PDF Disabled
         );
     }
 
     #[test]
-    fn initial_pdf_focus_prefers_non_default_selected_options() {
+    fn initial_general_focus_prefers_non_default_selected_options() {
         assert_eq!(
-            SettingsPopup::initial_pdf_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_idx_from_state(
                 true,
                 true,
                 true,
                 PdfRenderMode::Scroll,
-                PdfPageLayoutMode::Dual
+                PdfPageLayoutMode::Dual,
+                ZenModeShortcut::SpaceZ,
             ),
-            3
+            5 // Scroll mode
         );
         assert_eq!(
-            SettingsPopup::initial_pdf_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_idx_from_state(
                 true,
                 false,
                 true,
                 PdfRenderMode::Page,
-                PdfPageLayoutMode::Dual
+                PdfPageLayoutMode::Dual,
+                ZenModeShortcut::SpaceZ,
             ),
-            5
+            7 // Dual layout
         );
     }
 

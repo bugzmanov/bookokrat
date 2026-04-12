@@ -790,7 +790,7 @@ impl App {
             && app.pdf_supports_graphics
         {
             app.previous_main_panel = MainPanel::NavigationList;
-            app.settings_popup = Some(app.make_settings_popup(SettingsTab::PdfSupport));
+            app.settings_popup = Some(app.make_settings_popup(SettingsTab::General));
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             // Mark as configured so we don't show again
             crate::settings::set_pdf_settings_configured(true);
@@ -4060,7 +4060,17 @@ impl App {
                 self.handle_key_sequence(c)
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_zen_mode();
+                match settings::get_zen_mode_shortcut() {
+                    settings::ZenModeShortcut::CtrlZ => {
+                        self.toggle_zen_mode();
+                    }
+                    #[cfg(unix)]
+                    settings::ZenModeShortcut::SpaceZ => {
+                        self.pending_suspend = true;
+                    }
+                    #[cfg(not(unix))]
+                    _ => {}
+                }
                 true
             }
             KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -4068,7 +4078,13 @@ impl App {
                 true
             }
             #[cfg(unix)]
-            KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('q')
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && matches!(
+                        settings::get_zen_mode_shortcut(),
+                        settings::ZenModeShortcut::CtrlZ
+                    ) =>
+            {
                 self.pending_suspend = true;
                 true
             }
@@ -4098,7 +4114,7 @@ impl App {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
         }
-        self.settings_popup = Some(self.make_settings_popup(SettingsTab::PdfSupport));
+        self.settings_popup = Some(self.make_settings_popup(SettingsTab::General));
         self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
     }
 
@@ -4254,12 +4270,19 @@ impl App {
                 true
             }
             " z" => {
-                // Handle Space->z to copy raw_text_lines for debugging
-                if self.is_main_panel(MainPanel::Content) {
-                    if let Err(e) = self.text_reader.copy_raw_text_lines_to_clipboard() {
-                        debug!("Copy raw_text_lines failed: {e}");
-                    } else {
-                        debug!("Successfully copied raw_text_lines to clipboard for debugging");
+                if matches!(
+                    settings::get_zen_mode_shortcut(),
+                    settings::ZenModeShortcut::SpaceZ
+                ) {
+                    self.toggle_zen_mode();
+                } else {
+                    // Copy raw_text_lines for debugging (legacy Space+z behavior)
+                    if self.is_main_panel(MainPanel::Content) {
+                        if let Err(e) = self.text_reader.copy_raw_text_lines_to_clipboard() {
+                            debug!("Copy raw_text_lines failed: {e}");
+                        } else {
+                            debug!("Successfully copied raw_text_lines to clipboard for debugging");
+                        }
                     }
                 }
                 self.key_sequence.clear();
@@ -5673,7 +5696,17 @@ impl App {
                 self.scroll_full_screen_up();
             }
             KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_zen_mode();
+                match settings::get_zen_mode_shortcut() {
+                    settings::ZenModeShortcut::CtrlZ => {
+                        self.toggle_zen_mode();
+                    }
+                    #[cfg(unix)]
+                    settings::ZenModeShortcut::SpaceZ => {
+                        self.pending_suspend = true;
+                    }
+                    #[cfg(not(unix))]
+                    _ => {}
+                }
             }
 
             KeyCode::Char('G') => {
@@ -7090,11 +7123,14 @@ where
                             continue;
                         }
 
-                        // Intercept Ctrl+l / Ctrl+q before PDF handler (which would
-                        // consume plain 'l' / 'q' as next-page / quit).
+                        // Intercept Ctrl+l / Ctrl+q / Ctrl+z before PDF handler
+                        // (which would consume plain 'l' / 'q' / 'z' differently).
                         if !app.pdf_text_input_active()
                             && key.modifiers.contains(KeyModifiers::CONTROL)
-                            && matches!(key.code, KeyCode::Char('l') | KeyCode::Char('q'))
+                            && matches!(
+                                key.code,
+                                KeyCode::Char('l') | KeyCode::Char('q') | KeyCode::Char('z')
+                            )
                             && app.handle_global_hotkeys(*key)
                         {
                             continue;

@@ -33,7 +33,8 @@ wait 500
 screenshot bitmap_via_toc
 
 # Toggle zen mode to see graphics without sidebar
-ctrl z
+key space
+key z
 wait 200
 screenshot zen_mode
 
@@ -45,7 +46,8 @@ escape
 wait 50
 
 # Exit zen mode
-ctrl z
+key space
+key z
 wait 200
 
 # Open help popup with sidebar visible

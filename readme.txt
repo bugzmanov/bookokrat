@@ -63,12 +63,12 @@
 │ GLOBAL CONTROLS                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  q             Quit application                                             │
-│  Ctrl+z        Toggle zen mode (hide sidebar and status bar)                │
+│  Space+z       Toggle zen mode (configurable, see Settings)                 │
 │  Tab           Switch focus between library and reader                      │
 │  Esc           Clear selection, exit search, dismiss popups                 │
 │  ?             Toggle this help screen                                      │
 │  Space+t       Open theme selector                                          │
-│  Space+s       Open settings (PDF support + render mode)                    │
+│  Space+s       Open settings                                                │
 │  + / -         Increase / decrease content margins                          │
 │  Space+j       Toggle text justification (EPUB)                             │
 │  Space+h       Toggle reading history popup                                 │
@@ -83,7 +83,7 @@
 │  < / >         Shrink / grow sidebar panel width                            │
 │  Space+< / >   Reset sidebar panel width to default                         │
 │  Ctrl+l        Force full screen redraw                                     │
-│  Ctrl+q        Suspend process (unix only, resume with fg)                  │
+│  Ctrl+z        Suspend process (configurable, see Settings)                 │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -351,7 +351,7 @@ PDF annotations require a graphics-capable terminal.
   ▸ Smooth scrolling: Hold j or k for accelerated scrolling
   ▸ Half-page jumps: Use Ctrl+d and Ctrl+u with visual highlights
   ▸ Full-page jumps: Use Ctrl+f / Ctrl+b or PgDn / PgUp
-  ▸ Focus reading: Press Ctrl+z for zen mode (hides panels)
+  ▸ Focus reading: Press Space+z for zen mode (hides panels)
   ▸ Adjust margins: Press + or - to widen or narrow content
   ▸ Theme switching: Press Space+t to browse and apply color themes
 
@@ -420,10 +420,15 @@ PDF annotations require a graphics-capable terminal.
     (capture output) or "fire_and_forget" (launch and forget).
 
   [ZEN MODE]
-    Press Ctrl+z to toggle zen mode for distraction-free reading:
+    Toggle zen mode for distraction-free reading:
       • Hides the sidebar (library/TOC panel)
       • Hides the status bar
       • Maximizes the reading area
+
+    The zen mode shortcut is configurable in Settings (Ctrl+S):
+      • Space→Z (default for new installs) — Ctrl+Z suspends the app
+      • Ctrl+Z (legacy) — Ctrl+Q suspends the app
+    Suspending pauses bookokrat; resume with fg in your shell.
 
 ===============================================================================
 

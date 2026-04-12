@@ -231,7 +231,8 @@ key j
 wait 200
 
 # Enter zen mode
-ctrl z
+key space
+key z
 wait 300
 
 # Increase margins to max: 20x minus

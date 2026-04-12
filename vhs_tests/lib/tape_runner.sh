@@ -128,6 +128,22 @@ term_send_ctrl_key() {
     esac
 }
 
+term_send_ctrl_shift_key() {
+    local key="$1"
+
+    case "$TERMINAL_TYPE" in
+        kitty)
+            send_kitty_ctrl_shift_key "$key"
+            ;;
+        wezterm)
+            send_wezterm_ctrl_shift_key "$key"
+            ;;
+        ghostty|*)
+            send_ctrl_shift_key "$key"
+            ;;
+    esac
+}
+
 term_send_escape() {
     case "$TERMINAL_TYPE" in
         kitty)
@@ -328,6 +344,15 @@ execute_command() {
             fi
             log_verbose "ctrl+$arg"
             term_send_ctrl_key "$arg"
+            ;;
+
+        ctrl_shift)
+            if [ -z "$arg" ]; then
+                log_error "ctrl_shift requires a character"
+                return 1
+            fi
+            log_verbose "ctrl+shift+$arg"
+            term_send_ctrl_shift_key "$arg"
             ;;
 
         escape)

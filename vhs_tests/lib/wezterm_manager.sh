@@ -184,6 +184,19 @@ end tell
 " 2>/dev/null
 }
 
+# Send Ctrl+Shift+key to WezTerm using AppleScript
+# Usage: send_wezterm_ctrl_shift_key "z"
+send_wezterm_ctrl_shift_key() {
+    local key="$1"
+    osascript -e "
+tell application \"WezTerm\" to activate
+delay 0.1
+tell application \"System Events\"
+    keystroke \"$key\" using {control down, shift down}
+end tell
+" 2>/dev/null
+}
+
 # Send Escape key (key code 53)
 send_wezterm_escape() {
     osascript -e '

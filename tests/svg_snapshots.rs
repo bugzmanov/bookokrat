@@ -4151,11 +4151,7 @@ fn test_zen_mode_svg() {
         })
         .unwrap();
 
-    // Toggle zen mode with Ctrl+z
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
 
     // Draw zen mode - should show full screen content, no navigation panel
     terminal
@@ -4189,10 +4185,7 @@ fn test_margin_change_no_position_jump_svg() {
     open_first_test_book(&mut app);
 
     // Enter zen mode for full-screen view
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
 
     // Scroll down significantly to be in the middle of the chapter
     app.press_key(crossterm::event::KeyCode::Tab); // Switch to content view
@@ -4995,10 +4988,7 @@ fn test_justify_text_on_svg() {
     open_first_test_book(&mut app);
 
     // Zen mode for full-width text
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
     app.press_key(crossterm::event::KeyCode::Tab);
 
     // Enable justify via Space+j
@@ -5034,10 +5024,7 @@ fn test_justify_text_off_svg() {
     open_first_test_book(&mut app);
 
     // Zen mode for full-width text
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
     app.press_key(crossterm::event::KeyCode::Tab);
 
     // Enable justify then disable — toggle twice
@@ -5106,10 +5093,7 @@ fn test_search_with_justified_text_svg() {
     open_first_book(&mut app);
 
     // Zen mode for full-width text, then focus content panel
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
     app.press_key(crossterm::event::KeyCode::Tab);
 
     // Enable justify via Space+j
@@ -5190,10 +5174,7 @@ fn test_div_with_inline_content_svg() {
     app.press_key(crossterm::event::KeyCode::Tab);
 
     // Zen mode for clean view
-    app.press_key_with_modifiers(
-        crossterm::event::KeyCode::Char('z'),
-        crossterm::event::KeyModifiers::CONTROL,
-    );
+    app.set_zen_mode(true);
 
     terminal
         .draw(|f| {
@@ -5228,10 +5209,7 @@ fn full_screen_scroll_roundtrip(
     open_first_test_book(app);
 
     if zen {
-        app.press_key_with_modifiers(
-            crossterm::event::KeyCode::Char('z'),
-            crossterm::event::KeyModifiers::CONTROL,
-        );
+        app.set_zen_mode(true);
     }
 
     // Draw once to initialize visible_height

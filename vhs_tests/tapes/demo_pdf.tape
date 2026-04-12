@@ -85,7 +85,8 @@ escape
 wait 1000
 
 # ── Zen mode ─────────────────────────────────────────────
-ctrl z
+key space
+key z
 wait 500
 
 # ── Zoom out 2 times ─────────────────────────────────────
@@ -139,7 +140,8 @@ return
 wait 1000
 
 # ── Exit zen mode ────────────────────────────────────────
-ctrl z
+key space
+key z
 wait 500
 
 # ── Scroll down with j (20x) ────────────────────────────

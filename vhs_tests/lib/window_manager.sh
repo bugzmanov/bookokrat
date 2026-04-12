@@ -189,6 +189,19 @@ end tell
 " 2>/dev/null
 }
 
+# Send Ctrl+Shift+key to Ghostty via AppleScript
+# Usage: send_ctrl_shift_key "z"
+send_ctrl_shift_key() {
+    local key="$1"
+    osascript -e "
+tell application \"Ghostty\" to activate
+delay 0.1
+tell application \"System Events\"
+    keystroke \"$key\" using {control down, shift down}
+end tell
+" 2>/dev/null
+}
+
 # Send a special key by key code
 # Common codes: 53=Escape, 36=Return, 123=Left, 124=Right, 125=Down, 126=Up
 send_key_code() {
