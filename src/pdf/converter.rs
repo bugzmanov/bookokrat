@@ -206,6 +206,12 @@ impl ConvertedImage {
                 .find(|t| t.y_offset_cells == update_tile.y_offset_cells)
             {
                 *existing = update_tile;
+            } else {
+                log::warn!(
+                    "merge_tile_update: no tile at y_offset={} (existing: {:?})",
+                    update_tile.y_offset_cells,
+                    tiles.iter().map(|t| t.y_offset_cells).collect::<Vec<_>>()
+                );
             }
         }
         true
@@ -998,35 +1004,21 @@ impl ConverterEngine {
         let Some(viewport) = self.viewport.as_ref() else {
             return Ok(());
         };
-        let (_, char_height) = self.picker.font_size();
-        let tile_height_px = u32::from(char_height);
 
-        // Collect affected tiles from old and new visual rects
-        let mut affected_tiles: HashSet<(usize, u32)> = HashSet::new();
+        // Collect affected pages from old and new visual rects
+        let mut affected_pages: HashSet<usize> = HashSet::new();
         for rect in old.iter().chain(new.iter()) {
-            let start_tile = rect.y / tile_height_px;
-            let end_tile = (rect.y + rect.height).div_ceil(tile_height_px);
-            for tile_idx in start_tile..end_tile {
-                affected_tiles.insert((rect.page, tile_idx));
-            }
+            affected_pages.insert(rect.page);
         }
 
-        // Group tiles by page
-        let mut pages_to_tiles: HashMap<usize, Vec<u32>> = HashMap::new();
-        for (page, tile_idx) in affected_tiles {
-            pages_to_tiles.entry(page).or_default().push(tile_idx);
-        }
-
-        for (page_num, tile_indices) in pages_to_tiles {
+        for page_num in affected_pages {
             let overlays = self.build_overlay_set(page_num);
             let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
                 continue;
             };
 
-            let cell_size = CellSize::new(
-                cached.data.img_data.width_cell,
-                viewport.viewport_height_cells,
-            );
+            // Use page-intrinsic cell size to match render_viewport_tiles density
+            let cell_size = cached_cell_size(cached);
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1034,6 +1026,25 @@ impl ConverterEngine {
                     continue;
                 }
             };
+
+            // Compute tile height using the same density as render_viewport_tiles
+            let density = pixel_density_for_image(&decoded, cell_size, &self.picker);
+            let tile_height_px = density.y.max(1);
+
+            // Now compute affected tile indices using the correct density
+            let mut tile_indices: Vec<u32> = Vec::new();
+            for rect in old.iter().chain(new.iter()) {
+                if rect.page != page_num {
+                    continue;
+                }
+                let start_tile = rect.y / tile_height_px;
+                let end_tile = (rect.y + rect.height).div_ceil(tile_height_px);
+                for tile_idx in start_tile..end_tile {
+                    if !tile_indices.contains(&tile_idx) {
+                        tile_indices.push(tile_idx);
+                    }
+                }
+            }
 
             let tiles = match render_specific_tiles(
                 &decoded,
@@ -1081,7 +1092,9 @@ impl ConverterEngine {
         let page_is_tiled = affected_page.is_some_and(|p| self.tiled_pages.contains(&p));
 
         if can_use_tiles && !page_is_tiled {
-            let mut tile_base_error = false;
+            // Full tile render already includes cursor overlay via build_overlay_set
+            // (self.cursor_rect was updated before this call), so no separate
+            // render_cursor_tile_updates is needed.
             if let Some(vp) = self.viewport.as_ref() {
                 if let Some(page_num) = affected_page {
                     let overlays = self.build_overlay_set(page_num);
@@ -1093,17 +1106,14 @@ impl ConverterEngine {
                                     image: img,
                                 }))?;
                                 self.tiled_pages.insert(page_num);
+                                self.sent_for_viewport.insert(page_num);
                             }
                             Err(e) => {
                                 sender.send(Err(e))?;
-                                tile_base_error = true;
                             }
                         }
                     }
                 }
-            }
-            if !tile_base_error {
-                self.render_cursor_tile_updates(old_cursor, new_cursor, sender)?;
             }
         } else if can_use_tiles && page_is_tiled {
             self.render_cursor_tile_updates(old_cursor, new_cursor, sender)?;
@@ -1192,43 +1202,27 @@ impl ConverterEngine {
         let Some(viewport) = self.viewport.as_ref() else {
             return Ok(());
         };
-        let (_, char_height) = self.picker.font_size();
-        let tile_height_px = u32::from(char_height);
 
         let old_cursor = old_cursor.map(|cursor| expand_cursor_rect(cursor, &self.picker));
         let new_cursor = new_cursor.map(|cursor| expand_cursor_rect(cursor, &self.picker));
 
-        let mut affected_tiles: HashSet<(usize, u32)> = HashSet::new();
+        // Collect affected pages from both cursors
+        let mut affected_pages: HashSet<usize> = HashSet::new();
         if let Some(cursor) = old_cursor.as_ref() {
-            let start_tile = cursor.y / tile_height_px;
-            let end_tile = (cursor.y + cursor.height).div_ceil(tile_height_px);
-            for tile_idx in start_tile..end_tile {
-                affected_tiles.insert((cursor.page, tile_idx));
-            }
+            affected_pages.insert(cursor.page);
         }
         if let Some(cursor) = new_cursor.as_ref() {
-            let start_tile = cursor.y / tile_height_px;
-            let end_tile = (cursor.y + cursor.height).div_ceil(tile_height_px);
-            for tile_idx in start_tile..end_tile {
-                affected_tiles.insert((cursor.page, tile_idx));
-            }
+            affected_pages.insert(cursor.page);
         }
 
-        let mut pages_to_tiles: HashMap<usize, Vec<u32>> = HashMap::new();
-        for (page, tile_idx) in affected_tiles {
-            pages_to_tiles.entry(page).or_default().push(tile_idx);
-        }
-
-        for (page_num, tile_indices) in pages_to_tiles {
+        for page_num in affected_pages {
             let overlays = self.build_overlay_set_with_cursor(page_num, new_cursor.as_ref());
             let Some(Some(cached)) = self.page_cache.get_mut(page_num) else {
                 continue;
             };
 
-            let cell_size = CellSize::new(
-                cached.data.img_data.width_cell,
-                viewport.viewport_height_cells,
-            );
+            // Use page-intrinsic cell size to match render_viewport_tiles density
+            let cell_size = cached_cell_size(cached);
             let decoded = match take_decoded(cached) {
                 Ok(img) => img,
                 Err(e) => {
@@ -1236,6 +1230,28 @@ impl ConverterEngine {
                     continue;
                 }
             };
+
+            // Compute tile height using the same density as render_viewport_tiles
+            let density = pixel_density_for_image(&decoded, cell_size, &self.picker);
+            let tile_height_px = density.y.max(1);
+
+            // Now compute affected tile indices using the correct density
+            let mut tile_indices: Vec<u32> = Vec::new();
+            for cursor in [old_cursor.as_ref(), new_cursor.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                if cursor.page != page_num {
+                    continue;
+                }
+                let start_tile = cursor.y / tile_height_px;
+                let end_tile = (cursor.y + cursor.height).div_ceil(tile_height_px);
+                for tile_idx in start_tile..end_tile {
+                    if !tile_indices.contains(&tile_idx) {
+                        tile_indices.push(tile_idx);
+                    }
+                }
+            }
 
             let tiles = match render_specific_tiles(
                 &decoded,
