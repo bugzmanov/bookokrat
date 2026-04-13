@@ -45,7 +45,7 @@ fn parse_args() -> Result<CliArgs> {
             "--zen-mode" => zen_mode = true,
             "--test-mode" => test_mode = true,
             "--help" | "-h" => {
-                println!("Usage: bookokrat [FILE.epub] [--zen-mode] [--test-mode]");
+                println!("Usage: bookokrat [FILE.epub|.pdf|.md|DIR] [--zen-mode] [--test-mode]");
                 std::process::exit(0);
             }
             "--version" | "-V" => {

@@ -719,7 +719,7 @@ impl App {
             BookFormat::Pdf => {
                 self.load_pdf(&path_owned, self.test_mode)?;
             }
-            BookFormat::Epub | BookFormat::Html => {
+            BookFormat::Epub | BookFormat::Html | BookFormat::Markdown => {
                 self.load_epub(&path_owned, self.test_mode)?;
             }
         }

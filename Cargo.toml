@@ -84,6 +84,7 @@ thiserror = "1.0.59"
 flate2 = "1.0"
 png = "0.17"
 walkdir = "2.4"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 
 # PDF rendering dependencies (optional, enabled with `pdf` feature)
 mupdf = { version = "0.6.0", default-features = false, features = ["svg", "system-fonts", "img"], optional = true }

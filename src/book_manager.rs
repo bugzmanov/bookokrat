@@ -24,6 +24,7 @@ pub struct BookManager {
 pub enum BookFormat {
     Epub,
     Html,
+    Markdown,
     #[cfg(feature = "pdf")]
     Pdf,
 }
@@ -88,10 +89,23 @@ impl BookManager {
             .filter_map(|entry| {
                 let entry = entry.ok()?;
                 let path = entry.path();
+
+                // Check for markdown directories (e.g. wiki/)
+                if path.is_dir() && Self::is_markdown_directory(&path) {
+                    let path_str = path.to_str()?.to_string();
+                    let display_name = Self::extract_display_name(&path_str);
+                    return Some(BookInfo {
+                        path: path_str,
+                        display_name,
+                        format: BookFormat::Markdown,
+                    });
+                }
+
                 let extension = path.extension()?.to_str()?.to_lowercase();
                 let format = match extension.as_str() {
                     "epub" => Some(BookFormat::Epub),
                     "html" | "htm" => Some(BookFormat::Html),
+                    "md" | "markdown" => Some(BookFormat::Markdown),
                     #[cfg(feature = "pdf")]
                     "pdf" => Some(BookFormat::Pdf),
                     _ => None,
@@ -214,7 +228,16 @@ impl BookManager {
             }
         }
 
-        // For other files (like EPUB), remove the extension
+        // For directories (e.g. markdown wiki dirs), use the directory name
+        if path.is_dir() {
+            return path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+        }
+
+        // For other files (like EPUB, markdown), remove the extension
         path.file_stem()
             .unwrap_or_default()
             .to_string_lossy()
@@ -236,7 +259,11 @@ impl BookManager {
             return Err(format!("Book not found in managed list: {path}"));
         }
 
-        if self.is_html_file(path) {
+        if self.is_markdown_file(path) {
+            self.create_fake_epub_from_markdown(path)
+        } else if Self::is_markdown_directory(Path::new(path)) {
+            self.create_epub_from_markdown_dir(Path::new(path))
+        } else if self.is_html_file(path) {
             // For HTML files, create a fake EPUB
             self.create_fake_epub_from_html(path)
         } else if Self::is_epub_directory(Path::new(path)) {
@@ -624,6 +651,7 @@ impl BookManager {
                         BookFormat::Pdf => 0,
                         BookFormat::Epub => 1,
                         BookFormat::Html => 2,
+                        BookFormat::Markdown => 3,
                     }
                 };
                 type_order(&a.format)
@@ -658,10 +686,23 @@ impl BookManager {
     /// Detect format from file extension (for files not in the managed list)
     pub fn detect_format(path: &str) -> Option<BookFormat> {
         let path = Path::new(path);
+
+        // Check directories: exploded EPUB or markdown wiki
+        if path.is_dir() {
+            if Self::is_epub_directory(path) {
+                return Some(BookFormat::Epub);
+            }
+            if Self::is_markdown_directory(path) {
+                return Some(BookFormat::Markdown);
+            }
+            return None;
+        }
+
         let ext = path.extension()?.to_str()?.to_lowercase();
         match ext.as_str() {
             "epub" => Some(BookFormat::Epub),
             "html" | "htm" => Some(BookFormat::Html),
+            "md" | "markdown" => Some(BookFormat::Markdown),
             #[cfg(feature = "pdf")]
             "pdf" => Some(BookFormat::Pdf),
             _ => None,
@@ -670,6 +711,279 @@ impl BookManager {
 
     pub fn is_html_file(&self, path: &str) -> bool {
         Self::detect_format(path) == Some(BookFormat::Html)
+    }
+
+    pub fn is_markdown_file(&self, path: &str) -> bool {
+        let p = Path::new(path);
+        !p.is_dir() && Self::detect_format(path) == Some(BookFormat::Markdown)
+    }
+
+    fn is_markdown_directory(path: &Path) -> bool {
+        path.is_dir()
+            && std::fs::read_dir(path)
+                .ok()
+                .map(|entries| {
+                    entries.filter_map(Result::ok).any(|e| {
+                        e.path()
+                            .extension()
+                            .and_then(|ext| ext.to_str())
+                            .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+                    })
+                })
+                .unwrap_or(false)
+    }
+
+    fn markdown_to_html(markdown: &str) -> String {
+        use pulldown_cmark::{Options, Parser, html::push_html};
+
+        let mut options = Options::empty();
+        options.insert(Options::ENABLE_TABLES);
+        options.insert(Options::ENABLE_STRIKETHROUGH);
+        options.insert(Options::ENABLE_TASKLISTS);
+
+        let parser = Parser::new_ext(markdown, options);
+        let mut html_output = String::new();
+        push_html(&mut html_output, parser);
+        html_output
+    }
+
+    fn extract_title_from_markdown(content: &str) -> Option<String> {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if let Some(title) = trimmed.strip_prefix("# ") {
+                return Some(title.trim().to_string());
+            }
+        }
+        None
+    }
+
+    fn create_fake_epub_from_markdown(
+        &self,
+        path: &str,
+    ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        let markdown_content = std::fs::read_to_string(path).map_err(|e| {
+            error!("Failed to read markdown file {path}: {e}");
+            format!("Failed to read markdown file: {e}")
+        })?;
+
+        let html_content = Self::markdown_to_html(&markdown_content);
+        self.create_minimal_epub_from_html(&html_content, path)
+    }
+
+    fn create_epub_from_markdown_dir(
+        &self,
+        dir: &Path,
+    ) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        use zip::write::FileOptions;
+
+        info!("Creating EPUB from markdown directory: {dir:?}");
+
+        // Collect markdown files with their titles
+        let mut md_files: Vec<(std::path::PathBuf, String, String)> = Vec::new(); // (path, stem, title)
+
+        let entries = std::fs::read_dir(dir)
+            .map_err(|e| format!("Failed to read directory: {e}"))?;
+
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"))
+            {
+                let content = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+                let stem = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let title =
+                    Self::extract_title_from_markdown(&content).unwrap_or_else(|| stem.clone());
+                md_files.push((path, stem, title));
+            }
+        }
+
+        if md_files.is_empty() {
+            return Err("No markdown files found in directory".to_string());
+        }
+
+        // Sort: index-like files first (Home, README, index), then alphabetical
+        md_files.sort_by(|a, b| {
+            let priority = |name: &str| -> u8 {
+                match name.to_lowercase().as_str() {
+                    "home" | "readme" | "index" => 0,
+                    _ => 1,
+                }
+            };
+            priority(&a.1)
+                .cmp(&priority(&b.1))
+                .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+        });
+
+        let book_title = dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let dir_id = dir.to_string_lossy().replace('/', "_");
+
+        let temp_file =
+            NamedTempFile::new().map_err(|e| format!("Failed to create temp file: {e}"))?;
+        let temp_path = temp_file.path().to_path_buf();
+
+        {
+            let file = std::fs::File::create(&temp_path)
+                .map_err(|e| format!("Failed to create temp EPUB file: {e}"))?;
+            let mut zip = zip::ZipWriter::new(file);
+            let options =
+                FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+            // mimetype (must be first, uncompressed)
+            zip.start_file("mimetype", options)
+                .map_err(|e| format!("Failed to add mimetype: {e}"))?;
+            zip.write_all(b"application/epub+zip")
+                .map_err(|e| format!("Failed to write mimetype: {e}"))?;
+
+            // META-INF/container.xml
+            zip.start_file("META-INF/container.xml", options)
+                .map_err(|e| format!("Failed to add container.xml: {e}"))?;
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+            )
+            .map_err(|e| format!("Failed to write container.xml: {e}"))?;
+
+            // Build manifest, spine, nav, and chapter files
+            let mut manifest_items = String::new();
+            let mut spine_items = String::new();
+            let mut nav_points = String::new();
+
+            for (i, (file_path, _stem, title)) in md_files.iter().enumerate() {
+                let chapter_id = format!("chapter{}", i + 1);
+                let chapter_file = format!("{chapter_id}.xhtml");
+
+                manifest_items.push_str(&format!(
+                    "        <item id=\"{chapter_id}\" href=\"{chapter_file}\" \
+                     media-type=\"application/xhtml+xml\"/>\n"
+                ));
+                spine_items
+                    .push_str(&format!("        <itemref idref=\"{chapter_id}\"/>\n"));
+
+                let escaped_title = title
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+                nav_points.push_str(&format!(
+                    "        <navPoint id=\"{chapter_id}\" playOrder=\"{order}\">\n\
+                     \x20           <navLabel>\n\
+                     \x20               <text>{escaped_title}</text>\n\
+                     \x20           </navLabel>\n\
+                     \x20           <content src=\"{chapter_file}\"/>\n\
+                     \x20       </navPoint>\n",
+                    order = i + 1
+                ));
+
+                // Convert markdown to XHTML chapter
+                let md_content = std::fs::read_to_string(file_path)
+                    .map_err(|e| format!("Failed to read {}: {e}", file_path.display()))?;
+                let html_body = Self::markdown_to_html(&md_content);
+                let xhtml = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                     \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n\
+                     <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+                     <head>\n    <title>{escaped_title}</title>\n</head>\n\
+                     <body>\n{html_body}\n</body>\n</html>"
+                );
+
+                zip.start_file(format!("OEBPS/{chapter_file}"), options)
+                    .map_err(|e| format!("Failed to add {chapter_file}: {e}"))?;
+                zip.write_all(xhtml.as_bytes())
+                    .map_err(|e| format!("Failed to write {chapter_file}: {e}"))?;
+            }
+
+            // content.opf
+            let escaped_book_title = book_title
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let content_opf = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <package xmlns=\"http://www.idpf.org/2007/opf\" \
+                 unique-identifier=\"bookid\" version=\"2.0\">\n\
+                 \x20   <metadata>\n\
+                 \x20       <dc:title xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+                 {escaped_book_title}</dc:title>\n\
+                 \x20       <dc:identifier xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+                 id=\"bookid\">md-{dir_id}</dc:identifier>\n\
+                 \x20       <dc:language xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+                 en</dc:language>\n\
+                 \x20   </metadata>\n\
+                 \x20   <manifest>\n\
+                 {manifest_items}\
+                 \x20       <item id=\"ncx\" href=\"toc.ncx\" \
+                 media-type=\"application/x-dtbncx+xml\"/>\n\
+                 \x20   </manifest>\n\
+                 \x20   <spine toc=\"ncx\">\n\
+                 {spine_items}\
+                 \x20   </spine>\n\
+                 </package>"
+            );
+
+            zip.start_file("OEBPS/content.opf", options)
+                .map_err(|e| format!("Failed to add content.opf: {e}"))?;
+            zip.write_all(content_opf.as_bytes())
+                .map_err(|e| format!("Failed to write content.opf: {e}"))?;
+
+            // toc.ncx
+            let toc_ncx = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                 <ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\">\n\
+                 \x20   <head>\n\
+                 \x20       <meta name=\"dtb:uid\" content=\"md-{dir_id}\"/>\n\
+                 \x20       <meta name=\"dtb:depth\" content=\"1\"/>\n\
+                 \x20       <meta name=\"dtb:totalPageCount\" content=\"0\"/>\n\
+                 \x20       <meta name=\"dtb:maxPageNumber\" content=\"0\"/>\n\
+                 \x20   </head>\n\
+                 \x20   <docTitle>\n\
+                 \x20       <text>{escaped_book_title}</text>\n\
+                 \x20   </docTitle>\n\
+                 \x20   <navMap>\n\
+                 {nav_points}\
+                 \x20   </navMap>\n\
+                 </ncx>"
+            );
+
+            zip.start_file("OEBPS/toc.ncx", options)
+                .map_err(|e| format!("Failed to add toc.ncx: {e}"))?;
+            zip.write_all(toc_ncx.as_bytes())
+                .map_err(|e| format!("Failed to write toc.ncx: {e}"))?;
+
+            zip.finish()
+                .map_err(|e| format!("Failed to finish ZIP: {e}"))?;
+        }
+
+        match EpubDoc::new(&temp_path) {
+            Ok(mut doc) => {
+                info!(
+                    "Successfully created EPUB from markdown directory: {dir:?} ({} chapters)",
+                    doc.get_num_chapters()
+                );
+                let _ = doc.set_current_chapter(0);
+                Ok(doc)
+            }
+            Err(e) => {
+                error!("Failed to open created EPUB from markdown directory: {e}");
+                Err(format!("Failed to open created EPUB: {e}"))
+            }
+        }
     }
 
     #[cfg(feature = "pdf")]
@@ -773,5 +1087,107 @@ mod tests {
 
         assert!(doc.get_num_chapters() >= 1);
         assert!(doc.get_current_str().is_some());
+    }
+
+    #[test]
+    fn detect_format_markdown_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let md_path = temp_dir.path().join("notes.md");
+        write_file(&md_path, "# Hello\n\nSome content.");
+
+        let format = BookManager::detect_format(md_path.to_str().unwrap());
+        assert_eq!(format, Some(BookFormat::Markdown));
+    }
+
+    #[test]
+    fn detect_format_markdown_directory() {
+        let temp_dir = TempDir::new().unwrap();
+        let wiki_dir = temp_dir.path().join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        write_file(&wiki_dir.join("Home.md"), "# Home\n\nWelcome.");
+        write_file(&wiki_dir.join("Guide.md"), "# Guide\n\nSteps.");
+
+        let format = BookManager::detect_format(wiki_dir.to_str().unwrap());
+        assert_eq!(format, Some(BookFormat::Markdown));
+    }
+
+    #[test]
+    fn load_single_markdown_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let md_path = temp_dir.path().join("readme.md");
+        write_file(
+            &md_path,
+            "# My Project\n\nA **bold** statement.\n\n## Section\n\n- item 1\n- item 2\n",
+        );
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let mut doc = manager.load_epub(md_path.to_str().unwrap()).unwrap();
+
+        assert!(doc.get_num_chapters() >= 1);
+        let (content, _mime) = doc.get_current_str().unwrap();
+        assert!(content.contains("My Project"));
+        assert!(content.contains("<strong>bold</strong>"));
+    }
+
+    #[test]
+    fn load_markdown_directory_multi_chapter() {
+        let temp_dir = TempDir::new().unwrap();
+        let wiki_dir = temp_dir.path().join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        write_file(&wiki_dir.join("Home.md"), "# Home\n\nWelcome to the wiki.");
+        write_file(
+            &wiki_dir.join("Architecture.md"),
+            "# Architecture\n\nSystem design.",
+        );
+        write_file(
+            &wiki_dir.join("Getting-Started.md"),
+            "# Getting Started\n\nSetup steps.",
+        );
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let wiki_path = wiki_dir.to_str().unwrap();
+        let mut doc = manager.load_epub(wiki_path).unwrap();
+
+        // Should have 3 chapters
+        assert_eq!(doc.get_num_chapters(), 3);
+
+        // First chapter should be Home (sorted first)
+        let (content, _mime) = doc.get_current_str().unwrap();
+        assert!(content.contains("Home"));
+        assert!(content.contains("Welcome to the wiki"));
+    }
+
+    #[test]
+    fn discover_markdown_files_in_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        write_file(&temp_dir.path().join("notes.md"), "# Notes");
+        write_file(&temp_dir.path().join("other.txt"), "not markdown");
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let md_books: Vec<_> = manager
+            .books
+            .iter()
+            .filter(|b| b.format == BookFormat::Markdown)
+            .collect();
+        assert_eq!(md_books.len(), 1);
+        assert_eq!(md_books[0].display_name, "notes");
+    }
+
+    #[test]
+    fn discover_markdown_directory_in_parent() {
+        let temp_dir = TempDir::new().unwrap();
+        let wiki_dir = temp_dir.path().join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        write_file(&wiki_dir.join("Home.md"), "# Home");
+        write_file(&wiki_dir.join("Page.md"), "# Page");
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let md_books: Vec<_> = manager
+            .books
+            .iter()
+            .filter(|b| b.format == BookFormat::Markdown)
+            .collect();
+        assert_eq!(md_books.len(), 1);
+        assert_eq!(md_books[0].display_name, "wiki");
     }
 }
