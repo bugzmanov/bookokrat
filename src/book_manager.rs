@@ -757,6 +757,26 @@ impl BookManager {
         None
     }
 
+    /// Rewrite inter-file markdown links (e.g. `href="Getting-Started.md"`)
+    /// to point to the corresponding EPUB chapter file (e.g. `href="chapter3.xhtml"`).
+    fn rewrite_markdown_links(
+        html: &str,
+        link_map: &std::collections::HashMap<String, String>,
+    ) -> String {
+        use regex::Regex;
+        let re = Regex::new(r##"href="([^"#]+)(#[^"]*)?"##).unwrap();
+        re.replace_all(html, |caps: &regex::Captures| {
+            let target = &caps[1];
+            let anchor = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            if let Some(chapter_file) = link_map.get(target) {
+                format!(r#"href="{chapter_file}{anchor}""#)
+            } else {
+                caps[0].to_string()
+            }
+        })
+        .to_string()
+    }
+
     fn create_fake_epub_from_markdown(
         &self,
         path: &str,
@@ -822,6 +842,14 @@ impl BookManager {
                 .cmp(&priority(&b.1))
                 .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
         });
+
+        // Build link map: original filenames -> EPUB chapter filenames
+        let mut link_map = std::collections::HashMap::new();
+        for (i, (_path, stem, _title)) in md_files.iter().enumerate() {
+            let chapter_file = format!("chapter{}.xhtml", i + 1);
+            link_map.insert(format!("{stem}.md"), chapter_file.clone());
+            link_map.insert(format!("{stem}.markdown"), chapter_file.clone());
+        }
 
         let book_title = dir
             .file_name()
@@ -890,10 +918,13 @@ impl BookManager {
                     order = i + 1
                 ));
 
-                // Convert markdown to XHTML chapter
+                // Convert markdown to XHTML chapter, rewriting inter-file links
                 let md_content = std::fs::read_to_string(file_path)
                     .map_err(|e| format!("Failed to read {}: {e}", file_path.display()))?;
-                let html_body = Self::markdown_to_html(&md_content);
+                let html_body = Self::rewrite_markdown_links(
+                    &Self::markdown_to_html(&md_content),
+                    &link_map,
+                );
                 let xhtml = format!(
                     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
                      <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
@@ -1171,6 +1202,42 @@ mod tests {
             .collect();
         assert_eq!(md_books.len(), 1);
         assert_eq!(md_books[0].display_name, "notes");
+    }
+
+    #[test]
+    fn markdown_dir_rewrites_internal_links() {
+        let temp_dir = TempDir::new().unwrap();
+        let wiki_dir = temp_dir.path().join("wiki");
+        fs::create_dir_all(&wiki_dir).unwrap();
+        write_file(
+            &wiki_dir.join("Home.md"),
+            "# Home\n\nSee [Architecture](Architecture.md) and [Guide](Guide.md#setup).",
+        );
+        write_file(
+            &wiki_dir.join("Architecture.md"),
+            "# Architecture\n\nBack to [Home](Home.md).",
+        );
+        write_file(&wiki_dir.join("Guide.md"), "# Guide\n\n## Setup\n\nSteps.");
+
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let wiki_path = wiki_dir.to_str().unwrap();
+        let mut doc = manager.load_epub(wiki_path).unwrap();
+
+        // Home is chapter 1 (sorted first). Check its content has rewritten links.
+        let (content, _) = doc.get_current_str().unwrap();
+        // Architecture.md -> chapter2.xhtml, Guide.md#setup -> chapter3.xhtml#setup
+        assert!(
+            content.contains("chapter2.xhtml"),
+            "Architecture.md link should be rewritten to chapter2.xhtml"
+        );
+        assert!(
+            content.contains("chapter3.xhtml#setup"),
+            "Guide.md#setup link should be rewritten to chapter3.xhtml#setup"
+        );
+        assert!(
+            !content.contains("Architecture.md"),
+            "Original .md link should not remain"
+        );
     }
 
     #[test]
