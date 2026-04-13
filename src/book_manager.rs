@@ -253,6 +253,8 @@ impl BookManager {
     }
 
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
+        // Normalize trailing slashes so "wiki/" matches "wiki" in the book list
+        let path = path.trim_end_matches('/');
         info!("Loading document from path: {path}");
 
         if !self.books.iter().any(|book| book.path == path) {

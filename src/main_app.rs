@@ -710,7 +710,7 @@ impl App {
     pub fn open_book_for_reading_by_path(&mut self, path: &str) -> Result<()> {
         let format = BookManager::detect_format(path)
             .ok_or_else(|| anyhow::anyhow!("Unsupported file format: {}", path))?;
-        let path_owned = path.to_string();
+        let path_owned = path.trim_end_matches('/').to_string();
 
         self.save_bookmark_with_throttle(true);
 
