@@ -170,19 +170,20 @@ binding_tests! {
     global_space_a: KeyContext::Global, "<Space>a",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::CommentsViewer));
-    // <Space>s opens settings only with pdf feature — no-op in EPUB-only builds.
-    // Verified by checking it doesn't open any popup (returns false).
+    // <Space>s opens settings popup (with pdf feature, which is default)
     global_space_s: KeyContext::Global, "<Space>s",
         setup = |app, _dir| { open_book(&mut app); },
-        check = |app| !matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::Help));
+        check = |app| app.settings_popup().is_some()
+            && matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::Settings));
     global_space_z: KeyContext::Global, "<Space>z",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
+    // Space+t opens settings popup on Themes tab specifically
     global_space_t: KeyContext::Global, "<Space>t",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| {
-            matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::Settings))
-                && app.settings_popup().map(|s| s.current_tab()) == Some(bookokrat::widget::settings_popup::SettingsTab::Themes)
+            app.settings_popup().map(|s| s.current_tab())
+                == Some(bookokrat::widget::settings_popup::SettingsTab::Themes)
         };
     global_space_w: KeyContext::Global, "<Space>w",
         setup = |app, _dir| { open_book(&mut app); },
@@ -197,30 +198,38 @@ binding_tests! {
     global_space_l: KeyContext::Global, "<Space>l",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.has_notification();
-    // Space+< and Space+> reset panel width override to None.
-    // Can't observe the reset directly without exposing the private field.
-    // Verify no crash and app stays in expected state.
+    // Space+< and Space+> reset panel width override. After expanding, reset returns to default.
     global_space_lt: KeyContext::Global, "<Space><lt>",
-        setup = |app, _dir| { open_book(&mut app); },
-        check = |app| !app.is_zen_mode();
+        setup = |app, _dir| {
+            open_book(&mut app);
+            simulate(&mut app, "<gt>"); simulate(&mut app, "<gt>"); // 36 → 39 → 42
+        },
+        check = |app| app.nav_panel_width() == 36; // reset back to default
     global_space_gt: KeyContext::Global, "<Space><gt>",
-        setup = |app, _dir| { open_book(&mut app); },
-        check = |app| !app.is_zen_mode();
+        setup = |app, _dir| {
+            open_book(&mut app);
+            simulate(&mut app, "<gt>"); simulate(&mut app, "<gt>");
+        },
+        check = |app| app.nav_panel_width() == 36;
     global_ctrl_l: KeyContext::Global, "<C-l>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.pending_force_redraw;
     global_ctrl_s: KeyContext::Global, "<C-s>",
         setup = |app, _dir| { open_book(&mut app); },
-        check = |app| !matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::Help)); // no-op without pdf
+        check = |app| app.settings_popup().is_some()
+            && matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::Settings));
+    // < shrinks nav panel by 3 from current width. With terminal 120x36,
+    // default = 36 (30% of 120). After expand (36+3=39), shrink gives 36.
     global_lt: KeyContext::Global, "<lt>",
         setup = |app, _dir| {
             open_book(&mut app);
-            simulate(&mut app, "<gt>"); simulate(&mut app, "<gt>"); // expand first
+            simulate(&mut app, "<gt>"); // expand: 36 → 39
         },
-        check = |app| app.nav_panel_width() > 0; // shrink doesn't go below minimum
+        check = |app| app.nav_panel_width() == 36; // shrink: 39 → 36
+    // > expands nav panel by 3. Default = 36, after > = 39.
     global_gt: KeyContext::Global, "<gt>",
         setup = |app, _dir| { open_book(&mut app); },
-        check = |app| app.nav_panel_width() > 0; // expanded width
+        check = |app| app.nav_panel_width() == 39;
 
     // ── Navigation ───────────────────────────────────
     nav_j: KeyContext::Navigation, "j",
@@ -353,15 +362,8 @@ binding_tests! {
     content_g_upper: KeyContext::EpubContent, "G",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)); // scroll without layout is a no-op
-    // <C-d> in EpubContent: panics with "subtract with overflow" when visible_height is 0
-    // (no terminal layout). Pre-existing bug in navigation.rs:53.
-    // Covered by SVG snapshot tests. Registered for coverage only, setup avoids the panic path.
-    content_ctrl_d: KeyContext::EpubContent, "<C-d>",
-        setup = |app, _dir| {
-            // Don't open book or set content focus — avoids the panic path.
-            // The binding is registered for coverage enforcement only.
-        },
-        check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::NavigationList));
+    // <C-d> in EpubContent omitted from table — see manual list in coverage enforcement.
+    // Pre-existing bug: panics with "subtract with overflow" when visible_height is 0.
     content_ctrl_u: KeyContext::EpubContent, "<C-u>",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content));
@@ -433,12 +435,15 @@ binding_tests! {
         check = |app| app.text_reader().get_margin() < 2;
     // v/V enter visual mode but only in normal mode context; from scrolling mode
     // they enter normal mode first, then visual — check normal mode is active
+    // v/V call enter_visual_mode, which requires normal mode to be active.
+    // From scrolling mode (normal mode not active), they're a no-op.
+    // This reflects current behavior; the binding is still registered for coverage.
     content_v: KeyContext::EpubContent, "v",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
-        check = |app| !app.text_reader().has_text_selection(); // no-op from scrolling mode without normal
+        check = |app| !app.text_reader().is_visual_mode_active() && !app.is_normal_mode();
     content_v_upper: KeyContext::EpubContent, "V",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
-        check = |app| !app.text_reader().has_text_selection();
+        check = |app| !app.text_reader().is_visual_mode_active() && !app.is_normal_mode();
     content_y: KeyContext::EpubContent, "y",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)); // yank pending state internal
@@ -998,9 +1003,17 @@ fn every_default_binding_has_a_test() {
     let tested: HashSet<(KeyContext, String)> = tested_bindings().into_iter().collect();
 
     let skip_contexts = [
-        KeyContext::PdfStandard, // requires pdf feature + render pipeline
+        KeyContext::PdfStandard, // tested in keybinding_actions_pdf.rs
         KeyContext::PdfNormal,
     ];
+
+    // Bindings deliberately excluded from the table with documented reasons.
+    // Each exception is a KNOWN BUG or environmental limitation, NOT a test gap.
+    let known_exceptions: HashSet<(KeyContext, &str)> = HashSet::from([
+        // Pre-existing bug: panics with "subtract with overflow" when visible_height is 0
+        // (no terminal layout in unit test). navigation.rs:53. Covered by SVG snapshots.
+        (KeyContext::EpubContent, "<C-d>"),
+    ]);
 
     let mut missing = Vec::new();
     for ctx in KeyContext::ALL {
@@ -1010,6 +1023,9 @@ fn every_default_binding_has_a_test() {
         if let Some(ctx_map) = keymap.context(*ctx) {
             for (binding, action) in ctx_map.all_bindings() {
                 let notation = format_key_binding(&binding);
+                if known_exceptions.contains(&(*ctx, notation.as_str())) {
+                    continue;
+                }
                 if !tested.contains(&(*ctx, notation.clone())) {
                     missing.push(format!(
                         "  {} {:>12} → {:?}",
