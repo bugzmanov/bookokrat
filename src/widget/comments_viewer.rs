@@ -193,6 +193,10 @@ impl CommentsViewer {
         viewer
     }
 
+    pub fn is_export_mode(&self) -> bool {
+        self.export_mode
+    }
+
     pub fn restore_position(&mut self) {
         if self.global_search_mode {
             if let Some((scroll, selection)) = self.global_position {
@@ -2230,124 +2234,125 @@ impl CommentsViewer {
                 _ => None,
             }
         } else {
-            match key.code {
-                KeyCode::Char('j') | KeyCode::Down => {
-                    self.handle_j();
-                    None
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    self.handle_k();
-                    None
-                }
-                KeyCode::Tab => {
-                    self.toggle_focus();
-                    None
-                }
-                KeyCode::Char('h') | KeyCode::Left => {
-                    self.handle_h();
-                    None
-                }
-                KeyCode::Char('l') | KeyCode::Right => {
-                    self.handle_l();
-                    None
-                }
-                KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                    self.handle_gg();
-                    None
-                }
-                KeyCode::Char('G') => {
-                    self.handle_upper_g();
-                    None
-                }
-                KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.handle_ctrl_d();
-                    None
-                }
-                KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.handle_ctrl_u();
-                    None
-                }
-                KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.handle_ctrl_f();
-                    None
-                }
-                KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.handle_ctrl_b();
-                    None
-                }
-                KeyCode::PageDown => {
-                    self.handle_ctrl_f();
-                    None
-                }
-                KeyCode::PageUp => {
-                    self.handle_ctrl_b();
-                    None
-                }
-                KeyCode::Char('/') => {
-                    self.start_search();
-                    None
-                }
-                KeyCode::Char('?') => {
-                    self.toggle_global_search_mode();
-                    None
-                }
-                KeyCode::Char('n')
-                    if self.search_state.active
-                        && self.search_state.mode == SearchMode::NavigationMode =>
-                {
-                    self.next_match();
-                    None
-                }
-                KeyCode::Char('N')
-                    if self.search_state.active
-                        && self.search_state.mode == SearchMode::NavigationMode =>
-                {
-                    self.previous_match();
-                    None
-                }
-                KeyCode::Char('e') if key_seq.handle_key('e') == " e" => {
+            use crate::keybindings::action::Action;
+            use crate::keybindings::context::KeyContext;
+            use crate::keybindings::keymap::LookupResult;
+            use crate::keybindings::notation::key_event_to_input;
+
+            let input = key_event_to_input(&key);
+            let km = crate::keybindings::keymap();
+            let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+            prospective.push(input);
+
+            match km.lookup(KeyContext::PopupComments, &prospective) {
+                LookupResult::Found(action) => {
                     key_seq.clear();
-                    self.export_mode = true;
-                    self.export_filename = CommentsExporter::generate_filename(&self.book_title);
+                    match action {
+                        Action::MoveDown => {
+                            self.handle_j();
+                            None
+                        }
+                        Action::MoveUp => {
+                            self.handle_k();
+                            None
+                        }
+                        Action::NextTab => {
+                            self.toggle_focus();
+                            None
+                        }
+                        Action::MoveLeft => {
+                            self.handle_h();
+                            None
+                        }
+                        Action::MoveRight => {
+                            self.handle_l();
+                            None
+                        }
+                        Action::GoTop => {
+                            self.handle_gg();
+                            None
+                        }
+                        Action::GoBottom => {
+                            self.handle_upper_g();
+                            None
+                        }
+                        Action::ScrollHalfDown => {
+                            self.handle_ctrl_d();
+                            None
+                        }
+                        Action::ScrollHalfUp => {
+                            self.handle_ctrl_u();
+                            None
+                        }
+                        Action::ScrollPageDown => {
+                            self.handle_ctrl_f();
+                            None
+                        }
+                        Action::ScrollPageUp => {
+                            self.handle_ctrl_b();
+                            None
+                        }
+                        Action::StartSearch => {
+                            self.start_search();
+                            None
+                        }
+                        Action::ToggleGlobalSearch => {
+                            self.toggle_global_search_mode();
+                            None
+                        }
+                        Action::NextSearchMatch => {
+                            self.next_match();
+                            None
+                        }
+                        Action::PrevSearchMatch => {
+                            self.previous_match();
+                            None
+                        }
+                        Action::DeleteComment => Some(CommentsViewerAction::DeleteSelectedComment),
+                        Action::ExportComments => {
+                            self.export_mode = true;
+                            self.export_filename =
+                                CommentsExporter::generate_filename(&self.book_title);
+                            None
+                        }
+                        Action::Cancel => {
+                            if self.search_state.active {
+                                self.exit_search();
+                                None
+                            } else {
+                                Some(CommentsViewerAction::Close)
+                            }
+                        }
+                        Action::Select => {
+                            if let Some(entry) = self.selected_comment() {
+                                let target = entry.primary_comment().target.clone();
+                                log::info!(
+                                    "CommentsViewer: Enter pressed, target={:?}, page={:?}",
+                                    target,
+                                    target.page()
+                                );
+                                Some(CommentsViewerAction::JumpToComment {
+                                    chapter_href: entry.chapter_href.clone(),
+                                    target,
+                                })
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    }
+                }
+                LookupResult::Prefix => {
+                    key_seq.push(key);
                     None
                 }
-                KeyCode::Char('d') => {
-                    if key_seq.handle_key('d') == "dd" {
+                LookupResult::NoMatch => {
+                    if !key_seq.is_empty() {
                         key_seq.clear();
-                        Some(CommentsViewerAction::DeleteSelectedComment)
-                    } else {
-                        None
+                        return self.handle_key(key, key_seq);
                     }
-                }
-                KeyCode::Esc => {
-                    if self.search_state.active {
-                        self.exit_search();
-                        None
-                    } else {
-                        Some(CommentsViewerAction::Close)
-                    }
-                }
-                KeyCode::Enter => {
-                    if let Some(entry) = self.selected_comment() {
-                        let target = entry.primary_comment().target.clone();
-                        log::info!(
-                            "CommentsViewer: Enter pressed, target={:?}, page={:?}",
-                            target,
-                            target.page()
-                        );
-                        Some(CommentsViewerAction::JumpToComment {
-                            chapter_href: entry.chapter_href.clone(),
-                            target,
-                        })
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char(' ') => {
-                    key_seq.handle_key(' ');
                     None
                 }
-                _ => None,
             }
         }
     }

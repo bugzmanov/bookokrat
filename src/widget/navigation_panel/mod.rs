@@ -236,96 +236,132 @@ impl NavigationPanel {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<NavigationPanelAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
 
-        match key.code {
-            KeyCode::Tab => Some(NavigationPanelAction::Bypass),
-            KeyCode::Char('/') => {
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+
+        // Build prospective sequence from key_seq + new key
+        let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::Navigation, &prospective) {
+            LookupResult::Found(action) => {
+                key_seq.clear();
+                self.dispatch_nav_action(action)
+            }
+            LookupResult::Prefix => {
+                key_seq.push(key);
+                None // wait for more keys
+            }
+            LookupResult::NoMatch => {
+                if !key_seq.is_empty() {
+                    // Accumulated keys + this key didn't match.
+                    // Clear and try single key.
+                    key_seq.clear();
+                    match km.lookup(KeyContext::Navigation, &[key_event_to_input(&key)]) {
+                        LookupResult::Found(action) => self.dispatch_nav_action(action),
+                        LookupResult::Prefix => {
+                            key_seq.push(key);
+                            None
+                        }
+                        LookupResult::NoMatch => None,
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn dispatch_nav_action(
+        &mut self,
+        action: crate::keybindings::action::Action,
+    ) -> Option<NavigationPanelAction> {
+        use crate::keybindings::action::Action;
+
+        match action {
+            Action::SwitchFocus => Some(NavigationPanelAction::Bypass),
+            Action::StartSearch => {
                 self.start_search();
                 None
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            Action::MoveDown => {
                 self.handle_j();
                 None
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            Action::MoveUp => {
                 self.move_selection_up();
                 None
             }
-            KeyCode::Char('S') if self.mode == NavigationMode::BookSelection => {
+            Action::ToggleSortOrder if self.mode == NavigationMode::BookSelection => {
                 Some(NavigationPanelAction::ToggleSortOrder)
             }
-            KeyCode::Char('H') => {
+            Action::CollapseAll => {
                 self.handle_shift_h();
                 None
             }
-            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.handle_shift_h();
-                None
-            }
-            KeyCode::Char('L') => {
+            Action::ExpandAll => {
                 self.handle_shift_l();
                 None
             }
-            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
-                self.handle_shift_l();
-                None
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
+            Action::Collapse => {
                 self.handle_h();
                 None
             }
-            KeyCode::Char('l') | KeyCode::Right => {
+            Action::Expand => {
                 self.handle_l();
                 None
             }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
+            Action::GoTop => {
                 self.handle_gg();
                 None
             }
-            KeyCode::Char('G') => {
+            Action::GoBottom => {
                 self.handle_upper_g();
                 None
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollHalfDown => {
                 self.handle_ctrl_d();
                 None
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollHalfUp => {
                 self.handle_ctrl_u();
                 None
             }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollPageDown => {
                 self.handle_ctrl_f();
                 None
             }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollPageUp => {
                 self.handle_ctrl_b();
                 None
             }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::Char('n') if self.is_searching() => {
-                let search_state = self.get_search_state();
-                if search_state.mode == SearchMode::NavigationMode {
-                    self.next_match();
+            Action::NextSearchMatch => {
+                if self.is_searching() {
+                    let search_state = self.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.next_match();
+                    }
                 }
                 None
             }
-            KeyCode::Char('N') if self.is_searching() => {
-                let search_state = self.get_search_state();
-                if search_state.mode == SearchMode::NavigationMode {
-                    self.previous_match();
+            Action::PrevSearchMatch => {
+                if self.is_searching() {
+                    let search_state = self.get_search_state();
+                    if search_state.mode == SearchMode::NavigationMode {
+                        self.previous_match();
+                    }
                 }
                 None
             }
-            KeyCode::Enter => self.get_enter_action(),
+            Action::Select => self.get_enter_action(),
+            Action::SwitchNavMode => {
+                // 'b' key to switch back to book list
+                Some(NavigationPanelAction::SwitchToBookList)
+            }
             _ => None,
         }
     }

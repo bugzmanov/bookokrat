@@ -15,8 +15,8 @@ use crate::jump_list::JumpLocation;
 use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
 use crate::pdf::CellSize;
 use crate::pdf::{
-    CursorPosition, MoveResult, PendingMotion, ScrollDirection, ViewportUpdate, VisualMode, Zoom,
-    visual_rects_for_range,
+    CursorPosition, LineBounds, MoveResult, PendingMotion, ScrollDirection, ViewportUpdate,
+    VisualMode, Zoom, visual_rects_for_range,
 };
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
@@ -589,77 +589,101 @@ impl PdfReaderState {
     }
 
     fn handle_normal_mode_event(&mut self, key: KeyEvent) -> InputResponse {
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
         log::info!(
             "handle_normal_mode_event: key={:?}, normal_mode.active={}",
             key.code,
             self.normal_mode.active
         );
-        match key.code {
-            // When search is active, n/N navigate matches; otherwise n toggles normal mode
-            KeyCode::Char('n') if self.page_search.query.is_some() => {
-                InputResponse::handled(self.jump_to_next_search_match())
+
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+
+        // Try keymap lookup for PdfNormal context
+        let mut prospective: Vec<_> = self.key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::PdfNormal, &prospective) {
+            LookupResult::Found(action) => {
+                self.key_seq.clear();
+                self.dispatch_pdf_normal_action(action)
             }
-            KeyCode::Char('N') if self.page_search.query.is_some() => {
-                InputResponse::handled(self.jump_to_prev_search_match())
+            LookupResult::Prefix => {
+                self.key_seq.push(key);
+                InputResponse::handled(None)
             }
-            KeyCode::Char('n') => InputResponse::handled(self.toggle_normal_mode()),
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            LookupResult::NoMatch => {
+                if !self.key_seq.is_empty() {
+                    self.key_seq.clear();
+                    match km.lookup(KeyContext::PdfNormal, &[key_event_to_input(&key)]) {
+                        LookupResult::Found(action) => self.dispatch_pdf_normal_action(action),
+                        LookupResult::Prefix => {
+                            self.key_seq.push(key);
+                            InputResponse::handled(None)
+                        }
+                        LookupResult::NoMatch => {
+                            // Fall through to handle_normal_mode_key for vim motions
+                            // that aren't in the keymap (pending states, etc.)
+                            if let KeyCode::Char(c) = key.code {
+                                let action = self.handle_normal_mode_key(c);
+                                if action.is_some() {
+                                    InputResponse::handled(action)
+                                } else {
+                                    InputResponse::unhandled()
+                                }
+                            } else {
+                                InputResponse::unhandled()
+                            }
+                        }
+                    }
+                } else {
+                    // No accumulated keys. Try handle_normal_mode_key for char keys.
+                    if let KeyCode::Char(c) = key.code {
+                        let action = self.handle_normal_mode_key(c);
+                        if action.is_some() {
+                            InputResponse::handled(action)
+                        } else {
+                            InputResponse::unhandled()
+                        }
+                    } else {
+                        InputResponse::unhandled()
+                    }
+                }
+            }
+        }
+    }
+
+    fn dispatch_pdf_normal_action(
+        &mut self,
+        action: crate::keybindings::action::Action,
+    ) -> InputResponse {
+        use crate::keybindings::action::Action;
+        match action {
+            Action::ToggleNormalMode => {
+                if self.page_search.query.is_some() {
+                    InputResponse::handled(self.jump_to_next_search_match())
+                } else {
+                    InputResponse::handled(self.toggle_normal_mode())
+                }
+            }
+            Action::NextSearchMatch => InputResponse::handled(self.jump_to_next_search_match()),
+            Action::PrevSearchMatch => InputResponse::handled(self.jump_to_prev_search_match()),
+            Action::ScrollHalfDown => {
                 InputResponse::handled(self.scroll_half_screen(ScrollDirection::Down))
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollHalfUp => {
                 InputResponse::handled(self.scroll_half_screen(ScrollDirection::Up))
             }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollPageDown => {
                 InputResponse::handled(self.scroll_full_screen(ScrollDirection::Down))
             }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollPageUp => {
                 InputResponse::handled(self.scroll_full_screen(ScrollDirection::Up))
             }
-            KeyCode::PageDown => {
-                InputResponse::handled(self.scroll_full_screen(ScrollDirection::Down))
-            }
-            KeyCode::PageUp => InputResponse::handled(self.scroll_full_screen(ScrollDirection::Up)),
-            KeyCode::Up => {
-                let action = self.handle_normal_mode_key('k');
-                if action.is_some() {
-                    InputResponse::handled(action)
-                } else {
-                    InputResponse::unhandled()
-                }
-            }
-            KeyCode::Down => {
-                let action = self.handle_normal_mode_key('j');
-                if action.is_some() {
-                    InputResponse::handled(action)
-                } else {
-                    InputResponse::unhandled()
-                }
-            }
-            KeyCode::Left => {
-                let action = self.handle_normal_mode_key('h');
-                if action.is_some() {
-                    InputResponse::handled(action)
-                } else {
-                    InputResponse::unhandled()
-                }
-            }
-            KeyCode::Right => {
-                let action = self.handle_normal_mode_key('l');
-                if action.is_some() {
-                    InputResponse::handled(action)
-                } else {
-                    InputResponse::unhandled()
-                }
-            }
-            KeyCode::Char(c) => {
-                let action = self.handle_normal_mode_key(c);
-                if action.is_some() {
-                    InputResponse::handled(action)
-                } else {
-                    InputResponse::unhandled()
-                }
-            }
-            KeyCode::Enter => {
+            Action::FollowLink => {
                 if self.go_to_page_input.is_none() {
                     if let Some(target) = self.link_target_at_cursor() {
                         return InputResponse::handled(Some(self.activate_link_target(target)));
@@ -667,18 +691,206 @@ impl PdfReaderState {
                 }
                 InputResponse::handled(None)
             }
-            KeyCode::Esc => InputResponse::handled(self.handle_escape_key()),
-            KeyCode::BackTab => {
-                // Exit normal mode and start comment navigation
+            Action::Cancel => InputResponse::handled(self.handle_escape_key()),
+            Action::EnterCommentNav => {
                 self.normal_mode.exit_visual();
                 self.normal_mode.deactivate();
                 InputResponse::handled(self.start_comment_nav())
             }
+            Action::MoveLeft => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_left(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::MoveDown => {
+                let lb = self.current_line_bounds();
+                let result = self.normal_mode.move_down(&lb);
+                if result == MoveResult::WantsNextPage {
+                    let next = self.normal_mode.cursor.page + 1;
+                    if next < self.rendered.len() {
+                        let nlb = self.line_bounds_for_page(next);
+                        if !nlb.is_empty() {
+                            self.normal_mode.move_to_page_start(next, &nlb);
+                        }
+                    }
+                }
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::MoveUp => {
+                let lb = self.current_line_bounds();
+                let result = self.normal_mode.move_up(&lb);
+                if result == MoveResult::WantsPrevPage && self.normal_mode.cursor.page > 0 {
+                    let prev = self.normal_mode.cursor.page - 1;
+                    let plb = self.line_bounds_for_page(prev);
+                    if !plb.is_empty() {
+                        self.normal_mode.move_to_page_end(prev, &plb);
+                    }
+                }
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::MoveRight => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_right(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::WordForward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_forward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::WordBackward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_backward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::WordEnd => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_forward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::LineStart => {
+                self.normal_mode.move_line_start();
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::FirstNonBlank => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_first_non_whitespace(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::LineEnd => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_line_end(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::ParagraphBackward | Action::ParagraphForward => {
+                // Paragraph navigation not implemented for PDF normal mode
+                InputResponse::handled(None)
+            }
+            Action::GoTop => {
+                self.normal_mode.move_page_top();
+                let viewport = self.scroll_to_page_top_with_viewport();
+                if self.normal_mode.is_visual_active() {
+                    let all_lb = self.collect_all_line_bounds();
+                    let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
+                    InputResponse::handled(Some(InputAction::VisualChanged(rects, viewport)))
+                } else {
+                    InputResponse::handled(Some(InputAction::CursorChanged(
+                        self.get_cursor_rect(),
+                        viewport,
+                    )))
+                }
+            }
+            Action::GoBottom => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_page_bottom(&lb);
+                let viewport = self.scroll_to_page_bottom_with_viewport();
+                if self.normal_mode.is_visual_active() {
+                    let all_lb = self.collect_all_line_bounds();
+                    let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
+                    InputResponse::handled(Some(InputAction::VisualChanged(rects, viewport)))
+                } else {
+                    InputResponse::handled(Some(InputAction::CursorChanged(
+                        self.get_cursor_rect(),
+                        viewport,
+                    )))
+                }
+            }
+            Action::FindForward => {
+                self.normal_mode.pending_motion = PendingMotion::FindForward;
+                InputResponse::handled(Some(InputAction::Redraw))
+            }
+            Action::FindBackward => {
+                self.normal_mode.pending_motion = PendingMotion::FindBackward;
+                InputResponse::handled(Some(InputAction::Redraw))
+            }
+            Action::TillForward => {
+                self.normal_mode.pending_motion = PendingMotion::TillForward;
+                InputResponse::handled(Some(InputAction::Redraw))
+            }
+            Action::TillBackward => {
+                self.normal_mode.pending_motion = PendingMotion::TillBackward;
+                InputResponse::handled(Some(InputAction::Redraw))
+            }
+            Action::RepeatFind => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.repeat_find(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::EnterVisualMode => {
+                self.normal_mode.toggle_visual_char();
+                let all_lb = self.collect_all_line_bounds();
+                let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
+                InputResponse::handled(Some(InputAction::VisualChanged(rects, None)))
+            }
+            Action::EnterVisualLineMode => {
+                self.normal_mode.toggle_visual_line();
+                let all_lb = self.collect_all_line_bounds();
+                let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
+                InputResponse::handled(Some(InputAction::VisualChanged(rects, None)))
+            }
+            Action::StartYank => {
+                if self.normal_mode.is_visual_active() {
+                    let text = self.extract_visual_text();
+                    let start_pos = self.normal_mode.get_visual_range().map(|(start, _)| start);
+                    if let Some(start) = start_pos {
+                        self.normal_mode.cursor = start;
+                    }
+                    self.normal_mode.exit_visual();
+                    let cursor_rect = self.get_cursor_rect();
+                    if let Some(text) = text {
+                        InputResponse::handled(Some(InputAction::YankText(text, cursor_rect)))
+                    } else {
+                        InputResponse::handled(Some(InputAction::ExitVisualMode(cursor_rect)))
+                    }
+                } else {
+                    InputResponse::handled(None)
+                }
+            }
+            Action::CopySelection => InputResponse::handled(self.copy_selection()),
+            Action::AddComment => {
+                if self.normal_mode.is_visual_active() || self.selection.has_selection() {
+                    InputResponse::handled(self.start_comment_input())
+                } else {
+                    InputResponse::handled(None)
+                }
+            }
+            Action::ZoomIn => {
+                if self.is_kitty {
+                    InputResponse::handled(self.update_zoom_keep_page(Zoom::step_in))
+                } else {
+                    self.non_kitty_zoom_factor =
+                        Zoom::clamp_factor(self.non_kitty_zoom_factor * Zoom::ZOOM_IN_RATE);
+                    self.set_zoom_hud(self.non_kitty_zoom_factor);
+                    self.clear_pending_scroll();
+                    InputResponse::handled(
+                        self.make_render_scale_action(self.non_kitty_zoom_factor),
+                    )
+                }
+            }
+            Action::ZoomOut => {
+                if self.is_kitty {
+                    InputResponse::handled(self.update_zoom_keep_page(Zoom::step_out))
+                } else {
+                    self.non_kitty_zoom_factor =
+                        Zoom::clamp_factor(self.non_kitty_zoom_factor / Zoom::ZOOM_OUT_RATE);
+                    self.set_zoom_hud(self.non_kitty_zoom_factor);
+                    self.clear_pending_scroll();
+                    InputResponse::handled(
+                        self.make_render_scale_action(self.non_kitty_zoom_factor),
+                    )
+                }
+            }
+            Action::StartSearch => InputResponse::handled(self.start_page_search()),
             _ => InputResponse::unhandled(),
         }
     }
 
     fn handle_standard_key_event(&mut self, key: KeyEvent) -> Option<InputAction> {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
         // Clear expired quick page jump
         if self
             .quick_page_jump
@@ -688,123 +900,123 @@ impl PdfReaderState {
             self.quick_page_jump = None;
         }
 
-        match key.code {
-            KeyCode::Char(c) => {
-                if c == 'n' {
-                    self.quick_page_jump = None;
-                    return self.toggle_normal_mode();
+        // Quick page jump: digits accumulate, gg confirms
+        if let KeyCode::Char(c) = key.code {
+            if c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                if let Some(ref mut qj) = self.quick_page_jump {
+                    qj.push(c);
+                } else {
+                    self.quick_page_jump = Some(QuickPageJump::new(c));
                 }
+                self.key_seq.clear();
+                return Some(InputAction::Redraw);
+            }
+        }
 
-                // Quick page jump: digits accumulate, gg confirms
-                if c.is_ascii_digit() && !key.modifiers.contains(KeyModifiers::CONTROL) {
-                    if let Some(ref mut qj) = self.quick_page_jump {
-                        qj.push(c);
-                    } else {
-                        self.quick_page_jump = Some(QuickPageJump::new(c));
-                    }
-                    self.key_seq.clear();
-                    return Some(InputAction::Redraw);
-                }
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
 
-                self.key_seq.push(key);
-                if self.key_seq.len() > 2 {
-                    let start = self.key_seq.len() - 2;
-                    let last_two: Vec<KeyEvent> = self.key_seq.keys()[start..].to_vec();
-                    self.key_seq.clear();
-                    for key in last_two {
-                        self.key_seq.push(key);
-                    }
-                }
+        let mut prospective: Vec<_> = self.key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
 
-                if self
-                    .key_seq
-                    .matches(&[KeyCode::Char('g'), KeyCode::Char('g')])
-                {
-                    self.key_seq.clear();
+        match km.lookup(KeyContext::PdfStandard, &prospective) {
+            LookupResult::Found(action) => {
+                self.key_seq.clear();
+                // gg with pending quick page jump
+                if action == Action::GoTop {
                     if let Some(qj) = self.quick_page_jump.take() {
                         return self.execute_quick_page_jump(qj);
                     }
-                    return self.scroll_to_page_top();
                 }
-                if self
-                    .key_seq
-                    .matches(&[KeyCode::Char(' '), KeyCode::Char('g')])
-                {
-                    self.key_seq.clear();
-                    self.quick_page_jump = None;
-                    return self.start_go_to_page_input();
+                // Non-g, non-digit clears quick page jump
+                if !matches!(action, Action::GoTop | Action::SynctexInverse) {
+                    if let KeyCode::Char(c) = key.code {
+                        if c != 'g' {
+                            self.quick_page_jump = None;
+                        }
+                    } else {
+                        self.quick_page_jump = None;
+                    }
                 }
-                if self
-                    .key_seq
-                    .matches(&[KeyCode::Char('g'), KeyCode::Char('d')])
-                {
-                    self.key_seq.clear();
-                    self.quick_page_jump = None;
-                    return self.handle_synctex_normal_mode();
-                }
-
-                // Any non-digit, non-g key clears quick page jump
-                if c != 'g' {
-                    self.quick_page_jump = None;
-                }
-
-                match c {
-                    'j' | 'J' => self.scroll_line(ScrollDirection::Down),
-                    'k' | 'K' => self.scroll_line(ScrollDirection::Up),
-                    'H' => self.pan_horizontal(ScrollDirection::Left),
-                    'L' => self.pan_horizontal(ScrollDirection::Right),
-                    'l' => self.next_page(),
-                    'h' => self.prev_page(),
-                    'q' => Some(InputAction::QuitApp),
-                    'i' => Some(InputAction::ToggleInvertImages),
-                    'I' => Some(InputAction::TogglePdfTheming),
-                    'p' => Some(InputAction::ToggleProfiling),
-                    'x' => Some(InputAction::DumpDebugState),
-                    'a' => self.start_comment_input(),
-                    'z' if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.reset_zoom_to_fit()
-                    }
-                    'Z' if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.reset_zoom_to_fit_width()
-                    }
-                    '=' | '+' => self.zoom_in(),
-                    '-' | '_' => self.zoom_out(),
-                    'G' => self.scroll_to_page_bottom(),
-                    'd' if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_half_screen(ScrollDirection::Down)
-                    }
-                    'u' if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_half_screen(ScrollDirection::Up)
-                    }
-                    'f' if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_full_screen(ScrollDirection::Down)
-                    }
-                    'b' if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.scroll_full_screen(ScrollDirection::Up)
-                    }
-                    'c' | 'C' if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.copy_selection()
-                    }
-                    _ => None,
-                }
+                self.dispatch_pdf_standard_action(action)
             }
-            KeyCode::Up => self.scroll_line(ScrollDirection::Up),
-            KeyCode::Down => self.scroll_line(ScrollDirection::Down),
-            KeyCode::Left => self.prev_page(),
-            KeyCode::Right => self.next_page(),
-            KeyCode::PageDown => self.scroll_full_screen(ScrollDirection::Down),
-            KeyCode::PageUp => self.scroll_full_screen(ScrollDirection::Up),
-            KeyCode::Esc => self.handle_escape_key(),
-            KeyCode::Enter => None,
-            KeyCode::Tab => {
-                if !self.zen_mode && self.key_seq.matches(&[KeyCode::Char(' ')]) {
+            LookupResult::Prefix => {
+                self.key_seq.push(key);
+                None // wait for more keys, return None (not handled fully)
+            }
+            LookupResult::NoMatch => {
+                if !self.key_seq.is_empty() {
                     self.key_seq.clear();
-                    self.start_comment_nav()
+                    self.quick_page_jump = None;
+                    match km.lookup(KeyContext::PdfStandard, &[key_event_to_input(&key)]) {
+                        LookupResult::Found(action) => self.dispatch_pdf_standard_action(action),
+                        LookupResult::Prefix => {
+                            self.key_seq.push(key);
+                            None
+                        }
+                        LookupResult::NoMatch => None,
+                    }
                 } else {
+                    self.quick_page_jump = None;
                     None
                 }
             }
-            KeyCode::BackTab => self.start_comment_nav(),
+        }
+    }
+
+    fn dispatch_pdf_standard_action(
+        &mut self,
+        action: crate::keybindings::action::Action,
+    ) -> Option<InputAction> {
+        use crate::keybindings::action::Action;
+        match action {
+            Action::ToggleNormalMode => {
+                self.quick_page_jump = None;
+                if self.page_search.query.is_some() {
+                    self.jump_to_next_search_match()
+                } else {
+                    self.toggle_normal_mode()
+                }
+            }
+            Action::NextSearchMatch => self.jump_to_next_search_match(),
+            Action::PrevSearchMatch => self.jump_to_prev_search_match(),
+            Action::ScrollDown => self.scroll_line(ScrollDirection::Down),
+            Action::ScrollUp => self.scroll_line(ScrollDirection::Up),
+            Action::PanLeft => self.pan_horizontal(ScrollDirection::Left),
+            Action::PanRight => self.pan_horizontal(ScrollDirection::Right),
+            Action::NextPage => self.next_page(),
+            Action::PrevPage => self.prev_page(),
+            Action::Quit => Some(InputAction::QuitApp),
+            Action::ToggleInvertImages => Some(InputAction::ToggleInvertImages),
+            Action::TogglePdfTheming => Some(InputAction::TogglePdfTheming),
+            Action::ToggleProfiling => Some(InputAction::ToggleProfiling),
+            Action::DumpDebugState => Some(InputAction::DumpDebugState),
+            Action::AddComment => self.start_comment_input(),
+            Action::ZoomReset => self.reset_zoom_to_fit(),
+            Action::ZoomFitWidth => self.reset_zoom_to_fit_width(),
+            Action::ZoomIn => self.zoom_in(),
+            Action::ZoomOut => self.zoom_out(),
+            Action::GoTop => self.scroll_to_page_top(),
+            Action::GoBottom => self.scroll_to_page_bottom(),
+            Action::GoToPage => {
+                self.quick_page_jump = None;
+                self.start_go_to_page_input()
+            }
+            Action::SynctexInverse => {
+                self.quick_page_jump = None;
+                self.handle_synctex_normal_mode()
+            }
+            Action::ScrollHalfDown => self.scroll_half_screen(ScrollDirection::Down),
+            Action::ScrollHalfUp => self.scroll_half_screen(ScrollDirection::Up),
+            Action::ScrollPageDown => self.scroll_full_screen(ScrollDirection::Down),
+            Action::ScrollPageUp => self.scroll_full_screen(ScrollDirection::Up),
+            Action::CopySelection => self.copy_selection(),
+            Action::Cancel => self.handle_escape_key(),
+            Action::StartSearch => {
+                // '/' for search is handled by the main event loop, not here
+                None
+            }
+            Action::EnterCommentNav => self.start_comment_nav(),
             _ => None,
         }
     }
@@ -4398,6 +4610,42 @@ impl PdfReaderState {
         }
     }
 
+    fn current_line_bounds(&self) -> Vec<LineBounds> {
+        self.rendered
+            .get(self.normal_mode.cursor.page)
+            .map(|r| r.line_bounds.clone())
+            .unwrap_or_default()
+    }
+
+    fn line_bounds_for_page(&self, page: usize) -> Vec<LineBounds> {
+        self.rendered
+            .get(page)
+            .map(|r| r.line_bounds.clone())
+            .unwrap_or_default()
+    }
+
+    fn normal_cursor_moved_action(&mut self) -> InputAction {
+        let viewport_changed = self.ensure_cursor_visible();
+        let viewport = if viewport_changed && !self.is_kitty {
+            self.current_viewport_update()
+        } else {
+            None
+        };
+
+        if self.normal_mode.is_visual_active() {
+            let all_line_bounds = self.collect_all_line_bounds();
+            InputAction::VisualChanged(
+                self.normal_mode.get_visual_rects_multi(&all_line_bounds),
+                viewport,
+            )
+        } else {
+            InputAction::CursorChanged(self.get_cursor_rect(), viewport)
+        }
+    }
+
+    /// Handle a raw character in normal mode — only for pending states
+    /// (char motions like f/F/t/T, pending_g, pending_inner) that consume
+    /// the next typed character. Regular motions go through the keymap.
     fn handle_normal_mode_key(&mut self, c: char) -> Option<InputAction> {
         log::info!(
             "handle_normal_mode_key: c='{}', active={}",
@@ -4485,167 +4733,13 @@ impl PdfReaderState {
             }
         }
 
-        match c {
-            'h' => {
-                self.normal_mode.move_left(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'j' => {
-                let result = self.normal_mode.move_down(&line_bounds);
-                if result == MoveResult::WantsNextPage {
-                    let next_page = self.normal_mode.cursor.page + 1;
-                    if next_page < self.rendered.len() {
-                        let next_line_bounds = self
-                            .rendered
-                            .get(next_page)
-                            .map(|r| r.line_bounds.clone())
-                            .unwrap_or_default();
-                        if !next_line_bounds.is_empty() {
-                            self.normal_mode
-                                .move_to_page_start(next_page, &next_line_bounds);
-                        }
-                    }
-                }
-                Some(cursor_moved_action(self))
-            }
-            'k' => {
-                let result = self.normal_mode.move_up(&line_bounds);
-                if result == MoveResult::WantsPrevPage && self.normal_mode.cursor.page > 0 {
-                    let prev_page = self.normal_mode.cursor.page - 1;
-                    let prev_line_bounds = self
-                        .rendered
-                        .get(prev_page)
-                        .map(|r| r.line_bounds.clone())
-                        .unwrap_or_default();
-                    if !prev_line_bounds.is_empty() {
-                        self.normal_mode
-                            .move_to_page_end(prev_page, &prev_line_bounds);
-                    }
-                }
-                Some(cursor_moved_action(self))
-            }
-            'l' => {
-                self.normal_mode.move_right(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'w' => {
-                self.normal_mode.move_word_forward(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'b' => {
-                self.normal_mode.move_word_backward(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'e' => {
-                // move_word_end not available, use move_word_forward as fallback
-                self.normal_mode.move_word_forward(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            '0' => {
-                self.normal_mode.move_line_start();
-                Some(cursor_moved_action(self))
-            }
-            '$' => {
-                self.normal_mode.move_line_end(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            '^' => {
-                self.normal_mode.move_first_non_whitespace(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'g' => {
-                self.normal_mode.pending_g = true;
-                Some(InputAction::Redraw)
-            }
-            'G' => {
-                self.normal_mode.move_page_bottom(&line_bounds);
-                let viewport = self.scroll_to_page_bottom_with_viewport();
-                if self.normal_mode.is_visual_active() {
-                    let all_line_bounds = self.collect_all_line_bounds();
-                    let visual_rects = self.normal_mode.get_visual_rects_multi(&all_line_bounds);
-                    Some(InputAction::VisualChanged(visual_rects, viewport))
-                } else {
-                    Some(InputAction::CursorChanged(self.get_cursor_rect(), viewport))
-                }
-            }
-            'f' => {
-                self.normal_mode.pending_motion = PendingMotion::FindForward;
-                Some(InputAction::Redraw)
-            }
-            'F' => {
-                self.normal_mode.pending_motion = PendingMotion::FindBackward;
-                Some(InputAction::Redraw)
-            }
-            't' => {
-                self.normal_mode.pending_motion = PendingMotion::TillForward;
-                Some(InputAction::Redraw)
-            }
-            'T' => {
-                self.normal_mode.pending_motion = PendingMotion::TillBackward;
-                Some(InputAction::Redraw)
-            }
-            ';' => {
-                self.normal_mode.repeat_find(&line_bounds);
-                Some(cursor_moved_action(self))
-            }
-            'v' => {
-                self.normal_mode.toggle_visual_char();
-                let all_line_bounds = self.collect_all_line_bounds();
-                let visual_rects = self.normal_mode.get_visual_rects_multi(&all_line_bounds);
-                Some(InputAction::VisualChanged(visual_rects, None))
-            }
-            'V' => {
-                self.normal_mode.toggle_visual_line();
-                let all_line_bounds = self.collect_all_line_bounds();
-                let visual_rects = self.normal_mode.get_visual_rects_multi(&all_line_bounds);
-                Some(InputAction::VisualChanged(visual_rects, None))
-            }
-            'a' if self.normal_mode.is_visual_active() || self.selection.has_selection() => {
-                self.start_comment_input()
-            }
-            'y' if self.normal_mode.is_visual_active() => {
-                let text = self.extract_visual_text();
-                let start_pos = self.normal_mode.get_visual_range().map(|(start, _)| start);
-                if let Some(start) = start_pos {
-                    self.normal_mode.cursor = start;
-                }
-                self.normal_mode.exit_visual();
-                let cursor_rect = self.get_cursor_rect();
-                if let Some(text) = text {
-                    Some(InputAction::YankText(text, cursor_rect))
-                } else {
-                    Some(InputAction::ExitVisualMode(cursor_rect))
-                }
-            }
-            '=' | '+' => {
-                if self.is_kitty {
-                    self.update_zoom_keep_page(Zoom::step_in)
-                } else {
-                    self.non_kitty_zoom_factor =
-                        Zoom::clamp_factor(self.non_kitty_zoom_factor * Zoom::ZOOM_IN_RATE);
-                    self.set_zoom_hud(self.non_kitty_zoom_factor);
-                    self.clear_pending_scroll();
-                    self.make_render_scale_action(self.non_kitty_zoom_factor)
-                }
-            }
-            '-' | '_' => {
-                if self.is_kitty {
-                    self.update_zoom_keep_page(Zoom::step_out)
-                } else {
-                    self.non_kitty_zoom_factor =
-                        Zoom::clamp_factor(self.non_kitty_zoom_factor / Zoom::ZOOM_OUT_RATE);
-                    self.set_zoom_hud(self.non_kitty_zoom_factor);
-                    self.clear_pending_scroll();
-                    self.make_render_scale_action(self.non_kitty_zoom_factor)
-                }
-            }
-            'i' => {
-                self.normal_mode.pending_inner = true;
-                Some(InputAction::Redraw)
-            }
-            '/' => self.start_page_search(),
-            _ => None,
+        // Handle keys that set pending states (not keymap actions).
+        // 'i' enters pending_inner mode for text objects (iw, iW).
+        if c == 'i' {
+            self.normal_mode.pending_inner = true;
+            return Some(InputAction::Redraw);
         }
+        None
     }
 
     fn ensure_cursor_visible(&mut self) -> bool {

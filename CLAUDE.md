@@ -32,7 +32,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
     - **Migrations** (`migrate_settings()`) receive the file content as `&str` and return modified content. Insert new template sections at the correct position relative to existing sections (e.g., before custom_themes). The targeted update then writes the version bump on top.
     - NEVER regenerate the entire config file on save — this destroys user comments and formatting
 13. **VHS Test Tapes and Keyboard Shortcuts**: When changing keyboard shortcut mappings, ALWAYS check and update all VHS test tapes in `vhs_tests/tapes/` to use the new keybindings. Test tapes simulate user input, so outdated keybindings will cause test failures.
-13. **Keyboard Mapping Collisions**: When adding a new keyboard shortcut, ALWAYS check for collisions with existing mappings. Search the codebase for existing uses of the proposed key/key combination. If a collision is found, notify the user about the conflict and ask for a decision on how to proceed (use a different key, override existing mapping, or make it context-dependent).
+14. **Keybindings Architecture**: ALL keyboard shortcuts go through the configurable keybinding system in `src/keybindings/`. NEVER hardcode key-to-action mappings in match arms. See the "Configurable Keybindings" section below for the full workflow.
 
 ## Core Principles
 
@@ -1068,6 +1068,172 @@ The application primarily uses the Markdown AST-based pipeline through MarkdownT
 - **Scroll**: Scroll content or navigate lists
 - **Click on image**: Open image in popup viewer
 - **Click on link**: Display link URL information
+
+## Configurable Keybindings
+
+**CRITICAL: All keyboard shortcuts go through the keybinding system.** Never hardcode key-to-action mappings in match arms. The system lives in `src/keybindings/` and uses neovim-compatible key notation.
+
+### Module Structure
+
+```
+src/keybindings/
+    mod.rs          Global Keymap singleton (LazyLock<RwLock<Keymap>>)
+    notation.rs     Neovim key notation parser/formatter (<C-d>, gg, <Space>f, etc.)
+    action.rs       Action enum (~85 variants, serde snake_case)
+    context.rs      KeyContext enum (12 contexts) + group hierarchy
+    keymap.rs       Trie-based ContextKeymap, Keymap, LookupResult
+    defaults.rs     Default bindings defined in layers
+    config.rs       YAML config loading from ~/.config/bookokrat/keybindings.yaml
+```
+
+### Context Hierarchy and Layers
+
+Defaults are built from layers applied in order (later overrides earlier):
+
+```
+Layer 1: "all"    → shared vim nav (j/k, gg/G, C-d/u/f/b, arrows, Esc)
+                    Applied to every context EXCEPT Global.
+
+Layer 2: "normal" → vim cursor motions (h/l, w/b/e, 0/^/$, f/F/t/T, ;, v/V, y, n)
+                    Applied to EpubNormal + PdfNormal.
+
+Layer 3: "popup"  → (currently empty, reserved for future shared popup bindings)
+                    Applied to all popup contexts.
+
+Layer 4: per-context specifics override layers above.
+```
+
+Contexts:
+- `Global` — space-prefixed commands, Ctrl+Z/Q/L/S, `?`, `<`/`>` (standalone, no layer inheritance)
+- `Navigation` — book list / TOC panel
+- `EpubContent` — EPUB reader scrolling mode (overrides j/k to ScrollDown/Up, h/l to chapter nav)
+- `EpubNormal` — EPUB vim normal/visual mode
+- `PdfStandard` — PDF reader standard mode (overrides j/k to ScrollDown/Up, h/l to page nav)
+- `PdfNormal` — PDF vim normal mode
+- `PopupHelp`, `PopupHistory`, `PopupSearch`, `PopupStats`, `PopupComments`, `PopupSettings`
+
+### How to Add a New Keyboard Shortcut
+
+**Step 1: Add the Action variant** to `src/keybindings/action.rs`:
+```rust
+#[serde(rename_all = "snake_case")]
+pub enum Action {
+    // ...
+    MyNewAction,  // will be "my_new_action" in YAML config
+}
+```
+
+**Step 2: Add the default binding** to `src/keybindings/defaults.rs`:
+- If the binding applies to a single context, add it in that context's `_specifics()` function.
+- If it applies to all contexts, add it in `add_all_layer()`.
+- If it applies to normal modes only, add it in `add_normal_layer()`.
+- **Check for collisions**: the same key in the same context will overwrite. Run `cargo test --lib keybindings` to verify no existing tests break.
+
+```rust
+fn content_specifics(keymap: &mut Keymap) {
+    let ctx = keymap.context_mut(KeyContext::EpubContent);
+    // ...
+    bind!(ctx, "x" => Action::MyNewAction);
+}
+```
+
+**Step 3: Handle the action in the dispatch method** for the relevant context:
+- `dispatch_global_action()` in `main_app.rs` for Global
+- `dispatch_nav_action()` in `navigation_panel/mod.rs` for Navigation
+- `dispatch_epub_content_action()` in `main_app.rs` for EpubContent
+- `dispatch_epub_normal_action()` in `main_app.rs` for EpubNormal
+- `dispatch_pdf_standard_action()` in `pdf_reader/navigation.rs` for PdfStandard
+- `dispatch_pdf_normal_action()` in `pdf_reader/navigation.rs` for PdfNormal
+- Inline match in each popup's `handle_key()` for popup contexts
+
+```rust
+Action::MyNewAction => {
+    self.do_the_thing();
+    true  // or None for popup handlers
+}
+```
+
+**Step 4: Add a test** in `defaults.rs`:
+```rust
+#[test]
+fn my_new_binding() {
+    let keymap = default_keymap();
+    assert_eq!(
+        lookup(&keymap, KeyContext::EpubContent, "x"),
+        LookupResult::Found(Action::MyNewAction)
+    );
+}
+```
+
+### Key Notation (Neovim-Compatible)
+
+| Notation | Meaning |
+|---|---|
+| `j`, `G`, `?` | Single character |
+| `<C-d>` | Ctrl+d |
+| `<A-x>` / `<M-x>` | Alt+x |
+| `<S-Tab>` | Shift+Tab |
+| `<CR>` / `<Enter>` | Enter |
+| `<Esc>`, `<Tab>`, `<BS>`, `<Del>` | Special keys |
+| `<Space>` | Space |
+| `<lt>`, `<gt>` | Literal `<` and `>` |
+| `gg` | Sequence: g then g |
+| `<Space>f` | Sequence: space then f |
+
+### Dispatch Pattern
+
+Every key handler follows this pattern:
+
+```rust
+// 1. Text input guards (search input, comment editing) — bypass keymap
+if self.is_text_input_active() { return handle_text_input(key); }
+
+// 2. Pending states (f/F/t/T char, yank motion, visual text object) — bypass keymap
+if self.has_pending_state() { return handle_pending(key); }
+
+// 3. Keymap lookup
+let input = key_event_to_input(&key);
+let km = crate::keybindings::keymap();
+let mut keys: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+keys.push(input);
+
+match km.lookup(context, &keys) {
+    LookupResult::Found(action) => { key_seq.clear(); dispatch(action) }
+    LookupResult::Prefix => { key_seq.push(key); /* wait */ }
+    LookupResult::NoMatch => { key_seq.clear(); /* unhandled */ }
+}
+```
+
+Key rules:
+- **Text input modes MUST bypass the keymap.** Comment editing, search input, go-to-page input, export filename input — these consume raw characters.
+- **Pending vim states bypass the keymap.** After pressing `f`, the next character is consumed by the find-char motion, not looked up in the keymap.
+- **Count prefixes bypass the keymap.** `5j` = count 5 + action j. The digit accumulation happens before keymap lookup.
+- **The keymap is stateless.** `KeySeq` (in `src/inputs/key_seq.rs`) manages the 1-second timeout and sequence accumulation. The keymap just does a trie lookup on whatever keys are accumulated.
+- **Global context is checked first.** `handle_global_hotkeys()` runs before context-specific handlers. If it returns true, the key is consumed.
+- **Actions with runtime conditions** (e.g., `ToggleNormalMode` redirects to `next_search_match` when search is active) handle the condition in the dispatch, not in the keymap.
+
+### User Config File
+
+Path: `~/.config/bookokrat/keybindings.yaml`
+
+Only overrides need to be specified. Groups (`all`, `normal`, `popup`) apply to multiple contexts. Specific contexts override groups.
+
+```yaml
+all:
+  "<C-n>": move_down          # adds to every context except global
+
+content:
+  "j": scroll_up              # override in EPUB content only
+  "p": nop                    # disable a binding
+
+normal:
+  "<C-w>": word_forward       # both epub_normal + pdf_normal
+
+popup:
+  "q": cancel                 # close any popup with q
+```
+
+Config keys for specific contexts: `global`, `nav`, `content`, `epub_normal`, `pdf`, `pdf_normal`, `popup.help`, `popup.history`, `popup.search`, `popup.stats`, `popup.comments`, `popup.settings`.
 
 ## Snapshot Testing
 

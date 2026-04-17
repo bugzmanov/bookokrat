@@ -139,6 +139,10 @@ impl SettingsPopup {
         }
     }
 
+    pub fn current_tab(&self) -> SettingsTab {
+        self.current_tab
+    }
+
     pub fn new_with_tab(tab: SettingsTab) -> Self {
         let caps = terminal::detect_terminal_with_probe();
         Self::new_with_caps(tab, caps.supports_graphics, caps.pdf.supports_scroll_mode)
@@ -1486,87 +1490,107 @@ impl SettingsPopup {
             }
         }
 
-        match key.code {
-            KeyCode::Tab => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+        {
+            use crate::keybindings::action::Action;
+            use crate::keybindings::context::KeyContext;
+            use crate::keybindings::keymap::LookupResult;
+            use crate::keybindings::notation::key_event_to_input;
+
+            let input = key_event_to_input(&key);
+            let km = crate::keybindings::keymap();
+            let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+            prospective.push(input);
+
+            match km.lookup(KeyContext::PopupSettings, &prospective) {
+                LookupResult::Found(action) => {
+                    key_seq.clear();
+                    match action {
+                        Action::NextTab => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.next();
+                            None
+                        }
+                        Action::PrevTab => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.prev();
+                            None
+                        }
+                        Action::MoveLeft => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.prev();
+                            None
+                        }
+                        Action::MoveRight => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.next();
+                            None
+                        }
+                        Action::MoveDown => {
+                            self.handle_j();
+                            None
+                        }
+                        Action::MoveUp => {
+                            self.handle_k();
+                            None
+                        }
+                        Action::GoTop => {
+                            self.handle_gg();
+                            None
+                        }
+                        Action::GoBottom => {
+                            self.handle_upper_g();
+                            None
+                        }
+                        Action::ScrollHalfDown => {
+                            self.handle_ctrl_d();
+                            None
+                        }
+                        Action::ScrollHalfUp => {
+                            self.handle_ctrl_u();
+                            None
+                        }
+                        Action::ScrollPageDown => {
+                            self.handle_ctrl_f();
+                            None
+                        }
+                        Action::ScrollPageUp => {
+                            self.handle_ctrl_b();
+                            None
+                        }
+                        Action::Cancel => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            Some(SettingsAction::Close)
+                        }
+                        Action::Select => match self.current_tab {
+                            SettingsTab::General => self.apply_general_selected(),
+                            SettingsTab::Themes => self.apply_theme_selected(),
+                            SettingsTab::Integrations => self.apply_integrations_selected(),
+                        },
+                        _ => None,
+                    }
                 }
-                self.current_tab = self.current_tab.next();
-                None
-            }
-            KeyCode::BackTab => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+                LookupResult::Prefix => {
+                    key_seq.push(key);
+                    None
                 }
-                self.current_tab = self.current_tab.prev();
-                None
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+                LookupResult::NoMatch => {
+                    if !key_seq.is_empty() {
+                        key_seq.clear();
+                        return self.handle_key(key, key_seq);
+                    }
+                    None
                 }
-                self.current_tab = self.current_tab.prev();
-                None
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
-                }
-                self.current_tab = self.current_tab.next();
-                None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.handle_j();
-                None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.handle_k();
-                None
-            }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                self.handle_gg();
-                None
-            }
-            KeyCode::Char('G') => {
-                self.handle_upper_g();
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_d();
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_u();
-                None
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::Esc => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
-                }
-                Some(SettingsAction::Close)
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => match self.current_tab {
-                SettingsTab::General => self.apply_general_selected(),
-                SettingsTab::Themes => self.apply_theme_selected(),
-                SettingsTab::Integrations => self.apply_integrations_selected(),
-            },
-            _ => None,
         }
     }
 }

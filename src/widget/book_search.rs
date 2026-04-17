@@ -125,14 +125,18 @@ impl BookSearch {
         self.scroll_offset = 0;
     }
 
-    pub fn handle_key_event(&mut self, key: KeyEvent) -> Option<BookSearchAction> {
+    pub fn handle_key_event(
+        &mut self,
+        key: KeyEvent,
+        key_seq: &mut crate::inputs::KeySeq,
+    ) -> Option<BookSearchAction> {
         match self.focus_mode {
             FocusMode::Input => {
                 let action = self.handle_input_key(key);
                 self.update();
                 action
             }
-            FocusMode::Results => self.handle_results_key(key),
+            FocusMode::Results => self.handle_results_key(key, key_seq),
         }
     }
 
@@ -206,83 +210,111 @@ impl BookSearch {
         None
     }
 
-    fn handle_results_key(&mut self, key: KeyEvent) -> Option<BookSearchAction> {
-        match key.code {
-            KeyCode::Esc => {
-                self.active = false;
-                return Some(BookSearchAction::Close);
-            }
-            KeyCode::Enter => {
-                if !self.results.is_empty() {
-                    let result = &self.results[self.selected_result];
+    fn handle_results_key(
+        &mut self,
+        key: KeyEvent,
+        key_seq: &mut crate::inputs::KeySeq,
+    ) -> Option<BookSearchAction> {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+
+        let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::PopupSearch, &prospective) {
+            LookupResult::Found(action) => match action {
+                Action::Cancel => {
                     self.active = false;
-                    return Some(match &result.target {
-                        SearchResultTarget::Epub {
-                            chapter_index,
-                            node_index,
-                        } => BookSearchAction::JumpToChapter {
-                            chapter_index: *chapter_index,
-                            node_index: *node_index,
-                            line_number: result.line_number,
-                            query: self.search_input.clone(),
-                        },
-                        SearchResultTarget::Pdf {
-                            page_index,
-                            line_index,
-                            line_y_bounds,
-                        } => BookSearchAction::JumpToPdfPage {
-                            page_index: *page_index,
-                            line_index: *line_index,
-                            line_y_bounds: *line_y_bounds,
-                            query: self.search_input.clone(),
-                        },
-                    });
+                    Some(BookSearchAction::Close)
                 }
-            }
-            KeyCode::Char(' ') if key.modifiers.is_empty() => {
-                // Space+f behavior - go back to input mode
-                self.focus_mode = FocusMode::Input;
-            }
-            KeyCode::Char('/') if key.modifiers.is_empty() => {
-                self.focus_mode = FocusMode::Input;
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_selection_down();
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_selection_up();
-            }
-            KeyCode::Char('g') => {
-                self.selected_result = 0;
-                self.scroll_offset = 0;
-            }
-            KeyCode::Char('G') => {
-                if !self.results.is_empty() {
-                    self.selected_result = self.results.len() - 1;
-                    self.update_scroll();
+                Action::Select => {
+                    if !self.results.is_empty() {
+                        let result = &self.results[self.selected_result];
+                        self.active = false;
+                        Some(match &result.target {
+                            SearchResultTarget::Epub {
+                                chapter_index,
+                                node_index,
+                            } => BookSearchAction::JumpToChapter {
+                                chapter_index: *chapter_index,
+                                node_index: *node_index,
+                                line_number: result.line_number,
+                                query: self.search_input.clone(),
+                            },
+                            SearchResultTarget::Pdf {
+                                page_index,
+                                line_index,
+                                line_y_bounds,
+                            } => BookSearchAction::JumpToPdfPage {
+                                page_index: *page_index,
+                                line_index: *line_index,
+                                line_y_bounds: *line_y_bounds,
+                                query: self.search_input.clone(),
+                            },
+                        })
+                    } else {
+                        None
+                    }
                 }
+                Action::StartSearch => {
+                    self.focus_mode = FocusMode::Input;
+                    None
+                }
+                Action::MoveDown => {
+                    self.move_selection_down();
+                    None
+                }
+                Action::MoveUp => {
+                    self.move_selection_up();
+                    None
+                }
+                Action::GoTop => {
+                    self.selected_result = 0;
+                    self.scroll_offset = 0;
+                    None
+                }
+                Action::GoBottom => {
+                    if !self.results.is_empty() {
+                        self.selected_result = self.results.len() - 1;
+                        self.update_scroll();
+                    }
+                    None
+                }
+                Action::ScrollHalfDown => {
+                    self.handle_ctrl_d();
+                    None
+                }
+                Action::ScrollHalfUp => {
+                    self.handle_ctrl_u();
+                    None
+                }
+                Action::ScrollPageDown => {
+                    self.handle_ctrl_f();
+                    None
+                }
+                Action::ScrollPageUp => {
+                    self.handle_ctrl_b();
+                    None
+                }
+                _ => None,
+            },
+            LookupResult::Prefix => {
+                key_seq.push(key);
+                None
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_d();
+            LookupResult::NoMatch => {
+                if !key_seq.is_empty() {
+                    key_seq.clear();
+                    return self.handle_results_key(key, key_seq);
+                }
+                None
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_u();
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_f();
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_b();
-            }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-            }
-            _ => {}
         }
-        None
     }
 
     fn schedule_search(&mut self) {
