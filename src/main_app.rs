@@ -338,6 +338,7 @@ pub struct App {
     jump_list: JumpList,
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
+    keybinding_errors_popup: Option<crate::widget::keybinding_errors_popup::KeybindingErrorsPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
     lookup_popup: Option<LookupPopup>,
@@ -459,6 +460,7 @@ pub enum PopupWindow {
     CommentsViewer,
     Settings,
     Lookup,
+    KeybindingErrors,
 }
 
 impl Default for App {
@@ -504,7 +506,7 @@ impl App {
     }
 
     /// Check if we're in search mode
-    fn is_in_search_mode(&self) -> bool {
+    pub fn is_in_search_mode(&self) -> bool {
         self.navigation_panel.is_searching() || self.text_reader.is_searching()
     }
 
@@ -705,6 +707,7 @@ impl App {
             jump_list: JumpList::new(20),
             book_search: None,
             help_popup: None,
+            keybinding_errors_popup: None,
             comments_viewer: None,
             settings_popup: None,
             lookup_popup: None,
@@ -880,7 +883,7 @@ impl App {
         }
     }
 
-    fn is_profiling(&self) -> bool {
+    pub fn is_profiling(&self) -> bool {
         self.profiler.lock().unwrap().is_some()
     }
 
@@ -3130,6 +3133,36 @@ impl App {
         self.text_reader.get_scroll_offset()
     }
 
+    // Read-only accessors — exposed primarily for integration testing.
+
+    pub fn is_zen_mode(&self) -> bool {
+        self.zen_mode
+    }
+
+    pub fn is_normal_mode(&self) -> bool {
+        self.text_reader.is_normal_mode_active()
+    }
+
+    pub fn current_chapter(&self) -> Option<usize> {
+        self.current_book.as_ref().map(|b| b.current_chapter())
+    }
+
+    pub fn text_reader(&self) -> &MarkdownTextReader {
+        &self.text_reader
+    }
+
+    pub fn settings_popup(&self) -> Option<&SettingsPopup> {
+        self.settings_popup.as_ref()
+    }
+
+    pub fn comments_viewer(&self) -> Option<&crate::widget::comments_viewer::CommentsViewer> {
+        self.comments_viewer.as_ref()
+    }
+
+    pub fn has_notification(&self) -> bool {
+        self.notifications.has_notification()
+    }
+
     fn jump_to_location(&mut self, location: JumpLocation) -> Result<()> {
         match location {
             JumpLocation::Epub {
@@ -3210,7 +3243,7 @@ impl App {
     }
 
     /// Calculate the navigation panel width based on stored terminal width
-    fn nav_panel_width(&self) -> u16 {
+    pub fn nav_panel_width(&self) -> u16 {
         if self.zen_mode {
             0
         } else {
@@ -3576,6 +3609,22 @@ impl App {
 
         if matches!(
             self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::KeybindingErrors)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut popup) = self.keybinding_errors_popup {
+                popup.render(f, f.area());
+            }
+        }
+
+        if matches!(
+            self.focused_panel,
             FocusedPanel::Popup(PopupWindow::CommentsViewer)
         ) {
             let dim_block = Block::default().style(
@@ -3684,6 +3733,29 @@ impl App {
         }
     }
 
+    /// Build the clickable help bar button labels from the keymap.
+    /// Returns: Vec<(label, Action)> e.g. [("Space+a: Comments", ToggleCommentsViewer), ...]
+    fn help_bar_buttons() -> Vec<(String, crate::keybindings::action::Action)> {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+
+        let km = crate::keybindings::keymap();
+        let btn = |action: Action, label: &str| -> (String, Action) {
+            let key = km
+                .describe_binding_display(KeyContext::Global, &action)
+                .unwrap_or_else(|| "?".to_string());
+            (format!("{key}: {label}"), action)
+        };
+
+        vec![
+            btn(Action::ToggleCommentsViewer, "Comments"),
+            btn(Action::ToggleReadingHistory, "History"),
+            btn(Action::ToggleBookStats, "Stats"),
+            btn(Action::OpenThemeSelector, "Theme"),
+            btn(Action::ToggleHelp, "Help"),
+        ]
+    }
+
     fn handle_help_bar_click(&mut self, click_x: u16, click_y: u16) -> bool {
         let area = self.help_bar_area;
         if click_y < area.y || click_y >= area.y + area.height {
@@ -3701,146 +3773,71 @@ impl App {
         }
 
         let width = area.width.saturating_sub(2);
-        let comments_full = "[Space+a: Comments] ";
-        let history_full = "[Space+h: History] ";
-        let stats_full = "[Space+d: Stats] ";
-        let theme_full = "[Space+t: Theme] ";
-        let help_full = "[?: Help]";
+        let buttons = Self::help_bar_buttons();
 
-        let total_len = (comments_full.len()
-            + history_full.len()
-            + stats_full.len()
-            + theme_full.len()
-            + help_full.len()) as u16;
+        // Calculate total width: "[label1] [label2] [label3]..."
+        let total_len: u16 = buttons
+            .iter()
+            .enumerate()
+            .map(|(i, (label, _))| {
+                let bracket_len = if i < buttons.len() - 1 { 3 } else { 2 }; // "[] " or "[]"
+                label.len() as u16 + bracket_len as u16
+            })
+            .sum();
         let section_start = width.saturating_sub(total_len);
 
-        let comments_start = section_start + "[".len() as u16;
-        let comments_end = comments_start + "Space+a: Comments".len() as u16;
-        let history_start = section_start + comments_full.len() as u16 + "[".len() as u16;
-        let history_end = history_start + "Space+h: History".len() as u16;
-        let stats_start = section_start
-            + comments_full.len() as u16
-            + history_full.len() as u16
-            + "[".len() as u16;
-        let stats_end = stats_start + "Space+d: Stats".len() as u16;
-        let theme_start = section_start
-            + comments_full.len() as u16
-            + history_full.len() as u16
-            + stats_full.len() as u16
-            + "[".len() as u16;
-        let theme_end = theme_start + "Space+t: Theme".len() as u16;
-        let help_start = section_start
-            + comments_full.len() as u16
-            + history_full.len() as u16
-            + stats_full.len() as u16
-            + theme_full.len() as u16
-            + "[".len() as u16;
-        let help_end = help_start + "?: Help".len() as u16;
-
-        if inner_x >= comments_start && inner_x < comments_end {
-            if self.is_pdf_mode() {
-                #[cfg(feature = "pdf")]
-                {
-                    self.open_comments_viewer_for_pdf();
-                }
-            } else if self.current_book.is_some() {
-                if let FocusedPanel::Main(panel) = self.focused_panel {
-                    self.previous_main_panel = panel;
-                }
-                if let Some(ref mut book) = self.current_book {
-                    let toc_items = self.navigation_panel.get_toc_items();
-                    let current_chapter_href =
-                        Self::get_chapter_href(&book.epub, book.current_chapter());
-                    let book_title = Self::extract_book_title(&book.file);
-                    let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
-                        self.text_reader.get_comments(),
-                        &mut book.epub,
-                        &toc_items,
-                        current_chapter_href,
-                        book_title,
-                    );
-                    viewer.restore_position();
-                    self.comments_viewer = Some(viewer);
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
-                }
+        // Find which button was clicked
+        let mut offset = section_start;
+        for (i, (label, _)) in buttons.iter().enumerate() {
+            let content_start = offset + 1; // skip '['
+            let content_end = content_start + label.len() as u16;
+            if inner_x >= content_start && inner_x < content_end {
+                return self.dispatch_global_action(buttons[i].1.clone());
             }
-            return true;
-        }
-
-        if inner_x >= history_start && inner_x < history_end {
-            if let FocusedPanel::Main(panel) = self.focused_panel {
-                self.previous_main_panel = panel;
+            offset = content_end + 1; // skip ']'
+            if i < buttons.len() - 1 {
+                offset += 1; // skip ' '
             }
-            self.reading_history = Some(ReadingHistory::new(self.home_bookmarks()));
-            self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
-            return true;
-        }
-
-        if inner_x >= stats_start && inner_x < stats_end {
-            let terminal_size = (self.terminal_size.width, self.terminal_size.height);
-            let mut opened = false;
-
-            if let Some(ref mut book) = self.current_book {
-                if let Err(e) = self
-                    .book_stat
-                    .calculate_stats(&mut book.epub, terminal_size)
-                {
-                    error!("Failed to calculate book statistics: {e}");
-                    self.show_error(format!("Failed to calculate statistics: {e}"));
-                } else {
-                    opened = true;
-                }
-            } else if self.is_pdf_mode() {
-                #[cfg(feature = "pdf")]
-                if let Some(ref pdf_reader) = self.pdf_reader {
-                    if let Err(e) = self.book_stat.calculate_pdf_stats(
-                        &pdf_reader.toc_entries,
-                        pdf_reader.rendered.len(),
-                        &pdf_reader.page_numbers,
-                        terminal_size,
-                    ) {
-                        error!("Failed to calculate PDF statistics: {e}");
-                        self.show_error(format!("Failed to calculate statistics: {e}"));
-                    } else {
-                        opened = true;
-                    }
-                }
-            }
-
-            if opened {
-                if let FocusedPanel::Main(panel) = self.focused_panel {
-                    self.previous_main_panel = panel;
-                }
-                self.book_stat.show();
-                self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
-            }
-            return true;
-        }
-
-        if inner_x >= theme_start && inner_x < theme_end {
-            if let FocusedPanel::Main(panel) = self.focused_panel {
-                self.previous_main_panel = panel;
-            }
-            self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
-            self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
-            return true;
-        }
-
-        if inner_x >= help_start && inner_x < help_end {
-            if let FocusedPanel::Main(panel) = self.focused_panel {
-                self.previous_main_panel = panel;
-            }
-            self.help_popup = Some(HelpPopup::new());
-            self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
-            return true;
         }
 
         false
     }
 
+    /// Format a pair of keys compactly: "Ctrl+d/u" instead of "Ctrl+d/Ctrl+u".
+    fn key_pair(
+        ctx: crate::keybindings::context::KeyContext,
+        a1: crate::keybindings::action::Action,
+        a2: crate::keybindings::action::Action,
+    ) -> String {
+        let k1 = Self::key_for(ctx, a1);
+        let k2 = Self::key_for(ctx, a2);
+        // If both share a prefix like "Ctrl+", compact it
+        if let Some(prefix_end) = k1.rfind('+') {
+            let prefix = &k1[..=prefix_end];
+            if k2.starts_with(prefix) {
+                return format!("{k1}/{}", &k2[prefix.len()..]);
+            }
+        }
+        format!("{k1}/{k2}")
+    }
+
+    /// Look up the display-friendly key for an action. Returns "?" if unbound.
+    fn key_for(
+        ctx: crate::keybindings::context::KeyContext,
+        action: crate::keybindings::action::Action,
+    ) -> String {
+        let km = crate::keybindings::keymap();
+        km.describe_binding_display(ctx, &action)
+            .unwrap_or_else(|| "?".to_string())
+    }
+
     fn render_help_bar(&self, f: &mut ratatui::Frame, area: Rect, fps_counter: &FPSCounter) {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
         use crate::notification::NotificationLevel;
         let (_, _, border_color, _, _) = current_theme().get_interface_colors(false);
+
+        let esc = Self::key_for(KeyContext::Navigation, Action::Cancel);
 
         let help_content = if let Some(notification) = self.notifications.get_current() {
             let level_str = match notification.level {
@@ -3848,7 +3845,10 @@ impl App {
                 NotificationLevel::Warning => "WARNING",
                 NotificationLevel::Error => "ERROR",
             };
-            format!("[{}] {} | ESC: Dismiss", level_str, notification.message)
+            format!(
+                "[{}] {} | {}: Dismiss",
+                level_str, notification.message, esc
+            )
         } else if self.is_in_search_mode() {
             let search_state = if self.navigation_panel.is_searching() {
                 self.navigation_panel.get_search_state()
@@ -3865,49 +3865,110 @@ impl App {
                     } else {
                         ""
                     };
-                    format!("/ {query}█  {match_info}  ESC: Cancel | Enter: Search")
+                    format!("/ {query}█  {match_info}  {esc}: Cancel | Enter: Search")
                 }
                 SearchMode::NavigationMode => {
                     let query = &search_state.query;
                     let match_info = search_state.get_match_info();
-                    format!("/{query}  {match_info}  n/N: Navigate | ESC: Exit")
+                    let n = Self::key_for(KeyContext::PopupHelp, Action::NextSearchMatch);
+                    let nn = Self::key_for(KeyContext::PopupHelp, Action::PrevSearchMatch);
+                    format!("/{query}  {match_info}  {n}/{nn}: Navigate | {esc}: Exit")
                 }
                 _ => "Search mode active".to_string(),
             }
         } else if self.text_reader.has_text_selection() {
-            "a: Add comment | c/Ctrl+C: Copy to clipboard | ESC: Clear selection".to_string()
+            let a = Self::key_for(KeyContext::EpubContent, Action::AddComment);
+            let c = Self::key_for(KeyContext::EpubContent, Action::CopySelection);
+            format!("{a}: Add comment | {c}: Copy to clipboard | {esc}: Clear selection")
         } else {
             let help_text = match self.focused_panel {
                 FocusedPanel::Main(MainPanel::NavigationList) => {
-                    "j/k: Navigate | Enter: Select | h/l: Fold/Unfold | H/L: Fold/Unfold All | Tab: Switch | q: Quit"
+                    let ctx = KeyContext::Navigation;
+                    let j = Self::key_for(ctx, Action::MoveDown);
+                    let k = Self::key_for(ctx, Action::MoveUp);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    let h = Self::key_for(ctx, Action::Collapse);
+                    let l = Self::key_for(ctx, Action::Expand);
+                    let bh = Self::key_for(ctx, Action::CollapseAll);
+                    let bl = Self::key_for(ctx, Action::ExpandAll);
+                    let tab = Self::key_for(ctx, Action::SwitchFocus);
+                    format!(
+                        "{j}/{k}: Navigate | {sel}: Select | {h}/{l}: Fold/Unfold | {bh}/{bl}: Fold/Unfold All | {tab}: Switch | q: Quit"
+                    )
                 }
                 FocusedPanel::Main(MainPanel::Content) => {
-                    "j/k: Scroll | h/l: Chapter | Ctrl+d/u: Half-screen | Tab: Switch | Space+o: Open | q: Quit"
+                    let ctx = KeyContext::EpubContent;
+                    let jk = Self::key_pair(ctx, Action::ScrollDown, Action::ScrollUp);
+                    let hl = Self::key_pair(ctx, Action::PrevChapter, Action::NextChapter);
+                    let half = Self::key_pair(ctx, Action::ScrollHalfDown, Action::ScrollHalfUp);
+                    let tab = Self::key_for(ctx, Action::SwitchFocus);
+                    let open = Self::key_for(KeyContext::Global, Action::OpenExternalViewer);
+                    let q = Self::key_for(ctx, Action::Quit);
+                    format!(
+                        "{jk}: Scroll | {hl}: Chapter | {half}: Half-screen | {tab}: Switch | {open}: Open | {q}: Quit"
+                    )
                 }
                 FocusedPanel::Popup(PopupWindow::ReadingHistory) => {
-                    "j/k/Scroll: Navigate | Tab: Switch Tab | Enter/DblClick: Open | ESC: Close"
+                    let ctx = KeyContext::PopupHistory;
+                    let j = Self::key_for(ctx, Action::MoveDown);
+                    let k = Self::key_for(ctx, Action::MoveUp);
+                    let tab = Self::key_for(ctx, Action::NextTab);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    format!(
+                        "{j}/{k}/Scroll: Navigate | {tab}: Switch Tab | {sel}/DblClick: Open | {esc}: Close"
+                    )
                 }
                 FocusedPanel::Popup(PopupWindow::BookStats) => {
-                    "j/k/Ctrl+d/u/Scroll: Scroll | Enter/DblClick: Jump | ESC: Close"
+                    let ctx = KeyContext::PopupStats;
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let half = Self::key_pair(ctx, Action::ScrollHalfDown, Action::ScrollHalfUp);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    format!("{jk}/{half}/Scroll: Scroll | {sel}/DblClick: Jump | {esc}: Close")
                 }
-                FocusedPanel::Popup(PopupWindow::ImagePopup) => "ESC/Any key: Close",
+                FocusedPanel::Popup(PopupWindow::ImagePopup) => format!("{esc}/Any key: Close"),
                 FocusedPanel::Popup(PopupWindow::BookSearch) => {
-                    "Space+f: Reopen | Space+F: New Search"
+                    let f = Self::key_for(KeyContext::Global, Action::OpenBookSearch);
+                    let ff = Self::key_for(KeyContext::Global, Action::OpenBookSearchFresh);
+                    format!("{f}: Reopen | {ff}: New Search")
                 }
                 FocusedPanel::Popup(PopupWindow::Help) => {
-                    "j/k/Ctrl+d/u: Scroll | gg/G: Top/Bottom | ESC/?: Close"
+                    let ctx = KeyContext::PopupHelp;
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let half = Self::key_pair(ctx, Action::ScrollHalfDown, Action::ScrollHalfUp);
+                    let gtgb = Self::key_pair(ctx, Action::GoTop, Action::GoBottom);
+                    format!("{jk}/{half}: Scroll | {gtgb}: Top/Bottom | {esc}: Close")
                 }
                 FocusedPanel::Popup(PopupWindow::CommentsViewer) => {
-                    "j/k/Ctrl+d/u: Scroll | /: Search | Enter/DblClick: Jump | ESC: Close"
+                    let ctx = KeyContext::PopupComments;
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let half = Self::key_pair(ctx, Action::ScrollHalfDown, Action::ScrollHalfUp);
+                    let search = Self::key_for(ctx, Action::StartSearch);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    format!(
+                        "{jk}/{half}: Scroll | {search}: Search | {sel}/DblClick: Jump | {esc}: Close"
+                    )
                 }
                 FocusedPanel::Popup(PopupWindow::Settings) => {
-                    "Tab/h/l: Tabs | j/k: Navigate | Enter: Apply | ESC: Close"
+                    let ctx = KeyContext::PopupSettings;
+                    let tab = Self::key_for(ctx, Action::NextTab);
+                    let hl = Self::key_pair(ctx, Action::MoveLeft, Action::MoveRight);
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    format!("{tab}/{hl}: Tabs | {jk}: Navigate | {sel}: Apply | {esc}: Close")
                 }
                 FocusedPanel::Popup(PopupWindow::Lookup) => {
-                    "j/k: Scroll | Ctrl+d/u: Half-page | gg/G: Top/Bottom | ESC/q: Close"
+                    let ctx = KeyContext::PopupHelp;
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let half = Self::key_pair(ctx, Action::ScrollHalfDown, Action::ScrollHalfUp);
+                    let gtgb = Self::key_pair(ctx, Action::GoTop, Action::GoBottom);
+                    format!("{jk}: Scroll | {half}: Half-page | {gtgb}: Top/Bottom | {esc}: Close")
+                }
+                FocusedPanel::Popup(PopupWindow::KeybindingErrors) => {
+                    let reload = Self::key_for(KeyContext::Global, Action::ReloadKeybindings);
+                    format!("{reload}: Reload | {esc}: Close")
                 }
             };
-            help_text.to_string()
+            help_text
         };
 
         let block = Block::default()
@@ -3931,48 +3992,19 @@ impl App {
         f.render_widget(left_para, inner_area);
 
         let text_color = current_theme().base_03;
-        let right_content = Line::from(vec![
-            Span::raw("["),
-            Span::styled(
-                "Space+a: Comments",
+        let buttons = Self::help_bar_buttons();
+        let mut spans = Vec::new();
+        for (i, (label, _)) in buttons.iter().enumerate() {
+            spans.push(Span::raw("["));
+            spans.push(Span::styled(
+                label.clone(),
                 Style::default()
                     .fg(text_color)
                     .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw("] "),
-            Span::raw("["),
-            Span::styled(
-                "Space+h: History",
-                Style::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw("] "),
-            Span::raw("["),
-            Span::styled(
-                "Space+d: Stats",
-                Style::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw("] "),
-            Span::raw("["),
-            Span::styled(
-                "Space+t: Theme",
-                Style::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw("] "),
-            Span::raw("["),
-            Span::styled(
-                "?: Help",
-                Style::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-            Span::raw("]"),
-        ]);
+            ));
+            spans.push(Span::raw(if i < buttons.len() - 1 { "] " } else { "]" }));
+        }
+        let right_content = Line::from(spans);
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
@@ -4026,6 +4058,24 @@ impl App {
         self.test_mode = enabled;
     }
 
+    /// Open the modal listing keybinding-config errors. Used at startup when
+    /// `reload_keymap()` reports issues in `keybindings.toml`.
+    pub fn open_keybinding_errors_popup(
+        &mut self,
+        errors: Vec<crate::keybindings::config::LoadError>,
+    ) {
+        if errors.is_empty() {
+            return;
+        }
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+        self.keybinding_errors_popup = Some(
+            crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors),
+        );
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
+    }
+
     pub fn show_all_libraries_history(&mut self) {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
@@ -4034,14 +4084,94 @@ impl App {
         self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
     }
 
-    /// Check if a key is a global hotkey that should work regardless of focus
-    /// Returns true if the key was handled as a global hotkey
+    /// Check if a key is a global hotkey that should work regardless of focus.
+    /// Uses the configurable keymap for Global context.
+    /// Returns true if the key was handled as a global hotkey.
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
 
-        match key.code {
-            KeyCode::Char('?') => {
-                // Save current main panel before opening help
+        let input = key_event_to_input(&key);
+
+        // Resolve inside a short-lived scope so the read guard is released
+        // BEFORE dispatch runs. Actions like ReloadKeybindings need the write
+        // lock; holding the read guard across dispatch would deadlock.
+        enum Resolved {
+            Found(crate::keybindings::action::Action),
+            Prefix,
+            NoMatch,
+        }
+
+        let resolved = {
+            let km = crate::keybindings::keymap();
+
+            if !self.key_sequence.is_empty() {
+                let accumulated: Vec<_> = self
+                    .key_sequence
+                    .keys()
+                    .iter()
+                    .map(key_event_to_input)
+                    .collect();
+
+                if km.is_prefix(KeyContext::Global, &accumulated) {
+                    let mut prospective = accumulated;
+                    prospective.push(input.clone());
+
+                    match km.lookup(KeyContext::Global, &prospective) {
+                        LookupResult::Found(action) => {
+                            self.key_sequence.clear();
+                            Resolved::Found(action)
+                        }
+                        LookupResult::Prefix => {
+                            self.key_sequence.push(key);
+                            return true;
+                        }
+                        LookupResult::NoMatch => {
+                            // Was a global prefix but this key doesn't continue it.
+                            // #7: Clear sequence and let the key fall through to the
+                            // focused context (matching old behavior).
+                            self.key_sequence.clear();
+                            match km.lookup(KeyContext::Global, &[input]) {
+                                LookupResult::Found(a) => Resolved::Found(a),
+                                LookupResult::Prefix => Resolved::Prefix,
+                                LookupResult::NoMatch => Resolved::NoMatch,
+                            }
+                        }
+                    }
+                } else {
+                    match km.lookup(KeyContext::Global, &[input]) {
+                        LookupResult::Found(a) => Resolved::Found(a),
+                        LookupResult::Prefix => Resolved::Prefix,
+                        LookupResult::NoMatch => Resolved::NoMatch,
+                    }
+                }
+            } else {
+                match km.lookup(KeyContext::Global, &[input]) {
+                    LookupResult::Found(a) => Resolved::Found(a),
+                    LookupResult::Prefix => Resolved::Prefix,
+                    LookupResult::NoMatch => Resolved::NoMatch,
+                }
+            }
+        };
+
+        match resolved {
+            Resolved::Found(action) => self.dispatch_global_action(action),
+            Resolved::Prefix => {
+                self.key_sequence.push(key);
+                true
+            }
+            Resolved::NoMatch => false,
+        }
+    }
+
+    /// Execute a global action resolved from the keymap.
+    /// Returns true if the action was executed, false if conditions prevented it.
+    fn dispatch_global_action(&mut self, action: crate::keybindings::action::Action) -> bool {
+        use crate::keybindings::action::Action;
+
+        match action {
+            Action::ToggleHelp => {
                 if let FocusedPanel::Main(panel) = self.focused_panel {
                     self.previous_main_panel = panel;
                 }
@@ -4049,62 +4179,371 @@ impl App {
                 self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
                 true
             }
-            KeyCode::Char(' ') => {
-                self.key_sequence.handle_key(' ');
-                true
-            }
-            KeyCode::Char(c) if self.key_sequence.current_sequence() == " " => {
-                // Handle space + key combinations (global across all panels)
-                self.handle_key_sequence(c)
-            }
-            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match settings::get_zen_mode_shortcut() {
-                    settings::ZenModeShortcut::CtrlZ => {
-                        self.toggle_zen_mode();
-                    }
-                    #[cfg(unix)]
-                    settings::ZenModeShortcut::SpaceZ => {
-                        self.pending_suspend = true;
-                    }
-                    #[cfg(not(unix))]
-                    _ => {}
-                }
-                true
-            }
-            KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ForceRedraw => {
                 self.pending_force_redraw = true;
                 true
             }
-            #[cfg(unix)]
-            KeyCode::Char('q')
-                if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(
-                        settings::get_zen_mode_shortcut(),
-                        settings::ZenModeShortcut::CtrlZ
-                    ) =>
-            {
-                self.pending_suspend = true;
+            Action::ReloadKeybindings => {
+                let errors = crate::keybindings::reload_keymap();
+                if errors.is_empty() {
+                    self.notifications.show_info("Keybindings reloaded.".to_string());
+                } else {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.keybinding_errors_popup =
+                        Some(crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(
+                            errors,
+                        ));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
+                }
                 true
             }
-            #[cfg(feature = "pdf")]
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_settings_popup();
+            Action::OpenSettings => {
+                #[cfg(feature = "pdf")]
+                {
+                    self.open_settings_popup();
+                    true
+                }
+                #[cfg(not(feature = "pdf"))]
+                false
+            }
+            Action::ShrinkNavPanel => {
+                if !self.zen_mode && !self.has_active_popup() {
+                    let current_node = self.text_reader.get_current_node_index();
+                    self.resize_nav_panel(-3);
+                    self.text_reader.restore_to_node_index(current_node);
+                    #[cfg(not(any(test, feature = "test-utils")))]
+                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    true
+                } else {
+                    false
+                }
+            }
+            Action::ExpandNavPanel => {
+                if !self.zen_mode && !self.has_active_popup() {
+                    let current_node = self.text_reader.get_current_node_index();
+                    self.resize_nav_panel(3);
+                    self.text_reader.restore_to_node_index(current_node);
+                    #[cfg(not(any(test, feature = "test-utils")))]
+                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    true
+                } else {
+                    false
+                }
+            }
+            Action::ToggleReadingHistory => {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
+                ) {
+                    self.close_popup_to_previous();
+                    self.reading_history = None;
+                } else {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.reading_history = Some(ReadingHistory::new(self.home_bookmarks()));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
+                }
                 true
             }
-            KeyCode::Char('<') if !self.zen_mode && !self.has_active_popup() => {
-                let current_node = self.text_reader.get_current_node_index();
-                self.resize_nav_panel(-3);
-                self.text_reader.restore_to_node_index(current_node);
+            Action::ToggleBookStats => {
+                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
+                let mut opened = false;
+
+                if let Some(ref mut book) = self.current_book {
+                    if let Err(e) = self
+                        .book_stat
+                        .calculate_stats(&mut book.epub, terminal_size)
+                    {
+                        error!("Failed to calculate book statistics: {e}");
+                        self.show_error(format!("Failed to calculate statistics: {e}"));
+                    } else {
+                        opened = true;
+                    }
+                } else if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    if let Some(ref pdf_reader) = self.pdf_reader {
+                        if let Err(e) = self.book_stat.calculate_pdf_stats(
+                            &pdf_reader.toc_entries,
+                            pdf_reader.rendered.len(),
+                            &pdf_reader.page_numbers,
+                            terminal_size,
+                        ) {
+                            error!("Failed to calculate PDF statistics: {e}");
+                            self.show_error(format!("Failed to calculate statistics: {e}"));
+                        } else {
+                            opened = true;
+                        }
+                    }
+                }
+
+                if opened {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.book_stat.show();
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
+                }
+                true
+            }
+            Action::OpenBookSearch => {
+                let has_document = self.current_book.is_some() || self.is_pdf_mode();
+                if has_document {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.open_book_search(false);
+                }
+                true
+            }
+            Action::OpenBookSearchFresh => {
+                let has_document = self.current_book.is_some() || self.is_pdf_mode();
+                if has_document {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.open_book_search(true);
+                }
+                true
+            }
+            Action::OpenExternalViewer => {
+                self.open_with_system_viewer();
+                true
+            }
+            Action::CopyChapterText => {
+                if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        let page = self.pdf_reader.as_ref().map(|reader| reader.page);
+                        if let (Some(page), Some(service)) = (page, self.pdf_service.as_mut()) {
+                            service.extract_text(vec![crate::pdf::PageSelectionBounds {
+                                page,
+                                start_x: 0.0,
+                                end_x: f32::MAX,
+                                min_y: 0.0,
+                                max_y: f32::MAX,
+                            }]);
+                            self.notifications.info("Extracting current page text...");
+                        }
+                    }
+                } else if self.is_main_panel(MainPanel::Content) {
+                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
+                        debug!("Copy chapter failed: {e}");
+                    } else {
+                        debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                true
+            }
+            Action::CopyTocItem => {
+                if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        if self.is_main_panel(MainPanel::NavigationList)
+                            && self.navigation_panel.mode
+                                == crate::navigation_panel::NavigationMode::TableOfContents
+                        {
+                            self.copy_pdf_toc_selection();
+                        } else {
+                            self.notifications
+                                .warn("Space+C: Navigate to TOC first (Tab to switch)");
+                        }
+                    }
+                } else if self.is_main_panel(MainPanel::Content) {
+                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
+                        debug!("Copy chapter failed: {e}");
+                    } else {
+                        debug!("Successfully copied chapter content to clipboard");
+                    }
+                }
+                true
+            }
+            Action::ToggleJustifyText => {
+                if self.current_book.is_some() {
+                    let current_node = self.text_reader.get_current_node_index();
+                    let enabled = self.text_reader.toggle_justify_text();
+                    self.text_reader.restore_to_node_index(current_node);
+                    settings::set_justify_text(enabled);
+                    if enabled {
+                        self.notifications.info("Text justification: on");
+                    } else {
+                        self.notifications.info("Text justification: off");
+                    }
+                }
+                true
+            }
+            Action::ToggleCommentsViewer => {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::CommentsViewer)
+                ) {
+                    if let Some(ref mut viewer) = self.comments_viewer {
+                        viewer.save_position();
+                    }
+                    self.close_popup_to_previous();
+                    self.comments_viewer = None;
+                } else if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.open_comments_viewer_for_pdf();
+                    }
+                } else if self.current_book.is_some() {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    if let Some(ref mut book) = self.current_book {
+                        let toc_items = self.navigation_panel.get_toc_items();
+                        let current_chapter_href =
+                            Self::get_chapter_href(&book.epub, book.current_chapter());
+                        let book_title = Self::extract_book_title(&book.file);
+                        let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
+                            self.text_reader.get_comments(),
+                            &mut book.epub,
+                            &toc_items,
+                            current_chapter_href,
+                            book_title,
+                        );
+                        viewer.restore_position();
+                        self.comments_viewer = Some(viewer);
+                        self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
+                    }
+                }
+                true
+            }
+            Action::ToggleZenMode => {
+                self.toggle_zen_mode();
+                true
+            }
+            Action::Suspend => {
+                #[cfg(unix)]
+                {
+                    self.pending_suspend = true;
+                }
+                true
+            }
+            Action::OpenThemeSelector => {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::Settings)
+                ) {
+                    self.close_popup_to_previous();
+                    self.settings_popup = None;
+                } else {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
+                }
+                true
+            }
+            Action::TogglePdfWatching => {
+                if self.current_book.is_some() {
+                    self.notifications
+                        .warn("Watching is only supported for PDF files".to_string());
+                    true
+                } else {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.toggle_pdf_watching();
+                        true
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    false
+                }
+            }
+            Action::TogglePdfPageLayout => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    use crate::settings::{
+                        PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
+                    };
+                    let new_mode = match get_pdf_page_layout_mode() {
+                        PdfPageLayoutMode::Single => PdfPageLayoutMode::Dual,
+                        PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
+                    };
+                    set_pdf_page_layout_mode(new_mode);
+                    if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        if let Some(ref mut zoom) = pdf_reader.zoom {
+                            zoom.global_scroll_offset = 0;
+                        }
+                        pdf_reader.last_sent_viewport = None;
+                        pdf_reader.force_redraw();
+                        pdf_reader.set_hud_message(
+                            format!("Page layout: {}", new_mode.as_str()),
+                            crate::widget::hud_message::HudMode::Normal,
+                            std::time::Duration::from_secs(2),
+                        );
+                    }
+                }
+                true
+            }
+            Action::TogglePdfRenderMode => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    if self.pdf_supports_scroll_mode {
+                        use crate::settings::{
+                            PdfRenderMode, get_pdf_render_mode, set_pdf_render_mode,
+                        };
+                        let new_mode = match get_pdf_render_mode() {
+                            PdfRenderMode::Page => PdfRenderMode::Scroll,
+                            PdfRenderMode::Scroll => PdfRenderMode::Page,
+                        };
+                        set_pdf_render_mode(new_mode);
+                        if let Some(ref mut pdf_reader) = self.pdf_reader {
+                            if let Some(ref mut zoom) = pdf_reader.zoom {
+                                zoom.global_scroll_offset = 0;
+                            }
+                            pdf_reader.last_sent_viewport = None;
+                            pdf_reader.force_redraw();
+                            pdf_reader.set_hud_message(
+                                format!("Render mode: {}", new_mode.as_str()),
+                                crate::widget::hud_message::HudMode::Normal,
+                                std::time::Duration::from_secs(2),
+                            );
+                        }
+                    } else if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        pdf_reader.set_error_hud(
+                            "Scroll mode is only supported in Kitty terminal".to_string(),
+                        );
+                    }
+                }
+                true
+            }
+            Action::LookupSelection => {
+                let selected = if self.is_pdf_mode() {
+                    #[cfg(feature = "pdf")]
+                    {
+                        self.pdf_reader.as_ref().and_then(|r| r.get_selected_text())
+                    }
+                    #[cfg(not(feature = "pdf"))]
+                    {
+                        None
+                    }
+                } else {
+                    self.text_reader.get_selected_text()
+                };
+
+                match selected {
+                    Some(text) if !text.trim().is_empty() => {
+                        self.execute_lookup_command(&text);
+                    }
+                    _ => {
+                        self.show_info("No text selected. Select text first, then press Space+l.");
+                    }
+                }
+                true
+            }
+            Action::ResetNavPanelWidth => {
+                self.nav_panel_width_override = None;
                 #[cfg(not(any(test, feature = "test-utils")))]
-                settings::set_nav_panel_width(self.nav_panel_width_override);
-                true
-            }
-            KeyCode::Char('>') if !self.zen_mode && !self.has_active_popup() => {
-                let current_node = self.text_reader.get_current_node_index();
-                self.resize_nav_panel(3);
-                self.text_reader.restore_to_node_index(current_node);
-                #[cfg(not(any(test, feature = "test-utils")))]
-                settings::set_nav_panel_width(self.nav_panel_width_override);
+                settings::set_nav_panel_width(None);
+                #[cfg(feature = "pdf")]
+                if let Some(pdf_reader) = self.pdf_reader.as_mut() {
+                    pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
+                }
                 true
             }
             _ => false,
@@ -4147,414 +4586,6 @@ impl App {
         false
     }
 
-    /// Handle a key sequence and return true if it was handled
-    fn handle_key_sequence(&mut self, key_char: char) -> bool {
-        let sequence: String = self.key_sequence.handle_key(key_char);
-
-        match sequence.as_str() {
-            "gg" => {
-                // Handle 'gg' motion - go to top
-                self.text_reader.handle_gg();
-                self.save_bookmark();
-                self.key_sequence.clear();
-                true
-            }
-            "ss" => {
-                // Raw HTML source toggle (for EPUB/HTML)
-                if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
-                    if let Some(ref mut book) = self.current_book {
-                        if let Some((raw_html, _)) = book.epub.get_current_str() {
-                            self.text_reader.set_raw_html(raw_html);
-                            self.text_reader.toggle_raw_html();
-                        }
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " s" => {
-                #[cfg(feature = "pdf")]
-                {
-                    // Settings popup (only with PDF feature)
-                    self.open_settings_popup();
-                    self.key_sequence.clear();
-                    true
-                }
-                #[cfg(not(feature = "pdf"))]
-                {
-                    false
-                }
-            }
-            " w" => {
-                if self.current_book.is_some() {
-                    self.notifications
-                        .warn("Watching is only supported for PDF files".to_string());
-                    self.key_sequence.clear();
-                    true
-                } else {
-                    #[cfg(feature = "pdf")]
-                    {
-                        self.toggle_pdf_watching();
-                        self.key_sequence.clear();
-                        true
-                    }
-                    #[cfg(not(feature = "pdf"))]
-                    {
-                        false
-                    }
-                }
-            }
-            " f" => {
-                // Handle Space->f to open book search (reuse existing search)
-                // Works for both EPUB and PDF
-                let has_document = self.current_book.is_some() || self.is_pdf_mode();
-                if has_document {
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.open_book_search(false); // Don't clear input
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " F" => {
-                // Handle Space->F to open book search (clear input)
-                // Works for both EPUB and PDF
-                let has_document = self.current_book.is_some() || self.is_pdf_mode();
-                if has_document {
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.open_book_search(true); // Clear input for new search
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " d" => {
-                let terminal_size = (self.terminal_size.width, self.terminal_size.height);
-                let mut opened = false;
-
-                if let Some(ref mut book) = self.current_book {
-                    if let Err(e) = self
-                        .book_stat
-                        .calculate_stats(&mut book.epub, terminal_size)
-                    {
-                        error!("Failed to calculate book statistics: {e}");
-                        self.show_error(format!("Failed to calculate statistics: {e}"));
-                    } else {
-                        opened = true;
-                    }
-                } else if self.is_pdf_mode() {
-                    #[cfg(feature = "pdf")]
-                    if let Some(ref pdf_reader) = self.pdf_reader {
-                        if let Err(e) = self.book_stat.calculate_pdf_stats(
-                            &pdf_reader.toc_entries,
-                            pdf_reader.rendered.len(),
-                            &pdf_reader.page_numbers,
-                            terminal_size,
-                        ) {
-                            error!("Failed to calculate PDF statistics: {e}");
-                            self.show_error(format!("Failed to calculate statistics: {e}"));
-                        } else {
-                            opened = true;
-                        }
-                    }
-                }
-
-                if opened {
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.book_stat.show();
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::BookStats);
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " z" => {
-                if matches!(
-                    settings::get_zen_mode_shortcut(),
-                    settings::ZenModeShortcut::SpaceZ
-                ) {
-                    self.toggle_zen_mode();
-                } else {
-                    // Copy raw_text_lines for debugging (legacy Space+z behavior)
-                    if self.is_main_panel(MainPanel::Content) {
-                        if let Err(e) = self.text_reader.copy_raw_text_lines_to_clipboard() {
-                            debug!("Copy raw_text_lines failed: {e}");
-                        } else {
-                            debug!("Successfully copied raw_text_lines to clipboard for debugging");
-                        }
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " c" => {
-                if self.is_pdf_mode() {
-                    #[cfg(feature = "pdf")]
-                    {
-                        let page = self.pdf_reader.as_ref().map(|reader| reader.page);
-                        if let (Some(page), Some(service)) = (page, self.pdf_service.as_mut()) {
-                            service.extract_text(vec![crate::pdf::PageSelectionBounds {
-                                page,
-                                start_x: 0.0,
-                                end_x: f32::MAX,
-                                min_y: 0.0,
-                                max_y: f32::MAX,
-                            }]);
-                            self.notifications.info("Extracting current page text...");
-                        }
-                    }
-                } else if self.is_main_panel(MainPanel::Content) {
-                    // Handle Space->c to copy entire chapter content
-                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
-                        debug!("Copy chapter failed: {e}");
-                    } else {
-                        debug!("Successfully copied chapter content to clipboard");
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " C" => {
-                // Handle Space->C to copy selected TOC item in PDF (only works when TOC is focused)
-                if self.is_pdf_mode() {
-                    #[cfg(feature = "pdf")]
-                    {
-                        // Only works when navigation panel is focused and in TOC mode
-                        if self.is_main_panel(MainPanel::NavigationList)
-                            && self.navigation_panel.mode
-                                == crate::navigation_panel::NavigationMode::TableOfContents
-                        {
-                            self.copy_pdf_toc_selection();
-                        } else {
-                            self.notifications
-                                .warn("Space+C: Navigate to TOC first (Tab to switch)");
-                        }
-                    }
-                } else if self.is_main_panel(MainPanel::Content) {
-                    // For EPUB, same as Space+c
-                    if let Err(e) = self.text_reader.copy_chapter_to_clipboard() {
-                        debug!("Copy chapter failed: {e}");
-                    } else {
-                        debug!("Successfully copied chapter content to clipboard");
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " j" => {
-                if self.current_book.is_some() {
-                    let current_node = self.text_reader.get_current_node_index();
-                    let enabled = self.text_reader.toggle_justify_text();
-                    self.text_reader.restore_to_node_index(current_node);
-                    settings::set_justify_text(enabled);
-                    if enabled {
-                        self.notifications.info("Text justification: on");
-                    } else {
-                        self.notifications.info("Text justification: off");
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " o" => {
-                // Handle Space->o to open current EPUB with system viewer (global)
-                self.open_with_system_viewer();
-                self.key_sequence.clear();
-                true
-            }
-            " h" => {
-                // Handle Space->h to toggle reading history (global)
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::ReadingHistory)
-                ) {
-                    // Close history - return to previous panel
-                    self.close_popup_to_previous();
-                    self.reading_history = None;
-                } else {
-                    // Open history - save current main panel
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.reading_history = Some(ReadingHistory::new(self.home_bookmarks()));
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " l" => {
-                let selected = if self.is_pdf_mode() {
-                    #[cfg(feature = "pdf")]
-                    {
-                        self.pdf_reader.as_ref().and_then(|r| r.get_selected_text())
-                    }
-                    #[cfg(not(feature = "pdf"))]
-                    {
-                        None
-                    }
-                } else {
-                    self.text_reader.get_selected_text()
-                };
-
-                match selected {
-                    Some(text) if !text.trim().is_empty() => {
-                        self.execute_lookup_command(&text);
-                    }
-                    _ => {
-                        self.show_info("No text selected. Select text first, then press Space+l.");
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " a" => {
-                // Handle Space->a to toggle comments viewer (global)
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::CommentsViewer)
-                ) {
-                    // Close comments viewer - return to previous panel
-                    if let Some(ref mut viewer) = self.comments_viewer {
-                        viewer.save_position();
-                    }
-                    self.close_popup_to_previous();
-                    self.comments_viewer = None;
-                } else if self.is_pdf_mode() {
-                    #[cfg(feature = "pdf")]
-                    {
-                        self.open_comments_viewer_for_pdf();
-                    }
-                } else if self.current_book.is_some() {
-                    // Open comments viewer - save current main panel
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    if let Some(ref mut book) = self.current_book {
-                        let toc_items = self.navigation_panel.get_toc_items();
-                        let current_chapter_href =
-                            Self::get_chapter_href(&book.epub, book.current_chapter());
-                        let book_title = Self::extract_book_title(&book.file);
-                        let mut viewer = crate::widget::comments_viewer::CommentsViewer::new(
-                            self.text_reader.get_comments(),
-                            &mut book.epub,
-                            &toc_items,
-                            current_chapter_href,
-                            book_title,
-                        );
-                        viewer.restore_position();
-                        self.comments_viewer = Some(viewer);
-                        self.focused_panel = FocusedPanel::Popup(PopupWindow::CommentsViewer);
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " D" => {
-                #[cfg(feature = "pdf")]
-                if self.is_pdf_mode() {
-                    use crate::settings::{
-                        PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
-                    };
-                    let new_mode = match get_pdf_page_layout_mode() {
-                        PdfPageLayoutMode::Single => PdfPageLayoutMode::Dual,
-                        PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
-                    };
-                    set_pdf_page_layout_mode(new_mode);
-                    if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        if let Some(ref mut zoom) = pdf_reader.zoom {
-                            zoom.global_scroll_offset = 0;
-                        }
-                        pdf_reader.last_sent_viewport = None;
-                        pdf_reader.force_redraw();
-                        pdf_reader.set_hud_message(
-                            format!("Page layout: {}", new_mode.as_str()),
-                            crate::widget::hud_message::HudMode::Normal,
-                            std::time::Duration::from_secs(2),
-                        );
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " S" => {
-                #[cfg(feature = "pdf")]
-                if self.is_pdf_mode() {
-                    if self.pdf_supports_scroll_mode {
-                        use crate::settings::{
-                            PdfRenderMode, get_pdf_render_mode, set_pdf_render_mode,
-                        };
-                        let new_mode = match get_pdf_render_mode() {
-                            PdfRenderMode::Page => PdfRenderMode::Scroll,
-                            PdfRenderMode::Scroll => PdfRenderMode::Page,
-                        };
-                        set_pdf_render_mode(new_mode);
-                        if let Some(ref mut pdf_reader) = self.pdf_reader {
-                            if let Some(ref mut zoom) = pdf_reader.zoom {
-                                zoom.global_scroll_offset = 0;
-                            }
-                            pdf_reader.last_sent_viewport = None;
-                            pdf_reader.force_redraw();
-                            pdf_reader.set_hud_message(
-                                format!("Render mode: {}", new_mode.as_str()),
-                                crate::widget::hud_message::HudMode::Normal,
-                                std::time::Duration::from_secs(2),
-                            );
-                        }
-                    } else if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        pdf_reader.set_error_hud(
-                            "Scroll mode is only supported in Kitty terminal".to_string(),
-                        );
-                    }
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " t" => {
-                // Handle Space->t to toggle theme selector (opens settings on Themes tab)
-                if matches!(
-                    self.focused_panel,
-                    FocusedPanel::Popup(PopupWindow::Settings)
-                ) {
-                    // Close settings - return to previous panel
-                    self.close_popup_to_previous();
-                    self.settings_popup = None;
-                } else {
-                    // Open settings on Themes tab - save current main panel
-                    if let FocusedPanel::Main(panel) = self.focused_panel {
-                        self.previous_main_panel = panel;
-                    }
-                    self.settings_popup = Some(self.make_settings_popup(SettingsTab::Themes));
-                    self.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
-                }
-                self.key_sequence.clear();
-                true
-            }
-            " <" | " >" => {
-                self.nav_panel_width_override = None;
-                #[cfg(not(any(test, feature = "test-utils")))]
-                settings::set_nav_panel_width(None);
-                #[cfg(feature = "pdf")]
-                if let Some(pdf_reader) = self.pdf_reader.as_mut() {
-                    pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
-                }
-                self.key_sequence.clear();
-                true
-            }
-            _ if sequence.len() >= 2 => {
-                // Unknown sequence of 2+ chars, reset
-                self.key_sequence.clear();
-                false
-            }
-            _ => {
-                // Still building the sequence
-                false
-            }
-        }
-    }
-
     fn handle_pending_find_motion(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         use crossterm::event::KeyCode;
 
@@ -4586,165 +4617,197 @@ impl App {
         false
     }
 
+    /// Look up and dispatch a normal mode motion using the EpubNormal keymap.
+    /// Handles vim cursor motions, find/till, scrolling, etc.
+    /// Returns true if the key was handled.
     fn handle_common_normal_mode_motions(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
 
-        match key.code {
-            KeyCode::Char('h') | KeyCode::Left => {
+        let input = key_event_to_input(key);
+        let km = crate::keybindings::keymap();
+
+        // Build prospective sequence
+        let mut prospective: Vec<_> = self
+            .key_sequence
+            .keys()
+            .iter()
+            .map(key_event_to_input)
+            .collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::EpubNormal, &prospective) {
+            LookupResult::Found(action) => {
+                self.key_sequence.clear();
+                self.dispatch_epub_normal_action(action)
+            }
+            LookupResult::Prefix => {
+                self.key_sequence.push(*key);
+                true
+            }
+            LookupResult::NoMatch => {
+                if !self.key_sequence.is_empty() {
+                    self.key_sequence.clear();
+                    let single = key_event_to_input(key);
+                    match km.lookup(KeyContext::EpubNormal, &[single]) {
+                        LookupResult::Found(action) => self.dispatch_epub_normal_action(action),
+                        LookupResult::Prefix => {
+                            self.key_sequence.push(*key);
+                            true
+                        }
+                        LookupResult::NoMatch => false,
+                    }
+                } else {
+                    false
+                }
+            }
+        }
+    }
+
+    fn dispatch_epub_normal_action(&mut self, action: crate::keybindings::action::Action) -> bool {
+        use crate::keybindings::action::Action;
+
+        match action {
+            Action::MoveLeft => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_left();
                 }
                 true
             }
-            KeyCode::Char('j') | KeyCode::Down => {
+            Action::MoveDown => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_down();
                 }
                 true
             }
-            KeyCode::Char('k') | KeyCode::Up => {
+            Action::MoveUp => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_up();
                 }
                 true
             }
-            KeyCode::Char('l') | KeyCode::Right => {
+            Action::MoveRight => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_right();
                 }
                 true
             }
-            KeyCode::Char('w') => {
+            Action::WordForward => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_word_forward();
                 }
                 true
             }
-            KeyCode::Char('W') => {
-                let count = self.text_reader.take_count();
-                for _ in 0..count {
-                    self.text_reader.normal_mode_big_word_forward();
-                }
-                true
-            }
-            KeyCode::Char('e') | KeyCode::Char('E') => {
-                let count = self.text_reader.take_count();
-                for _ in 0..count {
-                    self.text_reader.normal_mode_word_end();
-                }
-                true
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.text_reader.clear_count();
-                let h = self.text_reader.get_visible_height();
-                self.text_reader.normal_mode_full_page_up(h);
-                true
-            }
-            KeyCode::Char('b') | KeyCode::Char('B') => {
+            Action::WordBackward => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_word_backward();
                 }
                 true
             }
-            KeyCode::Char('0') => {
+            Action::WordEnd => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_word_end();
+                }
+                true
+            }
+            Action::LineStart => {
                 self.text_reader.clear_count();
                 self.text_reader.normal_mode_line_start();
                 true
             }
-            KeyCode::Char('^') => {
+            Action::FirstNonBlank => {
                 self.text_reader.clear_count();
                 self.text_reader.normal_mode_first_non_whitespace();
                 true
             }
-            KeyCode::Char('$') => {
+            Action::LineEnd => {
                 self.text_reader.clear_count();
                 self.text_reader.normal_mode_line_end();
                 true
             }
-            KeyCode::Char('{') => {
+            Action::ParagraphBackward => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_paragraph_up();
                 }
                 true
             }
-            KeyCode::Char('}') => {
+            Action::ParagraphForward => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_paragraph_down();
                 }
                 true
             }
-            KeyCode::Char('g') => {
-                let seq = self.key_sequence.handle_key('g');
-                if seq == "gg" {
-                    self.text_reader.clear_count();
-                    self.text_reader.normal_mode_document_top();
-                    self.key_sequence.clear();
-                }
+            Action::GoTop => {
+                self.text_reader.clear_count();
+                self.text_reader.normal_mode_document_top();
                 true
             }
-            KeyCode::Char('G') => {
+            Action::GoBottom => {
                 self.text_reader.clear_count();
                 self.text_reader.normal_mode_document_bottom();
                 true
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollHalfDown => {
                 self.text_reader.clear_count();
                 let h = self.text_reader.get_visible_height();
                 self.text_reader.normal_mode_half_page_down(h);
                 true
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollHalfUp => {
                 self.text_reader.clear_count();
                 let h = self.text_reader.get_visible_height();
                 self.text_reader.normal_mode_half_page_up(h);
                 true
             }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ScrollPageDown => {
                 self.text_reader.clear_count();
                 let h = self.text_reader.get_visible_height();
                 self.text_reader.normal_mode_full_page_down(h);
                 true
             }
-            KeyCode::PageDown => {
-                self.text_reader.clear_count();
-                let h = self.text_reader.get_visible_height();
-                self.text_reader.normal_mode_full_page_down(h);
-                true
-            }
-            KeyCode::PageUp => {
+            Action::ScrollPageUp => {
                 self.text_reader.clear_count();
                 let h = self.text_reader.get_visible_height();
                 self.text_reader.normal_mode_full_page_up(h);
                 true
             }
-            KeyCode::Char('f') => {
+            Action::FindForward => {
                 self.text_reader.set_pending_find_forward();
                 true
             }
-            KeyCode::Char('F') => {
+            Action::FindBackward => {
                 self.text_reader.set_pending_find_backward();
                 true
             }
-            KeyCode::Char('t') => {
+            Action::TillForward => {
                 self.text_reader.set_pending_till_forward();
                 true
             }
-            KeyCode::Char('T') => {
+            Action::TillBackward => {
                 self.text_reader.set_pending_till_backward();
                 true
             }
-            KeyCode::Char(';') => {
+            Action::RepeatFind => {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.repeat_last_find();
+                }
+                true
+            }
+            Action::RepeatFindReverse => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.repeat_last_find_reverse();
                 }
                 true
             }
@@ -4752,8 +4815,183 @@ impl App {
         }
     }
 
+    /// Execute an EPUB content action (standard scrolling mode).
+    fn dispatch_epub_content_action(
+        &mut self,
+        action: crate::keybindings::action::Action,
+    ) -> Option<AppAction> {
+        use crate::keybindings::action::Action;
+
+        match action {
+            Action::StartSearch => {
+                if self.is_main_panel(MainPanel::Content) {
+                    self.text_reader.start_search();
+                }
+            }
+            Action::ToggleNormalMode => {
+                if self.is_main_panel(MainPanel::Content) {
+                    self.text_reader.toggle_normal_mode();
+                }
+            }
+            Action::ScrollPageUp => {
+                self.scroll_full_screen_up();
+            }
+            Action::ScrollPageDown => {
+                self.scroll_full_screen_down();
+            }
+            Action::ScrollHalfDown => {
+                let h = self.text_reader.get_visible_height();
+                self.scroll_half_screen_down(h);
+            }
+            Action::ScrollHalfUp => {
+                let h = self.text_reader.get_visible_height();
+                self.scroll_half_screen_up(h);
+            }
+            Action::ScrollDown => {
+                self.scroll_down();
+            }
+            Action::ScrollUp => {
+                self.scroll_up();
+            }
+            Action::ParagraphBackward => {
+                self.text_reader.scroll_paragraph_up();
+            }
+            Action::ParagraphForward => {
+                self.text_reader.scroll_paragraph_down();
+            }
+            Action::PrevChapter => {
+                let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
+            }
+            Action::NextChapter => {
+                let _ = self.navigate_chapter_relative(ChapterDirection::Next);
+            }
+            Action::GoTop => {
+                self.text_reader.handle_gg();
+                self.save_bookmark();
+            }
+            Action::GoBottom => {
+                if self.current_book.is_some() {
+                    self.text_reader.handle_upper_g();
+                }
+            }
+            Action::JumpForward => {
+                self.jump_forward();
+            }
+            Action::JumpBackward => {
+                self.jump_back();
+            }
+            Action::ToggleProfiling => {
+                self.toggle_profiling();
+            }
+            Action::SwitchFocus => {
+                if !self.has_active_popup() && !self.zen_mode {
+                    match self.focused_panel {
+                        FocusedPanel::Main(MainPanel::NavigationList) => {
+                            self.navigation_panel
+                                .table_of_contents
+                                .clear_manual_navigation();
+                            self.set_main_panel_focus(MainPanel::Content);
+                        }
+                        FocusedPanel::Main(MainPanel::Content) => {
+                            self.set_main_panel_focus(MainPanel::NavigationList);
+                        }
+                        FocusedPanel::Popup(_) => {}
+                    };
+                }
+            }
+            Action::DeleteComment => {
+                if !self.text_reader.is_comment_input_active() {
+                    match self.text_reader.delete_comment_at_cursor() {
+                        Ok(true) => {
+                            info!("Comment deleted successfully");
+                            self.show_info("Comment deleted");
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Failed to delete comment: {e}");
+                            self.show_error(format!("Failed to delete comment: {e}"));
+                        }
+                    }
+                }
+            }
+            Action::AddComment => {
+                if (self.text_reader.has_text_selection()
+                    || self.text_reader.is_visual_mode_active())
+                    && self.text_reader.start_comment_input()
+                {
+                    debug!("Started comment input mode");
+                }
+            }
+            Action::CopySelection => {
+                if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
+                    error!("Copy failed: {e}");
+                }
+            }
+            Action::FollowLink => {
+                if let Some(link_info) = self.text_reader.get_link_at_cursor() {
+                    if let Err(e) = self.handle_link_click(&link_info) {
+                        error!("Failed to handle link click: {e}");
+                    }
+                }
+            }
+            Action::ToggleHelp => {
+                self.help_popup = Some(HelpPopup::new());
+                self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+            }
+            Action::Quit => {
+                self.save_bookmark_with_throttle(true);
+                return Some(AppAction::Quit);
+            }
+            Action::Cancel => {
+                if self.notifications.has_notification() {
+                    self.notifications.dismiss();
+                } else if self.text_reader.has_text_selection() {
+                    self.text_reader.clear_selection();
+                } else if self.is_in_search_mode() {
+                    self.cancel_current_search();
+                }
+            }
+            Action::IncreaseMargin => {
+                let current_node = self.text_reader.get_current_node_index();
+                self.text_reader.increase_margin();
+                self.text_reader.restore_to_node_index(current_node);
+                settings::set_margin(self.text_reader.get_margin());
+            }
+            Action::DecreaseMargin => {
+                let current_node = self.text_reader.get_current_node_index();
+                self.text_reader.decrease_margin();
+                self.text_reader.restore_to_node_index(current_node);
+                settings::set_margin(self.text_reader.get_margin());
+            }
+            Action::EnterVisualMode => {
+                use crate::markdown_text_reader::VisualMode;
+                self.text_reader
+                    .enter_visual_mode(VisualMode::CharacterWise);
+            }
+            Action::EnterVisualLineMode => {
+                use crate::markdown_text_reader::VisualMode;
+                self.text_reader.enter_visual_mode(VisualMode::LineWise);
+            }
+            Action::StartYank => {
+                self.text_reader.start_yank();
+            }
+            Action::ToggleRawHtml => {
+                if self.is_main_panel(MainPanel::Content) && self.current_book.is_some() {
+                    if let Some(ref mut book) = self.current_book {
+                        if let Some((raw_html, _)) = book.epub.get_current_str() {
+                            self.text_reader.set_raw_html(raw_html);
+                            self.text_reader.toggle_raw_html();
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Option<AppAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
 
         #[cfg(any(test, feature = "test-utils"))]
         self.sync_terminal_size_from_test_context();
@@ -4782,7 +5020,7 @@ impl App {
         // If book search popup is shown, handle keys for it
         if self.focused_panel == FocusedPanel::Popup(PopupWindow::BookSearch) {
             let action = if let Some(ref mut book_search) = self.book_search {
-                book_search.handle_key_event(key)
+                book_search.handle_key_event(key, &mut self.key_sequence)
             } else {
                 None
             };
@@ -4881,6 +5119,28 @@ impl App {
             if let Some(HelpPopupAction::Close) = action {
                 self.close_popup_to_previous();
                 self.help_popup = None;
+            }
+            return None;
+        }
+
+        // Keybinding errors popup: simple nav + Esc to close.
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::KeybindingErrors) {
+            use crossterm::event::KeyCode;
+            use crossterm::event::KeyModifiers;
+            if let Some(ref mut popup) = self.keybinding_errors_popup {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
+                        self.close_popup_to_previous();
+                        self.keybinding_errors_popup = None;
+                    }
+                    (KeyCode::Char('j'), _) | (KeyCode::Down, _) => popup.scroll_down(),
+                    (KeyCode::Char('k'), _) | (KeyCode::Up, _) => popup.scroll_up(),
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                        popup.scroll_half_page_down(20)
+                    }
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => popup.scroll_half_page_up(20),
+                    _ => {}
+                }
             }
             return None;
         }
@@ -5205,20 +5465,10 @@ impl App {
 
         // Handle vim normal mode keys when active
         if self.is_main_panel(MainPanel::Content) && self.text_reader.is_normal_mode_active() {
-            // Handle Space-prefixed sequences (Space+l, Space+h, etc.) in normal/visual mode.
-            // Space must be recorded here since visual mode's catch-all would swallow it.
-            if key.code == KeyCode::Char(' ') {
-                self.key_sequence.handle_key(' ');
+            // Global hotkeys (Space-prefixed sequences, ?, <, >, Ctrl+Z/L/Q, etc.)
+            // must be checked before normal mode consumes the key.
+            if self.handle_global_hotkeys(key) {
                 return None;
-            }
-            if self.key_sequence.current_sequence() == " " {
-                if let KeyCode::Char(c) = key.code {
-                    if self.handle_key_sequence(c) {
-                        return None;
-                    }
-                    // Not a valid Space+key sequence, clear and let normal mode handle the key
-                    self.key_sequence.clear();
-                }
             }
 
             // Clear expired yank highlight
@@ -5561,210 +5811,92 @@ impl App {
             return None;
         }
 
-        match key.code {
-            KeyCode::Char('/') => {
-                if self.is_main_panel(MainPanel::Content) {
-                    self.text_reader.start_search();
-                }
-            }
-            KeyCode::Char('n') if self.is_in_search_mode() => {
-                if self.navigation_panel.is_searching() {
-                    let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
-                        self.handle_search_input('n');
+        // Search input interception: n/N during active search input are typed chars
+        if self.is_in_search_mode() {
+            use crossterm::event::KeyCode;
+            match key.code {
+                KeyCode::Char('n') => {
+                    if self.navigation_panel.is_searching() {
+                        let search_state = self.navigation_panel.get_search_state();
+                        if search_state.mode == SearchMode::InputMode {
+                            self.handle_search_input('n');
+                            return None;
+                        }
                     }
-                } else if self.text_reader.is_searching() {
-                    let search_state = self.text_reader.get_search_state();
-                    if search_state.mode == SearchMode::NavigationMode {
-                        self.text_reader.next_match();
-                    } else {
-                        self.handle_search_input('n');
-                    }
-                }
-            }
-            KeyCode::Char('N') if self.is_in_search_mode() => {
-                if self.navigation_panel.is_searching() {
-                    let search_state = self.navigation_panel.get_search_state();
-                    if search_state.mode == SearchMode::InputMode {
-                        self.handle_search_input('N');
-                    }
-                } else if self.text_reader.is_searching() {
-                    let search_state = self.text_reader.get_search_state();
-                    if search_state.mode == SearchMode::NavigationMode {
-                        self.text_reader.previous_match();
-                    } else {
-                        self.handle_search_input('N');
+                    if self.text_reader.is_searching() {
+                        let search_state = self.text_reader.get_search_state();
+                        if search_state.mode == SearchMode::NavigationMode {
+                            self.text_reader.next_match();
+                        } else {
+                            self.handle_search_input('n');
+                        }
+                        return None;
                     }
                 }
-            }
-            KeyCode::Char('n') if !self.is_in_search_mode() => {
-                if self.is_main_panel(MainPanel::Content) {
-                    self.text_reader.toggle_normal_mode();
+                KeyCode::Char('N') => {
+                    if self.navigation_panel.is_searching() {
+                        let search_state = self.navigation_panel.get_search_state();
+                        if search_state.mode == SearchMode::InputMode {
+                            self.handle_search_input('N');
+                            return None;
+                        }
+                    }
+                    if self.text_reader.is_searching() {
+                        let search_state = self.text_reader.get_search_state();
+                        if search_state.mode == SearchMode::NavigationMode {
+                            self.text_reader.previous_match();
+                        } else {
+                            self.handle_search_input('N');
+                        }
+                        return None;
+                    }
                 }
+                _ => {}
             }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_full_screen_up();
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.scroll_full_screen_down();
-            }
-            KeyCode::Char('f') => if self.handle_key_sequence('f') {},
-            KeyCode::Char('F') => if self.handle_key_sequence('F') {},
-            KeyCode::Char('s') => if self.handle_key_sequence('s') {},
-            KeyCode::Char(' ') => if !self.handle_key_sequence(' ') {},
-            KeyCode::Char('g') => if !self.handle_key_sequence('g') {},
+        }
 
-            KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.handle_key_sequence('d') {
-                } else if !self.text_reader.is_comment_input_active() {
-                    match self.text_reader.delete_comment_at_cursor() {
-                        Ok(true) => {
-                            info!("Comment deleted successfully");
-                            self.show_info("Comment deleted");
-                        }
-                        Ok(false) => {
-                            // Cursor not on a comment, ignore
-                        }
-                        Err(e) => {
-                            error!("Failed to delete comment: {e}");
-                            self.show_error(format!("Failed to delete comment: {e}"));
-                        }
-                    }
-                }
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_down();
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_up();
-            }
-            KeyCode::Char('{') => {
-                self.text_reader.scroll_paragraph_up();
-            }
-            KeyCode::Char('}') => {
-                self.text_reader.scroll_paragraph_down();
-            }
-            KeyCode::Char('h') => {
-                if !self.handle_key_sequence('h') {
-                    let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
-                }
-            }
-            KeyCode::Left => {
-                let _ = self.navigate_chapter_relative(ChapterDirection::Previous);
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                let _ = self.navigate_chapter_relative(ChapterDirection::Next);
-            }
-            KeyCode::Char('i') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.jump_forward();
-            }
-            KeyCode::Char('o') => {
-                if key.modifiers.contains(KeyModifiers::CONTROL) {
-                    self.jump_back();
-                } else if !self.handle_key_sequence('o') {
-                }
-            }
-            KeyCode::Char('p') => {
-                self.toggle_profiling();
-            }
-            KeyCode::Tab => {
-                if !self.has_active_popup() && !self.zen_mode {
-                    match self.focused_panel {
-                        FocusedPanel::Main(MainPanel::NavigationList) => {
-                            self.navigation_panel
-                                .table_of_contents
-                                .clear_manual_navigation();
-                            self.set_main_panel_focus(MainPanel::Content);
-                        }
-                        FocusedPanel::Main(MainPanel::Content) => {
-                            self.set_main_panel_focus(MainPanel::NavigationList);
-                        }
-                        FocusedPanel::Popup(_) => {} // No tab switching in popups
-                    };
-                }
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let h = self.text_reader.get_visible_height();
-                self.scroll_half_screen_down(h);
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let h = self.text_reader.get_visible_height();
-                self.scroll_half_screen_up(h);
-            }
-            KeyCode::PageDown => {
-                self.scroll_full_screen_down();
-            }
-            KeyCode::PageUp => {
-                self.scroll_full_screen_up();
-            }
-            KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                match settings::get_zen_mode_shortcut() {
-                    settings::ZenModeShortcut::CtrlZ => {
-                        self.toggle_zen_mode();
-                    }
-                    #[cfg(unix)]
-                    settings::ZenModeShortcut::SpaceZ => {
-                        self.pending_suspend = true;
-                    }
-                    #[cfg(not(unix))]
-                    _ => {}
-                }
-            }
+        // Keymap-based dispatch for EpubContent context
+        {
+            use crate::keybindings::context::KeyContext;
+            use crate::keybindings::keymap::LookupResult;
+            use crate::keybindings::notation::key_event_to_input;
 
-            KeyCode::Char('G') => {
-                if self.current_book.is_some() {
-                    self.text_reader.handle_upper_g();
+            let input = key_event_to_input(&key);
+            let km = crate::keybindings::keymap();
+
+            let mut prospective: Vec<_> = self
+                .key_sequence
+                .keys()
+                .iter()
+                .map(key_event_to_input)
+                .collect();
+            prospective.push(input);
+
+            match km.lookup(KeyContext::EpubContent, &prospective) {
+                LookupResult::Found(action) => {
+                    self.key_sequence.clear();
+                    return self.dispatch_epub_content_action(action);
                 }
-            }
-            KeyCode::Char('a') => {
-                if !self.handle_key_sequence('a')
-                    && (self.text_reader.has_text_selection()
-                        || self.text_reader.is_visual_mode_active())
-                    && self.text_reader.start_comment_input()
-                {
-                    debug!("Started comment input mode");
+                LookupResult::Prefix => {
+                    self.key_sequence.push(key);
+                    return None;
                 }
-            }
-            KeyCode::Char('c') => {
-                if !self.handle_key_sequence('c') {
-                    if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
-                        error!("Copy failed: {e}");
+                LookupResult::NoMatch => {
+                    if !self.key_sequence.is_empty() {
+                        self.key_sequence.clear();
+                        match km.lookup(KeyContext::EpubContent, &[key_event_to_input(&key)]) {
+                            LookupResult::Found(action) => {
+                                return self.dispatch_epub_content_action(action);
+                            }
+                            LookupResult::Prefix => {
+                                self.key_sequence.push(key);
+                                return None;
+                            }
+                            LookupResult::NoMatch => {}
+                        }
                     }
                 }
             }
-            KeyCode::Char('t') => {
-                self.handle_key_sequence('t');
-            }
-            KeyCode::Char('?') => {
-                self.help_popup = Some(HelpPopup::new());
-                self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
-            }
-            KeyCode::Char('q') => {
-                self.save_bookmark_with_throttle(true);
-                return Some(AppAction::Quit);
-            }
-            KeyCode::Esc => {
-                if self.notifications.has_notification() {
-                    self.notifications.dismiss();
-                } else if self.text_reader.has_text_selection() {
-                    self.text_reader.clear_selection();
-                } else if self.is_in_search_mode() {
-                    self.cancel_current_search();
-                }
-            }
-            KeyCode::Char('-') => {
-                let current_node = self.text_reader.get_current_node_index();
-                self.text_reader.increase_margin();
-                self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
-            }
-            KeyCode::Char('=') | KeyCode::Char('+') => {
-                let current_node = self.text_reader.get_current_node_index();
-                self.text_reader.decrease_margin();
-                self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
-            }
-            _ => {}
         }
         None
     }
@@ -7117,33 +7249,9 @@ where
                             continue;
                         }
 
-                        if !app.pdf_text_input_active()
-                            && app.key_sequence.current_sequence() == " "
-                            && matches!(key.code, KeyCode::Char('h') | KeyCode::Char('o'))
-                            && app.handle_global_hotkeys(*key)
-                        {
-                            continue;
-                        }
-
-                        // Intercept Ctrl+l / Ctrl+q / Ctrl+z before PDF handler
-                        // (which would consume plain 'l' / 'q' / 'z' differently).
-                        if !app.pdf_text_input_active()
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                            && matches!(
-                                key.code,
-                                KeyCode::Char('l') | KeyCode::Char('q') | KeyCode::Char('z')
-                            )
-                            && app.handle_global_hotkeys(*key)
-                        {
-                            continue;
-                        }
-
-                        // If there's a pending Space in key sequence, complete it
-                        // before PDF normal mode consumes the key (e.g. Space+l lookup)
-                        if !app.pdf_text_input_active()
-                            && app.key_sequence.current_sequence() == " "
-                            && app.handle_global_hotkeys(*key)
-                        {
+                        // Route through global hotkeys (keymap-based) before PDF handler.
+                        // This handles Space-prefixed sequences, Ctrl+Z/Q/L, ?, <, >, etc.
+                        if !app.pdf_text_input_active() && app.handle_global_hotkeys(*key) {
                             continue;
                         }
 

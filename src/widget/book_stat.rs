@@ -484,54 +484,71 @@ impl BookStat {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<BookStatAction> {
-        use crossterm::event::KeyCode;
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
 
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.handle_j();
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+
+        let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::PopupStats, &prospective) {
+            LookupResult::Found(action) => {
+                key_seq.clear();
+                match action {
+                    Action::MoveDown => {
+                        self.handle_j();
+                        None
+                    }
+                    Action::MoveUp => {
+                        self.handle_k();
+                        None
+                    }
+                    Action::GoTop => {
+                        self.handle_gg();
+                        None
+                    }
+                    Action::GoBottom => {
+                        self.handle_upper_g();
+                        None
+                    }
+                    Action::ScrollHalfDown => {
+                        self.handle_ctrl_d();
+                        None
+                    }
+                    Action::ScrollHalfUp => {
+                        self.handle_ctrl_u();
+                        None
+                    }
+                    Action::ScrollPageDown => {
+                        self.handle_ctrl_f();
+                        None
+                    }
+                    Action::ScrollPageUp => {
+                        self.handle_ctrl_b();
+                        None
+                    }
+                    Action::Cancel => Some(BookStatAction::Close),
+                    Action::Select => Some(BookStatAction::JumpToChapter {
+                        chapter_index: self.get_selected_chapter_index().unwrap_or(0),
+                    }),
+                    _ => None,
+                }
+            }
+            LookupResult::Prefix => {
+                key_seq.push(key);
                 None
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.handle_k();
+            LookupResult::NoMatch => {
+                if !key_seq.is_empty() {
+                    key_seq.clear();
+                    return self.handle_key(key, key_seq);
+                }
                 None
             }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                self.handle_gg();
-                None
-            }
-            KeyCode::Char('G') => {
-                self.handle_upper_g();
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_d();
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_u();
-                None
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::Esc => Some(BookStatAction::Close),
-            KeyCode::Enter => Some(BookStatAction::JumpToChapter {
-                chapter_index: self.get_selected_chapter_index().unwrap_or(0),
-            }),
-            _ => None,
         }
     }
 

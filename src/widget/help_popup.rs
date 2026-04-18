@@ -267,78 +267,95 @@ impl HelpPopup {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<HelpPopupAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
 
-        match key.code {
-            KeyCode::Char('/') => {
-                self.search_state.start_search(self.scroll_offset);
-                None
-            }
-            KeyCode::Char('n') if self.search_state.mode == SearchMode::NavigationMode => {
-                if let Some(line_idx) = self.search_state.next_match() {
-                    self.scroll_to_line(line_idx);
-                }
-                None
-            }
-            KeyCode::Char('N') if self.search_state.mode == SearchMode::NavigationMode => {
-                if let Some(line_idx) = self.search_state.previous_match() {
-                    self.scroll_to_line(line_idx);
-                }
-                None
-            }
-            KeyCode::Esc if self.search_state.mode == SearchMode::NavigationMode => {
-                self.search_state.exit_search();
-                None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_down();
-                None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_up();
-                None
-            }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                self.scroll_to_top();
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+
+        let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::PopupHelp, &prospective) {
+            LookupResult::Found(action) => {
                 key_seq.clear();
+                match action {
+                    Action::MoveDown => {
+                        self.scroll_down();
+                        None
+                    }
+                    Action::MoveUp => {
+                        self.scroll_up();
+                        None
+                    }
+                    Action::GoTop => {
+                        self.scroll_to_top();
+                        None
+                    }
+                    Action::GoBottom => {
+                        self.scroll_to_bottom();
+                        None
+                    }
+                    Action::ScrollHalfDown => {
+                        let ps = (self.popup_height(10) / 2).max(1) as usize;
+                        self.scroll_page_down(ps);
+                        None
+                    }
+                    Action::ScrollHalfUp => {
+                        let ps = (self.popup_height(10) / 2).max(1) as usize;
+                        self.scroll_page_up(ps);
+                        None
+                    }
+                    Action::ScrollPageDown => {
+                        let ps = (self.popup_height(20)).max(1) as usize;
+                        self.scroll_page_down(ps);
+                        None
+                    }
+                    Action::ScrollPageUp => {
+                        let ps = (self.popup_height(20)).max(1) as usize;
+                        self.scroll_page_up(ps);
+                        None
+                    }
+                    Action::Cancel => {
+                        if self.search_state.mode == SearchMode::NavigationMode {
+                            self.search_state.exit_search();
+                            None
+                        } else {
+                            Some(HelpPopupAction::Close)
+                        }
+                    }
+                    Action::StartSearch => {
+                        self.search_state.start_search(self.scroll_offset);
+                        None
+                    }
+                    Action::NextSearchMatch => {
+                        if let Some(line_idx) = self.search_state.next_match() {
+                            self.scroll_to_line(line_idx);
+                        }
+                        None
+                    }
+                    Action::PrevSearchMatch => {
+                        if let Some(line_idx) = self.search_state.previous_match() {
+                            self.scroll_to_line(line_idx);
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            LookupResult::Prefix => {
+                key_seq.push(key);
                 None
             }
-            KeyCode::Char('G') => {
-                self.scroll_to_bottom();
+            LookupResult::NoMatch => {
+                if !key_seq.is_empty() {
+                    key_seq.clear();
+                    return self.handle_normal_and_nav(key, key_seq);
+                }
                 None
             }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = (self.popup_height(10) / 2).max(1) as usize;
-                self.scroll_page_down(page_size);
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = (self.popup_height(10) / 2).max(1) as usize;
-                self.scroll_page_up(page_size);
-                None
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = (self.popup_height(20)).max(1) as usize;
-                self.scroll_page_down(page_size);
-                None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let page_size = (self.popup_height(20)).max(1) as usize;
-                self.scroll_page_up(page_size);
-                None
-            }
-            KeyCode::PageDown => {
-                let page_size = (self.popup_height(20)).max(1) as usize;
-                self.scroll_page_down(page_size);
-                None
-            }
-            KeyCode::PageUp => {
-                let page_size = (self.popup_height(20)).max(1) as usize;
-                self.scroll_page_up(page_size);
-                None
-            }
-            KeyCode::Esc | KeyCode::Char('?') => Some(HelpPopupAction::Close),
-            _ => None,
         }
     }
 

@@ -568,6 +568,21 @@ impl NormalModeState {
         }
     }
 
+    /// Repeat last find motion in the opposite direction
+    pub fn repeat_find_reverse(&mut self, line_bounds: &[LineBounds]) -> bool {
+        if let Some((motion, ch)) = self.last_find {
+            match motion {
+                PendingMotion::FindForward => self.find_char_backward(ch, line_bounds),
+                PendingMotion::FindBackward => self.find_char_forward(ch, line_bounds),
+                PendingMotion::TillForward => self.till_char_backward(ch, line_bounds),
+                PendingMotion::TillBackward => self.till_char_forward(ch, line_bounds),
+                PendingMotion::None => false,
+            }
+        } else {
+            false
+        }
+    }
+
     /// Get cursor rectangle for display
     #[must_use]
     pub fn get_cursor_rect(&self, line_bounds: &[LineBounds]) -> Option<CursorRect> {

@@ -1,11 +1,10 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, ZenModeShortcut, get_lookup_command,
-    get_lookup_display, get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor,
-    get_zen_mode_shortcut, is_pdf_enabled, is_transparent_background, set_integrations,
-    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
-    set_transparent_background, set_zen_mode_shortcut,
+    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
+    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_pdf_enabled,
+    is_transparent_background, set_integrations, set_lookup_display, set_pdf_enabled,
+    set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -105,7 +104,6 @@ pub struct SettingsPopup {
     current_tab: SettingsTab,
     // General tab state
     general_selected_idx: usize,
-    zen_mode_shortcut: ZenModeShortcut,
     // PDF section state
     supports_scroll_mode: bool,
     supports_graphics: bool,
@@ -139,6 +137,10 @@ impl SettingsPopup {
         }
     }
 
+    pub fn current_tab(&self) -> SettingsTab {
+        self.current_tab
+    }
+
     pub fn new_with_tab(tab: SettingsTab) -> Self {
         let caps = terminal::detect_terminal_with_probe();
         Self::new_with_caps(tab, caps.supports_graphics, caps.pdf.supports_scroll_mode)
@@ -155,14 +157,12 @@ impl SettingsPopup {
             SettingsTab::Themes
         };
 
-        let zen_shortcut = get_zen_mode_shortcut();
         let general_selected_idx = Self::initial_general_selected_idx_from_state(
             supports_graphics,
             supports_scroll_mode,
             is_pdf_enabled(),
             get_pdf_render_mode(),
             get_pdf_page_layout_mode(),
-            zen_shortcut,
         );
         let theme_names = all_theme_names();
 
@@ -185,7 +185,6 @@ impl SettingsPopup {
         SettingsPopup {
             current_tab,
             general_selected_idx,
-            zen_mode_shortcut: zen_shortcut,
             supports_scroll_mode,
             supports_graphics,
             theme_selected_idx: Self::initial_theme_selected_idx_from_state(
@@ -214,22 +213,17 @@ impl SettingsPopup {
         pdf_enabled: bool,
         render_mode: PdfRenderMode,
         layout_mode: PdfPageLayoutMode,
-        zen_shortcut: ZenModeShortcut,
     ) -> usize {
-        // Zen mode shortcut: non-default → focus it
-        if zen_shortcut == ZenModeShortcut::CtrlZ {
-            return 1;
-        }
         // PDF section: non-default → focus it
         if supports_graphics {
             if !pdf_enabled {
-                return 3; // Disabled
+                return 1; // Disabled
             }
             if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
-                return 5; // Scroll
+                return 3; // Scroll
             }
             if layout_mode == PdfPageLayoutMode::Dual {
-                return 7; // Dual
+                return 5; // Dual
             }
         }
         0
@@ -251,9 +245,9 @@ impl SettingsPopup {
 
     fn general_max_selectable_idx(&self) -> usize {
         if !is_pdf_enabled() || !self.supports_graphics {
-            return 3; // Zen (0-1) + PDF enabled/disabled (2-3)
+            return 1; // PDF enabled/disabled (0-1)
         }
-        7
+        5 // + render mode (2-3) + layout (4-5)
     }
 
     fn render_mode_available(&self) -> bool {
@@ -399,71 +393,22 @@ impl SettingsPopup {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), //  0: Zen Mode header
-                Constraint::Length(2), //  1: Zen Mode options
+                Constraint::Length(1), //  0: PDF Support header
+                Constraint::Length(2), //  1: PDF Support options (Enabled/Disabled)
                 Constraint::Length(1), //  2: spacer
-                Constraint::Length(1), //  3: PDF Support header
-                Constraint::Length(2), //  4: PDF Support options (Enabled/Disabled)
-                Constraint::Length(1), //  5: spacer
-                Constraint::Length(1), //  6: Render Mode header
-                Constraint::Length(1), //  7: empty line
-                Constraint::Length(2), //  8: Render Mode options
-                Constraint::Length(1), //  9: spacer
-                Constraint::Length(1), // 10: Page Layout header
-                Constraint::Length(1), // 11: empty line
-                Constraint::Length(2), // 12: Page Layout options
-                Constraint::Length(1), // 13: spacer
-                Constraint::Min(1),    // 14: Info message
+                Constraint::Length(1), //  3: Render Mode header
+                Constraint::Length(1), //  4: empty line
+                Constraint::Length(2), //  5: Render Mode options
+                Constraint::Length(1), //  6: spacer
+                Constraint::Length(1), //  7: Page Layout header
+                Constraint::Length(1), //  8: empty line
+                Constraint::Length(2), //  9: Page Layout options
+                Constraint::Length(1), // 10: spacer
+                Constraint::Min(1),    // 11: Info message
             ])
             .split(area);
 
         self.content_chunks = chunks.to_vec();
-
-        // ── Zen Mode Shortcut section ──
-        self.render_section_header(f, chunks[0], "Zen Mode Shortcut", palette, palette.base_06);
-
-        let zen_options_area = Rect {
-            x: chunks[1].x + 2,
-            y: chunks[1].y,
-            width: chunks[1].width.saturating_sub(2),
-            height: chunks[1].height,
-        };
-        let zen_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(zen_options_area);
-
-        let zen_style = Style::default().fg(palette.base_06);
-
-        let space_radio = if self.zen_mode_shortcut == ZenModeShortcut::SpaceZ {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let space_line = self.render_radio_option(
-            space_radio,
-            "Space→Z",
-            Some("Ctrl+Z suspends app"),
-            zen_style,
-            is_general && self.general_selected_idx == 0,
-            palette,
-        );
-        f.render_widget(Paragraph::new(space_line), zen_chunks[0]);
-
-        let ctrl_radio = if self.zen_mode_shortcut == ZenModeShortcut::CtrlZ {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let ctrl_line = self.render_radio_option(
-            ctrl_radio,
-            "Ctrl+Z",
-            Some("Ctrl+Q suspends app"),
-            zen_style,
-            is_general && self.general_selected_idx == 1,
-            palette,
-        );
-        f.render_widget(Paragraph::new(ctrl_line), zen_chunks[1]);
 
         // ── PDF / DJVU section ──
         let pdf_header_color = if self.supports_graphics {
@@ -471,13 +416,13 @@ impl SettingsPopup {
         } else {
             palette.base_03
         };
-        self.render_section_header(f, chunks[3], "PDF / DJVU", palette, pdf_header_color);
+        self.render_section_header(f, chunks[0], "PDF / DJVU", palette, pdf_header_color);
 
         let pdf_options_area = Rect {
-            x: chunks[4].x + 2,
-            y: chunks[4].y,
-            width: chunks[4].width.saturating_sub(2),
-            height: chunks[4].height,
+            x: chunks[1].x + 2,
+            y: chunks[1].y,
+            width: chunks[1].width.saturating_sub(2),
+            height: chunks[1].height,
         };
         let pdf_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -499,7 +444,7 @@ impl SettingsPopup {
             "Enabled",
             None,
             enabled_style,
-            is_general && self.general_selected_idx == 2 && self.supports_graphics,
+            is_general && self.general_selected_idx == 0 && self.supports_graphics,
             palette,
         );
         f.render_widget(Paragraph::new(enabled_line), pdf_chunks[0]);
@@ -514,7 +459,7 @@ impl SettingsPopup {
             "Disabled",
             None,
             enabled_style,
-            is_general && self.general_selected_idx == 3 && self.supports_graphics,
+            is_general && self.general_selected_idx == 1 && self.supports_graphics,
             palette,
         );
         f.render_widget(Paragraph::new(disabled_line), pdf_chunks[1]);
@@ -526,10 +471,10 @@ impl SettingsPopup {
             palette.base_03
         };
         let render_header_area = Rect {
-            x: chunks[6].x + 2,
-            y: chunks[6].y,
-            width: chunks[6].width.saturating_sub(2),
-            height: chunks[6].height,
+            x: chunks[3].x + 2,
+            y: chunks[3].y,
+            width: chunks[3].width.saturating_sub(2),
+            height: chunks[3].height,
         };
         self.render_section_header(
             f,
@@ -541,10 +486,10 @@ impl SettingsPopup {
 
         // Render Mode options
         let render_options_area = Rect {
-            x: chunks[8].x + 4,
-            y: chunks[8].y,
-            width: chunks[8].width.saturating_sub(4),
-            height: chunks[8].height,
+            x: chunks[5].x + 4,
+            y: chunks[5].y,
+            width: chunks[5].width.saturating_sub(4),
+            height: chunks[5].height,
         };
         let render_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -567,7 +512,7 @@ impl SettingsPopup {
             "Page",
             Some("one page at a time"),
             option_style,
-            is_general && self.general_selected_idx == 4 && render_mode_available,
+            is_general && self.general_selected_idx == 2 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(page_line), render_chunks[0]);
@@ -593,7 +538,7 @@ impl SettingsPopup {
             scroll_suffix,
             scroll_style,
             is_general
-                && self.general_selected_idx == 5
+                && self.general_selected_idx == 3
                 && render_mode_available
                 && self.supports_scroll_mode,
             palette,
@@ -607,10 +552,10 @@ impl SettingsPopup {
             palette.base_03
         };
         let layout_header_area = Rect {
-            x: chunks[10].x + 2,
-            y: chunks[10].y,
-            width: chunks[10].width.saturating_sub(2),
-            height: chunks[10].height,
+            x: chunks[7].x + 2,
+            y: chunks[7].y,
+            width: chunks[7].width.saturating_sub(2),
+            height: chunks[7].height,
         };
         self.render_section_header(
             f,
@@ -622,10 +567,10 @@ impl SettingsPopup {
 
         // Page Layout options
         let layout_options_area = Rect {
-            x: chunks[12].x + 4,
-            y: chunks[12].y,
-            width: chunks[12].width.saturating_sub(4),
-            height: chunks[12].height,
+            x: chunks[9].x + 4,
+            y: chunks[9].y,
+            width: chunks[9].width.saturating_sub(4),
+            height: chunks[9].height,
         };
         let layout_chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -648,7 +593,7 @@ impl SettingsPopup {
             "Single",
             Some("one page"),
             layout_option_style,
-            is_general && self.general_selected_idx == 6 && render_mode_available,
+            is_general && self.general_selected_idx == 4 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(single_line), layout_chunks[0]);
@@ -663,14 +608,14 @@ impl SettingsPopup {
             "Dual",
             Some("two pages"),
             layout_option_style,
-            is_general && self.general_selected_idx == 7 && render_mode_available,
+            is_general && self.general_selected_idx == 5 && render_mode_available,
             palette,
         );
         f.render_widget(Paragraph::new(dual_line), layout_chunks[1]);
 
         // Info message
         let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
-        f.render_widget(Paragraph::new(info_lines), chunks[14]);
+        f.render_widget(Paragraph::new(info_lines), chunks[11]);
     }
 
     fn render_themes_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
@@ -960,32 +905,15 @@ impl SettingsPopup {
 
     fn apply_general_selected(&mut self) -> Option<SettingsAction> {
         match self.general_selected_idx {
-            // Zen mode shortcut
-            0 => {
-                if self.zen_mode_shortcut != ZenModeShortcut::SpaceZ {
-                    self.zen_mode_shortcut = ZenModeShortcut::SpaceZ;
-                    set_zen_mode_shortcut(ZenModeShortcut::SpaceZ);
-                    return Some(SettingsAction::SettingsChanged);
-                }
-                None
-            }
-            1 => {
-                if self.zen_mode_shortcut != ZenModeShortcut::CtrlZ {
-                    self.zen_mode_shortcut = ZenModeShortcut::CtrlZ;
-                    set_zen_mode_shortcut(ZenModeShortcut::CtrlZ);
-                    return Some(SettingsAction::SettingsChanged);
-                }
-                None
-            }
             // PDF enabled/disabled
-            2 if self.supports_graphics => {
+            0 if self.supports_graphics => {
                 if !is_pdf_enabled() {
                     set_pdf_enabled(true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            3 if self.supports_graphics => {
+            1 if self.supports_graphics => {
                 if is_pdf_enabled() {
                     set_pdf_enabled(false);
                     return Some(SettingsAction::SettingsChanged);
@@ -993,14 +921,14 @@ impl SettingsPopup {
                 None
             }
             // Render mode
-            4 if self.render_mode_available() => {
+            2 if self.render_mode_available() => {
                 if get_pdf_render_mode() != PdfRenderMode::Page {
                     set_pdf_render_mode(PdfRenderMode::Page);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            5 if self.render_mode_available() && self.supports_scroll_mode => {
+            3 if self.render_mode_available() && self.supports_scroll_mode => {
                 if get_pdf_render_mode() != PdfRenderMode::Scroll {
                     set_pdf_render_mode(PdfRenderMode::Scroll);
                     return Some(SettingsAction::SettingsChanged);
@@ -1008,14 +936,14 @@ impl SettingsPopup {
                 None
             }
             // Page layout
-            6 if self.render_mode_available() => {
+            4 if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Single {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Single);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
-            7 if self.render_mode_available() => {
+            5 if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
@@ -1486,87 +1414,107 @@ impl SettingsPopup {
             }
         }
 
-        match key.code {
-            KeyCode::Tab => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+        {
+            use crate::keybindings::action::Action;
+            use crate::keybindings::context::KeyContext;
+            use crate::keybindings::keymap::LookupResult;
+            use crate::keybindings::notation::key_event_to_input;
+
+            let input = key_event_to_input(&key);
+            let km = crate::keybindings::keymap();
+            let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+            prospective.push(input);
+
+            match km.lookup(KeyContext::PopupSettings, &prospective) {
+                LookupResult::Found(action) => {
+                    key_seq.clear();
+                    match action {
+                        Action::NextTab => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.next();
+                            None
+                        }
+                        Action::PrevTab => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.prev();
+                            None
+                        }
+                        Action::MoveLeft => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.prev();
+                            None
+                        }
+                        Action::MoveRight => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            self.current_tab = self.current_tab.next();
+                            None
+                        }
+                        Action::MoveDown => {
+                            self.handle_j();
+                            None
+                        }
+                        Action::MoveUp => {
+                            self.handle_k();
+                            None
+                        }
+                        Action::GoTop => {
+                            self.handle_gg();
+                            None
+                        }
+                        Action::GoBottom => {
+                            self.handle_upper_g();
+                            None
+                        }
+                        Action::ScrollHalfDown => {
+                            self.handle_ctrl_d();
+                            None
+                        }
+                        Action::ScrollHalfUp => {
+                            self.handle_ctrl_u();
+                            None
+                        }
+                        Action::ScrollPageDown => {
+                            self.handle_ctrl_f();
+                            None
+                        }
+                        Action::ScrollPageUp => {
+                            self.handle_ctrl_b();
+                            None
+                        }
+                        Action::Cancel => {
+                            if self.current_tab == SettingsTab::Integrations {
+                                self.save_integrations();
+                            }
+                            Some(SettingsAction::Close)
+                        }
+                        Action::Select => match self.current_tab {
+                            SettingsTab::General => self.apply_general_selected(),
+                            SettingsTab::Themes => self.apply_theme_selected(),
+                            SettingsTab::Integrations => self.apply_integrations_selected(),
+                        },
+                        _ => None,
+                    }
                 }
-                self.current_tab = self.current_tab.next();
-                None
-            }
-            KeyCode::BackTab => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+                LookupResult::Prefix => {
+                    key_seq.push(key);
+                    None
                 }
-                self.current_tab = self.current_tab.prev();
-                None
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
+                LookupResult::NoMatch => {
+                    if !key_seq.is_empty() {
+                        key_seq.clear();
+                        return self.handle_key(key, key_seq);
+                    }
+                    None
                 }
-                self.current_tab = self.current_tab.prev();
-                None
             }
-            KeyCode::Char('l') | KeyCode::Right => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
-                }
-                self.current_tab = self.current_tab.next();
-                None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.handle_j();
-                None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.handle_k();
-                None
-            }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                self.handle_gg();
-                None
-            }
-            KeyCode::Char('G') => {
-                self.handle_upper_g();
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_d();
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_u();
-                None
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::Esc => {
-                if self.current_tab == SettingsTab::Integrations {
-                    self.save_integrations();
-                }
-                Some(SettingsAction::Close)
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => match self.current_tab {
-                SettingsTab::General => self.apply_general_selected(),
-                SettingsTab::Themes => self.apply_theme_selected(),
-                SettingsTab::Integrations => self.apply_integrations_selected(),
-            },
-            _ => None,
         }
     }
 }
@@ -1680,9 +1628,8 @@ mod tests {
                 false,
                 PdfRenderMode::Page,
                 PdfPageLayoutMode::Single,
-                ZenModeShortcut::SpaceZ,
             ),
-            3 // PDF Disabled
+            1 // PDF Disabled
         );
     }
 
@@ -1695,9 +1642,8 @@ mod tests {
                 true,
                 PdfRenderMode::Scroll,
                 PdfPageLayoutMode::Dual,
-                ZenModeShortcut::SpaceZ,
             ),
-            5 // Scroll mode
+            3 // Scroll mode
         );
         assert_eq!(
             SettingsPopup::initial_general_selected_idx_from_state(
@@ -1706,9 +1652,8 @@ mod tests {
                 true,
                 PdfRenderMode::Page,
                 PdfPageLayoutMode::Dual,
-                ZenModeShortcut::SpaceZ,
             ),
-            7 // Dual layout
+            5 // Dual layout
         );
     }
 

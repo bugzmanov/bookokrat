@@ -909,99 +909,120 @@ impl ReadingHistory {
             return self.handle_search_input(key);
         }
 
-        match key.code {
-            KeyCode::Char('/') => {
-                let current_pos = self.active_state().selected().unwrap_or(0);
-                self.search_state.start_search(current_pos);
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
+        let input = key_event_to_input(&key);
+        let km = crate::keybindings::keymap();
+        let mut prospective: Vec<_> = key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(input);
+
+        match km.lookup(KeyContext::PopupHistory, &prospective) {
+            LookupResult::Found(action) => {
+                key_seq.clear();
+                match action {
+                    Action::StartSearch => {
+                        let pos = self.active_state().selected().unwrap_or(0);
+                        self.search_state.start_search(pos);
+                        None
+                    }
+                    Action::NextTab | Action::PrevTab => {
+                        self.switch_tab();
+                        None
+                    }
+                    Action::MoveDown => {
+                        self.handle_j();
+                        None
+                    }
+                    Action::MoveUp => {
+                        self.handle_k();
+                        None
+                    }
+                    Action::MoveLeft => {
+                        self.handle_h();
+                        None
+                    }
+                    Action::MoveRight => {
+                        self.handle_l();
+                        None
+                    }
+                    Action::GoTop => {
+                        self.handle_gg();
+                        None
+                    }
+                    Action::GoBottom => {
+                        self.handle_upper_g();
+                        None
+                    }
+                    Action::ScrollHalfDown => {
+                        self.handle_ctrl_d();
+                        None
+                    }
+                    Action::ScrollHalfUp => {
+                        self.handle_ctrl_u();
+                        None
+                    }
+                    Action::ScrollPageDown => {
+                        self.handle_ctrl_f();
+                        None
+                    }
+                    Action::ScrollPageUp => {
+                        self.handle_ctrl_b();
+                        None
+                    }
+                    Action::DeleteEntry => {
+                        if let Some(item) = self.selected_item() {
+                            let title = item.title.clone();
+                            self.confirm_delete = true;
+                            self.hud_message = Some(crate::widget::hud_message::HudMessage::new(
+                                format!("Delete \"{}\"? y/n", truncate_title(&title, 40)),
+                                std::time::Duration::from_secs(30),
+                                crate::widget::hud_message::HudMode::Normal,
+                            ));
+                        }
+                        None
+                    }
+                    Action::CopyEntry => {
+                        self.copy_path();
+                        None
+                    }
+                    Action::Cancel => {
+                        if self.search_state.mode == SearchMode::NavigationMode {
+                            self.search_state.exit_search();
+                            None
+                        } else {
+                            Some(ReadingHistoryAction::Close)
+                        }
+                    }
+                    Action::Select => self.selected_action(),
+                    Action::NextSearchMatch => {
+                        if let Some(idx) = self.search_state.next_match() {
+                            self.active_state_mut().select(Some(idx));
+                        }
+                        None
+                    }
+                    Action::PrevSearchMatch => {
+                        if let Some(idx) = self.search_state.previous_match() {
+                            self.active_state_mut().select(Some(idx));
+                        }
+                        None
+                    }
+                    _ => None,
+                }
+            }
+            LookupResult::Prefix => {
+                key_seq.push(key);
                 None
             }
-            KeyCode::Char('n') if self.search_state.mode == SearchMode::NavigationMode => {
-                if let Some(item_idx) = self.search_state.next_match() {
-                    self.active_state_mut().select(Some(item_idx));
+            LookupResult::NoMatch => {
+                if !key_seq.is_empty() {
+                    key_seq.clear();
+                    return self.handle_key(key, key_seq);
                 }
                 None
             }
-            KeyCode::Char('N') if self.search_state.mode == SearchMode::NavigationMode => {
-                if let Some(item_idx) = self.search_state.previous_match() {
-                    self.active_state_mut().select(Some(item_idx));
-                }
-                None
-            }
-            KeyCode::Esc if self.search_state.mode == SearchMode::NavigationMode => {
-                self.search_state.exit_search();
-                None
-            }
-            KeyCode::Tab | KeyCode::BackTab => {
-                self.switch_tab();
-                None
-            }
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.handle_j();
-                None
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.handle_k();
-                None
-            }
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.handle_h();
-                None
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.handle_l();
-                None
-            }
-            KeyCode::Char('g') if key_seq.handle_key('g') == "gg" => {
-                self.handle_gg();
-                None
-            }
-            KeyCode::Char('G') => {
-                self.handle_upper_g();
-                None
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_d();
-                None
-            }
-            KeyCode::Char('d') if key_seq.handle_key('d') == "dd" => {
-                if let Some(item) = self.selected_item() {
-                    let title = item.title.clone();
-                    self.confirm_delete = true;
-                    self.hud_message = Some(crate::widget::hud_message::HudMessage::new(
-                        format!("Delete \"{}\"? y/n", truncate_title(&title, 40)),
-                        std::time::Duration::from_secs(30),
-                        crate::widget::hud_message::HudMode::Normal,
-                    ));
-                }
-                None
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_u();
-                None
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::PageDown => {
-                self.handle_ctrl_f();
-                None
-            }
-            KeyCode::PageUp => {
-                self.handle_ctrl_b();
-                None
-            }
-            KeyCode::Char('c') | KeyCode::Char('C') => {
-                self.copy_path();
-                None
-            }
-            KeyCode::Esc => Some(ReadingHistoryAction::Close),
-            KeyCode::Enter => self.selected_action(),
-            _ => None,
         }
     }
 }

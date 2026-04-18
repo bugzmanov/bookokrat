@@ -37,13 +37,18 @@ fn create_test_app_isolated() -> (App, TempDir) {
     bookokrat::settings::set_justify_text(false);
     bookokrat::settings::set_nav_panel_width(None);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
-    let app = App::new_with_config(
+    let mut app = App::new_with_config(
         Some("tests/testdata"),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
     );
+    // Force graphics support so PDFs show up regardless of sandbox env vars.
+    app.book_manager.supports_graphics = true;
+    app.navigation_panel
+        .book_list
+        .set_books(app.book_manager.get_books());
     (app, comments_dir)
 }
 
