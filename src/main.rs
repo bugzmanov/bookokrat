@@ -185,10 +185,11 @@ fn main() -> Result<()> {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
-    // Layer user's `keybindings.yaml` overrides on top of the built-in defaults.
+    // Layer user's keybindings.toml overrides on top of the built-in defaults.
     // Tests deliberately skip this so they stay hermetic with respect to
-    // `~/.config/bookokrat/`.
-    bookokrat::keybindings::reload_keymap();
+    // `~/.config/bookokrat/`. Any issues are surfaced to the app below so it
+    // can open the error popup on first draw.
+    let keybinding_load_errors = bookokrat::keybindings::reload_keymap();
 
     // Resolve library directory from file argument or CWD
     let library_dir = args
@@ -380,6 +381,9 @@ fn main() -> Result<()> {
     );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);
+    if !keybinding_load_errors.is_empty() {
+        app.open_keybinding_errors_popup(keybinding_load_errors);
+    }
     if args.continue_reading {
         if let Some(recent) = find_most_recent_book() {
             let result = app.open_book_for_reading_with_source_bookmarks(

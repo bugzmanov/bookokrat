@@ -135,6 +135,9 @@ pub enum Action {
     // === Context-dependent cancel/escape ===
     Cancel,
 
+    // === Keybindings config ===
+    ReloadKeybindings,
+
     // === Popup tab switching ===
     NextTab,
     PrevTab,
@@ -248,6 +251,7 @@ impl Action {
         Action::ExportComments,
         Action::EnterCommentNav,
         Action::Cancel,
+        Action::ReloadKeybindings,
         Action::NextTab,
         Action::PrevTab,
         Action::Unknown,
@@ -392,6 +396,9 @@ impl Action {
             // Context-dependent
             Cancel => "Close popup / clear selection / exit mode",
 
+            // Keybindings config
+            ReloadKeybindings => "Reload keybindings.toml (shows a modal with errors if any)",
+
             // Popup tab switching
             NextTab => "Switch to the next tab / pane",
             PrevTab => "Switch to the previous tab / pane",
@@ -475,7 +482,7 @@ mod tests {
                 ScrollDown | ScrollUp => a,
                 ToggleSortOrder | CollapseAll | ExpandAll | Collapse | Expand | SwitchNavMode => a,
                 DeleteEntry | CopyEntry | ExportComments | EnterCommentNav => a,
-                Cancel | NextTab | PrevTab => a,
+                Cancel | ReloadKeybindings | NextTab | PrevTab => a,
             }
         }
 

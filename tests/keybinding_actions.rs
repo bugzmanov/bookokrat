@@ -188,6 +188,11 @@ binding_tests! {
             // but still consumes the key — just assert the app didn't quit.
             if cfg!(unix) { app.pending_suspend } else { true }
         };
+    // Ctrl+R reloads keybindings; with no user config, reload is a no-op but the
+    // action still dispatches successfully (notification fires, no popup).
+    global_ctrl_r: KeyContext::Global, "<C-r>",
+        setup = |app, _dir| { open_book(&mut app); },
+        check = |app| app.has_notification();
     // Space+t opens settings popup on Themes tab specifically
     global_space_t: KeyContext::Global, "<Space>t",
         setup = |app, _dir| { open_book(&mut app); },

@@ -131,6 +131,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<C-l>" => Action::ForceRedraw);
     bind!(ctx, "<C-q>" => Action::Suspend);
+    bind!(ctx, "<C-r>" => Action::ReloadKeybindings);
     bind!(ctx, "<C-s>" => Action::OpenSettings);
     bind!(ctx, "<C-z>" => Action::ToggleZenMode);
     bind!(ctx, "<lt>" => Action::ShrinkNavPanel);

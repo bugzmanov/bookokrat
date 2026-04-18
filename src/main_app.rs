@@ -338,6 +338,7 @@ pub struct App {
     jump_list: JumpList,
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
+    keybinding_errors_popup: Option<crate::widget::keybinding_errors_popup::KeybindingErrorsPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
     lookup_popup: Option<LookupPopup>,
@@ -459,6 +460,7 @@ pub enum PopupWindow {
     CommentsViewer,
     Settings,
     Lookup,
+    KeybindingErrors,
 }
 
 impl Default for App {
@@ -705,6 +707,7 @@ impl App {
             jump_list: JumpList::new(20),
             book_search: None,
             help_popup: None,
+            keybinding_errors_popup: None,
             comments_viewer: None,
             settings_popup: None,
             lookup_popup: None,
@@ -3606,6 +3609,22 @@ impl App {
 
         if matches!(
             self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::KeybindingErrors)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut popup) = self.keybinding_errors_popup {
+                popup.render(f, f.area());
+            }
+        }
+
+        if matches!(
+            self.focused_panel,
             FocusedPanel::Popup(PopupWindow::CommentsViewer)
         ) {
             let dim_block = Block::default().style(
@@ -3944,6 +3963,10 @@ impl App {
                     let gtgb = Self::key_pair(ctx, Action::GoTop, Action::GoBottom);
                     format!("{jk}: Scroll | {half}: Half-page | {gtgb}: Top/Bottom | {esc}: Close")
                 }
+                FocusedPanel::Popup(PopupWindow::KeybindingErrors) => {
+                    let reload = Self::key_for(KeyContext::Global, Action::ReloadKeybindings);
+                    format!("{reload}: Reload | {esc}: Close")
+                }
             };
             help_text
         };
@@ -4035,6 +4058,24 @@ impl App {
         self.test_mode = enabled;
     }
 
+    /// Open the modal listing keybinding-config errors. Used at startup when
+    /// `reload_keymap()` reports issues in `keybindings.toml`.
+    pub fn open_keybinding_errors_popup(
+        &mut self,
+        errors: Vec<crate::keybindings::config::LoadError>,
+    ) {
+        if errors.is_empty() {
+            return;
+        }
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+        self.keybinding_errors_popup = Some(
+            crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors),
+        );
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
+    }
+
     pub fn show_all_libraries_history(&mut self) {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
@@ -4052,50 +4093,75 @@ impl App {
         use crate::keybindings::notation::key_event_to_input;
 
         let input = key_event_to_input(&key);
-        let km = crate::keybindings::keymap();
 
-        // If key_sequence has accumulated keys, check if they're part of a Global prefix
-        if !self.key_sequence.is_empty() {
-            let accumulated: Vec<_> = self
-                .key_sequence
-                .keys()
-                .iter()
-                .map(key_event_to_input)
-                .collect();
-
-            if km.is_prefix(KeyContext::Global, &accumulated) {
-                let mut prospective = accumulated;
-                prospective.push(input.clone());
-
-                match km.lookup(KeyContext::Global, &prospective) {
-                    LookupResult::Found(action) => {
-                        self.key_sequence.clear();
-                        return self.dispatch_global_action(action);
-                    }
-                    LookupResult::Prefix => {
-                        self.key_sequence.push(key);
-                        return true;
-                    }
-                    LookupResult::NoMatch => {
-                        // Was a global prefix but this key doesn't continue it.
-                        // #7: Clear sequence and let the key fall through to the
-                        // focused context (matching old behavior).
-                        self.key_sequence.clear();
-                    }
-                }
-            }
-            // Accumulated keys are NOT a global prefix — they belong to
-            // a context-specific handler. Fall through to single-key check.
+        // Resolve inside a short-lived scope so the read guard is released
+        // BEFORE dispatch runs. Actions like ReloadKeybindings need the write
+        // lock; holding the read guard across dispatch would deadlock.
+        enum Resolved {
+            Found(crate::keybindings::action::Action),
+            Prefix,
+            NoMatch,
         }
 
-        // Try the single new key
-        match km.lookup(KeyContext::Global, &[input]) {
-            LookupResult::Found(action) => self.dispatch_global_action(action),
-            LookupResult::Prefix => {
+        let resolved = {
+            let km = crate::keybindings::keymap();
+
+            if !self.key_sequence.is_empty() {
+                let accumulated: Vec<_> = self
+                    .key_sequence
+                    .keys()
+                    .iter()
+                    .map(key_event_to_input)
+                    .collect();
+
+                if km.is_prefix(KeyContext::Global, &accumulated) {
+                    let mut prospective = accumulated;
+                    prospective.push(input.clone());
+
+                    match km.lookup(KeyContext::Global, &prospective) {
+                        LookupResult::Found(action) => {
+                            self.key_sequence.clear();
+                            Resolved::Found(action)
+                        }
+                        LookupResult::Prefix => {
+                            self.key_sequence.push(key);
+                            return true;
+                        }
+                        LookupResult::NoMatch => {
+                            // Was a global prefix but this key doesn't continue it.
+                            // #7: Clear sequence and let the key fall through to the
+                            // focused context (matching old behavior).
+                            self.key_sequence.clear();
+                            match km.lookup(KeyContext::Global, &[input]) {
+                                LookupResult::Found(a) => Resolved::Found(a),
+                                LookupResult::Prefix => Resolved::Prefix,
+                                LookupResult::NoMatch => Resolved::NoMatch,
+                            }
+                        }
+                    }
+                } else {
+                    match km.lookup(KeyContext::Global, &[input]) {
+                        LookupResult::Found(a) => Resolved::Found(a),
+                        LookupResult::Prefix => Resolved::Prefix,
+                        LookupResult::NoMatch => Resolved::NoMatch,
+                    }
+                }
+            } else {
+                match km.lookup(KeyContext::Global, &[input]) {
+                    LookupResult::Found(a) => Resolved::Found(a),
+                    LookupResult::Prefix => Resolved::Prefix,
+                    LookupResult::NoMatch => Resolved::NoMatch,
+                }
+            }
+        };
+
+        match resolved {
+            Resolved::Found(action) => self.dispatch_global_action(action),
+            Resolved::Prefix => {
                 self.key_sequence.push(key);
                 true
             }
-            LookupResult::NoMatch => false,
+            Resolved::NoMatch => false,
         }
     }
 
@@ -4115,6 +4181,22 @@ impl App {
             }
             Action::ForceRedraw => {
                 self.pending_force_redraw = true;
+                true
+            }
+            Action::ReloadKeybindings => {
+                let errors = crate::keybindings::reload_keymap();
+                if errors.is_empty() {
+                    self.notifications.show_info("Keybindings reloaded.".to_string());
+                } else {
+                    if let FocusedPanel::Main(panel) = self.focused_panel {
+                        self.previous_main_panel = panel;
+                    }
+                    self.keybinding_errors_popup =
+                        Some(crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(
+                            errors,
+                        ));
+                    self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
+                }
                 true
             }
             Action::OpenSettings => {
@@ -5037,6 +5119,28 @@ impl App {
             if let Some(HelpPopupAction::Close) = action {
                 self.close_popup_to_previous();
                 self.help_popup = None;
+            }
+            return None;
+        }
+
+        // Keybinding errors popup: simple nav + Esc to close.
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::KeybindingErrors) {
+            use crossterm::event::KeyCode;
+            use crossterm::event::KeyModifiers;
+            if let Some(ref mut popup) = self.keybinding_errors_popup {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
+                        self.close_popup_to_previous();
+                        self.keybinding_errors_popup = None;
+                    }
+                    (KeyCode::Char('j'), _) | (KeyCode::Down, _) => popup.scroll_down(),
+                    (KeyCode::Char('k'), _) | (KeyCode::Up, _) => popup.scroll_up(),
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
+                        popup.scroll_half_page_down(20)
+                    }
+                    (KeyCode::Char('u'), KeyModifiers::CONTROL) => popup.scroll_half_page_up(20),
+                    _ => {}
+                }
             }
             return None;
         }

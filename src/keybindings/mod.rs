@@ -21,10 +21,13 @@ pub fn keymap() -> RwLockReadGuard<'static, Keymap> {
     KEYMAP.read().unwrap()
 }
 
-/// Reload the keymap from config (defaults + user overrides).
-/// Call this from `main.rs` at startup and when the user's config file changes.
-pub fn reload_keymap() {
+/// Reload the keymap from config (defaults + user overrides). Returns any
+/// issues discovered while parsing the user's file so callers can surface
+/// them in the UI.
+pub fn reload_keymap() -> Vec<config::LoadError> {
+    let (new_km, errors) = config::load_keymap();
     if let Ok(mut km) = KEYMAP.write() {
-        *km = config::load_keymap();
+        *km = new_km;
     }
+    errors
 }

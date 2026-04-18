@@ -11,20 +11,54 @@ use super::notation::{format_key_binding, parse_key_binding};
 
 const KEYBINDINGS_FILENAME: &str = "keybindings.toml";
 
-/// Load the keymap: defaults + user overrides from config file.
-pub fn load_keymap() -> Keymap {
+/// A single issue encountered while loading `keybindings.toml`.
+///
+/// Carries a best-effort line number (1-indexed) so the UI can render each
+/// error next to the offending line. `line` is `None` only when we genuinely
+/// can't locate the source (e.g., a missing file or a read error before any
+/// content is parsed).
+#[derive(Debug, Clone)]
+pub struct LoadError {
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+impl LoadError {
+    fn with_line(line: usize, message: impl Into<String>) -> Self {
+        Self {
+            line: Some(line),
+            message: message.into(),
+        }
+    }
+
+    fn no_line(message: impl Into<String>) -> Self {
+        Self {
+            line: None,
+            message: message.into(),
+        }
+    }
+}
+
+/// Load the keymap: defaults + user overrides. Returns any issues alongside
+/// the resulting keymap so callers can surface them in the UI.
+pub fn load_keymap() -> (Keymap, Vec<LoadError>) {
     let mut keymap = default_keymap();
+    let mut errors = Vec::new();
 
     if let Some(config_path) = keybindings_config_path() {
         if config_path.exists() {
             info!("Loading keybindings from {:?}", config_path);
-            match load_and_apply(&config_path, &mut keymap) {
-                Ok(count) => {
+            match std::fs::read_to_string(&config_path) {
+                Ok(content) => {
+                    let count = apply_toml(&content, &mut keymap, &mut errors);
                     info!("Applied {count} keybinding overrides from config");
                 }
                 Err(e) => {
-                    error!("Failed to load keybindings config: {e}");
-                    info!("Using default keybindings");
+                    error!("Failed to read keybindings config: {e}");
+                    errors.push(LoadError::no_line(format!(
+                        "Failed to read {}: {e}",
+                        config_path.display()
+                    )));
                     keymap = default_keymap();
                 }
             }
@@ -33,34 +67,46 @@ pub fn load_keymap() -> Keymap {
         }
     }
 
-    keymap
+    (keymap, errors)
 }
 
 fn keybindings_config_path() -> Option<PathBuf> {
     crate::settings::preferred_config_dir().map(|dir| dir.join(KEYBINDINGS_FILENAME))
 }
 
-fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    apply_toml(&content, keymap).map_err(|e| format!("invalid TOML in {}: {e}", path.display()))
-}
-
-/// Parse TOML content and apply overrides to the keymap.
+/// Parse TOML content and apply overrides to the keymap. Returns the number
+/// of bindings successfully applied; pushes `LoadError`s for each issue.
 ///
 /// TOML's dotted keys and nested tables are equivalent, so users may write
 /// `popup.help."?" = "cancel"` (flat, one-line) or
 /// `[popup.help]` + `"?" = "cancel"` (nested block) interchangeably.
 /// Both produce the same parsed tree.
-fn apply_toml(content: &str, keymap: &mut Keymap) -> Result<usize, String> {
-    let root: toml::Table = content
-        .parse()
-        .map_err(|e: toml::de::Error| e.to_string())?;
+fn apply_toml(content: &str, keymap: &mut Keymap, errors: &mut Vec<LoadError>) -> usize {
+    let root: toml::Table = match content.parse() {
+        Ok(table) => table,
+        Err(e) => {
+            let line = e
+                .span()
+                .map(|s| byte_to_line(content, s.start))
+                .unwrap_or(1);
+            errors.push(LoadError::with_line(
+                line,
+                // toml's Display includes a multi-line caret diagram; take
+                // just the first line which is the plain message.
+                e.to_string()
+                    .lines()
+                    .next()
+                    .unwrap_or("invalid TOML")
+                    .to_string(),
+            ));
+            return 0;
+        }
+    };
 
     // Walk the tree, flattening each "leaf context" (a sub-table whose
     // immediate children are all strings) to its dotted-path name.
     let mut by_context: HashMap<String, HashMap<String, String>> = HashMap::new();
-    walk_toml(&root, String::new(), &mut by_context);
+    walk_toml(&root, String::new(), &mut by_context, content, errors);
 
     // Apply groups (all/normal/popup) first so specific contexts override.
     let (mut groups, mut specifics): (Vec<_>, Vec<_>) = by_context
@@ -77,28 +123,29 @@ fn apply_toml(content: &str, keymap: &mut Keymap) -> Result<usize, String> {
     let mut total = 0;
     for (key, bindings) in groups.into_iter().chain(specifics.into_iter()) {
         let Some(group) = super::context::resolve_config_key(key) else {
-            warn!("Unknown context '{key}' in keybindings config, skipping");
+            errors.push(LoadError::with_line(
+                find_context_line(content, key).unwrap_or(1),
+                format!("unknown context '{key}' (valid: global, nav, content, epub_normal, pdf, pdf_normal, popup.help, popup.history, popup.search, popup.stats, popup.comments, popup.settings, or groups all/normal/popup)"),
+            ));
             continue;
         };
         for ctx_id in super::context::group_contexts(&group) {
-            total += apply_context_overrides(keymap, ctx_id, bindings);
+            total += apply_context_overrides(keymap, ctx_id, bindings, content, key, errors);
         }
     }
-    Ok(total)
+    total
 }
 
 /// Recursively walk a TOML table, routing each string-leaf to the context
 /// identified by its dotted path and each nested sub-table to the caller.
-///
-/// If a single table has both string children (bindings) and table children
-/// (sub-contexts), the string children attach to the current path and the
-/// sub-tables recurse with extended paths. Non-string, non-table values
-/// (numbers, arrays, etc.) are silently ignored — they can't express a
-/// valid binding.
+/// Non-string, non-table values become `LoadError`s since they can't express
+/// a valid binding.
 fn walk_toml(
     table: &toml::Table,
     prefix: String,
     out: &mut HashMap<String, HashMap<String, String>>,
+    content: &str,
+    errors: &mut Vec<LoadError>,
 ) {
     let mut local: HashMap<String, String> = HashMap::new();
     for (k, v) in table {
@@ -112,19 +159,94 @@ fn walk_toml(
                 } else {
                     format!("{prefix}.{k}")
                 };
-                walk_toml(inner, sub, out);
+                walk_toml(inner, sub, out, content, errors);
             }
             _ => {
-                warn!(
-                    "ignoring non-string binding value at {}.{k} in keybindings config",
-                    prefix
-                );
+                let path = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                errors.push(LoadError::with_line(
+                    find_binding_line(content, &prefix, k).unwrap_or(1),
+                    format!("{path}: binding value must be a string (got {})", type_name(v)),
+                ));
             }
         }
     }
     if !prefix.is_empty() && !local.is_empty() {
         out.entry(prefix).or_default().extend(local);
     }
+}
+
+fn type_name(v: &toml::Value) -> &'static str {
+    match v {
+        toml::Value::String(_) => "string",
+        toml::Value::Integer(_) => "integer",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "boolean",
+        toml::Value::Array(_) => "array",
+        toml::Value::Datetime(_) => "datetime",
+        toml::Value::Table(_) => "table",
+    }
+}
+
+/// Byte offset → 1-indexed line number.
+fn byte_to_line(content: &str, byte: usize) -> usize {
+    content[..byte.min(content.len())].matches('\n').count() + 1
+}
+
+/// Best-effort line lookup for a specific binding's assignment. Tries the
+/// flat form `<context>."<key>"` first, then the grouped form where `<key>`
+/// appears after a `[<context>]` section header.
+fn find_binding_line(content: &str, context: &str, key: &str) -> Option<usize> {
+    let flat_needle = format!("{context}.{key}");
+    for (i, line) in content.lines().enumerate() {
+        if line.contains(&flat_needle) {
+            return Some(i + 1);
+        }
+    }
+    // Also try with quoted context (e.g., user wrote `"popup.help"."?"`)
+    let quoted_flat = format!("\"{context}\".{key}");
+    for (i, line) in content.lines().enumerate() {
+        if line.contains(&quoted_flat) {
+            return Some(i + 1);
+        }
+    }
+    // Grouped form: scan for `[context]`, then the key until the next section.
+    let section_open = format!("[{context}]");
+    let mut in_section = false;
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == section_open {
+            in_section = true;
+            continue;
+        }
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_section = false;
+            continue;
+        }
+        if in_section && line.contains(key) {
+            return Some(i + 1);
+        }
+    }
+    None
+}
+
+/// Best-effort line lookup for a context section header or dotted prefix.
+fn find_context_line(content: &str, context: &str) -> Option<usize> {
+    let section_open = format!("[{context}]");
+    let dotted_prefix = format!("{context}.");
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed == section_open {
+            return Some(i + 1);
+        }
+        if line.contains(&dotted_prefix) {
+            return Some(i + 1);
+        }
+    }
+    None
 }
 
 /// Format the default keymap as flat, greppable TOML.
@@ -298,6 +420,9 @@ fn apply_context_overrides(
     keymap: &mut Keymap,
     context: KeyContext,
     overrides: &HashMap<String, String>,
+    content: &str,
+    config_key: &str,
+    errors: &mut Vec<LoadError>,
 ) -> usize {
     let mut applied = 0;
     let ctx = keymap.context_mut(context);
@@ -306,11 +431,11 @@ fn apply_context_overrides(
         let binding = match parse_key_binding(notation) {
             Ok(b) => b,
             Err(e) => {
-                warn!(
-                    "Invalid key notation '{}' in context '{}': {e}",
-                    notation,
-                    context.config_key()
-                );
+                let quoted = format!("\"{notation}\"");
+                errors.push(LoadError::with_line(
+                    find_binding_line(content, config_key, &quoted).unwrap_or(1),
+                    format!("{config_key}.\"{notation}\": invalid key notation — {e}"),
+                ));
                 continue;
             }
         };
@@ -318,22 +443,23 @@ fn apply_context_overrides(
         let action: Action = match serde_yaml::from_str(&format!("\"{}\"", action_str)) {
             Ok(a) => a,
             Err(e) => {
-                warn!(
-                    "Invalid action '{}' in context '{}': {e}",
-                    action_str,
-                    context.config_key()
-                );
+                let quoted = format!("\"{notation}\"");
+                errors.push(LoadError::with_line(
+                    find_binding_line(content, config_key, &quoted).unwrap_or(1),
+                    format!("{config_key}.\"{notation}\": cannot parse action \"{action_str}\" — {e}"),
+                ));
                 continue;
             }
         };
 
         if action == Action::Unknown {
-            warn!(
-                "Unknown action '{}' for key '{}' in context '{}'",
-                action_str,
-                notation,
-                context.config_key()
-            );
+            let quoted = format!("\"{notation}\"");
+            errors.push(LoadError::with_line(
+                find_binding_line(content, config_key, &quoted).unwrap_or(1),
+                format!(
+                    "{config_key}.\"{notation}\": unknown action \"{action_str}\" — run `bookokrat --print-default-keybindings` for the list"
+                ),
+            ));
         }
 
         if action == Action::Nop {
@@ -357,17 +483,25 @@ mod tests {
         keymap.lookup(context, binding.keys())
     }
 
-    fn make_keymap_with_toml(src: &str) -> Result<Keymap, String> {
+    fn make_keymap_with_toml(src: &str) -> Keymap {
         let mut keymap = default_keymap();
-        apply_toml(src, &mut keymap)?;
-        Ok(keymap)
+        let mut errors = Vec::new();
+        apply_toml(src, &mut keymap, &mut errors);
+        keymap
+    }
+
+    fn load_errors(src: &str) -> Vec<LoadError> {
+        let mut keymap = default_keymap();
+        let mut errors = Vec::new();
+        apply_toml(src, &mut keymap, &mut errors);
+        errors
     }
 
     // === Valid TOML parsing ===
 
     #[test]
     fn empty_toml_uses_defaults() {
-        let keymap = make_keymap_with_toml("").unwrap();
+        let keymap = make_keymap_with_toml("");
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
@@ -380,7 +514,7 @@ mod tests {
 [content]
 "j" = "scroll_up"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "j"),
             LookupResult::Found(Action::ScrollUp)
@@ -396,7 +530,7 @@ mod tests {
         // Same override as `override_single_context`, written as a single
         // dotted-key line. TOML treats these as equivalent.
         let src = r#"content."j" = "scroll_up""#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "j"),
             LookupResult::Found(Action::ScrollUp)
@@ -413,7 +547,7 @@ content."j" = "scroll_up"
 [nav]
 "x" = "quit"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "j"),
             LookupResult::Found(Action::ScrollUp)
@@ -432,7 +566,7 @@ content."j" = "scroll_up"
 [nav]
 "j" = "move_up"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::Quit)
@@ -451,7 +585,7 @@ content."j" = "scroll_up"
 [popup.help]
 "q" = "quit"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::PopupHelp, "q"),
             LookupResult::Found(Action::Quit)
@@ -471,7 +605,7 @@ content."j" = "scroll_up"
 [all]
 "<C-n>" = "move_down"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::Navigation, "<C-n>"),
             LookupResult::Found(Action::MoveDown)
@@ -501,7 +635,7 @@ content."j" = "scroll_up"
 [normal]
 "x" = "quit"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubNormal, "x"),
             LookupResult::Found(Action::Quit)
@@ -522,7 +656,7 @@ content."j" = "scroll_up"
 [popup]
 "x" = "quit"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::PopupHelp, "x"),
             LookupResult::Found(Action::Quit)
@@ -549,7 +683,7 @@ content."j" = "scroll_up"
 [content]
 "x" = "scroll_down"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "x"),
             LookupResult::Found(Action::ScrollDown)
@@ -568,7 +702,7 @@ content."j" = "scroll_up"
 [content]
 "p" = "nop"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "p"),
             LookupResult::NoMatch
@@ -581,7 +715,7 @@ content."j" = "scroll_up"
 [nav]
 "<C-n>" = "move_down"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::Navigation, "<C-n>"),
             LookupResult::Found(Action::MoveDown)
@@ -598,7 +732,7 @@ content."j" = "scroll_up"
 [content]
 "j" = "scroll_up"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::Navigation, "j"),
             LookupResult::Found(Action::MoveDown)
@@ -614,7 +748,7 @@ content."j" = "scroll_up"
 "<C-" = "scroll_down"
 "k" = "scroll_up"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "k"),
             LookupResult::Found(Action::ScrollUp)
@@ -629,7 +763,7 @@ content."j" = "scroll_up"
 [content]
 "k" = "scroll_up"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "k"),
             LookupResult::Found(Action::ScrollUp)
@@ -642,7 +776,7 @@ content."j" = "scroll_up"
 [content]
 "j" = "future_action_v2"
 "#;
-        let keymap = make_keymap_with_toml(src).unwrap();
+        let keymap = make_keymap_with_toml(src);
         assert_eq!(
             lookup(&keymap, KeyContext::EpubContent, "j"),
             LookupResult::Found(Action::Unknown)
@@ -650,14 +784,79 @@ content."j" = "scroll_up"
     }
 
     #[test]
-    fn invalid_toml_returns_error() {
+    fn invalid_toml_returns_error_with_line() {
         let src = "this is not = [valid toml";
-        assert!(make_keymap_with_toml(src).is_err());
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(1));
+    }
+
+    #[test]
+    fn unknown_action_reports_line() {
+        let src = "\
+[content]
+\"j\" = \"scroll_up\"
+\"k\" = \"totally_fake_action\"
+";
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(3));
+        assert!(
+            errors[0].message.contains("totally_fake_action"),
+            "message = {:?}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn invalid_notation_reports_line() {
+        let src = "\
+[content]
+\"<C-\" = \"scroll_down\"
+";
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(2));
+    }
+
+    #[test]
+    fn unknown_context_reports_line() {
+        let src = "\
+[garbage]
+\"x\" = \"quit\"
+";
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(1));
+        assert!(errors[0].message.contains("garbage"));
+    }
+
+    #[test]
+    fn non_string_value_reports_line() {
+        let src = "\
+[content]
+\"j\" = 42
+";
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(2));
+    }
+
+    #[test]
+    fn flat_form_errors_report_line() {
+        let src = "\
+content.\"k\" = \"scroll_up\"
+content.\"j\" = \"bad_action_name\"
+";
+        let errors = load_errors(src);
+        assert_eq!(errors.len(), 1, "expected one error, got {errors:?}");
+        assert_eq!(errors[0].line, Some(2));
     }
 
     #[test]
     fn load_keymap_returns_defaults_when_no_file() {
-        let keymap = load_keymap();
+        let (keymap, errors) = load_keymap();
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
@@ -668,7 +867,7 @@ content."j" = "scroll_up"
     fn user_stub_parses_as_empty_overrides() {
         // The first-launch stub is comments-only TOML. It must parse cleanly
         // (yielding zero overrides) so untouched users still get every default.
-        let keymap = make_keymap_with_toml(USER_STUB).expect("stub must be valid TOML");
+        let keymap = make_keymap_with_toml(USER_STUB);
         let defaults = default_keymap();
         let probes = [
             (KeyContext::Global, "?"),
@@ -692,7 +891,7 @@ content."j" = "scroll_up"
         // printer has drifted (wrong notation, wrong action name, etc.).
         let toml_src = print_default_keybindings();
         let reloaded =
-            make_keymap_with_toml(&toml_src).expect("printed reference must be valid config TOML");
+            make_keymap_with_toml(&toml_src);
         assert_keymaps_equal(&reloaded, &default_keymap());
     }
 
@@ -701,8 +900,7 @@ content."j" = "scroll_up"
         // Same invariant as the flat printer — grouped output must be valid
         // TOML and reload to exactly the defaults.
         let toml_src = print_default_keybindings_grouped();
-        let reloaded = make_keymap_with_toml(&toml_src)
-            .expect("grouped printed reference must be valid config TOML");
+        let reloaded = make_keymap_with_toml(&toml_src);
         assert_keymaps_equal(&reloaded, &default_keymap());
     }
 
