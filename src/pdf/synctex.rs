@@ -569,12 +569,20 @@ impl SyncTexListener {
         let shutdown_clone = shutdown.clone();
         let path_clone = socket_path.clone();
 
+        // Rendezvous so start() doesn't return until the listener thread is
+        // scheduled and about to enter accept(); prevents a connect-before-accept
+        // race that surfaces as transient ENOTCONN on macOS.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<()>(0);
+
         let join_handle = std::thread::Builder::new()
             .name("synctex-listener".into())
             .spawn(move || {
+                let _ = ready_tx.send(());
                 Self::listener_loop(listener, tx, shutdown_clone, &path_clone);
             })
             .with_context(|| "Failed to spawn synctex listener thread")?;
+
+        let _ = ready_rx.recv();
 
         log::info!("SyncTeX listener started on {}", socket_path.display());
 
