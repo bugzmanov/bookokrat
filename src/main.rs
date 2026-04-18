@@ -148,6 +148,15 @@ fn main() -> Result<()> {
 
     let args = cli::Cli::parse();
 
+    // Print defaults and exit — no TUI setup needed.
+    if args.print_default_keybindings {
+        print!(
+            "{}",
+            bookokrat::keybindings::config::print_default_keybindings()
+        );
+        return Ok(());
+    }
+
     // Handle subcommands before TUI setup
     if let Some(ref command) = args.command {
         match command {

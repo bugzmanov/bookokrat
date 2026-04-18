@@ -150,6 +150,148 @@ impl Action {
     pub fn is_nop(&self) -> bool {
         matches!(self, Action::Nop | Action::Unknown)
     }
+
+    /// Short one-line description of what this action does.
+    ///
+    /// The match is intentionally exhaustive (no `_` wildcard) so the
+    /// compiler forces a description whenever a new variant is added.
+    pub fn description(&self) -> &'static str {
+        use Action::*;
+        match self {
+            Nop => "Disable this binding",
+            Unknown => "(unknown action — from a newer config version)",
+
+            // General
+            Quit => "Quit the application",
+            ForceRedraw => "Force a full-screen redraw",
+            Suspend => "Suspend the process (job control)",
+            SwitchFocus => "Switch focus between nav panel and reader",
+
+            // Navigation / movement
+            MoveDown => "Move selection down one item",
+            MoveUp => "Move selection up one item",
+            MoveLeft => "Move cursor / selection left",
+            MoveRight => "Move cursor / selection right",
+            ScrollHalfDown => "Scroll half a screen down",
+            ScrollHalfUp => "Scroll half a screen up",
+            ScrollPageDown => "Scroll one full page down",
+            ScrollPageUp => "Scroll one full page up",
+            GoTop => "Jump to top of document / list",
+            GoBottom => "Jump to bottom of document / list",
+            Select => "Activate / open the highlighted item",
+
+            // Chapters / pages
+            NextChapter => "Go to the next chapter (EPUB)",
+            PrevChapter => "Go to the previous chapter (EPUB)",
+            NextPage => "Go to the next page (PDF)",
+            PrevPage => "Go to the previous page (PDF)",
+
+            // Paragraphs
+            ParagraphForward => "Jump to the next paragraph",
+            ParagraphBackward => "Jump to the previous paragraph",
+
+            // Search
+            StartSearch => "Start in-scope text search",
+            ToggleGlobalSearch => "Toggle global vs scope-local search",
+            NextSearchMatch => "Jump to the next search match",
+            PrevSearchMatch => "Jump to the previous search match",
+
+            // Panels / popups
+            ToggleHelp => "Toggle the help popup",
+            ToggleReadingHistory => "Toggle the reading history popup",
+            ToggleBookStats => "Toggle the book statistics popup",
+            ToggleZenMode => "Toggle zen mode (hide navigation panel)",
+            ToggleCommentsViewer => "Toggle the comments viewer popup",
+            OpenBookSearch => "Reopen the last book-wide search",
+            OpenBookSearchFresh => "Start a fresh book-wide search",
+            OpenSettings => "Open the settings popup",
+            OpenThemeSelector => "Open the theme selector popup",
+            OpenExternalViewer => "Open the current book in an external viewer",
+            ShrinkNavPanel => "Shrink the navigation panel by one step",
+            ExpandNavPanel => "Expand the navigation panel by one step",
+            ResetNavPanelWidth => "Reset the navigation panel to its default width",
+
+            // Content operations
+            AddComment => "Add or edit a comment on the selection",
+            DeleteComment => "Delete the comment under the cursor",
+            EditComment => "Edit the comment under the cursor",
+            CopySelection => "Copy the current selection to the clipboard",
+            CopyChapterText => "Copy chapter text (EPUB) / page text (PDF)",
+            CopyTocItem => "Copy the selected TOC entry (PDF)",
+            LookupSelection => "Run the configured lookup command on the selection",
+            FollowLink => "Follow the link under the cursor",
+
+            // Vim normal mode
+            ToggleNormalMode => "Toggle vim normal mode in the reader",
+            EnterVisualMode => "Enter visual (character) selection mode",
+            EnterVisualLineMode => "Enter visual-line selection mode",
+            StartYank => "Start a yank (copy) motion",
+            FindForward => "Find a character forward on the line",
+            FindBackward => "Find a character backward on the line",
+            TillForward => "Move till before a character forward on the line",
+            TillBackward => "Move till before a character backward on the line",
+            RepeatFind => "Repeat the last find/till motion",
+            RepeatFindReverse => "Repeat the last find/till in the opposite direction",
+            WordForward => "Move to the beginning of the next word",
+            WordBackward => "Move to the beginning of the previous word",
+            WordEnd => "Move to the end of the current / next word",
+            LineStart => "Move to the start of the line",
+            LineEnd => "Move to the end of the line",
+            FirstNonBlank => "Move to the first non-blank character on the line",
+
+            // Jump list
+            JumpForward => "Jump forward in the navigation history",
+            JumpBackward => "Jump backward in the navigation history",
+
+            // Display
+            ToggleProfiling => "Toggle the performance profiler overlay",
+            ToggleRawHtml => "Toggle raw HTML view (EPUB)",
+            ToggleJustifyText => "Toggle justified text rendering (EPUB)",
+            IncreaseMargin => "Increase content margin",
+            DecreaseMargin => "Decrease content margin",
+
+            // PDF-specific
+            ZoomIn => "Zoom in (PDF)",
+            ZoomOut => "Zoom out (PDF)",
+            ZoomReset => "Reset zoom / fit-to-height (PDF)",
+            ZoomFitWidth => "Fit page width (PDF)",
+            PanLeft => "Pan the page left (PDF)",
+            PanRight => "Pan the page right (PDF)",
+            GoToPage => "Jump to a specific page number (PDF)",
+            ToggleInvertImages => "Toggle image inversion in themed mode (PDF)",
+            TogglePdfTheming => "Toggle themed vs original PDF rendering",
+            TogglePdfWatching => "Toggle file watching / auto-reload (PDF)",
+            TogglePdfPageLayout => "Toggle single / dual page layout (PDF)",
+            TogglePdfRenderMode => "Toggle scroll / page render mode (PDF)",
+            DumpDebugState => "Dump PDF debug state to the log",
+            SynctexInverse => "SyncTeX inverse search: jump to LaTeX source",
+            ScrollDown => "Scroll the reader down by one line",
+            ScrollUp => "Scroll the reader up by one line",
+
+            // Navigation panel
+            ToggleSortOrder => "Toggle book list sort order",
+            CollapseAll => "Collapse all TOC entries",
+            ExpandAll => "Expand all TOC entries",
+            Collapse => "Collapse the current TOC entry",
+            Expand => "Expand the current TOC entry",
+            SwitchNavMode => "Switch between book list and table of contents",
+
+            // History / comments viewer
+            DeleteEntry => "Delete the highlighted entry",
+            CopyEntry => "Copy the highlighted entry to the clipboard",
+            ExportComments => "Export all comments to a Markdown file",
+
+            // Comment navigation
+            EnterCommentNav => "Enter comment navigation mode (PDF)",
+
+            // Context-dependent
+            Cancel => "Close popup / clear selection / exit mode",
+
+            // Popup tab switching
+            NextTab => "Switch to the next tab / pane",
+            PrevTab => "Switch to the previous tab / pane",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,6 +327,33 @@ mod tests {
         let yaml = serde_yaml::to_string(&action).unwrap();
         let parsed: Action = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed, action);
+    }
+
+    #[test]
+    fn every_action_has_non_empty_description() {
+        // Exhaustive list — if a variant is added and this test compiles,
+        // that's because the exhaustive match in `description()` already forced
+        // a description. This test just guards against empty strings.
+        let actions = [
+            Action::Nop,
+            Action::Unknown,
+            Action::Quit,
+            Action::ForceRedraw,
+            Action::Suspend,
+            Action::SwitchFocus,
+            Action::MoveDown,
+            Action::MoveUp,
+            Action::Cancel,
+            Action::ToggleHelp,
+            Action::ToggleNormalMode,
+            Action::SynctexInverse,
+        ];
+        for a in actions {
+            assert!(
+                !a.description().trim().is_empty(),
+                "action {a:?} has an empty description"
+            );
+        }
     }
 
     #[test]

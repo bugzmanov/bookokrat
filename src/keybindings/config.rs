@@ -7,7 +7,7 @@ use super::action::Action;
 use super::context::KeyContext;
 use super::defaults::default_keymap;
 use super::keymap::Keymap;
-use super::notation::parse_key_binding;
+use super::notation::{format_key_binding, parse_key_binding};
 
 const KEYBINDINGS_FILENAME: &str = "keybindings.yaml";
 
@@ -90,6 +90,64 @@ fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> 
     }
 
     Ok(total_applied)
+}
+
+/// Format the default keymap as a YAML string suitable for use as a
+/// `~/.config/bookokrat/keybindings.yaml` starting template.
+pub fn print_default_keybindings() -> String {
+    let keymap = default_keymap();
+    let mut out = String::new();
+
+    out.push_str("# Default bookokrat keybindings.\n");
+    out.push_str("# Copy to ~/.config/bookokrat/keybindings.yaml and edit.\n");
+    out.push_str("#\n");
+    out.push_str("# Values: any action name listed below, or \"nop\" to disable the binding.\n");
+    out.push_str("# Groups (apply before per-context overrides):\n");
+    out.push_str("#   all    -> every context except `global`\n");
+    out.push_str("#   normal -> epub_normal + pdf_normal\n");
+    out.push_str("#   popup  -> every popup.* context\n");
+    out.push('\n');
+
+    for ctx in KeyContext::ALL {
+        let Some(ctx_map) = keymap.context(*ctx) else {
+            continue;
+        };
+        let mut bindings = ctx_map.all_bindings();
+        if bindings.is_empty() {
+            continue;
+        }
+        bindings.sort_by(|(k1, _), (k2, _)| format_key_binding(k1).cmp(&format_key_binding(k2)));
+
+        // Pre-format each line so we can align trailing `# description` comments.
+        let rows: Vec<(String, &'static str)> = bindings
+            .iter()
+            .map(|(key, action)| {
+                let prefix = format!(
+                    "  \"{}\": {}",
+                    format_key_binding(key),
+                    action_to_yaml_value(action),
+                );
+                (prefix, action.description())
+            })
+            .collect();
+        let comment_col = rows.iter().map(|(p, _)| p.len()).max().unwrap_or(0) + 2;
+
+        out.push_str(&format!("{}:\n", ctx.config_key()));
+        for (prefix, desc) in rows {
+            let pad = comment_col.saturating_sub(prefix.len());
+            out.push_str(&format!("{prefix}{:pad$}# {desc}\n", ""));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn action_to_yaml_value(action: &Action) -> String {
+    serde_yaml::to_string(action)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn apply_context_overrides(
@@ -443,5 +501,36 @@ content:
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
         );
+    }
+
+    #[test]
+    fn print_default_keybindings_roundtrips_through_loader() {
+        // The printed YAML must be loadable by the same loader users run at startup,
+        // and the reloaded keymap must behave identically to the defaults.
+        let yaml = print_default_keybindings();
+        let reloaded = make_keymap_with_yaml(&yaml)
+            .expect("printed default keybindings must parse as valid config YAML");
+
+        // Spot-check a binding from every context to catch notation regressions.
+        let defaults = default_keymap();
+        let probes = [
+            (KeyContext::Global, "?"),
+            (KeyContext::Navigation, "j"),
+            (KeyContext::EpubContent, "j"),
+            (KeyContext::EpubNormal, "w"),
+            (KeyContext::PdfStandard, "l"),
+            (KeyContext::PdfNormal, "gd"),
+            (KeyContext::PopupHelp, "?"),
+            (KeyContext::PopupHistory, "dd"),
+            (KeyContext::PopupComments, "dd"),
+            (KeyContext::PopupSettings, "<Tab>"),
+        ];
+        for (ctx, key) in probes {
+            assert_eq!(
+                lookup(&reloaded, ctx, key),
+                lookup(&defaults, ctx, key),
+                "mismatch at {ctx:?} / {key}"
+            );
+        }
     }
 }

@@ -33,6 +33,11 @@ pub struct Cli {
     #[cfg(feature = "pdf")]
     #[arg(long)]
     pub synctex_forward: Option<String>,
+
+    /// Print the default keybindings as YAML and exit.
+    /// Redirect to ~/.config/bookokrat/keybindings.yaml as a starting template.
+    #[arg(long)]
+    pub print_default_keybindings: bool,
 }
 
 #[derive(Subcommand)]
