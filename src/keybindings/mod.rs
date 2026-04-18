@@ -9,7 +9,12 @@ use std::sync::{LazyLock, RwLock, RwLockReadGuard};
 
 use keymap::Keymap;
 
-static KEYMAP: LazyLock<RwLock<Keymap>> = LazyLock::new(|| RwLock::new(config::load_keymap()));
+/// The global keymap starts as pure defaults. Production callers (main.rs)
+/// invoke `reload_keymap()` at startup to layer user overrides on top.
+///
+/// This means tests — which never call `reload_keymap()` — see only defaults
+/// and are hermetic with respect to the developer's `~/.config/bookokrat/`.
+static KEYMAP: LazyLock<RwLock<Keymap>> = LazyLock::new(|| RwLock::new(defaults::default_keymap()));
 
 /// Get a read guard to the global keymap.
 pub fn keymap() -> RwLockReadGuard<'static, Keymap> {
@@ -17,6 +22,7 @@ pub fn keymap() -> RwLockReadGuard<'static, Keymap> {
 }
 
 /// Reload the keymap from config (defaults + user overrides).
+/// Call this from `main.rs` at startup and when the user's config file changes.
 pub fn reload_keymap() {
     if let Ok(mut km) = KEYMAP.write() {
         *km = config::load_keymap();

@@ -816,6 +816,11 @@ impl PdfReaderState {
                 self.normal_mode.repeat_find(&lb);
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
             }
+            Action::RepeatFindReverse => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.repeat_find_reverse(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
             Action::EnterVisualMode => {
                 self.normal_mode.toggle_visual_char();
                 let all_lb = self.collect_all_line_bounds();

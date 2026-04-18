@@ -428,6 +428,24 @@ impl MarkdownTextReader {
         }
     }
 
+    pub fn repeat_last_find_reverse(&mut self) -> bool {
+        if !self.normal_mode.active {
+            return false;
+        }
+
+        if let Some((motion, ch)) = self.normal_mode.last_find {
+            match motion {
+                PendingCharMotion::FindForward => self.find_char_backward(ch),
+                PendingCharMotion::FindBackward => self.find_char_forward(ch),
+                PendingCharMotion::TillForward => self.find_char_till_backward(ch),
+                PendingCharMotion::TillBackward => self.find_char_till_forward(ch),
+                PendingCharMotion::None => false,
+            }
+        } else {
+            false
+        }
+    }
+
     fn find_char_forward(&mut self, ch: char) -> bool {
         let line = self.normal_mode.cursor.line;
         let col = self.normal_mode.cursor.column;

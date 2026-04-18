@@ -4047,40 +4047,6 @@ impl App {
     /// Uses the configurable keymap for Global context.
     /// Returns true if the key was handled as a global hotkey.
     fn handle_global_hotkeys(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        // #1: Ctrl+Z/Q respect zen_mode_shortcut setting.
-        // These must be checked before the keymap because the SAME physical keys
-        // map to different actions depending on the setting.
-        {
-            use crossterm::event::{KeyCode, KeyModifiers};
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match key.code {
-                    KeyCode::Char('z') => {
-                        match settings::get_zen_mode_shortcut() {
-                            settings::ZenModeShortcut::CtrlZ => self.toggle_zen_mode(),
-                            #[cfg(unix)]
-                            settings::ZenModeShortcut::SpaceZ => {
-                                self.pending_suspend = true;
-                            }
-                            #[cfg(not(unix))]
-                            _ => {}
-                        }
-                        return true;
-                    }
-                    #[cfg(unix)]
-                    KeyCode::Char('q')
-                        if matches!(
-                            settings::get_zen_mode_shortcut(),
-                            settings::ZenModeShortcut::CtrlZ
-                        ) =>
-                    {
-                        self.pending_suspend = true;
-                        return true;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         use crate::keybindings::context::KeyContext;
         use crate::keybindings::keymap::LookupResult;
         use crate::keybindings::notation::key_event_to_input;
@@ -4753,6 +4719,13 @@ impl App {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.repeat_last_find();
+                }
+                true
+            }
+            Action::RepeatFindReverse => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.repeat_last_find_reverse();
                 }
                 true
             }

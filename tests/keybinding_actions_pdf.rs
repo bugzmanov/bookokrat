@@ -308,6 +308,10 @@ pdf_binding_tests! {
     pdf_normal_semicolon: KeyContext::PdfNormal, ";",
         setup = |state| { state.normal_mode.active = true; },
         check = |_state, action| matches!(action, Some(InputAction::CursorChanged(_, _)));
+    // , repeats last find reversed; same contract as ;
+    pdf_normal_comma: KeyContext::PdfNormal, ",",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| matches!(action, Some(InputAction::CursorChanged(_, _)));
     // v/V toggle visual mode → returns VisualChanged
     pdf_normal_v: KeyContext::PdfNormal, "v",
         setup = |state| { state.normal_mode.active = true; },

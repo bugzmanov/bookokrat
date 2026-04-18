@@ -95,6 +95,7 @@ fn add_normal_layer(ctx: &mut ContextKeymap) {
     bind!(ctx, "t" => Action::TillForward);
     bind!(ctx, "T" => Action::TillBackward);
     bind!(ctx, ";" => Action::RepeatFind);
+    bind!(ctx, "," => Action::RepeatFindReverse);
     bind!(ctx, "v" => Action::EnterVisualMode);
     bind!(ctx, "V" => Action::EnterVisualLineMode);
     bind!(ctx, "y" => Action::StartYank);
@@ -129,9 +130,9 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space><lt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<C-l>" => Action::ForceRedraw);
+    bind!(ctx, "<C-q>" => Action::Suspend);
     bind!(ctx, "<C-s>" => Action::OpenSettings);
-    // Note: <C-z> and <C-q> are handled specially in handle_global_hotkeys
-    // because their behavior depends on the zen_mode_shortcut setting.
+    bind!(ctx, "<C-z>" => Action::ToggleZenMode);
     bind!(ctx, "<lt>" => Action::ShrinkNavPanel);
     bind!(ctx, "<gt>" => Action::ExpandNavPanel);
 }
@@ -318,6 +319,76 @@ mod tests {
     #[test]
     fn default_keymap_construction_does_not_panic() {
         let _keymap = default_keymap();
+    }
+
+    /// Every `Action` variant must be reachable: either bound in the default
+    /// keymap, or explicitly allowlisted as unreachable-by-design.
+    ///
+    /// If this test fails, one of these is true:
+    /// - You added an action variant and forgot to bind it in defaults.
+    /// - You removed a default binding and left the action orphaned (like
+    ///   the `Suspend` regression when `<C-z>`/`<C-q>` special-cases were
+    ///   deleted).
+    /// - The action was always dead code (e.g., `EditComment`) and should
+    ///   either be wired up or deleted.
+    ///
+    /// To allowlist an action as intentionally unbound-by-default but still
+    /// available for user overrides, add it to `UNBOUND_BY_DESIGN` below and
+    /// document why.
+    #[test]
+    fn every_action_is_reachable_in_defaults() {
+        use crate::keybindings::action::Action;
+        use std::collections::HashSet;
+
+        // Actions that cannot or should not appear in the default keymap.
+        const UNREACHABLE_BY_DESIGN: &[Action] = &[
+            // Special marker used in user config to disable a binding.
+            Action::Nop,
+            // Sentinel returned by serde when a config names an action the
+            // current binary doesn't know about. Never dispatched.
+            Action::Unknown,
+        ];
+
+        // Actions that have no default key but ARE available for users to
+        // bind via `keybindings.yaml`. Each entry needs a justification —
+        // otherwise bind it or delete it.
+        const UNBOUND_BY_DESIGN: &[Action] = &[
+            // Add entries as `(Action::Foo, "reason why unbound")` — kept
+            // separate from UNREACHABLE_BY_DESIGN so the intent is clear.
+        ];
+
+        let keymap = default_keymap();
+        let mut bound: HashSet<Action> = HashSet::new();
+        for ctx in KeyContext::ALL {
+            if let Some(ctx_map) = keymap.context(*ctx) {
+                for (_, action) in ctx_map.all_bindings() {
+                    bound.insert(action);
+                }
+            }
+        }
+
+        let unreachable: HashSet<&Action> = UNREACHABLE_BY_DESIGN.iter().collect();
+        let unbound_ok: HashSet<&Action> = UNBOUND_BY_DESIGN.iter().collect();
+
+        let missing: Vec<&Action> = Action::ALL
+            .iter()
+            .filter(|a| !bound.contains(a) && !unreachable.contains(a) && !unbound_ok.contains(a))
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "the following actions have no default binding and are not allowlisted:\n{}\n\n\
+             Each one is either a regression (action exists but no user can trigger it \
+             out of the box) or dead code. Fix by:\n\
+               - binding it in `defaults.rs`, OR\n\
+               - adding it to `UNBOUND_BY_DESIGN` with a reason, OR\n\
+               - deleting the variant from `Action` if it's dead.",
+            missing
+                .iter()
+                .map(|a| format!("  - Action::{a:?}  ({})", a.description()))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
     }
 
     #[test]

@@ -34,10 +34,13 @@ pub struct Cli {
     #[arg(long)]
     pub synctex_forward: Option<String>,
 
-    /// Print the default keybindings as YAML and exit.
-    /// Redirect to ~/.config/bookokrat/keybindings.yaml as a starting template.
+    /// Print the default keybindings as flat TOML (one binding per line) and exit.
     #[arg(long)]
     pub print_default_keybindings: bool,
+
+    /// Print the default keybindings as grouped TOML ([context] sections) and exit.
+    #[arg(long)]
+    pub print_default_keybindings_grouped: bool,
 }
 
 #[derive(Subcommand)]

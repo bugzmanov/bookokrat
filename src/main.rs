@@ -156,6 +156,13 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    if args.print_default_keybindings_grouped {
+        print!(
+            "{}",
+            bookokrat::keybindings::config::print_default_keybindings_grouped()
+        );
+        return Ok(());
+    }
 
     // Handle subcommands before TUI setup
     if let Some(ref command) = args.command {
@@ -177,6 +184,11 @@ fn main() -> Result<()> {
     if let Some(ref fwd) = args.synctex_forward {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
+
+    // Layer user's `keybindings.yaml` overrides on top of the built-in defaults.
+    // Tests deliberately skip this so they stay hermetic with respect to
+    // `~/.config/bookokrat/`.
+    bookokrat::keybindings::reload_keymap();
 
     // Resolve library directory from file argument or CWD
     let library_dir = args

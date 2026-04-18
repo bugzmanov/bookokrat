@@ -178,6 +178,16 @@ binding_tests! {
     global_space_z: KeyContext::Global, "<Space>z",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
+    global_ctrl_z: KeyContext::Global, "<C-z>",
+        setup = |app, _dir| { open_book(&mut app); },
+        check = |app| app.is_zen_mode();
+    global_ctrl_q: KeyContext::Global, "<C-q>",
+        setup = |app, _dir| { open_book(&mut app); },
+        check = |app| {
+            // Suspend is unix-only; on other platforms the dispatcher is a no-op
+            // but still consumes the key — just assert the app didn't quit.
+            if cfg!(unix) { app.pending_suspend } else { true }
+        };
     // Space+t opens settings popup on Themes tab specifically
     global_space_t: KeyContext::Global, "<Space>t",
         setup = |app, _dir| { open_book(&mut app); },
@@ -531,6 +541,9 @@ binding_tests! {
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
         check = |app| app.is_normal_mode();
     epub_normal_semicolon: KeyContext::EpubNormal, ";",
+        setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
+        check = |app| app.is_normal_mode();
+    epub_normal_comma: KeyContext::EpubNormal, ",",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
         check = |app| app.is_normal_mode();
     epub_normal_v: KeyContext::EpubNormal, "v",

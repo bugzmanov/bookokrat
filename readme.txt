@@ -59,6 +59,10 @@
 
                             KEYBOARD REFERENCE CARD
 
+Every binding below is a customizable default. Override any of them in
+~/.config/bookokrat/keybindings.toml — see CUSTOMIZATION → KEYBINDINGS
+at the bottom of this document for the syntax.
+
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │ GLOBAL CONTROLS                                                             │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -292,7 +296,8 @@ PDF annotations require a graphics-capable terminal.
       Ctrl+click, right-click on the PDF, or gd in normal mode jumps to
       the corresponding LaTeX source line. gd also works on selected text
       (mouse selection anchor is used). Configure which editor opens
-      in ~/.bookokrat_settings.yaml or in the Settings popup (Space+s):
+      in ~/.config/bookokrat/config.yaml (Windows: %APPDATA%\bookokrat\
+      config.yaml) or in the Settings popup (Space+s):
 
         synctex_editor: "nvim --server /tmp/nvim.sock --remote-send '<C-\><C-n>:e {file}<CR>:{line}<CR>'"
 
@@ -368,24 +373,34 @@ PDF annotations require a graphics-capable terminal.
       • Comments     <data_dir>/bookokrat/libraries/<library>/comments/
       • Image cache  <cache_dir>/bookokrat/libraries/<library>/temp_images/
       • Log file     <state_dir>/bookokrat/bookokrat.log
+                     (macOS: <cache_dir>/bookokrat/bookokrat.log — no
+                     state_dir, falls back to cache)
 
-    Typical <data_dir> paths:
-      • macOS:  ~/Library/Application Support
-      • Linux:  ~/.local/share
+    Typical paths per platform:
+      • macOS:   data_dir=~/Library/Application Support
+                 cache_dir=~/Library/Caches
+      • Linux:   data_dir=~/.local/share        cache_dir=~/.cache
+                 state_dir=~/.local/state
+      • Windows: data_dir=%APPDATA%             cache_dir=%LOCALAPPDATA%
 
     If old files (bookmarks.json, .bookokrat_comments/, temp_images/) are
     found in your working directory, they are automatically migrated to
     the new locations on startup.
 
   [SETTINGS FILE]
-    Bookokrat saves your preferences to ~/.bookokrat_settings.yaml:
-      • Selected theme
-      • Content margin setting
-      • Custom color themes
-      • PDF enabled flag and render mode
-      • PDF scale and pan shift
+    Bookokrat saves user preferences to ~/.config/bookokrat/config.yaml
+    (Windows: %APPDATA%\bookokrat\config.yaml). Key settings:
+      • Selected theme and custom themes
+      • Content margin and text justification
+      • PDF enabled flag, render mode, page layout, scale, pan shift
+      • Nav panel width override
+      • Lookup command and display mode (dictionary / shell integration)
+      • SyncTeX editor command
 
-    Settings persist across sessions and apply to all book directories.
+    Settings persist across sessions and apply to all libraries.
+
+    Keybindings live in a separate file ~/.config/bookokrat/keybindings.toml
+    (see CUSTOMIZATION → KEYBINDINGS below).
 
   [COLOR THEMES]
     Built-in themes:
@@ -400,7 +415,7 @@ PDF annotations require a graphics-capable terminal.
 
   [DICTIONARY / SHELL LOOKUP]
     Select text and press Space+l to look up words. Configure in your
-    settings file (~/.bookokrat_settings.yaml):
+    settings file (~/.config/bookokrat/config.yaml):
 
     Console dictionary (output shown in scrollable popup):
       lookup_command: "dict {}"
@@ -425,10 +440,26 @@ PDF annotations require a graphics-capable terminal.
       • Hides the status bar
       • Maximizes the reading area
 
-    The zen mode shortcut is configurable in Settings (Ctrl+S):
-      • Space→Z (default for new installs) — Ctrl+Z suspends the app
-      • Ctrl+Z (legacy) — Ctrl+Q suspends the app
+    Rebind the zen mode toggle in ~/.config/bookokrat/keybindings.toml by
+    mapping any key to the `toggle_zen_mode` action; bind `suspend` to
+    whichever key you want to pause the process with. Run
+    `bookokrat --print-default-keybindings` to see current defaults.
     Suspending pauses bookokrat; resume with fg in your shell.
+
+  [KEYBINDINGS]
+    All keyboard shortcuts are customizable via ~/.config/bookokrat/
+    keybindings.toml (created on first launch). Write overrides in either
+    flat or grouped TOML:
+
+      content."j" = "scroll_up"          # flat, one line per binding
+      [content]                          # or group in a table
+      "j" = "scroll_up"
+
+    Use "nop" as the action to disable a default. The full list of default
+    bindings and available actions is available via:
+
+      bookokrat --print-default-keybindings          # flat reference
+      bookokrat --print-default-keybindings-grouped  # grouped by context
 
 ===============================================================================
 

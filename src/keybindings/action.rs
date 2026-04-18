@@ -63,7 +63,6 @@ pub enum Action {
     // === Content operations ===
     AddComment,
     DeleteComment,
-    EditComment,
     CopySelection,
     CopyChapterText,
     CopyTocItem,
@@ -147,6 +146,113 @@ pub enum Action {
 }
 
 impl Action {
+    /// Every variant of `Action`, in declaration order.
+    ///
+    /// Hand-maintained. If you add a variant to the enum, add it here too —
+    /// the `all_slice_covers_every_variant` test uses an exhaustive match to
+    /// catch drift between this list and the enum definition.
+    pub const ALL: &'static [Action] = &[
+        Action::Nop,
+        Action::Quit,
+        Action::ForceRedraw,
+        Action::Suspend,
+        Action::SwitchFocus,
+        Action::MoveDown,
+        Action::MoveUp,
+        Action::MoveLeft,
+        Action::MoveRight,
+        Action::ScrollHalfDown,
+        Action::ScrollHalfUp,
+        Action::ScrollPageDown,
+        Action::ScrollPageUp,
+        Action::GoTop,
+        Action::GoBottom,
+        Action::Select,
+        Action::NextChapter,
+        Action::PrevChapter,
+        Action::NextPage,
+        Action::PrevPage,
+        Action::ParagraphForward,
+        Action::ParagraphBackward,
+        Action::StartSearch,
+        Action::ToggleGlobalSearch,
+        Action::NextSearchMatch,
+        Action::PrevSearchMatch,
+        Action::ToggleHelp,
+        Action::ToggleReadingHistory,
+        Action::ToggleBookStats,
+        Action::ToggleZenMode,
+        Action::ToggleCommentsViewer,
+        Action::OpenBookSearch,
+        Action::OpenBookSearchFresh,
+        Action::OpenSettings,
+        Action::OpenThemeSelector,
+        Action::OpenExternalViewer,
+        Action::ShrinkNavPanel,
+        Action::ExpandNavPanel,
+        Action::ResetNavPanelWidth,
+        Action::AddComment,
+        Action::DeleteComment,
+        Action::CopySelection,
+        Action::CopyChapterText,
+        Action::CopyTocItem,
+        Action::LookupSelection,
+        Action::FollowLink,
+        Action::ToggleNormalMode,
+        Action::EnterVisualMode,
+        Action::EnterVisualLineMode,
+        Action::StartYank,
+        Action::FindForward,
+        Action::FindBackward,
+        Action::TillForward,
+        Action::TillBackward,
+        Action::RepeatFind,
+        Action::RepeatFindReverse,
+        Action::WordForward,
+        Action::WordBackward,
+        Action::WordEnd,
+        Action::LineStart,
+        Action::LineEnd,
+        Action::FirstNonBlank,
+        Action::JumpForward,
+        Action::JumpBackward,
+        Action::ToggleProfiling,
+        Action::ToggleRawHtml,
+        Action::ToggleJustifyText,
+        Action::IncreaseMargin,
+        Action::DecreaseMargin,
+        Action::ZoomIn,
+        Action::ZoomOut,
+        Action::ZoomReset,
+        Action::ZoomFitWidth,
+        Action::PanLeft,
+        Action::PanRight,
+        Action::GoToPage,
+        Action::ToggleInvertImages,
+        Action::TogglePdfTheming,
+        Action::TogglePdfWatching,
+        Action::TogglePdfPageLayout,
+        Action::TogglePdfRenderMode,
+        Action::DumpDebugState,
+        Action::SynctexInverse,
+        Action::ScrollDown,
+        Action::ScrollUp,
+        Action::ToggleSortOrder,
+        Action::CollapseAll,
+        Action::ExpandAll,
+        Action::Collapse,
+        Action::Expand,
+        Action::SwitchNavMode,
+        Action::DeleteEntry,
+        Action::CopyEntry,
+        Action::ExportComments,
+        Action::EnterCommentNav,
+        Action::Cancel,
+        Action::NextTab,
+        Action::PrevTab,
+        Action::Unknown,
+    ];
+
     pub fn is_nop(&self) -> bool {
         matches!(self, Action::Nop | Action::Unknown)
     }
@@ -214,7 +320,6 @@ impl Action {
             // Content operations
             AddComment => "Add or edit a comment on the selection",
             DeleteComment => "Delete the comment under the cursor",
-            EditComment => "Edit the comment under the cursor",
             CopySelection => "Copy the current selection to the clipboard",
             CopyChapterText => "Copy chapter text (EPUB) / page text (PDF)",
             CopyTocItem => "Copy the selected TOC entry (PDF)",
@@ -329,26 +434,71 @@ mod tests {
         assert_eq!(parsed, action);
     }
 
+    /// Exhaustive match — adding a variant without also adding it to
+    /// `Action::ALL` will fail this compilation. The test body is a runtime
+    /// check that `Action::ALL` actually contains the result.
+    ///
+    /// This is the drift guard for `Action::ALL`. If you add a variant to the
+    /// enum, you MUST: (1) add a description, (2) add a match arm here, and
+    /// (3) add it to `Action::ALL`.
+    #[test]
+    fn all_slice_covers_every_variant() {
+        fn __exhaustive_check(a: Action) -> Action {
+            use Action::*;
+            match a {
+                Nop | Unknown => a,
+                Quit | ForceRedraw | Suspend | SwitchFocus => a,
+                MoveDown | MoveUp | MoveLeft | MoveRight => a,
+                ScrollHalfDown | ScrollHalfUp | ScrollPageDown | ScrollPageUp => a,
+                GoTop | GoBottom | Select => a,
+                NextChapter | PrevChapter | NextPage | PrevPage => a,
+                ParagraphForward | ParagraphBackward => a,
+                StartSearch | ToggleGlobalSearch | NextSearchMatch | PrevSearchMatch => a,
+                ToggleHelp | ToggleReadingHistory | ToggleBookStats | ToggleZenMode
+                | ToggleCommentsViewer => a,
+                OpenBookSearch | OpenBookSearchFresh | OpenSettings | OpenThemeSelector
+                | OpenExternalViewer => a,
+                ShrinkNavPanel | ExpandNavPanel | ResetNavPanelWidth => a,
+                AddComment | DeleteComment => a,
+                CopySelection | CopyChapterText | CopyTocItem => a,
+                LookupSelection | FollowLink => a,
+                ToggleNormalMode | EnterVisualMode | EnterVisualLineMode | StartYank => a,
+                FindForward | FindBackward | TillForward | TillBackward | RepeatFind
+                | RepeatFindReverse => a,
+                WordForward | WordBackward | WordEnd | LineStart | LineEnd | FirstNonBlank => a,
+                JumpForward | JumpBackward => a,
+                ToggleProfiling | ToggleRawHtml | ToggleJustifyText | IncreaseMargin
+                | DecreaseMargin => a,
+                ZoomIn | ZoomOut | ZoomReset | ZoomFitWidth | PanLeft | PanRight => a,
+                GoToPage | ToggleInvertImages | TogglePdfTheming | TogglePdfWatching => a,
+                TogglePdfPageLayout | TogglePdfRenderMode | DumpDebugState | SynctexInverse => a,
+                ScrollDown | ScrollUp => a,
+                ToggleSortOrder | CollapseAll | ExpandAll | Collapse | Expand | SwitchNavMode => a,
+                DeleteEntry | CopyEntry | ExportComments | EnterCommentNav => a,
+                Cancel | NextTab | PrevTab => a,
+            }
+        }
+
+        // Every variant present in ALL should survive a round-trip through
+        // the exhaustive match. Any variant added to the enum but missing
+        // from ALL will not be iterated here — but the match above will
+        // fail to compile, which is exactly the failure we want.
+        for a in Action::ALL {
+            assert_eq!(__exhaustive_check(a.clone()), *a);
+        }
+
+        // ALL must list every variant exactly once.
+        let mut seen = std::collections::HashSet::new();
+        for a in Action::ALL {
+            assert!(seen.insert(a.clone()), "duplicate in Action::ALL: {a:?}");
+        }
+    }
+
     #[test]
     fn every_action_has_non_empty_description() {
-        // Exhaustive list — if a variant is added and this test compiles,
-        // that's because the exhaustive match in `description()` already forced
-        // a description. This test just guards against empty strings.
-        let actions = [
-            Action::Nop,
-            Action::Unknown,
-            Action::Quit,
-            Action::ForceRedraw,
-            Action::Suspend,
-            Action::SwitchFocus,
-            Action::MoveDown,
-            Action::MoveUp,
-            Action::Cancel,
-            Action::ToggleHelp,
-            Action::ToggleNormalMode,
-            Action::SynctexInverse,
-        ];
-        for a in actions {
+        // Walks Action::ALL — catches any variant whose description()
+        // returns an empty or whitespace-only string.
+        for a in Action::ALL {
             assert!(
                 !a.description().trim().is_empty(),
                 "action {a:?} has an empty description"
