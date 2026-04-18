@@ -28,6 +28,8 @@ pub fn load_keymap() -> Keymap {
                     keymap = default_keymap();
                 }
             }
+        } else {
+            write_template_if_missing(&config_path);
         }
     }
 
@@ -42,8 +44,12 @@ fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> 
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
-    let raw: HashMap<String, HashMap<String, String>> = serde_yaml::from_str(&content)
+    // Inner value is `Option<...>` so a context header with only commented-out
+    // bindings below it (which YAML parses as null) is accepted as "no overrides".
+    let raw: HashMap<String, Option<HashMap<String, String>>> = serde_yaml::from_str(&content)
         .map_err(|e| format!("invalid YAML in {}: {e}", path.display()))?;
+
+    let empty = HashMap::new();
 
     // Apply groups first (all, normal, popup), then specific contexts.
     // This ensures specific context overrides beat group overrides.
@@ -51,6 +57,7 @@ fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> 
     let mut context_keys = Vec::new();
 
     for (config_key, bindings) in &raw {
+        let bindings = bindings.as_ref().unwrap_or(&empty);
         match config_key.as_str() {
             "all" | "normal" | "popup" => group_keys.push((config_key.as_str(), bindings)),
             _ => context_keys.push((config_key.as_str(), bindings)),
@@ -94,14 +101,20 @@ fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> 
 
 /// Format the default keymap as a YAML string suitable for use as a
 /// `~/.config/bookokrat/keybindings.yaml` starting template.
+///
+/// Context headers are emitted as live YAML; every binding line is emitted as
+/// a comment so an untouched file loads as "no overrides." To customize, the
+/// user removes the leading `# ` from a binding line and edits the value.
 pub fn print_default_keybindings() -> String {
     let keymap = default_keymap();
     let mut out = String::new();
 
-    out.push_str("# Default bookokrat keybindings.\n");
-    out.push_str("# Copy to ~/.config/bookokrat/keybindings.yaml and edit.\n");
+    out.push_str("# Bookokrat keybindings.\n");
     out.push_str("#\n");
-    out.push_str("# Values: any action name listed below, or \"nop\" to disable the binding.\n");
+    out.push_str("# Every binding below is commented out and matches the application default.\n");
+    out.push_str("# To customize a binding, remove the leading `# ` from its line and edit the\n");
+    out.push_str("# action name (or use `nop` to disable the default).\n");
+    out.push_str("#\n");
     out.push_str("# Groups (apply before per-context overrides):\n");
     out.push_str("#   all    -> every context except `global`\n");
     out.push_str("#   normal -> epub_normal + pdf_normal\n");
@@ -118,29 +131,60 @@ pub fn print_default_keybindings() -> String {
         }
         bindings.sort_by(|(k1, _), (k2, _)| format_key_binding(k1).cmp(&format_key_binding(k2)));
 
-        // Pre-format each line so we can align trailing `# description` comments.
+        // Pre-format each binding as its active form, then align trailing
+        // `# description` comments within the block.
         let rows: Vec<(String, &'static str)> = bindings
             .iter()
             .map(|(key, action)| {
-                let prefix = format!(
-                    "  \"{}\": {}",
+                let active = format!(
+                    "\"{}\": {}",
                     format_key_binding(key),
                     action_to_yaml_value(action),
                 );
-                (prefix, action.description())
+                (active, action.description())
             })
             .collect();
-        let comment_col = rows.iter().map(|(p, _)| p.len()).max().unwrap_or(0) + 2;
+        let desc_col = rows.iter().map(|(a, _)| a.len()).max().unwrap_or(0) + 2;
 
         out.push_str(&format!("{}:\n", ctx.config_key()));
-        for (prefix, desc) in rows {
-            let pad = comment_col.saturating_sub(prefix.len());
-            out.push_str(&format!("{prefix}{:pad$}# {desc}\n", ""));
+        for (active, desc) in rows {
+            let pad = desc_col.saturating_sub(active.len());
+            // "  # " prefix turns the line into a YAML comment inside the
+            // (live) context mapping above.
+            out.push_str(&format!("  # {active}{:pad$}# {desc}\n", ""));
         }
         out.push('\n');
     }
 
     out
+}
+
+/// Write the default template to `path` if no file exists there.
+/// Called once at startup from `load_keymap`. Failures are logged but
+/// non-fatal — the app still starts with built-in defaults.
+fn write_template_if_missing(path: &PathBuf) {
+    if path.exists() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                warn!(
+                    "Failed to create keybindings config dir {}: {e}",
+                    parent.display()
+                );
+                return;
+            }
+        }
+    }
+    let content = print_default_keybindings();
+    match std::fs::write(path, content) {
+        Ok(_) => info!("Wrote default keybindings template to {}", path.display()),
+        Err(e) => warn!(
+            "Failed to write keybindings template to {}: {e}",
+            path.display()
+        ),
+    }
 }
 
 fn action_to_yaml_value(action: &Action) -> String {
@@ -215,13 +259,15 @@ mod tests {
 
     fn make_keymap_with_yaml(yaml: &str) -> Result<Keymap, String> {
         let mut keymap = default_keymap();
-        let raw: HashMap<String, HashMap<String, String>> =
+        let raw: HashMap<String, Option<HashMap<String, String>>> =
             serde_yaml::from_str(yaml).map_err(|e| format!("invalid yaml: {e}"))?;
+        let empty = HashMap::new();
 
         // Replicate the group-aware loading from load_and_apply
         let mut group_keys = Vec::new();
         let mut context_keys = Vec::new();
         for (k, v) in &raw {
+            let v = v.as_ref().unwrap_or(&empty);
             match k.as_str() {
                 "all" | "normal" | "popup" => group_keys.push((k.as_str(), v)),
                 _ => context_keys.push((k.as_str(), v)),
@@ -504,14 +550,13 @@ content:
     }
 
     #[test]
-    fn print_default_keybindings_roundtrips_through_loader() {
-        // The printed YAML must be loadable by the same loader users run at startup,
-        // and the reloaded keymap must behave identically to the defaults.
+    fn print_default_keybindings_untouched_parses_as_no_overrides() {
+        // An unedited template loads cleanly with empty context mappings —
+        // every default binding should still be active.
         let yaml = print_default_keybindings();
         let reloaded = make_keymap_with_yaml(&yaml)
-            .expect("printed default keybindings must parse as valid config YAML");
+            .expect("printed default keybindings template must be valid YAML");
 
-        // Spot-check a binding from every context to catch notation regressions.
         let defaults = default_keymap();
         let probes = [
             (KeyContext::Global, "?"),
@@ -531,6 +576,40 @@ content:
                 lookup(&defaults, ctx, key),
                 "mismatch at {ctx:?} / {key}"
             );
+        }
+    }
+
+    #[test]
+    fn print_default_keybindings_uncommented_roundtrips_to_defaults() {
+        // If a user uncomments every binding line, the reloaded keymap must
+        // match the defaults exactly — otherwise the printer has drifted
+        // (wrong notation, wrong action name, missing description).
+        let yaml = print_default_keybindings();
+        let uncommented: String = yaml
+            .lines()
+            .map(|line| {
+                // Active binding lines always begin with "  # \"" after formatting.
+                // Strip the "# " while keeping the two-space indent.
+                if let Some(rest) = line.strip_prefix("  # \"") {
+                    format!("  \"{rest}\n")
+                } else {
+                    format!("{line}\n")
+                }
+            })
+            .collect();
+
+        let reloaded = make_keymap_with_yaml(&uncommented)
+            .expect("uncommented template must parse as valid config YAML");
+        let defaults = default_keymap();
+
+        for ctx in KeyContext::ALL {
+            let reloaded_ctx = reloaded.context(*ctx).expect("context must exist");
+            let defaults_ctx = defaults.context(*ctx).expect("context must exist");
+            let mut r = reloaded_ctx.all_bindings();
+            let mut d = defaults_ctx.all_bindings();
+            r.sort_by_key(|(k, a)| (format_key_binding(k), format!("{a:?}")));
+            d.sort_by_key(|(k, a)| (format_key_binding(k), format!("{a:?}")));
+            assert_eq!(r, d, "binding set diverges in context {ctx:?}");
         }
     }
 }
