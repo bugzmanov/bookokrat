@@ -74,6 +74,22 @@ fn keybindings_config_path() -> Option<PathBuf> {
     crate::settings::preferred_config_dir().map(|dir| dir.join(KEYBINDINGS_FILENAME))
 }
 
+/// Human-friendly representation of the keybindings config path — absolute
+/// on Windows, tilde-abbreviated on Unix when it sits under `$HOME`.
+/// Falls back to the bare filename if we can't resolve a config dir.
+fn keybindings_config_path_display() -> String {
+    let Some(path) = keybindings_config_path() else {
+        return KEYBINDINGS_FILENAME.to_string();
+    };
+    #[cfg(unix)]
+    if let Some(home) = std::env::home_dir() {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            return format!("~/{}", rest.display());
+        }
+    }
+    path.display().to_string()
+}
+
 /// Parse TOML content and apply overrides to the keymap. Returns the number
 /// of bindings successfully applied; pushes `LoadError`s for each issue.
 ///
@@ -262,7 +278,10 @@ pub fn print_default_keybindings() -> String {
     out.push_str("# Bookokrat default keybindings — flat TOML reference.\n");
     out.push_str("# Format:  <context>.\"<key>\" = \"<action>\"   # description\n");
     out.push_str("#\n");
-    out.push_str("# To override, edit ~/.config/bookokrat/keybindings.toml. Either form works:\n");
+    out.push_str(&format!(
+        "# To override, edit {}. Either form works:\n",
+        keybindings_config_path_display()
+    ));
     out.push_str("#     content.\"j\" = \"scroll_up\"            # flat, one line per binding\n");
     out.push_str("#     [content]                             # or group in a table\n");
     out.push_str("#     \"j\" = \"scroll_up\"\n");
@@ -316,7 +335,10 @@ pub fn print_default_keybindings_grouped() -> String {
     out.push_str("# Bookokrat default keybindings — grouped TOML reference.\n");
     out.push_str("# Same data as `--print-default-keybindings`, organized by context.\n");
     out.push_str("#\n");
-    out.push_str("# To override, edit ~/.config/bookokrat/keybindings.toml — either keep this\n");
+    out.push_str(&format!(
+        "# To override, edit {} — either keep this\n",
+        keybindings_config_path_display()
+    ));
     out.push_str("# grouped shape or use per-line dotted keys:\n");
     out.push_str("#     content.\"j\" = \"scroll_up\"            # one-line form\n");
     out.push_str("# Use \"nop\" as the action to disable a default.\n");

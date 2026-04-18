@@ -72,21 +72,10 @@ fn build_config_migrations() -> Vec<Box<dyn Migration>> {
         )));
     }
 
-    // keybindings.yaml — only macOS has a prior location worth migrating
-    // (Linux already uses ~/.config/bookokrat/; Windows stays on %APPDATA%).
-    #[cfg(target_os = "macos")]
-    if let Some(ref h) = home {
-        out.push(Box::new(FileMoveMigration::new(
-            "keybindings",
-            target_dir.join("keybindings.yaml"),
-            vec![
-                h.join("Library")
-                    .join("Application Support")
-                    .join("bookokrat")
-                    .join("keybindings.yaml"),
-            ],
-        )));
-    }
+    // No keybindings migration: the feature ships for the first time as
+    // `keybindings.toml` in this release, so there's no prior location on any
+    // platform that could hold a compatible file. First launch writes the
+    // stub via `write_template_if_missing()`.
 
     out
 }
