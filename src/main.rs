@@ -1,4 +1,4 @@
-use std::{fs::OpenOptions, io::stdout, path::Path};
+use std::{fs::OpenOptions, io::stdout, path::Path, path::PathBuf};
 
 use anyhow::Result;
 use clap::Parser;
@@ -15,6 +15,7 @@ mod cli;
 mod print;
 
 // Use modules from the library crate
+use bookokrat::config_migration::{self, FileMoveMigration, Migration};
 #[cfg(not(feature = "pdf"))]
 use bookokrat::event_source::KeyboardEventSource;
 #[cfg(feature = "pdf")]
@@ -36,6 +37,72 @@ use bookokrat::theme::load_custom_themes;
 fn find_most_recent_book() -> Option<library::MostRecentBook> {
     let libraries_dir = library::libraries_data_dir().ok()?;
     library::find_most_recent_book_in(&libraries_dir)
+}
+
+/// Build the list of config-file migrations to apply at startup.
+/// Paths are resolved from the user's real environment (home dir, etc.)
+/// so the migration module itself stays pure.
+fn build_config_migrations() -> Vec<Box<dyn Migration>> {
+    let mut out: Vec<Box<dyn Migration>> = Vec::new();
+    let Some(target_dir) = settings::preferred_config_dir() else {
+        return out;
+    };
+    let home = std::env::home_dir();
+
+    // Legacy locations for config.yaml, in priority order
+    // (first present becomes the source; others become stale cleanup).
+    let mut config_legacies: Vec<PathBuf> = Vec::new();
+    #[cfg(target_os = "macos")]
+    if let Some(ref h) = home {
+        config_legacies.push(
+            h.join("Library")
+                .join("Application Support")
+                .join("bookokrat")
+                .join("config.yaml"),
+        );
+    }
+    if let Some(ref h) = home {
+        config_legacies.push(h.join(".bookokrat_settings.yaml"));
+    }
+    if !config_legacies.is_empty() {
+        out.push(Box::new(FileMoveMigration::new(
+            "config",
+            target_dir.join("config.yaml"),
+            config_legacies,
+        )));
+    }
+
+    // keybindings.yaml — only macOS has a prior location worth migrating
+    // (Linux already uses ~/.config/bookokrat/; Windows stays on %APPDATA%).
+    #[cfg(target_os = "macos")]
+    if let Some(ref h) = home {
+        out.push(Box::new(FileMoveMigration::new(
+            "keybindings",
+            target_dir.join("keybindings.yaml"),
+            vec![
+                h.join("Library")
+                    .join("Application Support")
+                    .join("bookokrat")
+                    .join("keybindings.yaml"),
+            ],
+        )));
+    }
+
+    out
+}
+
+/// Read a y/n answer from stdin. Anything other than "y"/"yes" (case-insensitive) counts as no.
+fn ask_user_confirm(prompt: &str) -> bool {
+    use std::io::{self, BufRead, Write};
+    println!("\n{prompt}");
+    print!(" [y/N]: ");
+    let _ = io::stdout().flush();
+    let mut line = String::new();
+    if io::stdin().lock().read_line(&mut line).is_err() {
+        return false;
+    }
+    let answer = line.trim().to_lowercase();
+    matches!(answer.as_str(), "y" | "yes")
 }
 
 /// Handle --synctex-forward: connect to a running instance's socket and send a forward search command.
@@ -162,6 +229,43 @@ fn main() -> Result<()> {
     }
 
     info!("Starting Bookokrat EPUB reader");
+
+    // Config-file migration: must run before the TUI steals stdin/stdout
+    // (we need a y/n prompt) and before settings::load_settings() so that
+    // the settings loader looks at the post-migration target path.
+    if !args.test_mode {
+        let migrations = build_config_migrations();
+        match config_migration::run(&migrations, ask_user_confirm) {
+            config_migration::Outcome::NothingToDo => {}
+            config_migration::Outcome::Completed { applied } => {
+                println!("Migrated {} config file(s): {applied:?}", applied.len());
+            }
+            config_migration::Outcome::Declined => {
+                eprintln!(
+                    "Config migration declined. Bookokrat cannot start until legacy config \
+                     files are migrated. Relaunch to try again."
+                );
+                std::process::exit(1);
+            }
+            config_migration::Outcome::Blocked { .. } => {
+                eprintln!("{}", config_migration::format_conflict_error(&migrations));
+                std::process::exit(2);
+            }
+            config_migration::Outcome::Failed {
+                applied,
+                failed_id,
+                error,
+            } => {
+                eprintln!("Config migration failed on '{failed_id}': {error}");
+                if !applied.is_empty() {
+                    eprintln!("Already migrated before failure: {applied:?}");
+                }
+                eprintln!("Resolve the issue above and restart.");
+                std::process::exit(3);
+            }
+        }
+    }
+
     bookokrat::clipboard::init();
 
     #[cfg(feature = "pdf")]

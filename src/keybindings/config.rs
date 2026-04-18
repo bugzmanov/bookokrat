@@ -10,7 +10,6 @@ use super::keymap::Keymap;
 use super::notation::parse_key_binding;
 
 const KEYBINDINGS_FILENAME: &str = "keybindings.yaml";
-const APP_NAME: &str = "bookokrat";
 
 /// Load the keymap: defaults + user overrides from config file.
 pub fn load_keymap() -> Keymap {
@@ -36,7 +35,7 @@ pub fn load_keymap() -> Keymap {
 }
 
 fn keybindings_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|c| c.join(APP_NAME).join(KEYBINDINGS_FILENAME))
+    crate::settings::preferred_config_dir().map(|dir| dir.join(KEYBINDINGS_FILENAME))
 }
 
 fn load_and_apply(path: &PathBuf, keymap: &mut Keymap) -> Result<usize, String> {

@@ -214,8 +214,23 @@ impl Default for Settings {
 
 static SETTINGS: LazyLock<RwLock<Settings>> = LazyLock::new(|| RwLock::new(Settings::default()));
 
+/// Canonical config directory for the app. XDG-style (`~/.config/bookokrat/`)
+/// on macOS and Linux; `%APPDATA%\bookokrat\` on Windows (via `dirs`).
+/// The macOS override keeps us consistent with other brew-installed TUI apps
+/// (nvim, helix, starship) rather than following Apple's GUI convention.
+pub fn preferred_config_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        std::env::home_dir().map(|h| h.join(".config").join(APP_NAME))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        dirs::config_dir().map(|c| c.join(APP_NAME))
+    }
+}
+
 fn preferred_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|config| config.join(APP_NAME).join(SETTINGS_FILENAME))
+    preferred_config_dir().map(|dir| dir.join(SETTINGS_FILENAME))
 }
 
 fn legacy_config_path() -> Option<PathBuf> {
