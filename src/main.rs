@@ -187,6 +187,7 @@ fn main() -> Result<()> {
         .and_then(|p| Path::new(p).parent())
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
+        .or_else(|| args.directory.as_deref().map(PathBuf::from))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
     let lib_paths = library::resolve_library_paths(&library_dir);
@@ -332,7 +333,9 @@ fn main() -> Result<()> {
             } else {
                 parent.to_str()
             }
-        });
+        })
+        .or(args.directory.as_deref());
+        
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent =
         should_auto_load_recent(args.file.as_deref(), args.test_mode, args.continue_reading);

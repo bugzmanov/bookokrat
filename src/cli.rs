@@ -9,6 +9,10 @@ pub struct Cli {
     /// EPUB or PDF file to open
     pub file: Option<String>,
 
+    /// Directory to use as the library (defaults to current directory)
+    #[arg(long, short = 'd', conflicts_with = "file")]
+    pub directory: Option<String>,
+
     /// Open at a given chapter
     #[arg(long, requires = "file", conflicts_with = "page")]
     pub chapter: Option<usize>,
