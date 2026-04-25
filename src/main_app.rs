@@ -4070,9 +4070,8 @@ impl App {
         if let FocusedPanel::Main(panel) = self.focused_panel {
             self.previous_main_panel = panel;
         }
-        self.keybinding_errors_popup = Some(
-            crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors),
-        );
+        self.keybinding_errors_popup =
+            Some(crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors));
         self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
     }
 
@@ -4186,15 +4185,15 @@ impl App {
             Action::ReloadKeybindings => {
                 let errors = crate::keybindings::reload_keymap();
                 if errors.is_empty() {
-                    self.notifications.show_info("Keybindings reloaded.".to_string());
+                    self.notifications
+                        .show_info("Keybindings reloaded.".to_string());
                 } else {
                     if let FocusedPanel::Main(panel) = self.focused_panel {
                         self.previous_main_panel = panel;
                     }
-                    self.keybinding_errors_popup =
-                        Some(crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(
-                            errors,
-                        ));
+                    self.keybinding_errors_popup = Some(
+                        crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors),
+                    );
                     self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
                 }
                 true
@@ -5135,9 +5134,7 @@ impl App {
                     }
                     (KeyCode::Char('j'), _) | (KeyCode::Down, _) => popup.scroll_down(),
                     (KeyCode::Char('k'), _) | (KeyCode::Up, _) => popup.scroll_up(),
-                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-                        popup.scroll_half_page_down(20)
-                    }
+                    (KeyCode::Char('d'), KeyModifiers::CONTROL) => popup.scroll_half_page_down(20),
                     (KeyCode::Char('u'), KeyModifiers::CONTROL) => popup.scroll_half_page_up(20),
                     _ => {}
                 }

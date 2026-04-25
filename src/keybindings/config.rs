@@ -185,7 +185,10 @@ fn walk_toml(
                 };
                 errors.push(LoadError::with_line(
                     find_binding_line(content, &prefix, k).unwrap_or(1),
-                    format!("{path}: binding value must be a string (got {})", type_name(v)),
+                    format!(
+                        "{path}: binding value must be a string (got {})",
+                        type_name(v)
+                    ),
                 ));
             }
         }
@@ -468,7 +471,9 @@ fn apply_context_overrides(
                 let quoted = format!("\"{notation}\"");
                 errors.push(LoadError::with_line(
                     find_binding_line(content, config_key, &quoted).unwrap_or(1),
-                    format!("{config_key}.\"{notation}\": cannot parse action \"{action_str}\" — {e}"),
+                    format!(
+                        "{config_key}.\"{notation}\": cannot parse action \"{action_str}\" — {e}"
+                    ),
                 ));
                 continue;
             }
@@ -912,8 +917,7 @@ content.\"j\" = \"bad_action_name\"
         // loader must reproduce the default keymap exactly — otherwise the
         // printer has drifted (wrong notation, wrong action name, etc.).
         let toml_src = print_default_keybindings();
-        let reloaded =
-            make_keymap_with_toml(&toml_src);
+        let reloaded = make_keymap_with_toml(&toml_src);
         assert_keymaps_equal(&reloaded, &default_keymap());
     }
 
