@@ -93,10 +93,7 @@ impl KeybindingErrorsPopup {
             )),
         ];
 
-        f.render_widget(
-            Paragraph::new(lines).wrap(Wrap { trim: false }),
-            area,
-        );
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
     }
 
     fn render_body(&self, f: &mut Frame, area: Rect, palette: &crate::theme::Base16Palette) {

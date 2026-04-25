@@ -13,10 +13,13 @@ use crate::theme::{
 use crate::widget::popup::Popup;
 use ratatui::{
     Frame,
+    buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{
+        Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Widget,
+    },
 };
 
 pub enum SettingsAction {
@@ -115,9 +118,19 @@ pub struct SettingsPopup {
     lookup_command_input: crate::vendored::tui_textarea::TextArea<'static>,
     lookup_display_selected: LookupDisplay,
     synctex_editor_input: crate::vendored::tui_textarea::TextArea<'static>,
-    // Click targets: stored during render for mouse hit-testing
+    // Click targets: stored during render for mouse hit-testing.
+    // content_chunks are stored in virtual buffer coords (origin at content_buf_origin),
+    // since content is rendered to an off-screen buffer when it overflows the viewport.
     tab_area: Option<Rect>,
     content_chunks: Vec<Rect>,
+    // Origin of the virtual content buffer (matches visible content area's x/y).
+    content_buf_origin: (u16, u16),
+    // Visible content viewport (on-screen area where content is shown).
+    content_viewport: Option<Rect>,
+    // Vertical scroll offset into the virtual content buffer (in rows).
+    scroll_offset: u16,
+    // Total natural content height for current tab (set during render).
+    content_total_height: u16,
     // Common
     last_popup_area: Option<Rect>,
 }
@@ -199,6 +212,10 @@ impl SettingsPopup {
             synctex_editor_input,
             tab_area: None,
             content_chunks: Vec::new(),
+            content_buf_origin: (0, 0),
+            content_viewport: None,
+            scroll_offset: 0,
+            content_total_height: 0,
             last_popup_area: None,
         }
     }
@@ -299,26 +316,169 @@ impl SettingsPopup {
             ])
             .split(padded);
 
-        // Render tabs
+        // Render tabs directly into frame (tabs do not scroll)
         self.tab_area = Some(main_chunks[0]);
-        self.render_tabs(f, main_chunks[0], palette);
+        self.render_tabs(f.buffer_mut(), main_chunks[0], palette);
 
-        // Render content based on selected tab
-        let content_area = Rect {
+        // Visible content viewport on screen
+        let viewport = Rect {
             x: main_chunks[1].x,
             y: main_chunks[1].y + 1,
             width: main_chunks[1].width,
             height: main_chunks[1].height.saturating_sub(1),
         };
+        self.content_viewport = Some(viewport);
+
+        if viewport.width == 0 || viewport.height == 0 {
+            return;
+        }
+
+        // Compute natural height for current tab. Scrollbar lives on the
+        // popup border, so the content can use the full viewport width.
+        let natural_height = self.compute_natural_height(viewport.width);
+        let needs_scroll = natural_height > viewport.height;
+        let content_width = viewport.width;
+
+        // Off-screen buffer sized to natural content height. Origin matches
+        // viewport so layouts produce on-screen-looking coordinates which we
+        // then translate when blitting.
+        let buf_area = Rect {
+            x: viewport.x,
+            y: viewport.y,
+            width: content_width,
+            height: natural_height.max(viewport.height),
+        };
+        self.content_buf_origin = (buf_area.x, buf_area.y);
+        self.content_total_height = natural_height;
+
+        let mut content_buf = Buffer::empty(buf_area);
+        // Match popup background so unfilled cells don't show through with default colors.
+        for cell in content_buf.content.iter_mut() {
+            cell.set_style(Style::default().bg(palette.base_00));
+        }
 
         match self.current_tab {
-            SettingsTab::General => self.render_general_tab(f, content_area, palette),
-            SettingsTab::Themes => self.render_themes_tab(f, content_area, palette),
-            SettingsTab::Integrations => self.render_integrations_tab(f, content_area, palette),
+            SettingsTab::General => self.render_general_tab(&mut content_buf, buf_area, palette),
+            SettingsTab::Themes => self.render_themes_tab(&mut content_buf, buf_area, palette),
+            SettingsTab::Integrations => {
+                self.render_integrations_tab(&mut content_buf, buf_area, palette)
+            }
+        }
+
+        // Auto-scroll: ensure the currently selected row is in view.
+        let max_scroll = natural_height.saturating_sub(viewport.height);
+        if let Some((sel_y, sel_h)) = self.selected_row_range() {
+            let sel_top = sel_y.saturating_sub(buf_area.y);
+            let sel_bottom = sel_top + sel_h;
+            if sel_top < self.scroll_offset {
+                self.scroll_offset = sel_top;
+            } else if sel_bottom > self.scroll_offset + viewport.height {
+                self.scroll_offset = sel_bottom.saturating_sub(viewport.height);
+            }
+        }
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+
+        // Blit visible portion of the off-screen buffer to the frame.
+        let frame_buf = f.buffer_mut();
+        for vy in 0..viewport.height {
+            let src_y = buf_area.y + self.scroll_offset + vy;
+            if src_y >= buf_area.y + buf_area.height {
+                break;
+            }
+            for vx in 0..content_width {
+                let src_x = buf_area.x + vx;
+                let cell = content_buf[(src_x, src_y)].clone();
+                frame_buf[(viewport.x + vx, viewport.y + vy)] = cell;
+            }
+        }
+
+        // Render scrollbar on the popup's right border, spanning the content
+        // viewport vertically. Position reflects the cursor (selected option),
+        // not just the scroll offset.
+        if needs_scroll {
+            let cursor_pos = self
+                .selected_row_range()
+                .map(|(y, _)| y.saturating_sub(buf_area.y) as usize)
+                .unwrap_or(self.scroll_offset as usize);
+            let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .style(Style::default().fg(palette.base_04))
+                .begin_symbol(None)
+                .end_symbol(None);
+            let mut scrollbar_state = ScrollbarState::new(natural_height as usize)
+                .viewport_content_length(viewport.height as usize)
+                .position(cursor_pos);
+            let scrollbar_area = Rect {
+                x: popup_area.x,
+                y: viewport.y,
+                width: popup_area.width,
+                height: viewport.height,
+            };
+            f.render_stateful_widget(scrollbar, scrollbar_area, &mut scrollbar_state);
         }
     }
 
-    fn render_tabs(&self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+    /// Compute the natural (un-scrolled) height of content for the current tab.
+    fn compute_natural_height(&self, _width: u16) -> u16 {
+        match self.current_tab {
+            SettingsTab::General => {
+                // PDF section (3) + spacer (1) + Render Mode (4) + spacer (1) +
+                // Page Layout (4) + spacer (1) + Info (≤2)
+                let pdf_enabled = is_pdf_enabled();
+                let info_h = self
+                    .get_pdf_info_lines(current_theme(), pdf_enabled, get_pdf_render_mode())
+                    .len() as u16;
+                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1)
+            }
+            SettingsTab::Themes => self.theme_names.len() as u16 + 1 + 1 + 1 + 2,
+            SettingsTab::Integrations => {
+                // 1+3+3+1+1+1+1+1+1+1+3+9+1+1 = 28
+                28
+            }
+        }
+    }
+
+    /// Returns (virtual_y, height) of the currently selected row in the
+    /// off-screen content buffer (absolute coords, matching content_chunks).
+    fn selected_row_range(&self) -> Option<(u16, u16)> {
+        match self.current_tab {
+            SettingsTab::General => {
+                // chunks[1] holds idx 0,1; chunks[5] holds idx 2,3; chunks[9] holds idx 4,5.
+                let (chunk_idx, sub) = match self.general_selected_idx {
+                    0 | 1 => (1usize, self.general_selected_idx),
+                    2 | 3 => (5, self.general_selected_idx - 2),
+                    4 | 5 => (9, self.general_selected_idx - 4),
+                    _ => return None,
+                };
+                let r = self.content_chunks.get(chunk_idx)?;
+                Some((r.y + sub as u16, 1))
+            }
+            SettingsTab::Themes => {
+                let theme_count = self.theme_names.len();
+                if self.theme_selected_idx < theme_count {
+                    let r = self.content_chunks.first()?;
+                    Some((r.y + self.theme_selected_idx as u16, 1))
+                } else {
+                    let sub = self.theme_selected_idx - theme_count;
+                    let r = self.content_chunks.get(4)?;
+                    Some((r.y + sub as u16, 1))
+                }
+            }
+            SettingsTab::Integrations => {
+                let chunk_idx = match self.integrations_focus {
+                    IntegrationsFocus::LookupCommand => 1,
+                    IntegrationsFocus::DisplayPopup => 4,
+                    IntegrationsFocus::DisplayFireAndForget => 5,
+                    IntegrationsFocus::TestLookup => 7,
+                    IntegrationsFocus::SynctexEditor => 10,
+                    IntegrationsFocus::TestSynctex => 13,
+                };
+                let r = self.content_chunks.get(chunk_idx)?;
+                Some((r.y, r.height))
+            }
+        }
+    }
+
+    fn render_tabs(&self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
         let tab_names = ["General", "Select Theme", "Integrations"];
 
         let mut spans = Vec::new();
@@ -351,7 +511,7 @@ impl SettingsPopup {
         }
 
         let tabs_line = Line::from(spans);
-        f.render_widget(Paragraph::new(tabs_line), area);
+        Paragraph::new(tabs_line).render(area, buf);
 
         // Render underline for selected tab
         let underline_y = area.y + 1;
@@ -375,11 +535,11 @@ impl SettingsPopup {
                 Style::default().fg(palette.base_0d),
             ));
 
-            f.render_widget(Paragraph::new(Line::from(underline_spans)), underline_area);
+            Paragraph::new(Line::from(underline_spans)).render(underline_area, buf);
         }
     }
 
-    fn render_general_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+    fn render_general_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
         let pdf_enabled = is_pdf_enabled();
         let current_mode = get_pdf_render_mode();
         let current_layout_mode = get_pdf_page_layout_mode();
@@ -390,21 +550,24 @@ impl SettingsPopup {
         let radio_unselected = "○";
         let is_general = self.current_tab == SettingsTab::General;
 
+        let info_lines_count = self
+            .get_pdf_info_lines(palette, pdf_enabled, current_mode)
+            .len() as u16;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), //  0: PDF Support header
-                Constraint::Length(2), //  1: PDF Support options (Enabled/Disabled)
-                Constraint::Length(1), //  2: spacer
-                Constraint::Length(1), //  3: Render Mode header
-                Constraint::Length(1), //  4: empty line
-                Constraint::Length(2), //  5: Render Mode options
-                Constraint::Length(1), //  6: spacer
-                Constraint::Length(1), //  7: Page Layout header
-                Constraint::Length(1), //  8: empty line
-                Constraint::Length(2), //  9: Page Layout options
-                Constraint::Length(1), // 10: spacer
-                Constraint::Min(1),    // 11: Info message
+                Constraint::Length(1),                       //  0: PDF Support header
+                Constraint::Length(2),                       //  1: PDF Support options
+                Constraint::Length(1),                       //  2: spacer
+                Constraint::Length(1),                       //  3: Render Mode header
+                Constraint::Length(1),                       //  4: empty line
+                Constraint::Length(2),                       //  5: Render Mode options
+                Constraint::Length(1),                       //  6: spacer
+                Constraint::Length(1),                       //  7: Page Layout header
+                Constraint::Length(1),                       //  8: empty line
+                Constraint::Length(2),                       //  9: Page Layout options
+                Constraint::Length(1),                       // 10: spacer
+                Constraint::Length(info_lines_count.max(1)), // 11: Info message
             ])
             .split(area);
 
@@ -416,7 +579,7 @@ impl SettingsPopup {
         } else {
             palette.base_03
         };
-        self.render_section_header(f, chunks[0], "PDF / DJVU", palette, pdf_header_color);
+        self.render_section_header(buf, chunks[0], "PDF / DJVU", palette, pdf_header_color);
 
         let pdf_options_area = Rect {
             x: chunks[1].x + 2,
@@ -447,7 +610,7 @@ impl SettingsPopup {
             is_general && self.general_selected_idx == 0 && self.supports_graphics,
             palette,
         );
-        f.render_widget(Paragraph::new(enabled_line), pdf_chunks[0]);
+        Paragraph::new(enabled_line).render(pdf_chunks[0], buf);
 
         let disabled_radio = if !effective_pdf_enabled {
             radio_selected
@@ -462,7 +625,7 @@ impl SettingsPopup {
             is_general && self.general_selected_idx == 1 && self.supports_graphics,
             palette,
         );
-        f.render_widget(Paragraph::new(disabled_line), pdf_chunks[1]);
+        Paragraph::new(disabled_line).render(pdf_chunks[1], buf);
 
         // Render Mode section header
         let render_header_color = if render_mode_available {
@@ -477,7 +640,7 @@ impl SettingsPopup {
             height: chunks[3].height,
         };
         self.render_section_header(
-            f,
+            buf,
             render_header_area,
             "Render Mode",
             palette,
@@ -515,7 +678,7 @@ impl SettingsPopup {
             is_general && self.general_selected_idx == 2 && render_mode_available,
             palette,
         );
-        f.render_widget(Paragraph::new(page_line), render_chunks[0]);
+        Paragraph::new(page_line).render(render_chunks[0], buf);
 
         let scroll_radio = if current_mode == PdfRenderMode::Scroll {
             radio_selected
@@ -543,7 +706,7 @@ impl SettingsPopup {
                 && self.supports_scroll_mode,
             palette,
         );
-        f.render_widget(Paragraph::new(scroll_line), render_chunks[1]);
+        Paragraph::new(scroll_line).render(render_chunks[1], buf);
 
         // Page Layout section header
         let layout_header_color = if render_mode_available {
@@ -558,7 +721,7 @@ impl SettingsPopup {
             height: chunks[7].height,
         };
         self.render_section_header(
-            f,
+            buf,
             layout_header_area,
             "Page Layout",
             palette,
@@ -596,7 +759,7 @@ impl SettingsPopup {
             is_general && self.general_selected_idx == 4 && render_mode_available,
             palette,
         );
-        f.render_widget(Paragraph::new(single_line), layout_chunks[0]);
+        Paragraph::new(single_line).render(layout_chunks[0], buf);
 
         let dual_radio = if current_layout_mode == PdfPageLayoutMode::Dual {
             radio_selected
@@ -611,14 +774,14 @@ impl SettingsPopup {
             is_general && self.general_selected_idx == 5 && render_mode_available,
             palette,
         );
-        f.render_widget(Paragraph::new(dual_line), layout_chunks[1]);
+        Paragraph::new(dual_line).render(layout_chunks[1], buf);
 
         // Info message
         let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
-        f.render_widget(Paragraph::new(info_lines), chunks[11]);
+        Paragraph::new(info_lines).render(chunks[11], buf);
     }
 
-    fn render_themes_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+    fn render_themes_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
         let theme_list_height = self.theme_names.len() as u16;
 
         let chunks = Layout::default()
@@ -651,11 +814,11 @@ impl SettingsPopup {
             };
 
             let line = self.render_theme_option(name, is_current, is_selected, palette);
-            f.render_widget(Paragraph::new(line), line_area);
+            Paragraph::new(line).render(line_area, buf);
         }
 
         // Background section header
-        self.render_section_header(f, chunks[2], "Background", palette, palette.base_06);
+        self.render_section_header(buf, chunks[2], "Background", palette, palette.base_06);
 
         // Transparent Background options (indices theme_names.len() and theme_names.len()+1)
         let transparent = is_transparent_background();
@@ -687,7 +850,7 @@ impl SettingsPopup {
             self.theme_selected_idx == self.theme_names.len(),
             palette,
         );
-        f.render_widget(Paragraph::new(theme_line), trans_options_chunks[0]);
+        Paragraph::new(theme_line).render(trans_options_chunks[0], buf);
 
         let trans_radio = if transparent {
             radio_selected
@@ -702,7 +865,7 @@ impl SettingsPopup {
             self.theme_selected_idx == self.theme_names.len() + 1,
             palette,
         );
-        f.render_widget(Paragraph::new(trans_line), trans_options_chunks[1]);
+        Paragraph::new(trans_line).render(trans_options_chunks[1], buf);
     }
 
     fn render_theme_option(
@@ -735,7 +898,7 @@ impl SettingsPopup {
 
     fn render_section_header(
         &self,
-        f: &mut Frame,
+        buf: &mut Buffer,
         area: Rect,
         title: &str,
         palette: &Base16Palette,
@@ -747,7 +910,7 @@ impl SettingsPopup {
             Span::styled(title, Style::default().fg(title_color)),
         ]);
 
-        f.render_widget(Paragraph::new(line), area);
+        Paragraph::new(line).render(area, buf);
     }
 
     fn get_pdf_info_lines(
@@ -978,7 +1141,7 @@ impl SettingsPopup {
         None
     }
 
-    fn render_integrations_tab(&mut self, f: &mut Frame, area: Rect, palette: &Base16Palette) {
+    fn render_integrations_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
         let hint_style = Style::default().fg(palette.base_03);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -1005,7 +1168,7 @@ impl SettingsPopup {
 
         // -- Dictionary Lookup section --
         self.render_section_header(
-            f,
+            buf,
             chunks[0],
             "Dictionary Lookup (Space+l)",
             palette,
@@ -1025,7 +1188,7 @@ impl SettingsPopup {
         );
         self.lookup_command_input
             .set_style(Style::default().fg(palette.base_05));
-        f.render_widget(&self.lookup_command_input, chunks[1]);
+        Widget::render(&self.lookup_command_input, chunks[1], buf);
 
         let lookup_hints = vec![
             Line::from(Span::styled(
@@ -1038,10 +1201,10 @@ impl SettingsPopup {
                 hint_style,
             )),
         ];
-        f.render_widget(Paragraph::new(lookup_hints), chunks[2]);
+        Paragraph::new(lookup_hints).render(chunks[2], buf);
 
         // Display mode (vertical radio buttons)
-        self.render_section_header(f, chunks[3], "Display mode:", palette, palette.base_04);
+        self.render_section_header(buf, chunks[3], "Display mode:", palette, palette.base_04);
 
         let radio_style = Style::default().fg(palette.base_05);
         let popup_selected = self.lookup_display_selected == LookupDisplay::Popup;
@@ -1055,7 +1218,7 @@ impl SettingsPopup {
             self.integrations_focus == IntegrationsFocus::DisplayPopup,
             palette,
         );
-        f.render_widget(Paragraph::new(popup_line), chunks[4]);
+        Paragraph::new(popup_line).render(chunks[4], buf);
 
         let faf_radio = if popup_selected { "○" } else { "●" };
         let faf_line = self.render_radio_option(
@@ -1066,11 +1229,11 @@ impl SettingsPopup {
             self.integrations_focus == IntegrationsFocus::DisplayFireAndForget,
             palette,
         );
-        f.render_widget(Paragraph::new(faf_line), chunks[5]);
+        Paragraph::new(faf_line).render(chunks[5], buf);
 
         // chunks[6] = spacing
         self.render_test_button(
-            f,
+            buf,
             chunks[7],
             "Test",
             "lookup word \"hello\"",
@@ -1082,7 +1245,7 @@ impl SettingsPopup {
 
         // -- SyncTeX section --
         self.render_section_header(
-            f,
+            buf,
             chunks[9],
             "SyncTeX Editor (Ctrl+click, right-click / gd)",
             palette,
@@ -1102,7 +1265,7 @@ impl SettingsPopup {
         );
         self.synctex_editor_input
             .set_style(Style::default().fg(palette.base_05));
-        f.render_widget(&self.synctex_editor_input, chunks[10]);
+        Widget::render(&self.synctex_editor_input, chunks[10], buf);
 
         let synctex_hints = vec![
             Line::from(Span::styled(
@@ -1135,11 +1298,11 @@ impl SettingsPopup {
                 hint_style,
             )),
         ];
-        f.render_widget(Paragraph::new(synctex_hints), chunks[11]);
+        Paragraph::new(synctex_hints).render(chunks[11], buf);
 
         // chunks[12] = spacing
         self.render_test_button(
-            f,
+            buf,
             chunks[13],
             "Test",
             "open /tmp/synctex_test.txt:1",
@@ -1150,7 +1313,7 @@ impl SettingsPopup {
 
     fn render_test_button(
         &self,
-        f: &mut Frame,
+        buf: &mut Buffer,
         area: Rect,
         label: &str,
         description: &str,
@@ -1181,7 +1344,7 @@ impl SettingsPopup {
             Span::styled(format!(" {label} "), btn_style),
             Span::styled(format!("  {description}"), desc_style),
         ]);
-        f.render_widget(Paragraph::new(line), area);
+        Paragraph::new(line).render(area, buf);
     }
 
     fn apply_integrations_selected(&mut self) -> Option<SettingsAction> {
@@ -1215,23 +1378,20 @@ impl SettingsPopup {
                 let rel_x = col.saturating_sub(tab_area.x);
                 // Tab positions: " General   Select Theme   Integrations"
                 //                  1..8       11..23          26..38
-                if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 11 {
-                    if self.current_tab == SettingsTab::Integrations {
-                        self.save_integrations();
-                    }
-                    self.current_tab = SettingsTab::General;
-                    return None;
+                let new_tab = if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 11 {
+                    Some(SettingsTab::General)
                 } else if rel_x >= 11 && rel_x < 26 {
-                    if self.current_tab == SettingsTab::Integrations {
-                        self.save_integrations();
-                    }
-                    self.current_tab = SettingsTab::Themes;
-                    return None;
+                    Some(SettingsTab::Themes)
                 } else if rel_x >= 26 {
+                    Some(SettingsTab::Integrations)
+                } else {
+                    None
+                };
+                if let Some(tab) = new_tab {
                     if self.current_tab == SettingsTab::Integrations {
                         self.save_integrations();
                     }
-                    self.current_tab = SettingsTab::Integrations;
+                    self.set_tab(tab);
                     return None;
                 }
             }
@@ -1241,10 +1401,24 @@ impl SettingsPopup {
             return None;
         }
 
+        // Translate screen click to virtual content-buffer coordinates.
+        let viewport = self.content_viewport?;
+        if col < viewport.x
+            || col >= viewport.x + viewport.width
+            || row < viewport.y
+            || row >= viewport.y + viewport.height
+        {
+            return None;
+        }
+        let virtual_row = row + self.scroll_offset;
+
         let chunks = &self.content_chunks;
         let hit = |idx: usize| -> bool {
             if let Some(r) = chunks.get(idx) {
-                col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height
+                col >= r.x
+                    && col < r.x + r.width
+                    && virtual_row >= r.y
+                    && virtual_row < r.y + r.height
             } else {
                 false
             }
@@ -1252,54 +1426,64 @@ impl SettingsPopup {
 
         match self.current_tab {
             SettingsTab::General => {
-                // Chunk 1: zen mode options (height=2), indices 0-1
+                // chunks[1]: PDF Enabled/Disabled (idx 0,1)
                 if let Some(r) = chunks.get(1) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let sub = (row - r.y) as usize;
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
                         self.general_selected_idx = sub;
                         return self.apply_general_selected();
                     }
                 }
-                // Chunk 4: PDF enabled/disabled (height=2), indices 2-3
-                if let Some(r) = chunks.get(4) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let sub = (row - r.y) as usize;
+                // chunks[5]: Render Mode options (idx 2,3)
+                if let Some(r) = chunks.get(5) {
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
                         self.general_selected_idx = 2 + sub;
                         return self.apply_general_selected();
                     }
                 }
-                // Chunk 8: render mode options (height=2), indices 4-5
-                if let Some(r) = chunks.get(8) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let sub = (row - r.y) as usize;
+                // chunks[9]: Page Layout options (idx 4,5)
+                if let Some(r) = chunks.get(9) {
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
                         self.general_selected_idx = 4 + sub;
-                        return self.apply_general_selected();
-                    }
-                }
-                // Chunk 12: page layout options (height=2), indices 6-7
-                if let Some(r) = chunks.get(12) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let sub = (row - r.y) as usize;
-                        self.general_selected_idx = 6 + sub;
                         return self.apply_general_selected();
                     }
                 }
             }
             SettingsTab::Themes => {
-                // Theme list is in chunk 0 — each theme is one row
-                if let Some(r) = chunks.get(0) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let idx = (row - r.y) as usize;
+                if let Some(r) = chunks.first() {
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let idx = (virtual_row - r.y) as usize;
                         if idx < self.theme_names.len() {
                             self.theme_selected_idx = idx;
                             return self.apply_theme_selected();
                         }
                     }
                 }
-                // Background options in chunk 4 (height=2)
                 if let Some(r) = chunks.get(4) {
-                    if col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height {
-                        let sub = (row - r.y) as usize;
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
                         self.theme_selected_idx = self.theme_names.len() + sub;
                         return self.apply_theme_selected();
                     }
@@ -1331,6 +1515,14 @@ impl SettingsPopup {
             }
         }
         None
+    }
+
+    /// Switch tabs and reset scroll state.
+    fn set_tab(&mut self, tab: SettingsTab) {
+        if self.current_tab != tab {
+            self.current_tab = tab;
+            self.scroll_offset = 0;
+        }
     }
 
     fn save_integrations(&self) {
@@ -1378,12 +1570,12 @@ impl SettingsPopup {
                 }
                 KeyCode::Tab => {
                     self.save_integrations();
-                    self.current_tab = self.current_tab.next();
+                    self.set_tab(self.current_tab.next());
                     return None;
                 }
                 KeyCode::BackTab => {
                     self.save_integrations();
-                    self.current_tab = self.current_tab.prev();
+                    self.set_tab(self.current_tab.prev());
                     return None;
                 }
                 KeyCode::Down => {
@@ -1433,28 +1625,28 @@ impl SettingsPopup {
                             if self.current_tab == SettingsTab::Integrations {
                                 self.save_integrations();
                             }
-                            self.current_tab = self.current_tab.next();
+                            self.set_tab(self.current_tab.next());
                             None
                         }
                         Action::PrevTab => {
                             if self.current_tab == SettingsTab::Integrations {
                                 self.save_integrations();
                             }
-                            self.current_tab = self.current_tab.prev();
+                            self.set_tab(self.current_tab.prev());
                             None
                         }
                         Action::MoveLeft => {
                             if self.current_tab == SettingsTab::Integrations {
                                 self.save_integrations();
                             }
-                            self.current_tab = self.current_tab.prev();
+                            self.set_tab(self.current_tab.prev());
                             None
                         }
                         Action::MoveRight => {
                             if self.current_tab == SettingsTab::Integrations {
                                 self.save_integrations();
                             }
-                            self.current_tab = self.current_tab.next();
+                            self.set_tab(self.current_tab.next());
                             None
                         }
                         Action::MoveDown => {
@@ -1527,7 +1719,7 @@ impl Popup for SettingsPopup {
 
 impl VimNavMotions for SettingsPopup {
     fn handle_h(&mut self) {
-        self.current_tab = self.current_tab.prev();
+        self.set_tab(self.current_tab.prev());
     }
 
     fn handle_j(&mut self) {
@@ -1551,7 +1743,7 @@ impl VimNavMotions for SettingsPopup {
     }
 
     fn handle_l(&mut self) {
-        self.current_tab = self.current_tab.next();
+        self.set_tab(self.current_tab.next());
     }
 
     fn handle_ctrl_d(&mut self) {
