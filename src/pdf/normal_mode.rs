@@ -336,6 +336,42 @@ impl NormalModeState {
         }
     }
 
+    /// Move to end of current word, or end of next word if already at a word's end
+    /// or on whitespace (vim `e` motion).
+    pub fn move_word_end(&mut self, line_bounds: &[LineBounds]) {
+        if !self.active {
+            return;
+        }
+
+        let mut line_idx = self.cursor.line_idx;
+        let mut idx = self.cursor.char_idx + 1;
+
+        loop {
+            let Some(line) = line_bounds.get(line_idx) else {
+                return;
+            };
+
+            while idx < line.chars.len() && line.chars[idx].c.is_whitespace() {
+                idx += 1;
+            }
+
+            if idx < line.chars.len() {
+                while idx + 1 < line.chars.len() && !line.chars[idx + 1].c.is_whitespace() {
+                    idx += 1;
+                }
+                self.cursor.line_idx = line_idx;
+                self.cursor.char_idx = idx;
+                return;
+            }
+
+            if line_idx >= line_bounds.len().saturating_sub(1) {
+                return;
+            }
+            line_idx += 1;
+            idx = 0;
+        }
+    }
+
     /// Move word backward
     pub fn move_word_backward(&mut self, line_bounds: &[LineBounds]) {
         if !self.active {
