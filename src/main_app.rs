@@ -1641,10 +1641,25 @@ impl App {
     /// Switch navigation panel to PDF TOC mode
     #[cfg(feature = "pdf")]
     fn switch_to_pdf_toc_mode(&mut self) {
+        let pdf_path = match self.pdf_reader.as_ref() {
+            Some(pdf) => pdf.name.clone(),
+            None => return,
+        };
+        let saved_expansion_state = self
+            .current_book_bookmarks()
+            .get_bookmark(&pdf_path)
+            .and_then(|b| b.toc_expansion_state.clone());
+
         let Some(ref pdf_reader) = self.pdf_reader else {
             return;
         };
         pdf_reader.switch_to_toc_mode(&mut self.navigation_panel);
+
+        if let Some(state) = saved_expansion_state {
+            self.navigation_panel
+                .table_of_contents
+                .apply_expansion_state(&state);
+        }
     }
 
     #[cfg(feature = "pdf")]
@@ -1839,7 +1854,18 @@ impl App {
             active_section,
         };
 
+        let saved_expansion_state = self
+            .current_book_bookmarks()
+            .get_bookmark(&book.file)
+            .and_then(|b| b.toc_expansion_state.clone());
+
         self.navigation_panel.switch_to_toc_mode(book_info);
+
+        if let Some(state) = saved_expansion_state {
+            self.navigation_panel
+                .table_of_contents
+                .apply_expansion_state(&state);
+        }
     }
 
     fn update_toc_state(&mut self) {
@@ -1875,6 +1901,31 @@ impl App {
 
     pub fn save_bookmark(&mut self) {
         self.save_bookmark_with_throttle(false);
+    }
+
+    fn persist_toc_expansion_state(&mut self) {
+        let path = {
+            #[cfg(feature = "pdf")]
+            {
+                if let Some(ref pdf) = self.pdf_reader {
+                    Some(pdf.name.clone())
+                } else {
+                    self.current_book.as_ref().map(|b| b.file.clone())
+                }
+            }
+            #[cfg(not(feature = "pdf"))]
+            {
+                self.current_book.as_ref().map(|b| b.file.clone())
+            }
+        };
+        if let Some(path) = path {
+            let state = self
+                .navigation_panel
+                .table_of_contents
+                .collect_expansion_state();
+            self.current_book_bookmarks_mut()
+                .set_toc_expansion_state(&path, state);
+        }
     }
 
     fn handle_reading_history_action(
@@ -2532,18 +2583,29 @@ impl App {
 
                     match click_type {
                         ClickType::Single | ClickType::Triple => {
-                            self.navigation_panel.handle_mouse_click(
+                            let outcome = self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 nav_area,
                             );
+                            if outcome
+                                == crate::navigation_panel::MouseClickOutcome::ExpansionToggled
+                            {
+                                self.persist_toc_expansion_state();
+                            }
                         }
                         ClickType::Double => {
-                            if self.navigation_panel.handle_mouse_click(
+                            let outcome = self.navigation_panel.handle_mouse_click(
                                 mouse_event.column,
                                 mouse_event.row,
                                 nav_area,
-                            ) {
+                            );
+                            if outcome
+                                == crate::navigation_panel::MouseClickOutcome::ExpansionToggled
+                            {
+                                self.persist_toc_expansion_state();
+                            }
+                            if outcome.handled() {
                                 if let Some(action) = self.navigation_panel.get_enter_action() {
                                     self.handle_navigation_panel_action(action);
                                 }
@@ -3367,6 +3429,11 @@ impl App {
                 self.navigation_panel
                     .table_of_contents
                     .toggle_selected_expansion();
+                self.persist_toc_expansion_state();
+                false
+            }
+            NavigationPanelAction::TocExpansionChanged => {
+                self.persist_toc_expansion_state();
                 false
             }
             NavigationPanelAction::ToggleSortOrder => {

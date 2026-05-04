@@ -5857,7 +5857,7 @@ pub(crate) fn convert_pdf_toc_to_toc_items(entries: &[crate::pdf::TocEntry]) -> 
                     href: Some(href),
                     anchor: None,
                     children,
-                    is_expanded: true,
+                    is_expanded: false,
                 });
                 i = children_end;
             } else {
@@ -5915,7 +5915,7 @@ pub(crate) fn convert_pdf_toc_children(
                     href: Some(href),
                     anchor: None,
                     children,
-                    is_expanded: true,
+                    is_expanded: false,
                 });
                 i = children_end;
             } else {
