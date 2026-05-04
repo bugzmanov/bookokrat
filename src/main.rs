@@ -335,7 +335,7 @@ fn main() -> Result<()> {
             }
         })
         .or(args.directory.as_deref());
-        
+
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent =
         should_auto_load_recent(args.file.as_deref(), args.test_mode, args.continue_reading);

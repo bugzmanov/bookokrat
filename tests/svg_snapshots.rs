@@ -2798,6 +2798,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             book_title: None,
             book_author: None,
             absolute_path: None,
+            toc_expansion_state: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2821,6 +2822,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             book_title: None,
             book_author: None,
             absolute_path: None,
+            toc_expansion_state: None,
         };
         books_map.insert(book_path, bookmark);
     }

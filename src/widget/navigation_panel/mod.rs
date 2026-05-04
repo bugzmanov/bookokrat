@@ -12,6 +12,19 @@ use crate::search::{SearchMode, SearchState, SearchablePanel};
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect, style::Modifier, text::Span};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MouseClickOutcome {
+    NotHandled,
+    ItemSelected,
+    ExpansionToggled,
+}
+
+impl MouseClickOutcome {
+    pub fn handled(self) -> bool {
+        !matches!(self, MouseClickOutcome::NotHandled)
+    }
+}
+
 pub enum NavigationPanelAction {
     SelectBook {
         book_path: String,
@@ -21,6 +34,7 @@ pub enum NavigationPanelAction {
         anchor: Option<String>,
     },
     ToggleSection,
+    TocExpansionChanged,
     SwitchToBookList,
     ToggleSortOrder,
     Bypass, // when the component assumes the upper layer should handle the action
@@ -135,11 +149,16 @@ impl NavigationPanel {
         self.book_list.selected
     }
 
-    /// Handle mouse click at the given position
-    /// Returns true if an item was selected (for double-click handling)
-    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> bool {
+    /// Handle mouse click at the given position.
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> MouseClickOutcome {
         match self.mode {
-            NavigationMode::BookSelection => self.book_list.handle_mouse_click(x, y, area),
+            NavigationMode::BookSelection => {
+                if self.book_list.handle_mouse_click(x, y, area) {
+                    MouseClickOutcome::ItemSelected
+                } else {
+                    MouseClickOutcome::NotHandled
+                }
+            }
             NavigationMode::TableOfContents => {
                 self.table_of_contents.handle_mouse_click(x, y, area)
             }
@@ -301,19 +320,35 @@ impl NavigationPanel {
             }
             Action::CollapseAll => {
                 self.handle_shift_h();
-                None
+                if self.mode == NavigationMode::TableOfContents {
+                    Some(NavigationPanelAction::TocExpansionChanged)
+                } else {
+                    None
+                }
             }
             Action::ExpandAll => {
                 self.handle_shift_l();
-                None
+                if self.mode == NavigationMode::TableOfContents {
+                    Some(NavigationPanelAction::TocExpansionChanged)
+                } else {
+                    None
+                }
             }
             Action::Collapse => {
                 self.handle_h();
-                None
+                if self.mode == NavigationMode::TableOfContents {
+                    Some(NavigationPanelAction::TocExpansionChanged)
+                } else {
+                    None
+                }
             }
             Action::Expand => {
                 self.handle_l();
-                None
+                if self.mode == NavigationMode::TableOfContents {
+                    Some(NavigationPanelAction::TocExpansionChanged)
+                } else {
+                    None
+                }
             }
             Action::GoTop => {
                 self.handle_gg();

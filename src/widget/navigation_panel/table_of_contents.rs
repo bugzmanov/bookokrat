@@ -1,4 +1,5 @@
-use super::CurrentBookInfo;
+use super::{CurrentBookInfo, MouseClickOutcome};
+use crate::bookmarks::TocSectionState;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
 use crate::theme::{Base16Palette, theme_background};
@@ -9,6 +10,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
+use std::collections::HashMap;
 
 /// New ADT-based model for TOC items
 #[derive(Clone, Debug)]
@@ -118,7 +120,9 @@ impl TableOfContents {
     pub fn update_current_book_info_preserve_state(&mut self, mut new_book_info: CurrentBookInfo) {
         // If we have existing book info with the same ToC structure, preserve expansion states
         if let Some(ref current_info) = self.current_book_info {
-            Self::copy_expansion_states(&current_info.toc_items, &mut new_book_info.toc_items);
+            if current_info.path == new_book_info.path {
+                Self::copy_expansion_states(&current_info.toc_items, &mut new_book_info.toc_items);
+            }
         }
         self.current_book_info = Some(new_book_info);
     }
@@ -223,6 +227,115 @@ impl TableOfContents {
             if let TocItem::Section { children, .. } = item {
                 Self::collect_anchors_for_href(children, target_base, output);
             }
+        }
+    }
+
+    /// Collect the expansion state of every *expanded* Section, keyed by the
+    /// section's URL/anchor path from the TOC root. Chapters are skipped, and
+    /// sections in their default (collapsed) state are omitted to keep the
+    /// saved record minimal — apply_expansion_state treats absence as default.
+    ///
+    /// Target-keyed (rather than positional or title-keyed) storage lets the
+    /// saved state survive book edits that insert, remove, or rename sections.
+    pub fn collect_expansion_state(&self) -> Vec<TocSectionState> {
+        let mut state = Vec::new();
+        if let Some(ref info) = self.current_book_info {
+            Self::collect_expansion_state_recursive(&info.toc_items, &mut Vec::new(), &mut state);
+        }
+        state
+    }
+
+    fn collect_expansion_state_recursive(
+        items: &[TocItem],
+        target_path_stack: &mut Vec<String>,
+        state: &mut Vec<TocSectionState>,
+    ) {
+        for item in items {
+            if let TocItem::Section {
+                title,
+                href,
+                anchor,
+                children,
+                is_expanded,
+                ..
+            } = item
+            {
+                target_path_stack.push(Self::section_target_segment(
+                    title,
+                    href.as_deref(),
+                    anchor.as_deref(),
+                ));
+                if *is_expanded {
+                    state.push(TocSectionState {
+                        target_path: target_path_stack.clone(),
+                        expanded: true,
+                    });
+                }
+                Self::collect_expansion_state_recursive(children, target_path_stack, state);
+                target_path_stack.pop();
+            }
+        }
+    }
+
+    /// Apply a previously collected expansion state. Sections that match a
+    /// saved target get the saved expansion state; sections without a match
+    /// (e.g., newly added) keep their default. Saved entries that no longer
+    /// match any section are silently ignored.
+    pub fn apply_expansion_state(&mut self, state: &[TocSectionState]) {
+        let target_lookup: HashMap<&[String], bool> = state
+            .iter()
+            .map(|s| (s.target_path.as_slice(), s.expanded))
+            .collect();
+        if let Some(ref mut info) = self.current_book_info {
+            Self::apply_expansion_state_recursive(
+                &mut info.toc_items,
+                &mut Vec::new(),
+                &target_lookup,
+            );
+        }
+    }
+
+    fn apply_expansion_state_recursive(
+        items: &mut [TocItem],
+        target_path_stack: &mut Vec<String>,
+        target_lookup: &HashMap<&[String], bool>,
+    ) {
+        for item in items {
+            if let TocItem::Section {
+                title,
+                href,
+                anchor,
+                children,
+                is_expanded,
+                ..
+            } = item
+            {
+                target_path_stack.push(Self::section_target_segment(
+                    title,
+                    href.as_deref(),
+                    anchor.as_deref(),
+                ));
+                if let Some(&saved) = target_lookup.get(target_path_stack.as_slice()) {
+                    *is_expanded = saved;
+                }
+                Self::apply_expansion_state_recursive(children, target_path_stack, target_lookup);
+                target_path_stack.pop();
+            }
+        }
+    }
+
+    fn section_target_segment(title: &str, href: Option<&str>, anchor: Option<&str>) -> String {
+        if let Some(href) = href {
+            let mut segment = format!("href:{href}");
+            if let Some(anchor) = anchor {
+                if !anchor.is_empty() {
+                    segment.push('#');
+                    segment.push_str(anchor);
+                }
+            }
+            segment
+        } else {
+            format!("title:{title}")
         }
     }
 
@@ -620,9 +733,8 @@ impl TableOfContents {
         }
     }
 
-    /// Handle mouse click at the given position
-    /// Returns true if an item was clicked
-    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> bool {
+    /// Handle mouse click at the given position.
+    pub fn handle_mouse_click(&mut self, x: u16, y: u16, area: Rect) -> MouseClickOutcome {
         // Account for the border (1 line at top and bottom)
         if y > area.y && y < area.y + area.height - 1 {
             let relative_y = y - area.y - 1; // Subtract 1 for the top border
@@ -661,7 +773,7 @@ impl TableOfContents {
                                     // Set cooldown to prevent viewport jumping
                                     self.manual_navigation = true;
                                     self.manual_navigation_cooldown = 5;
-                                    return true;
+                                    return MouseClickOutcome::ExpansionToggled;
                                 }
                             }
                         }
@@ -673,10 +785,10 @@ impl TableOfContents {
                 self.list_state.select(Some(new_index));
                 self.manual_navigation = true;
                 self.manual_navigation_cooldown = 5; // Set grace period
-                return true;
+                return MouseClickOutcome::ItemSelected;
             }
         }
-        false
+        MouseClickOutcome::NotHandled
     }
 
     /// Count visible TOC items (considering expansion state)
@@ -1325,4 +1437,188 @@ impl SearchablePanel for TableOfContents {
 pub enum SelectedTocItem<'a> {
     BackToBooks,
     TocItem(&'a TocItem),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::markdown_text_reader::ActiveSection;
+    use crate::widget::navigation_panel::CurrentBookInfo;
+
+    fn section(title: &str, expanded: bool, children: Vec<TocItem>) -> TocItem {
+        section_with_href(title, &format!("{title}.html"), expanded, children)
+    }
+
+    fn section_with_href(
+        title: &str,
+        href: &str,
+        expanded: bool,
+        children: Vec<TocItem>,
+    ) -> TocItem {
+        TocItem::Section {
+            title: title.to_string(),
+            href: Some(href.to_string()),
+            anchor: None,
+            children,
+            is_expanded: expanded,
+        }
+    }
+
+    fn chapter(title: &str) -> TocItem {
+        TocItem::Chapter {
+            title: title.to_string(),
+            href: format!("{title}.html"),
+            anchor: None,
+        }
+    }
+
+    fn build_toc() -> Vec<TocItem> {
+        vec![
+            section(
+                "Part1",
+                false,
+                vec![
+                    chapter("ch1"),
+                    section("Sub1", true, vec![chapter("ch2"), chapter("ch3")]),
+                ],
+            ),
+            chapter("standalone"),
+            section("Part2", true, vec![chapter("ch4")]),
+        ]
+    }
+
+    fn make_toc_with(toc_items: Vec<TocItem>) -> TableOfContents {
+        let mut toc = TableOfContents::new();
+        toc.set_current_book_info(CurrentBookInfo {
+            path: "test.epub".to_string(),
+            toc_items,
+            current_chapter: 0,
+            current_chapter_href: None,
+            active_section: ActiveSection::new(0, "ch1.html".to_string(), None),
+        });
+        toc
+    }
+
+    fn st(path: &[&str], expanded: bool) -> TocSectionState {
+        TocSectionState {
+            target_path: path.iter().map(|s| format!("href:{s}.html")).collect(),
+            expanded,
+        }
+    }
+
+    fn st_with_target(target_path: &[&str], expanded: bool) -> TocSectionState {
+        TocSectionState {
+            target_path: target_path.iter().map(|s| s.to_string()).collect(),
+            expanded,
+        }
+    }
+
+    /// Only sections currently expanded are emitted; collapsed sections are
+    /// implicit (default).
+    #[test]
+    fn collect_expansion_state_emits_only_expanded() {
+        let toc = make_toc_with(build_toc());
+        // build_toc: Part1=false, Sub1=true, Part2=true
+        assert_eq!(
+            toc.collect_expansion_state(),
+            vec![st(&["Part1", "Sub1"], true), st(&["Part2"], true)]
+        );
+    }
+
+    /// Round-trip works for any state expressible by the new contract
+    /// (i.e., already filtered to only-expanded entries) when starting from
+    /// the parser default of fully collapsed.
+    #[test]
+    fn apply_then_collect_round_trips_for_expanded_only() {
+        let mut toc = make_toc_with(vec![
+            section(
+                "Part1",
+                false,
+                vec![chapter("ch1"), section("Sub1", false, vec![chapter("ch2")])],
+            ),
+            section("Part2", false, vec![chapter("ch3")]),
+        ]);
+        let new_state = vec![st(&["Part1"], true), st(&["Part2"], true)];
+        toc.apply_expansion_state(&new_state);
+        assert_eq!(toc.collect_expansion_state(), new_state);
+    }
+
+    /// Explicit `expanded: false` records are honored if present.
+    #[test]
+    fn apply_expansion_state_honors_false_records() {
+        let mut toc = make_toc_with(build_toc());
+        toc.apply_expansion_state(&[
+            st(&["Part1"], true),
+            st(&["Part1", "Sub1"], false),
+            st(&["Part2"], false),
+        ]);
+        // Sub1 and Part2 were forced to false by the saved state; only Part1
+        // remains expanded.
+        assert_eq!(toc.collect_expansion_state(), vec![st(&["Part1"], true)]);
+    }
+
+    /// Saved state for sections that no longer exist is silently dropped.
+    #[test]
+    fn apply_expansion_state_ignores_unknown_paths() {
+        let mut toc = make_toc_with(build_toc());
+        toc.apply_expansion_state(&[st(&["NoSuchSection"], true), st(&["Part2", "Ghost"], true)]);
+        // Nothing matched; in-memory defaults from build_toc remain (Sub1, Part2 expanded).
+        assert_eq!(
+            toc.collect_expansion_state(),
+            vec![st(&["Part1", "Sub1"], true), st(&["Part2"], true)]
+        );
+    }
+
+    /// New sections that aren't in the saved state keep their default
+    /// expansion — only matched targets are restored. This is the key advantage
+    /// of target-keyed storage over positional.
+    #[test]
+    fn apply_expansion_state_survives_section_insertion() {
+        // Build a fully-collapsed TOC (matches the new uniform default).
+        let mut toc = make_toc_with(vec![
+            section("Part1", false, vec![chapter("ch1")]),
+            section("Part2", false, vec![chapter("ch2")]),
+        ]);
+        // Saved state from before "Part1.5" was inserted.
+        let saved = vec![st(&["Part1"], true), st(&["Part2"], true)];
+        if let Some(ref mut info) = toc.current_book_info {
+            info.toc_items
+                .insert(1, section("Part1.5", false, vec![chapter("ch_new")]));
+        }
+        toc.apply_expansion_state(&saved);
+        // Part1 and Part2 restored to expanded; Part1.5 stays at parser default (collapsed).
+        assert_eq!(
+            toc.collect_expansion_state(),
+            vec![st(&["Part1"], true), st(&["Part2"], true)]
+        );
+    }
+
+    #[test]
+    fn apply_expansion_state_uses_target_path_for_duplicate_titles() {
+        let mut toc = make_toc_with(vec![
+            section_with_href("Part", "one.html", false, vec![chapter("ch1")]),
+            section_with_href("Part", "two.html", false, vec![chapter("ch2")]),
+        ]);
+
+        let saved = vec![st_with_target(&["href:two.html"], true)];
+        toc.apply_expansion_state(&saved);
+
+        assert_eq!(toc.collect_expansion_state(), saved);
+    }
+
+    #[test]
+    fn updating_different_book_does_not_copy_expansion_state() {
+        let mut toc = make_toc_with(vec![section("Part1", true, vec![chapter("ch1")])]);
+        let new_book_info = CurrentBookInfo {
+            path: "other.epub".to_string(),
+            toc_items: vec![section("Part1", false, vec![chapter("ch1")])],
+            current_chapter: 0,
+            current_chapter_href: None,
+            active_section: ActiveSection::new(0, "ch1.html".to_string(), None),
+        };
+
+        toc.update_current_book_info_preserve_state(new_book_info);
+
+        assert_eq!(toc.collect_expansion_state(), Vec::new());
+    }
 }

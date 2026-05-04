@@ -49,6 +49,31 @@ pub struct Bookmark {
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub absolute_path: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub toc_expansion_state: Option<Vec<TocSectionState>>,
+}
+
+// JSON shape:
+//   "toc_expansion_state": [
+//     {
+//       "target_path": ["href:OEBPS/part1.xhtml"],
+//       "expanded": true
+//     },
+//     {
+//       "target_path": ["href:OEBPS/part1.xhtml", "href:OEBPS/sub1.xhtml#intro"],
+//       "expanded": true
+//     }
+//   ]
+// `target_path` is the section's URL/anchor trail from the TOC root and is the
+// restore key.
+//
+// Only sections that diverge from the default (collapsed) are stored; absence
+// in the list means "use the parser default."
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct TocSectionState {
+    pub target_path: Vec<String>,
+    pub expanded: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -279,6 +304,7 @@ impl Bookmarks {
         let book_title = existing.and_then(|b| b.book_title.clone());
         let book_author = existing.and_then(|b| b.book_author.clone());
         let absolute_path = existing.and_then(|b| b.absolute_path.clone());
+        let toc_expansion_state = existing.and_then(|b| b.toc_expansion_state.clone());
 
         self.books.insert(
             key,
@@ -300,6 +326,7 @@ impl Bookmarks {
                 book_title,
                 book_author,
                 absolute_path,
+                toc_expansion_state,
             },
         );
 
@@ -355,6 +382,7 @@ impl Bookmarks {
                     book_title,
                     book_author,
                     absolute_path,
+                    toc_expansion_state: None,
                 },
             );
         }
@@ -381,6 +409,23 @@ impl Bookmarks {
             bookmark.absolute_path = abs_path;
             if let Err(e) = self.save() {
                 log::error!("Failed to save bookmark metadata: {e}");
+            }
+        }
+    }
+
+    pub fn set_toc_expansion_state(&mut self, path: &str, state: Vec<TocSectionState>) {
+        let key = match self.resolve_existing_key(path) {
+            Some(k) => k,
+            None => return,
+        };
+        if let Some(bookmark) = self.books.get_mut(&key) {
+            let new_state = if state.is_empty() { None } else { Some(state) };
+            if bookmark.toc_expansion_state == new_state {
+                return;
+            }
+            bookmark.toc_expansion_state = new_state;
+            if let Err(e) = self.save() {
+                log::error!("Failed to save TOC expansion state: {e}");
             }
         }
     }
@@ -412,6 +457,228 @@ impl Bookmarks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Old bookmark files (without `toc_expansion_state`) must still load
+    /// without error. The missing field defaults to `None`.
+    #[test]
+    fn old_bookmark_file_without_toc_expansion_state_loads() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("legacy.json");
+        let legacy_json = r#"{
+            "books": {
+                "./book.epub": {
+                    "chapter_href": "ch1",
+                    "last_read": "2024-01-01T00:00:00Z"
+                }
+            }
+        }"#;
+        std::fs::write(&path, legacy_json).unwrap();
+
+        let bookmarks = Bookmarks::load_from_file(path.to_str().unwrap()).unwrap();
+        let bookmark = bookmarks.get_bookmark("./book.epub").unwrap();
+        assert_eq!(bookmark.toc_expansion_state, None);
+        assert_eq!(bookmark.chapter_href, "ch1");
+    }
+
+    /// A realistic v0.3.0 bookmark file (multiple books, all the previously
+    /// existing fields populated, no `toc_expansion_state`) must load,
+    /// preserve all data, survive a regular update, and end up with the new
+    /// field unset until the user actually changes anything.
+    #[test]
+    fn realistic_pre_feature_bookmark_file_round_trips() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("legacy_full.json");
+        // Synthesized to mirror what the previous release wrote: every field
+        // that existed before this commit, no `toc_expansion_state`.
+        let legacy_json = r#"{
+            "books": {
+                "./book_a.epub": {
+                    "chapter_href": "OEBPS/ch3.xhtml",
+                    "node_index": 42,
+                    "last_read": "2026-04-01T12:34:56Z",
+                    "chapter_index": 3,
+                    "total_chapters": 17,
+                    "book_progress": 0.42,
+                    "total_nodes": 1234,
+                    "book_title": "A Book",
+                    "book_author": "An Author",
+                    "absolute_path": "/lib/book_a.epub"
+                },
+                "./book_b.pdf": {
+                    "chapter_href": "12",
+                    "last_read": "2026-04-02T08:00:00Z",
+                    "total_chapters": 200,
+                    "pdf_page": 12,
+                    "pdf_zoom": 1.5,
+                    "pdf_pan": 4,
+                    "book_progress": 0.06,
+                    "book_title": "A PDF",
+                    "absolute_path": "/lib/book_b.pdf"
+                }
+            }
+        }"#;
+        std::fs::write(&path, legacy_json).unwrap();
+
+        let mut bookmarks = Bookmarks::load_from_file(path.to_str().unwrap()).unwrap();
+
+        // All existing fields preserved.
+        let a = bookmarks.get_bookmark("./book_a.epub").unwrap();
+        assert_eq!(a.chapter_href, "OEBPS/ch3.xhtml");
+        assert_eq!(a.node_index, Some(42));
+        assert_eq!(a.chapter_index, Some(3));
+        assert_eq!(a.total_chapters, Some(17));
+        assert_eq!(a.book_progress, Some(0.42));
+        assert_eq!(a.total_nodes, Some(1234));
+        assert_eq!(a.book_title.as_deref(), Some("A Book"));
+        assert_eq!(a.absolute_path.as_deref(), Some("/lib/book_a.epub"));
+        assert_eq!(a.toc_expansion_state, None);
+
+        let b = bookmarks.get_bookmark("./book_b.pdf").unwrap();
+        assert_eq!(b.pdf_page, Some(12));
+        assert_eq!(b.pdf_zoom, Some(1.5));
+        assert_eq!(b.pdf_pan, Some(4));
+        assert_eq!(b.toc_expansion_state, None);
+
+        // A regular bookmark update doesn't fabricate or clobber the new field.
+        bookmarks.update_bookmark(
+            "./book_a.epub",
+            "OEBPS/ch4.xhtml".to_string(),
+            Some(50),
+            Some(4),
+            Some(17),
+            None,
+            None,
+            None,
+            Some(0.5),
+            Some(1234),
+        );
+        let reloaded = Bookmarks::load_from_file(path.to_str().unwrap()).unwrap();
+        let a = reloaded.get_bookmark("./book_a.epub").unwrap();
+        assert_eq!(a.chapter_index, Some(4));
+        assert_eq!(a.toc_expansion_state, None);
+        assert_eq!(a.book_title.as_deref(), Some("A Book"));
+    }
+
+    /// New writes must not include `toc_expansion_state` in the JSON when it's
+    /// `None` — that's what keeps old app versions from seeing surprise fields
+    /// (and what keeps the file small for users who don't use the feature).
+    #[test]
+    fn unset_toc_expansion_state_is_omitted_from_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bm.json");
+
+        let mut bookmarks = Bookmarks::with_file(path.to_str().unwrap());
+        bookmarks.update_bookmark(
+            "./book.epub",
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !raw.contains("toc_expansion_state"),
+            "unset field must be omitted; got:\n{raw}"
+        );
+    }
+
+    fn st(path: &[&str], expanded: bool) -> TocSectionState {
+        TocSectionState {
+            target_path: path.iter().map(|s| s.to_string()).collect(),
+            expanded,
+        }
+    }
+
+    /// `toc_expansion_state` round-trips through serialization and is preserved
+    /// across regular bookmark updates. Only expanded sections are stored.
+    #[test]
+    fn toc_expansion_state_persists_and_round_trips() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bm.json");
+        let book_path = "./book.epub";
+        let saved = vec![
+            st(&["Part1"], true),
+            st(&["Part1", "Sub1.1"], true),
+            st(&["Part2"], true),
+        ];
+
+        let mut bookmarks = Bookmarks::with_file(path.to_str().unwrap());
+        bookmarks.update_bookmark(
+            book_path,
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+        bookmarks.set_toc_expansion_state(book_path, saved.clone());
+
+        let reloaded = Bookmarks::load_from_file(path.to_str().unwrap()).unwrap();
+        let bookmark = reloaded.get_bookmark(book_path).unwrap();
+        assert_eq!(bookmark.toc_expansion_state, Some(saved.clone()));
+
+        // A subsequent regular update_bookmark must preserve the saved state.
+        let mut reloaded = reloaded;
+        reloaded.update_bookmark(
+            book_path,
+            "ch2".to_string(),
+            Some(5),
+            Some(1),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.2),
+            None,
+        );
+        let bookmark = reloaded.get_bookmark(book_path).unwrap();
+        assert_eq!(bookmark.toc_expansion_state, Some(saved));
+    }
+
+    /// Setting an empty state clears the field so the JSON stays clean.
+    #[test]
+    fn empty_toc_expansion_state_clears_field() {
+        let mut bookmarks = Bookmarks::ephemeral();
+        let book_path = "./book.epub";
+        bookmarks.update_bookmark(
+            book_path,
+            "ch1".to_string(),
+            Some(0),
+            Some(0),
+            Some(10),
+            None,
+            None,
+            None,
+            Some(0.1),
+            None,
+        );
+        bookmarks.set_toc_expansion_state(book_path, vec![st(&["Part1"], true)]);
+        assert!(
+            bookmarks
+                .get_bookmark(book_path)
+                .unwrap()
+                .toc_expansion_state
+                .is_some()
+        );
+        bookmarks.set_toc_expansion_state(book_path, Vec::new());
+        assert!(
+            bookmarks
+                .get_bookmark(book_path)
+                .unwrap()
+                .toc_expansion_state
+                .is_none()
+        );
+    }
 
     #[test]
     fn save_initial_bookmark_creates_entry_with_metadata() {
