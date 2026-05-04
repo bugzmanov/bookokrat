@@ -745,7 +745,7 @@ impl PdfReaderState {
             }
             Action::WordEnd => {
                 let lb = self.current_line_bounds();
-                self.normal_mode.move_word_forward(&lb);
+                self.normal_mode.move_word_end(&lb);
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
             }
             Action::LineStart => {
