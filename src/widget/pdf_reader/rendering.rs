@@ -1283,10 +1283,8 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
                 .write_to(&mut stdout, tmux);
         }
 
-        let (r, g, b) = match pdf_reader.palette.base_01 {
-            Color::Rgb(r, g, b) => (r, g, b),
-            _ => (0x34, 0x3D, 0x46),
-        };
+        let (r, g, b) = crate::color_mode::color_to_rgb(pdf_reader.palette.base_01)
+            .unwrap_or((0x34, 0x3D, 0x46));
 
         // Source image dimensions must match the dest cell ratio because Kitty
         // preserves aspect ratio when scaling. Use 1 pixel per cell — small

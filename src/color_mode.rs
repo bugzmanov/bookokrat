@@ -73,6 +73,71 @@ pub fn smart_color(rgb: u32) -> Color {
     }
 }
 
+pub fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Reset => None,
+        Color::Black => Some((0x00, 0x00, 0x00)),
+        Color::Red => Some((0x80, 0x00, 0x00)),
+        Color::Green => Some((0x00, 0x80, 0x00)),
+        Color::Yellow => Some((0x80, 0x80, 0x00)),
+        Color::Blue => Some((0x00, 0x00, 0x80)),
+        Color::Magenta => Some((0x80, 0x00, 0x80)),
+        Color::Cyan => Some((0x00, 0x80, 0x80)),
+        Color::Gray => Some((0xC0, 0xC0, 0xC0)),
+        Color::DarkGray => Some((0x80, 0x80, 0x80)),
+        Color::LightRed => Some((0xFF, 0x00, 0x00)),
+        Color::LightGreen => Some((0x00, 0xFF, 0x00)),
+        Color::LightYellow => Some((0xFF, 0xFF, 0x00)),
+        Color::LightBlue => Some((0x00, 0x00, 0xFF)),
+        Color::LightMagenta => Some((0xFF, 0x00, 0xFF)),
+        Color::LightCyan => Some((0x00, 0xFF, 0xFF)),
+        Color::White => Some((0xFF, 0xFF, 0xFF)),
+        Color::Rgb(r, g, b) => Some((r, g, b)),
+        Color::Indexed(index) => Some(indexed_color_to_rgb(index)),
+    }
+}
+
+fn indexed_color_to_rgb(index: u8) -> (u8, u8, u8) {
+    const ANSI_COLORS: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0x80, 0x00, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x80, 0x80, 0x00),
+        (0x00, 0x00, 0x80),
+        (0x80, 0x00, 0x80),
+        (0x00, 0x80, 0x80),
+        (0xC0, 0xC0, 0xC0),
+        (0x80, 0x80, 0x80),
+        (0xFF, 0x00, 0x00),
+        (0x00, 0xFF, 0x00),
+        (0xFF, 0xFF, 0x00),
+        (0x00, 0x00, 0xFF),
+        (0xFF, 0x00, 0xFF),
+        (0x00, 0xFF, 0xFF),
+        (0xFF, 0xFF, 0xFF),
+    ];
+
+    match index {
+        0..=15 => ANSI_COLORS[index as usize],
+        16..=231 => {
+            let color = index - 16;
+            let r = color / 36;
+            let g = (color % 36) / 6;
+            let b = color % 6;
+
+            (xterm_component(r), xterm_component(g), xterm_component(b))
+        }
+        232..=255 => {
+            let gray = 8 + (index - 232) * 10;
+            (gray, gray, gray)
+        }
+    }
+}
+
+fn xterm_component(value: u8) -> u8 {
+    if value == 0 { 0 } else { 55 + value * 40 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +176,31 @@ mod tests {
         // Test a mid-tone color
         let idx = rgb_to_256color(128, 128, 128);
         assert!(idx >= 16); // Should be in valid range
+    }
+
+    #[test]
+    fn test_color_to_rgb_indexed_ansi_colors() {
+        assert_eq!(color_to_rgb(Color::Indexed(0)), Some((0x00, 0x00, 0x00)));
+        assert_eq!(color_to_rgb(Color::Indexed(15)), Some((0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn test_color_to_rgb_indexed_cube_colors() {
+        assert_eq!(color_to_rgb(Color::Indexed(16)), Some((0x00, 0x00, 0x00)));
+        assert_eq!(color_to_rgb(Color::Indexed(231)), Some((0xFF, 0xFF, 0xFF)));
+    }
+
+    #[test]
+    fn test_color_to_rgb_indexed_grayscale_colors() {
+        assert_eq!(color_to_rgb(Color::Indexed(232)), Some((8, 8, 8)));
+        assert_eq!(color_to_rgb(Color::Indexed(255)), Some((238, 238, 238)));
+    }
+
+    #[test]
+    fn test_color_to_rgb_named_colors() {
+        assert_eq!(color_to_rgb(Color::Black), Some((0x00, 0x00, 0x00)));
+        assert_eq!(color_to_rgb(Color::White), Some((0xFF, 0xFF, 0xFF)));
+        assert_eq!(color_to_rgb(Color::DarkGray), Some((0x80, 0x80, 0x80)));
+        assert_eq!(color_to_rgb(Color::Reset), None);
     }
 }

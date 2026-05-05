@@ -6015,10 +6015,7 @@ pub(crate) fn apply_theme_to_pdf_reader(
 }
 
 fn extract_pdf_rgb(color: &ratatui::style::Color) -> (u8, u8, u8) {
-    match color {
-        ratatui::style::Color::Rgb(r, g, b) => (*r, *g, *b),
-        _ => (0, 0, 0),
-    }
+    crate::color_mode::color_to_rgb(*color).unwrap_or((0, 0, 0))
 }
 
 #[cfg(test)]
