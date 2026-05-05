@@ -30,6 +30,9 @@ pub enum SettingsAction {
     TestSynctexEditor,
 }
 
+const TRUECOLOR_NOTE_LINES: u16 = 4;
+const TRUECOLOR_NOTE_SPACER_LINES: u16 = 1;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
     General,
@@ -429,7 +432,14 @@ impl SettingsPopup {
                     .len() as u16;
                 3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1)
             }
-            SettingsTab::Themes => self.theme_names.len() as u16 + 1 + 1 + 1 + 2,
+            SettingsTab::Themes => {
+                let truecolor_note_height = if crate::color_mode::supports_true_color() {
+                    0
+                } else {
+                    TRUECOLOR_NOTE_SPACER_LINES + TRUECOLOR_NOTE_LINES
+                };
+                self.theme_names.len() as u16 + 1 + 1 + 1 + 2 + truecolor_note_height
+            }
             SettingsTab::Integrations => {
                 // 1+3+3+1+1+1+1+1+1+1+3+9+1+1 = 28
                 28
@@ -783,16 +793,28 @@ impl SettingsPopup {
 
     fn render_themes_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
         let theme_list_height = self.theme_names.len() as u16;
+        let truecolor_note_height = if crate::color_mode::supports_true_color() {
+            0
+        } else {
+            TRUECOLOR_NOTE_LINES
+        };
+        let truecolor_note_spacer_height = if truecolor_note_height > 0 {
+            TRUECOLOR_NOTE_SPACER_LINES
+        } else {
+            0
+        };
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(theme_list_height), // Theme list
-                Constraint::Length(1),                 // spacer
-                Constraint::Length(1),                 // Background header
-                Constraint::Length(1),                 // empty line
-                Constraint::Length(2),                 // Transparent Background options
-                Constraint::Min(0),                    // remaining space
+                Constraint::Length(theme_list_height),            // Theme list
+                Constraint::Length(1),                            // spacer
+                Constraint::Length(1),                            // Background header
+                Constraint::Length(1),                            // empty line
+                Constraint::Length(2),                            // Transparent Background options
+                Constraint::Length(truecolor_note_spacer_height), // spacer
+                Constraint::Length(truecolor_note_height),        // truecolor warning
+                Constraint::Min(0),                               // remaining space
             ])
             .split(area);
 
@@ -866,6 +888,33 @@ impl SettingsPopup {
             palette,
         );
         Paragraph::new(trans_line).render(trans_options_chunks[1], buf);
+
+        if truecolor_note_height > 0 {
+            let note_lines = vec![
+                Line::from(vec![
+                    Span::styled("ⓘ ", Style::default().fg(palette.base_0a)),
+                    Span::styled(
+                        "Truecolor was not detected; themes may look incorrect.",
+                        Style::default().fg(palette.base_03),
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    "If your terminal supports RGB colors, try:",
+                    Style::default().fg(palette.base_03),
+                )),
+                Line::from(Span::styled(
+                    "export COLORTERM=truecolor",
+                    Style::default()
+                        .fg(palette.base_06)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    "then run bookokrat again.",
+                    Style::default().fg(palette.base_03),
+                )),
+            ];
+            Paragraph::new(note_lines).render(chunks[6], buf);
+        }
     }
 
     fn render_theme_option(

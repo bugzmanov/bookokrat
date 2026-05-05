@@ -1593,10 +1593,8 @@ impl App {
     #[cfg(feature = "pdf")]
     fn palette_to_mupdf_colors(palette: &crate::theme::Base16Palette) -> (i32, i32) {
         fn color_to_i32(color: Color) -> i32 {
-            match color {
-                Color::Rgb(r, g, b) => ((r as i32) << 16) | ((g as i32) << 8) | (b as i32),
-                _ => 0x000000, // Default to black for non-RGB colors
-            }
+            let (r, g, b) = crate::color_mode::color_to_rgb(color).unwrap_or((0, 0, 0));
+            ((r as i32) << 16) | ((g as i32) << 8) | (b as i32)
         }
 
         let black = color_to_i32(palette.base_00); // Background
