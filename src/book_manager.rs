@@ -240,23 +240,8 @@ impl BookManager {
         self.books.iter().find(|book| book.path == path)
     }
 
-    pub fn add_external_book(&mut self, path: &str) {
-        if !self.books.iter().any(|book| book.path == path) {
-            let format = Self::detect_format(path).unwrap_or(BookFormat::Epub);
-            self.books.push(BookInfo {
-                path: path.to_string(),
-                display_name: Self::extract_display_name(path),
-                format,
-            });
-        }
-    }
-
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
         info!("Loading document from path: {path}");
-
-        if !self.books.iter().any(|book| book.path == path) {
-            return Err(format!("Book not found in managed list: {path}"));
-        }
 
         if self.is_html_file(path) {
             // For HTML files, create a fake EPUB

@@ -1007,8 +1007,6 @@ impl App {
         let path_owned = path.to_string();
         let skip_bookmarks = position.is_some() || self.test_mode;
 
-        self.book_manager.add_external_book(path);
-
         match format {
             #[cfg(feature = "pdf")]
             BookFormat::Pdf => {
