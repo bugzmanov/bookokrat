@@ -235,19 +235,35 @@ impl NavigationPanel {
                 );
             }
             NavigationMode::TableOfContents => {
-                if let Some(ref current_path) = self.current_book_path {
-                    if let Some(book) = book_manager.get_book_by_path(current_path) {
-                        self.table_of_contents.render(
-                            f,
-                            area,
-                            is_focused,
-                            palette,
-                            &book.display_name,
-                        );
-                    }
+                let current_path = self.current_book_path.clone().or_else(|| {
+                    self.table_of_contents
+                        .get_current_book_info()
+                        .map(|info| info.path.clone())
+                });
+                if let Some(current_path) = current_path {
+                    let fallback_display_name;
+                    let display_name =
+                        if let Some(book) = book_manager.get_book_by_path(&current_path) {
+                            book.display_name.as_str()
+                        } else {
+                            fallback_display_name = Self::fallback_book_display_name(&current_path);
+                            fallback_display_name.as_str()
+                        };
+                    self.table_of_contents
+                        .render(f, area, is_focused, palette, display_name);
                 }
             }
         }
+    }
+
+    fn fallback_book_display_name(path: &str) -> String {
+        let path = std::path::Path::new(path);
+        path.file_stem()
+            .or_else(|| path.file_name())
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Book")
+            .to_string()
     }
 
     pub fn handle_key(

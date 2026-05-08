@@ -7,7 +7,6 @@ use crate::table_of_contents::TocItem;
 use crate::theme::current_theme;
 use crate::widget::popup::Popup;
 use anyhow::Result;
-use crossterm::event::KeyModifiers;
 use epub::doc::EpubDoc;
 use log::{debug, error};
 use ratatui::Frame;
@@ -49,6 +48,7 @@ pub struct BookStat {
     terminal_size: (u16, u16),
     last_popup_area: Option<Rect>,
     stat_unit: StatUnit,
+    current_stat_index: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +105,7 @@ impl BookStat {
             terminal_size: (80, 24),
             last_popup_area: None,
             stat_unit: StatUnit::Screens,
+            current_stat_index: None,
         }
     }
 
@@ -148,10 +149,7 @@ impl BookStat {
         }
 
         epub.set_current_chapter(original_chapter);
-
-        if !self.chapter_stats.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        self.select_stat_for_position(original_chapter);
 
         debug!("Chapter stats: {:?}", self.chapter_stats);
 
@@ -165,6 +163,7 @@ impl BookStat {
         page_count: usize,
         page_numbers: &crate::pdf::PageNumberTracker,
         terminal_size: (u16, u16),
+        current_page: usize,
     ) -> Result<()> {
         use crate::pdf::TocTarget;
 
@@ -173,6 +172,7 @@ impl BookStat {
         self.stat_unit = StatUnit::Pages;
 
         if page_count == 0 {
+            self.select_stat_for_position(current_page);
             return Ok(());
         }
 
@@ -225,9 +225,7 @@ impl BookStat {
             });
         }
 
-        if !self.chapter_stats.is_empty() {
-            self.list_state.select(Some(0));
-        }
+        self.select_stat_for_position(current_page);
 
         debug!("PDF chapter stats: {:?}", self.chapter_stats);
 
@@ -350,6 +348,55 @@ impl BookStat {
         total_lines.div_ceil(lines_per_screen)
     }
 
+    fn select_stat_for_position(&mut self, position: usize) {
+        let Some((idx, _)) = self
+            .chapter_stats
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, stat)| stat.chapter_index <= position)
+            .or_else(|| self.chapter_stats.iter().enumerate().next())
+        else {
+            self.list_state.select(None);
+            self.current_stat_index = None;
+            *self.list_state.offset_mut() = 0;
+            return;
+        };
+
+        self.current_stat_index = Some(idx);
+        self.list_state.select(Some(idx));
+        self.ensure_selected_visible(Self::visible_item_count_for_terminal_height(
+            self.terminal_size.1,
+        ));
+    }
+
+    fn visible_item_count_for_terminal_height(terminal_height: u16) -> usize {
+        terminal_height.saturating_sub(4).min(30).saturating_sub(2) as usize
+    }
+
+    fn ensure_selected_visible(&mut self, visible_items: usize) {
+        let Some(selected) = self.list_state.selected() else {
+            return;
+        };
+
+        if visible_items == 0 {
+            *self.list_state.offset_mut() = selected;
+            return;
+        }
+
+        let current_offset = self.list_state.offset();
+        let max_offset = self.chapter_stats.len().saturating_sub(visible_items);
+        let new_offset = if selected < current_offset {
+            selected
+        } else if selected >= current_offset.saturating_add(visible_items) {
+            selected.saturating_sub(visible_items.saturating_sub(1))
+        } else {
+            current_offset
+        };
+
+        *self.list_state.offset_mut() = new_offset.min(max_offset);
+    }
+
     pub fn show(&mut self) {
         self.visible = true;
     }
@@ -386,6 +433,7 @@ impl BookStat {
         };
 
         self.last_popup_area = Some(popup_area);
+        self.ensure_selected_visible(popup_height.saturating_sub(2) as usize);
 
         // Clear background
         frame.render_widget(Clear, popup_area);
@@ -407,7 +455,9 @@ impl BookStat {
 
             self.chapter_stats
                 .iter()
-                .map(|stat| {
+                .enumerate()
+                .map(|(idx, stat)| {
+                    let is_current = self.current_stat_index == Some(idx);
                     let percentage = if total_screens > 0 {
                         (cumulative_screens * 100) / total_screens
                     } else {
@@ -418,10 +468,13 @@ impl BookStat {
                     let count_text = self.stat_unit.format_count(stat.count);
                     let count_suffix = format!(" [{count_text}]");
                     let prefix = format!("{percentage:3}% ");
+                    let marker = if is_current { "* " } else { "  " };
 
                     // Truncate title so the full line fits within inner_width
                     let title_clean = stat.title.replace('\n', " ");
-                    let overhead = prefix.chars().count() + count_suffix.chars().count();
+                    let overhead = marker.chars().count()
+                        + prefix.chars().count()
+                        + count_suffix.chars().count();
                     let max_title = inner_width.saturating_sub(overhead);
                     let title_chars: Vec<char> = title_clean.chars().collect();
                     let title = if title_chars.len() > max_title {
@@ -431,10 +484,25 @@ impl BookStat {
                     } else {
                         title_clean
                     };
+                    let marker_style = if is_current {
+                        Style::default()
+                            .fg(current_theme().base_0a)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(current_theme().base_03)
+                    };
+                    let title_style = if is_current {
+                        Style::default()
+                            .fg(current_theme().base_0a)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
 
                     let content = vec![Line::from(vec![
+                        Span::styled(marker, marker_style),
                         Span::styled(prefix, Style::default().fg(current_theme().base_03)),
-                        Span::raw(title),
+                        Span::styled(title, title_style),
                         Span::styled(count_suffix, Style::default().fg(current_theme().base_0c)),
                     ])];
 
