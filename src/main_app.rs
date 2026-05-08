@@ -4332,6 +4332,7 @@ impl App {
                             pdf_reader.rendered.len(),
                             &pdf_reader.page_numbers,
                             terminal_size,
+                            pdf_reader.page,
                         ) {
                             error!("Failed to calculate PDF statistics: {e}");
                             self.show_error(format!("Failed to calculate statistics: {e}"));
