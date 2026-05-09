@@ -2194,7 +2194,7 @@ impl PdfReaderState {
         let Some(zoom) = self.zoom.as_mut() else {
             return;
         };
-        if (zoom.factor() - display_factor).abs() <= 0.0001 {
+        if (zoom.factor() - display_factor).abs() <= Zoom::SCALE_ROUNDTRIP_EPS {
             return;
         }
         zoom.factor = display_factor;
@@ -2413,7 +2413,7 @@ impl PdfReaderState {
         let rendered_scale = self.rendered_scale_for_page(self.page);
         let effective_zoom = self.kitty_effective_zoom_factor;
 
-        if (rendered_scale - effective_zoom).abs() < 0.001 {
+        if (rendered_scale - effective_zoom).abs() < Zoom::ZOOM_USER_EPS {
             self.set_error_hud("Already enhanced at this zoom level".into());
             return Some(InputAction::Redraw);
         }
@@ -2471,7 +2471,7 @@ impl PdfReaderState {
             return;
         }
 
-        if (s_new - pending.effective_zoom).abs() > 0.001 {
+        if (s_new - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
             log::debug!(
                 "Waiting for enhanced frame page={} requested_scale={} target_scale={}",
                 page,

@@ -635,7 +635,8 @@ impl PdfReaderState {
             return false;
         };
         if let Some(requested_scale) = info.requested_scale
-            && (requested_scale - self.non_kitty_zoom_factor).abs() > 0.0001
+            && (requested_scale - self.non_kitty_zoom_factor).abs()
+                > crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS
         {
             return false;
         }

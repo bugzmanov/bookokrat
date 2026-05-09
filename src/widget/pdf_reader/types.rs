@@ -147,9 +147,9 @@ impl RenderedInfo {
 
     pub fn has_image_for_scale(&self, scale: f32) -> bool {
         self.img.is_some()
-            && self
-                .image_scale()
-                .is_some_and(|image_scale| (image_scale - scale).abs() <= 0.0001)
+            && self.image_scale().is_some_and(|image_scale| {
+                (image_scale - scale).abs() <= crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS
+            })
     }
 }
 

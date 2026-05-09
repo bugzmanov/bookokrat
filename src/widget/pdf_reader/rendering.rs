@@ -354,7 +354,8 @@ pub(crate) fn apply_render_responses(
                         && is_full_frame
                         && let Some(enhance) = pdf_reader.pending_enhance.as_ref()
                         && frame_index == enhance.target_page
-                        && (frame.requested_scale - enhance.effective_zoom).abs() > 0.0001
+                        && (frame.requested_scale - enhance.effective_zoom).abs()
+                            > crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS
                     {
                         log::debug!(
                             "Dropping stale converted enhance frame page={} requested_scale={} target_scale={}",
@@ -368,9 +369,10 @@ pub(crate) fn apply_render_responses(
                         .rendered
                         .get(frame_index)
                         .and_then(|info| info.requested_scale);
-                    if expected_scale
-                        .is_some_and(|scale| (scale - frame.requested_scale).abs() > 0.0001)
-                    {
+                    if expected_scale.is_some_and(|scale| {
+                        (scale - frame.requested_scale).abs()
+                            > crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS
+                    }) {
                         log::debug!(
                             "Dropping stale converted frame page={} requested_scale={} current={:?}",
                             frame_index,
