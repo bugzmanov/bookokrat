@@ -195,6 +195,9 @@ pdf_binding_tests! {
     pdf_z_upper: KeyContext::PdfStandard, "Z",
         setup = |state| {},
         check = |_state, action| action.is_some();
+    pdf_e: KeyContext::PdfStandard, "e",
+        setup = |state| {},
+        check = |_state, action| matches!(action, Some(InputAction::Redraw));
     pdf_equals: KeyContext::PdfStandard, "=",
         setup = |state| {},
         check = |_state, action| matches!(action, Some(InputAction::Redraw));

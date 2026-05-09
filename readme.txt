@@ -122,6 +122,7 @@ at the bottom of this document for the syntax.
 │  [n]gg (PDF)   Jump to page number n (e.g. 42gg)                            │
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
+│  e (PDF)       Enhance current page render quality at this zoom             │
 │  i (PDF)       Toggle image inversion (themed mode only; saved per book)    │
 │  I (PDF)       Switch between original PDF rendering and themed style       │
 │                (saved per book).                                            │

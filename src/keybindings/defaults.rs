@@ -218,6 +218,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "a" => Action::AddComment);
     bind!(ctx, "z" => Action::ZoomReset);
     bind!(ctx, "Z" => Action::ZoomFitWidth);
+    bind!(ctx, "e" => Action::ZoomEnhance);
     bind!(ctx, "=" => Action::ZoomIn);
     bind!(ctx, "+" => Action::ZoomIn);
     bind!(ctx, "-" => Action::ZoomOut);

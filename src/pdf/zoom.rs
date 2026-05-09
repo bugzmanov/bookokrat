@@ -55,6 +55,23 @@ impl Zoom {
     /// Base pan step in cells for vertical movement
     pub const BASE_PAN_STEP_Y: f32 = 2.0;
 
+    /// Tolerance for "is this f32 the same value after a roundtrip through
+    /// arithmetic / IPC?" comparisons.
+    ///
+    /// Use at points where two scale values *should* be exactly equal but
+    /// went through `* / .ceil() / .round()` or were sent across a channel,
+    /// so a few ULPs of drift is expected. Zoom factors are at most ~10, so
+    /// 1e-4 is well above accumulated f32 round-off and well below any
+    /// meaningful difference.
+    pub const SCALE_ROUNDTRIP_EPS: f32 = 0.0001;
+
+    /// Tolerance for "is this zoom level user-visibly the same?" decisions.
+    ///
+    /// Zoom steps are 5–10% (`ZOOM_IN_RATE` / `ZOOM_OUT_RATE`), so 0.1% is
+    /// far smaller than anything a user can perceive or trigger. Use at
+    /// user-facing decision points (e.g. "already enhanced at this zoom").
+    pub const ZOOM_USER_EPS: f32 = 0.001;
+
     /// Returns the current zoom factor
     pub fn factor(&self) -> f32 {
         self.factor
@@ -125,6 +142,22 @@ impl Zoom {
             1.0
         } else {
             factor.max(Self::MIN_SCALE)
+        }
+    }
+
+    /// Compute display-side zoom from the user-visible zoom and the scale
+    /// that the image was rendered at.
+    pub fn display_zoom_for(user_factor: f32, rendered_scale: Option<f32>) -> f32 {
+        match rendered_scale {
+            Some(scale) if scale > 0.0 && scale.is_finite() => {
+                let factor = user_factor / scale;
+                if factor.is_finite() {
+                    factor.max(Self::MIN_SCALE)
+                } else {
+                    1.0
+                }
+            }
+            _ => user_factor,
         }
     }
 }
