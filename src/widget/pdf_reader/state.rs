@@ -259,6 +259,21 @@ pub(crate) struct NonKittyDualLayout {
     pub right_slice: Option<NonKittyDualSlice>,
 }
 
+/// State captured before an enhanced Kitty render arrives.
+pub struct PendingEnhance {
+    pub target_page: usize,
+    pub effective_zoom: f32,
+    pub old_display_factor: f32,
+    pub old_rendered_scale: f32,
+    pub old_scroll_offset: u32,
+    pub old_viewport_start: u32,
+    pub old_pan_from_left: u16,
+    pub old_cell_size: Option<crate::pdf::CellSize>,
+    pub old_pixel_w: Option<u32>,
+    pub old_pixel_h: Option<u32>,
+    pub old_right_cell_w: Option<u16>,
+}
+
 /// Main PDF reader widget state
 pub struct PdfReaderState {
     /// Document name
@@ -277,6 +292,9 @@ pub struct PdfReaderState {
     pub is_kitty: bool,
     /// Zoom state (only for Kitty terminals)
     pub zoom: Option<Zoom>,
+    /// User-visible Kitty zoom. `zoom.factor` is display-side scale for the
+    /// current rendered bitmap, so this stays stable across re-renders.
+    pub kitty_effective_zoom_factor: f32,
     /// Color palette
     pub palette: Base16Palette,
     /// Theme index in palette list
@@ -373,6 +391,8 @@ pub struct PdfReaderState {
     pub quick_page_jump: Option<QuickPageJump>,
     /// SyncTeX scanner for LaTeX source ↔ PDF position mapping
     pub synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
+    /// Pending Kitty zoom enhancement waiting for the converted frame.
+    pub pending_enhance: Option<PendingEnhance>,
 }
 
 impl PdfReaderState {
@@ -413,6 +433,7 @@ impl PdfReaderState {
             rendered: vec![],
             is_kitty,
             zoom,
+            kitty_effective_zoom_factor: if is_kitty { zoom_factor } else { 1.0 },
             palette,
             theme_index,
             selection: TextSelection::new(),
@@ -462,6 +483,7 @@ impl PdfReaderState {
             watching: false,
             quick_page_jump: None,
             synctex_scanner: None,
+            pending_enhance: None,
         }
     }
 
@@ -558,7 +580,7 @@ impl PdfReaderState {
         let mut invalidated = Vec::new();
         for (i, info) in self.rendered.iter_mut().enumerate() {
             if info.img.is_some() {
-                info.img = None;
+                info.clear_image();
                 invalidated.push(i);
             }
         }

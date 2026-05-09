@@ -127,4 +127,20 @@ impl Zoom {
             factor.max(Self::MIN_SCALE)
         }
     }
+
+    /// Compute display-side zoom from the user-visible zoom and the scale
+    /// that the image was rendered at.
+    pub fn display_zoom_for(user_factor: f32, rendered_scale: Option<f32>) -> f32 {
+        match rendered_scale {
+            Some(scale) if scale > 0.0 && scale.is_finite() => {
+                let factor = user_factor / scale;
+                if factor.is_finite() {
+                    factor.max(Self::MIN_SCALE)
+                } else {
+                    1.0
+                }
+            }
+            _ => user_factor,
+        }
+    }
 }

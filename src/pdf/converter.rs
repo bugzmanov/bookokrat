@@ -220,6 +220,7 @@ impl ConvertedImage {
 
 pub struct RenderedFrame {
     pub index: usize,
+    pub requested_scale: f32,
     pub image: ConvertedImage,
 }
 
@@ -442,6 +443,7 @@ impl ConverterEngine {
                             self.sent_for_viewport.insert(new_viewport.page);
                             sender.send(Ok(RenderedFrame {
                                 index: new_viewport.page,
+                                requested_scale: cached.data.requested_scale,
                                 image: img,
                             }))?;
                         }
@@ -491,6 +493,7 @@ impl ConverterEngine {
 
                     sender.send(Ok(RenderedFrame {
                         index: new_viewport.page,
+                        requested_scale: cached.data.requested_scale,
                         image: img,
                     }))?;
                 }
@@ -577,6 +580,7 @@ impl ConverterEngine {
 
             return Ok(Some(RenderedFrame {
                 index: page_info.page_num,
+                requested_scale: page_info.requested_scale,
                 image: img,
             }));
         }
@@ -878,6 +882,7 @@ impl ConverterEngine {
                                     self.sent_for_viewport.insert(*page_num);
                                     sender.send(Ok(RenderedFrame {
                                         index: *page_num,
+                                        requested_scale: cached.data.requested_scale,
                                         image: img,
                                     }))?;
                                 }
@@ -908,6 +913,7 @@ impl ConverterEngine {
                     self.sent_for_viewport.insert(*page_num);
                     sender.send(Ok(RenderedFrame {
                         index: *page_num,
+                        requested_scale: cached.data.requested_scale,
                         image: img,
                     }))?;
                 }
@@ -984,6 +990,7 @@ impl ConverterEngine {
                     self.sent_for_viewport.insert(page_num);
                     sender.send(Ok(RenderedFrame {
                         index: page_num,
+                        requested_scale: cached.data.requested_scale,
                         image: img,
                     }))?;
                 }
@@ -1071,6 +1078,7 @@ impl ConverterEngine {
                 );
                 sender.send(Ok(RenderedFrame {
                     index: page_num,
+                    requested_scale: cached.data.requested_scale,
                     image: ConvertedImage::TileUpdate { tiles, cell_size },
                 }))?;
             }
@@ -1103,6 +1111,7 @@ impl ConverterEngine {
                             Ok(img) => {
                                 sender.send(Ok(RenderedFrame {
                                     index: page_num,
+                                    requested_scale: cached.data.requested_scale,
                                     image: img,
                                 }))?;
                                 self.tiled_pages.insert(page_num);
@@ -1180,6 +1189,7 @@ impl ConverterEngine {
                     self.sent_for_viewport.insert(page_num);
                     sender.send(Ok(RenderedFrame {
                         index: page_num,
+                        requested_scale: cached.data.requested_scale,
                         image: img,
                     }))?;
                 }
@@ -1278,6 +1288,7 @@ impl ConverterEngine {
                 );
                 sender.send(Ok(RenderedFrame {
                     index: page_num,
+                    requested_scale: cached.data.requested_scale,
                     image: ConvertedImage::TileUpdate { tiles, cell_size },
                 }))?;
             }

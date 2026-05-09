@@ -95,6 +95,11 @@ pub struct PendingScroll {
 pub struct RenderedInfo {
     /// The converted image ready for display
     pub img: Option<ConvertedImage>,
+    /// Worker-requested scale for the converted image in `img`.
+    ///
+    /// Worker metadata can arrive before the converted Kitty image, so layout
+    /// code must not treat an old image as if it already has the new scale.
+    pub image_requested_scale: Option<f32>,
     /// Full size in terminal cells
     pub full_cell_size: Option<CellSize>,
     /// Width in pixels
@@ -115,6 +120,37 @@ pub struct RenderedInfo {
     pub link_rects: Vec<crate::pdf::LinkRect>,
     /// Page height in pixels
     pub page_px_height: Option<f32>,
+}
+
+impl RenderedInfo {
+    pub fn clear_image(&mut self) {
+        self.img = None;
+        self.image_requested_scale = None;
+    }
+
+    pub fn image_scale(&self) -> Option<f32> {
+        self.image_requested_scale
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+    }
+
+    pub fn layout_scale(&self) -> f32 {
+        if self.img.is_some()
+            && let Some(scale) = self.image_scale()
+        {
+            return scale;
+        }
+
+        self.requested_scale
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .unwrap_or(1.0)
+    }
+
+    pub fn has_image_for_scale(&self, scale: f32) -> bool {
+        self.img.is_some()
+            && self
+                .image_scale()
+                .is_some_and(|image_scale| (image_scale - scale).abs() <= 0.0001)
+    }
 }
 
 /// Layout for rendering

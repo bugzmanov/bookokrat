@@ -22,8 +22,8 @@ use super::{CellSize, DEFAULT_CACHE_SIZE, DEFAULT_PREFETCH_RADIUS, DEFAULT_WORKE
 
 #[derive(Debug)]
 enum PendingRequest {
-    Page(usize),
-    Prefetch(usize),
+    Page { page: usize, key: CacheKey },
+    Prefetch { page: usize, key: CacheKey },
     ExtractText,
 }
 
@@ -357,6 +357,7 @@ impl RenderService {
     pub fn request_page(&mut self, page: usize) -> RequestId {
         let id = self.next_id();
         let params = self.state.render_params();
+        let key = CacheKey::from_params(page, &params);
 
         let _ = self.request_tx.send(RenderRequest::Page {
             id,
@@ -364,7 +365,8 @@ impl RenderService {
             params,
             render_generation: self.render_generation,
         });
-        self.pending_requests.insert(id, PendingRequest::Page(page));
+        self.pending_requests
+            .insert(id, PendingRequest::Page { page, key });
         self.latest_page_request.insert(page, id);
         self.prefetch_in_flight.remove(&page);
 
@@ -373,7 +375,13 @@ impl RenderService {
 
     /// Request a page only if it is not cached or already in flight.
     pub fn request_page_if_needed(&mut self, page: usize) -> Option<RequestId> {
-        if self.is_page_cached(page) || self.is_page_in_flight(page) {
+        let key = CacheKey::from_params(page, &self.state.render_params());
+        let cached = self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains(&key);
+        if cached || self.is_page_in_flight_for_key(page, &key) {
             return None;
         }
 
@@ -397,6 +405,7 @@ impl RenderService {
     fn prefetch_page(&mut self, page: usize) -> RequestId {
         let id = self.next_id();
         let params = self.state.render_params();
+        let key = CacheKey::from_params(page, &params);
 
         let _ = self.request_tx.send(RenderRequest::Prefetch {
             id,
@@ -405,7 +414,7 @@ impl RenderService {
             render_generation: self.render_generation,
         });
         self.pending_requests
-            .insert(id, PendingRequest::Prefetch(page));
+            .insert(id, PendingRequest::Prefetch { page, key });
         self.latest_page_request.insert(page, id);
         self.prefetch_in_flight.insert(page);
 
@@ -427,7 +436,7 @@ impl RenderService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&key);
 
-        if !current_cached && !self.is_page_in_flight(current) {
+        if !current_cached && !self.is_page_in_flight_for_key(current, &key) {
             self.request_page(current);
         }
 
@@ -442,10 +451,6 @@ impl RenderService {
     }
 
     fn maybe_prefetch(&mut self, page: usize) {
-        if self.prefetch_in_flight.contains(&page) {
-            return;
-        }
-
         let key = CacheKey::from_params(page, &self.state.render_params());
         let cached = self
             .cache
@@ -453,18 +458,15 @@ impl RenderService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&key);
 
-        if !cached {
+        if !cached && !self.is_page_in_flight_for_key(page, &key) {
             self.prefetch_page(page);
         }
     }
 
-    fn is_page_in_flight(&self, page: usize) -> bool {
-        if self.prefetch_in_flight.contains(&page) {
-            return true;
-        }
-
+    fn is_page_in_flight_for_key(&self, page: usize, key: &CacheKey) -> bool {
         self.pending_requests.values().any(|request| match request {
-            PendingRequest::Page(p) | PendingRequest::Prefetch(p) => *p == page,
+            PendingRequest::Page { page: p, key: k }
+            | PendingRequest::Prefetch { page: p, key: k } => *p == page && k == key,
             PendingRequest::ExtractText => false,
         })
     }
@@ -478,22 +480,35 @@ impl RenderService {
             let mut skip_response = false;
             match &response {
                 RenderResponse::Page { id, page, .. } => {
-                    self.pending_requests.remove(id);
+                    let pending = self.pending_requests.remove(id);
                     self.prefetch_in_flight.remove(page);
-                    let is_latest = self.latest_page_request.get(page) == Some(id);
-                    if !is_latest {
+                    let current_key = CacheKey::from_params(*page, &self.state.render_params());
+                    let request_key = match pending.as_ref() {
+                        Some(PendingRequest::Page {
+                            page: pending_page,
+                            key,
+                        })
+                        | Some(PendingRequest::Prefetch {
+                            page: pending_page,
+                            key,
+                        }) if pending_page == page => Some(key),
+                        _ => None,
+                    };
+                    if request_key != Some(&current_key) {
                         skip_response = true;
                         log::debug!(
-                            "Dropping stale render response page={} id={} latest={:?}",
+                            "Dropping stale render response page={} id={} due to params mismatch request={:?} current={:?}",
                             page,
                             id.0,
-                            self.latest_page_request.get(page).map(|r| r.0)
+                            request_key,
+                            current_key
                         );
                     }
                 }
                 RenderResponse::Cancelled(id) | RenderResponse::Error { id, .. } => {
-                    if let Some(PendingRequest::Page(page) | PendingRequest::Prefetch(page)) =
-                        self.pending_requests.remove(id)
+                    if let Some(
+                        PendingRequest::Page { page, .. } | PendingRequest::Prefetch { page, .. },
+                    ) = self.pending_requests.remove(id)
                     {
                         self.prefetch_in_flight.remove(&page);
                     }
@@ -803,7 +818,10 @@ mod tests {
         service.latest_page_request.clear();
 
         let id = RequestId::new(42);
-        service.pending_requests.insert(id, PendingRequest::Page(0));
+        let key = CacheKey::from_params(0, &service.state.render_params());
+        service
+            .pending_requests
+            .insert(id, PendingRequest::Page { page: 0, key });
         service.latest_page_request.insert(0, id);
 
         response_tx
@@ -824,5 +842,30 @@ mod tests {
             [RenderResponse::Page { id: got_id, page: 0, .. }] if *got_id == id
         ));
         assert!(service.pending_requests.is_empty());
+    }
+
+    #[test]
+    fn stale_in_flight_request_does_not_block_new_render_params() {
+        let pdf = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/testdata/vhs_test.pdf");
+        let (mut service, _response_tx) = test_service_with_response_tx(pdf);
+
+        service.state.area = ratatui::layout::Rect::new(0, 0, 80, 40);
+        let stale_key = CacheKey::from_params(0, &service.state.render_params());
+        let stale_id = RequestId::new(42);
+        service.pending_requests.insert(
+            stale_id,
+            PendingRequest::Prefetch {
+                page: 0,
+                key: stale_key,
+            },
+        );
+        service.prefetch_in_flight.insert(0);
+
+        service.state.scale = 2.0;
+
+        assert!(
+            service.request_page_if_needed(0).is_some(),
+            "a prefetch in flight for stale render params must not block a fresh page request"
+        );
     }
 }
