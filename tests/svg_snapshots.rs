@@ -2799,6 +2799,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             book_author: None,
             absolute_path: None,
             toc_expansion_state: None,
+            marks: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -2823,6 +2824,7 @@ fn test_book_reading_history_with_many_entries_svg() {
             book_author: None,
             absolute_path: None,
             toc_expansion_state: None,
+            marks: None,
         };
         books_map.insert(book_path, bookmark);
     }
@@ -5490,5 +5492,189 @@ fn test_nav_panel_resize_from_toc_focus_svg() {
         std::path::Path::new("tests/snapshots/nav_panel_resize_from_toc.svg"),
         "test_nav_panel_resize_from_toc_focus_svg",
         create_test_failure_handler("test_nav_panel_resize_from_toc_focus_svg"),
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Marks (vim-style m/`/' + marks-list popup)
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Set two local marks at different chapters, then open the marks-list popup
+/// via the doubled apostrophe trigger. Snapshot covers popup layout, the
+/// L scope marker, mark letter column, and the help bar.
+#[test]
+#[parallel]
+fn test_marks_popup_populated_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_test_book(&mut app, "digital_frontier.epub");
+
+    // Set mark 'a' on the chapter we land on after open.
+    app.press_key(crossterm::event::KeyCode::Char('m'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    // Move to chapter index 2 and set mark 'b'.
+    app.navigate_to_chapter(2).expect("navigate to chapter 2");
+    app.press_key(crossterm::event::KeyCode::Char('m'));
+    app.press_key(crossterm::event::KeyCode::Char('b'));
+
+    // Confirm we're in EpubContent scroll mode (no `n` was pressed) — this
+    // is the regression we want to guard: doubled-trigger must work outside
+    // normal mode.
+    assert!(
+        matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)),
+        "should be in Content panel before triggering popup"
+    );
+
+    // Doubled apostrophe opens the popup.
+    app.press_key(crossterm::event::KeyCode::Char('\''));
+    app.press_key(crossterm::event::KeyCode::Char('\''));
+
+    assert!(
+        matches!(
+            app.focused_panel,
+            FocusedPanel::Popup(bookokrat::PopupWindow::MarksList)
+        ),
+        "marks popup must be focused after `'' in scroll mode"
+    );
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_marks_popup_populated.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/marks_popup_populated.svg"),
+        "test_marks_popup_populated_svg",
+        create_test_failure_handler("test_marks_popup_populated_svg"),
+    );
+}
+
+/// Set a mark at chapter index 3, navigate away to chapter 0, then jump back
+/// via `` `a ``. Snapshot is the post-jump state — must show chapter 3 again,
+/// proving direct goto restored the chapter.
+#[test]
+#[parallel]
+fn test_mark_jump_via_backtick_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_test_book(&mut app, "digital_frontier.epub");
+
+    // Land on chapter index 3, set mark 'a'.
+    app.navigate_to_chapter(3).expect("navigate to chapter 3");
+    app.press_key(crossterm::event::KeyCode::Char('m'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    // Wander away.
+    app.navigate_to_chapter(0).expect("navigate to chapter 0");
+    assert_eq!(app.current_chapter(), Some(0), "precondition: at ch 0");
+
+    // Jump back via `` `a ``.
+    app.press_key(crossterm::event::KeyCode::Char('`'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    assert_eq!(
+        app.current_chapter(),
+        Some(3),
+        "after `a we must be back at chapter 3"
+    );
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_mark_jump_via_backtick.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/mark_jump_via_backtick.svg"),
+        "test_mark_jump_via_backtick_svg",
+        create_test_failure_handler("test_mark_jump_via_backtick_svg"),
+    );
+}
+
+/// Set a mark at chapter index 2, navigate to chapter 0, open the popup via
+/// `''`, press Enter on the (only) entry. Snapshot is the post-jump state —
+/// must show chapter 2, proving the popup-Enter path restores the chapter.
+#[test]
+#[parallel]
+fn test_mark_jump_via_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_test_book(&mut app, "digital_frontier.epub");
+
+    app.navigate_to_chapter(2).expect("navigate to chapter 2");
+    app.press_key(crossterm::event::KeyCode::Char('m'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    app.navigate_to_chapter(0).expect("navigate to chapter 0");
+    assert_eq!(app.current_chapter(), Some(0), "precondition: at ch 0");
+
+    // Open marks popup with doubled apostrophe.
+    app.press_key(crossterm::event::KeyCode::Char('\''));
+    app.press_key(crossterm::event::KeyCode::Char('\''));
+    assert!(
+        matches!(
+            app.focused_panel,
+            FocusedPanel::Popup(bookokrat::PopupWindow::MarksList)
+        ),
+        "marks popup must be focused"
+    );
+
+    // Enter on the selected (and only) entry should jump and close popup.
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    assert_eq!(
+        app.current_chapter(),
+        Some(2),
+        "after Enter from popup we must be back at chapter 2"
+    );
+    assert!(
+        matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)),
+        "popup must close back to content view after jump"
+    );
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write("tests/snapshots/debug_mark_jump_via_popup.svg", &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/mark_jump_via_popup.svg"),
+        "test_mark_jump_via_popup_svg",
+        create_test_failure_handler("test_mark_jump_via_popup_svg"),
     );
 }

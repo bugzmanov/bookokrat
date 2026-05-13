@@ -50,6 +50,7 @@ pub fn default_keymap() -> Keymap {
     popup_stats_specifics(&mut keymap);
     popup_comments_specifics(&mut keymap);
     popup_settings_specifics(&mut keymap);
+    popup_marks_specifics(&mut keymap);
 
     keymap
 }
@@ -100,6 +101,9 @@ fn add_normal_layer(ctx: &mut ContextKeymap) {
     bind!(ctx, "V" => Action::EnterVisualLineMode);
     bind!(ctx, "y" => Action::StartYank);
     bind!(ctx, "n" => Action::ToggleNormalMode);
+    bind!(ctx, "m" => Action::SetMark);
+    bind!(ctx, "`" => Action::GotoMark);
+    bind!(ctx, "'" => Action::GotoMark);
 }
 
 fn add_popup_layer(_ctx: &mut ContextKeymap) {}
@@ -176,6 +180,9 @@ fn content_specifics(keymap: &mut Keymap) {
     bind!(ctx, "c" => Action::CopySelection);
     bind!(ctx, "<C-i>" => Action::JumpForward);
     bind!(ctx, "<C-o>" => Action::JumpBackward);
+    bind!(ctx, "m" => Action::SetMark);
+    bind!(ctx, "`" => Action::GotoMark);
+    bind!(ctx, "'" => Action::GotoMark);
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "<Tab>" => Action::SwitchFocus);
     bind!(ctx, "-" => Action::IncreaseMargin);
@@ -219,6 +226,9 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "z" => Action::ZoomReset);
     bind!(ctx, "Z" => Action::ZoomFitWidth);
     bind!(ctx, "e" => Action::ZoomEnhance);
+    bind!(ctx, "m" => Action::SetMark);
+    bind!(ctx, "`" => Action::GotoMark);
+    bind!(ctx, "'" => Action::GotoMark);
     bind!(ctx, "=" => Action::ZoomIn);
     bind!(ctx, "+" => Action::ZoomIn);
     bind!(ctx, "-" => Action::ZoomOut);
@@ -295,6 +305,16 @@ fn popup_comments_specifics(keymap: &mut Keymap) {
     bind!(ctx, "N" => Action::PrevSearchMatch);
 }
 
+fn popup_marks_specifics(keymap: &mut Keymap) {
+    let ctx = keymap.context_mut(KeyContext::PopupMarks);
+    bind!(ctx, "<CR>" => Action::Select);
+    bind!(ctx, "dd" => Action::DeleteEntry);
+    bind!(ctx, "<Tab>" => Action::NextTab);
+    bind!(ctx, "<S-Tab>" => Action::PrevTab);
+    bind!(ctx, "'" => Action::Cancel);
+    bind!(ctx, "`" => Action::Cancel);
+}
+
 fn popup_settings_specifics(keymap: &mut Keymap) {
     let ctx = keymap.context_mut(KeyContext::PopupSettings);
     bind!(ctx, "h" => Action::MoveLeft);
@@ -355,8 +375,11 @@ mod tests {
         // bind via `keybindings.yaml`. Each entry needs a justification —
         // otherwise bind it or delete it.
         const UNBOUND_BY_DESIGN: &[Action] = &[
-            // Add entries as `(Action::Foo, "reason why unbound")` — kept
-            // separate from UNREACHABLE_BY_DESIGN so the intent is clear.
+            // Triggered via the pending-mark state machine when the user types
+            // the goto-mark trigger twice (`` ` ` ``/`''`); not reachable through
+            // a single keymap binding, but exposed for users who want their
+            // own shortcut.
+            Action::ToggleMarksList,
         ];
 
         let keymap = default_keymap();
@@ -535,6 +558,56 @@ mod tests {
             lookup(&keymap, KeyContext::EpubContent, "j"),
             LookupResult::Found(Action::ScrollDown)
         );
+    }
+
+    #[test]
+    fn mark_bindings_in_all_reader_contexts() {
+        let keymap = default_keymap();
+        for ctx in [
+            KeyContext::EpubNormal,
+            KeyContext::PdfNormal,
+            KeyContext::EpubContent,
+            KeyContext::PdfStandard,
+        ] {
+            assert_eq!(
+                lookup(&keymap, ctx, "m"),
+                LookupResult::Found(Action::SetMark),
+                "m should be SetMark in {ctx:?}"
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "`"),
+                LookupResult::Found(Action::GotoMark),
+                "` should be GotoMark in {ctx:?}"
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "'"),
+                LookupResult::Found(Action::GotoMark),
+                "' should be GotoMark in {ctx:?}"
+            );
+        }
+    }
+
+    /// `` ` `` and `'` must dispatch immediately (not be a prefix). The popup
+    /// trigger (doubled key) is handled in the pending-state layer, not the
+    /// keymap, so binding `` `` `` here would silently break single-key goto.
+    #[test]
+    fn single_mark_trigger_is_not_a_prefix() {
+        let keymap = default_keymap();
+        for ctx in [
+            KeyContext::EpubNormal,
+            KeyContext::PdfNormal,
+            KeyContext::EpubContent,
+            KeyContext::PdfStandard,
+        ] {
+            assert!(
+                matches!(lookup(&keymap, ctx, "`"), LookupResult::Found(_)),
+                "` must be Found, not Prefix, in {ctx:?}"
+            );
+            assert!(
+                matches!(lookup(&keymap, ctx, "'"), LookupResult::Found(_)),
+                "' must be Found, not Prefix, in {ctx:?}"
+            );
+        }
     }
 
     #[test]

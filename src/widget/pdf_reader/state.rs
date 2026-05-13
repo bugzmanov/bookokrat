@@ -102,12 +102,39 @@ pub struct PageSearchMatch {
     pub length: usize,
 }
 
+/// What to highlight on a page. Two flavors exist because the *locator* to
+/// recompute rects on each rerender is fundamentally different:
+///
+/// - `Query` — substring search; rects are the matches of `query`. Optional
+///   `line_index` / `line_y_bounds` disambiguate which match is the "active"
+///   one when there are multiple matches per page.
+/// - `Line` — a specific logical line in `line_bounds`. The whole line is
+///   highlighted; no text matching needed.
 #[derive(Clone, Debug)]
-pub struct ActiveSearchHighlight {
+pub enum HighlightLocator {
+    Query {
+        query: String,
+        line_index: Option<usize>,
+        line_y_bounds: Option<(f32, f32)>,
+    },
+    Line {
+        line_idx: usize,
+    },
+}
+
+/// A pending highlight to be rendered on a PDF page. Replaces the older
+/// `ActiveSearchHighlight` and `MarkJumpHighlight` types — both shared the
+/// same one-per-page lifecycle and the same `UpdateSelection` channel, so
+/// they're collapsed into a single field.
+///
+/// `expires_at = None` means persistent (used by search; cleared when the
+/// user dismisses or starts a new search). `Some(_)` means transient (used
+/// by mark jumps; the App tick clears it after the deadline).
+#[derive(Clone, Debug)]
+pub struct PendingHighlight {
     pub page: usize,
-    pub query: String,
-    pub line_index: Option<usize>,
-    pub line_y_bounds: Option<(f32, f32)>,
+    pub locator: HighlightLocator,
+    pub expires_at: Option<std::time::Instant>,
 }
 
 /// Page search state for vim-style / search in normal mode
@@ -228,6 +255,8 @@ pub enum InputAction {
         file: String,
         line: u32,
     },
+    SetMarkPending,
+    GotoMarkPending,
 }
 
 /// Separator height between pages in continuous scroll
@@ -378,9 +407,10 @@ pub struct PdfReaderState {
     pub kitty_visible_pages: HashSet<usize>,
     /// Whether Kitty delete-by-range is safe on this terminal
     pub kitty_delete_range_supported: bool,
-    /// Active PDF/DJVU search highlight to (re)apply when page data arrives
-    /// or rerenders after a geometry change.
-    pub pending_search_highlight: Option<ActiveSearchHighlight>,
+    /// Pending overlay highlight (search match or mark-jump line). Re-applied
+    /// when page data arrives or rerenders after geometry changes. See
+    /// `HighlightLocator` for the two flavors.
+    pub pending_highlight: Option<PendingHighlight>,
     /// Transient HUD message for the bottom title area
     pub hud_message: Option<HudMessage>,
     /// Page search state for vim-style / search in normal mode
@@ -477,7 +507,7 @@ impl PdfReaderState {
             last_kitty_cache_window: None,
             kitty_visible_pages: HashSet::new(),
             kitty_delete_range_supported: false,
-            pending_search_highlight: None,
+            pending_highlight: None,
             hud_message: None,
             page_search: PageSearchState::default(),
             watching: false,
@@ -535,6 +565,81 @@ impl PdfReaderState {
 
     pub(crate) fn set_hud_message(&mut self, message: String, mode: HudMode, duration: Duration) {
         self.hud_message = Some(HudMessage::new(message, duration, mode));
+    }
+
+    /// Persistent search-style highlight; recomputed on each rerender via
+    /// substring matching of `query` against page text.
+    pub fn set_search_highlight(
+        &mut self,
+        page: usize,
+        query: String,
+        line_index: Option<usize>,
+        line_y_bounds: Option<(f32, f32)>,
+    ) {
+        self.pending_highlight = Some(PendingHighlight {
+            page,
+            locator: HighlightLocator::Query {
+                query,
+                line_index,
+                line_y_bounds,
+            },
+            expires_at: None,
+        });
+    }
+
+    /// Brief line-level highlight after a mark jump. Cleared by the App tick
+    /// once `duration` has passed.
+    pub fn start_mark_jump_highlight(&mut self, page: usize, line_idx: usize, duration: Duration) {
+        self.pending_highlight = Some(PendingHighlight {
+            page,
+            locator: HighlightLocator::Line { line_idx },
+            expires_at: Some(std::time::Instant::now() + duration),
+        });
+    }
+
+    pub fn clear_pending_highlight(&mut self) {
+        self.pending_highlight = None;
+    }
+
+    /// Clear the highlight if its expiry has passed. Returns `true` when the
+    /// state changed (caller should send empty `UpdateSelection` and force a
+    /// redraw). Persistent highlights (no expiry) are never auto-cleared.
+    pub fn tick_pending_highlight(&mut self) -> bool {
+        let expired = self.pending_highlight.as_ref().is_some_and(|h| {
+            h.expires_at
+                .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        });
+        if expired {
+            self.pending_highlight = None;
+            return true;
+        }
+        false
+    }
+
+    /// Build selection rects for the active pending highlight. Empty if
+    /// nothing is pending or the line bounds aren't available yet.
+    pub fn pending_highlight_rects(&self) -> Vec<crate::pdf::SelectionRect> {
+        let Some(h) = self.pending_highlight.as_ref() else {
+            return Vec::new();
+        };
+        match &h.locator {
+            HighlightLocator::Line { line_idx } => {
+                let Some(info) = self.rendered.get(h.page) else {
+                    return Vec::new();
+                };
+                let Some(line) = info.line_bounds.get(*line_idx) else {
+                    return Vec::new();
+                };
+                vec![crate::pdf::SelectionRect {
+                    page: h.page,
+                    topleft_x: line.x0 as u32,
+                    topleft_y: line.y0 as u32,
+                    bottomright_x: line.x1 as u32,
+                    bottomright_y: line.y1 as u32,
+                }]
+            }
+            HighlightLocator::Query { .. } => self.find_query_highlight_rects(h),
+        }
     }
 
     pub(crate) fn pdf_rendering_status(&self) -> String {

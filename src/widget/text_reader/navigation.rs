@@ -279,12 +279,134 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         0
     }
 
+    /// Node index at a specific wrapped-line, if any. Walks forward from the
+    /// requested line so a hit on an "empty" line (no node_index) falls
+    /// through to the next content line — matching how the viewport-based
+    /// `get_current_node_index` behaves.
+    pub fn node_index_at_line(&self, line: usize) -> Option<usize> {
+        for rendered_line in self.rendered_content.lines.iter().skip(line) {
+            if let Some(node_idx) = rendered_line.node_index {
+                return Some(node_idx);
+            }
+        }
+        None
+    }
+
+    /// Node index at the user's "current focus": cursor line in normal mode,
+    /// top-of-viewport in scroll mode. Used by mark capture and any other
+    /// code that wants "where is the user actually looking".
+    pub fn focused_node_index(&self) -> usize {
+        if self.normal_mode.is_active() {
+            self.node_index_at_line(self.normal_mode.cursor.line)
+                .unwrap_or_else(|| self.get_current_node_index())
+        } else {
+            self.get_current_node_index()
+        }
+    }
+
+    /// Wrapped-line index at the user's current focus. Mirrors
+    /// `focused_node_index` but returns the line itself, walking forward
+    /// past any blank/separator lines (no `node_index`) so we land on a
+    /// real content line.
+    pub fn focused_line_index(&self) -> usize {
+        let start = if self.normal_mode.is_active() {
+            self.normal_mode.cursor.line
+        } else {
+            self.scroll_offset
+        };
+        for (offset, line) in self.rendered_content.lines.iter().skip(start).enumerate() {
+            if line.node_index.is_some() {
+                return start + offset;
+            }
+        }
+        start
+    }
+
+    /// Canonical char offset of the focused line within its paragraph. None
+    /// if the focused line isn't part of an annotatable block (separator,
+    /// horizontal rule, etc.).
+    pub fn focused_node_char_offset(&self) -> Option<usize> {
+        let line_idx = self.focused_line_index();
+        self.rendered_content
+            .lines
+            .get(line_idx)
+            .and_then(|l| l.canonical_content_start)
+    }
+
+    /// Find the wrapped line within `node_index` whose canonical content
+    /// start best matches `char_offset` (largest start <= offset). Falls
+    /// back to the first line of the node when nothing fits.
+    pub fn find_line_for_node_offset(
+        &self,
+        node_index: usize,
+        char_offset: usize,
+    ) -> Option<usize> {
+        let mut best: Option<usize> = None;
+        let mut first_in_node: Option<usize> = None;
+        for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if line.node_index != Some(node_index) {
+                if first_in_node.is_some() {
+                    break; // walked past the node
+                }
+                continue;
+            }
+            if first_in_node.is_none() {
+                first_in_node = Some(line_idx);
+            }
+            if let Some(start) = line.canonical_content_start {
+                if start <= char_offset {
+                    best = Some(line_idx);
+                } else {
+                    break;
+                }
+            }
+        }
+        best.or(first_in_node)
+    }
+
+    /// Restore scroll to the wrapped line within `node_index` matching
+    /// `char_offset`. Performs immediately and queues a pending restore so
+    /// it re-runs after the next render — needed for cross-chapter jumps
+    /// where `rendered_content.lines` is empty when the jump fires.
+    pub fn restore_to_node_position(&mut self, node_index: usize, char_offset: usize) {
+        self.perform_node_position_restore(node_index, char_offset);
+        self.pending_node_restore = Some((node_index, Some(char_offset)));
+    }
+
+    /// Synchronous half of `restore_to_node_position`. Does not queue any
+    /// pending state; safe to call from the render-time pending processor.
+    pub fn perform_node_position_restore(&mut self, node_index: usize, char_offset: usize) {
+        if let Some(line_idx) = self.find_line_for_node_offset(node_index, char_offset) {
+            self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
+        } else {
+            self.perform_node_restore(node_index);
+        }
+    }
+
+    /// Briefly highlight the wrapped line at `(node_index, char_offset)`.
+    /// Defers to a render-time hook if `rendered_content.lines` is empty
+    /// (cross-chapter jump where content hasn't re-rendered yet).
+    pub fn flash_node_position_highlight(
+        &mut self,
+        node_index: usize,
+        char_offset: usize,
+        duration: std::time::Duration,
+    ) {
+        if self.rendered_content.lines.is_empty() {
+            self.pending_node_highlight = Some((node_index, Some(char_offset), duration));
+            return;
+        }
+        if let Some(line_idx) = self.find_line_for_node_offset(node_index, char_offset) {
+            self.highlight_line_temporarily(line_idx, duration);
+        }
+    }
+
     /// Restore scroll position to show a specific node
     pub fn restore_to_node_index(&mut self, node_index: usize) {
         // Perform immediately for jump list navigation
         self.perform_node_restore(node_index);
         // Also set pending in case content hasn't been rendered yet
-        self.pending_node_restore = Some(node_index);
+        self.pending_node_restore = Some((node_index, None));
     }
 
     pub fn perform_node_restore(&mut self, node_index: usize) {
@@ -292,6 +414,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Some(node_idx) = line.node_index {
                 if node_idx >= node_index {
                     self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Briefly background-highlight the line that maps to `node_index`. Used
+    /// after a mark jump so the user can see *which* line they jumped to.
+    ///
+    /// If `rendered_content.lines` is still empty (cross-chapter jump where
+    /// content was cleared but the next render hasn't run), defers the
+    /// highlight to fire after the render via `pending_node_highlight`.
+    pub fn flash_node_highlight(&mut self, node_index: usize, duration: std::time::Duration) {
+        if self.rendered_content.lines.is_empty() {
+            self.pending_node_highlight = Some((node_index, None, duration));
+            return;
+        }
+        for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
+            if let Some(node_idx) = line.node_index {
+                if node_idx >= node_index {
+                    self.highlight_line_temporarily(line_idx, duration);
                     return;
                 }
             }
@@ -309,6 +452,56 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_visible_height(&self) -> usize {
         self.visible_height
+    }
+
+    /// Capture a short text excerpt for use as a mark label.
+    ///
+    /// In normal mode: starts at the cursor line (the line the user
+    /// explicitly chose). In scroll mode: starts at the top of the viewport
+    /// but skips any leading heading or horizontal-rule lines so the snippet
+    /// is the first body content the reader sees, not a section title that
+    /// happens to be at the top of the screen.
+    pub fn current_text_snippet(&self, max_chars: usize) -> Option<String> {
+        let (start, skip_headings) = if self.normal_mode.is_active() {
+            (self.normal_mode.cursor.line, false)
+        } else {
+            (self.scroll_offset, true)
+        };
+        self.text_snippet_from(start, max_chars, skip_headings)
+    }
+
+    fn text_snippet_from(
+        &self,
+        start_line: usize,
+        max_chars: usize,
+        skip_headings: bool,
+    ) -> Option<String> {
+        use super::types::LineType;
+
+        let mut included_any = false;
+        let filtered = self
+            .rendered_content
+            .lines
+            .iter()
+            .skip(start_line)
+            .filter_map(|line| {
+                let trimmed = line.raw_text.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+                if !included_any
+                    && skip_headings
+                    && matches!(
+                        line.line_type,
+                        LineType::Heading { .. } | LineType::HorizontalRule
+                    )
+                {
+                    return None;
+                }
+                included_any = true;
+                Some(line.raw_text.as_str())
+            });
+        crate::marks::build_text_snippet(filtered, max_chars)
     }
 }
 

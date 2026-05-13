@@ -1,3 +1,4 @@
+use crate::marks::MarkLocation;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -52,6 +53,11 @@ pub struct Bookmark {
 
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub toc_expansion_state: Option<Vec<TocSectionState>>,
+
+    /// Vim-style local marks (a-z) for this book. Each key is a single
+    /// lowercase letter and points back to a position inside this book.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub marks: Option<HashMap<char, MarkLocation>>,
 }
 
 // JSON shape:
@@ -305,6 +311,7 @@ impl Bookmarks {
         let book_author = existing.and_then(|b| b.book_author.clone());
         let absolute_path = existing.and_then(|b| b.absolute_path.clone());
         let toc_expansion_state = existing.and_then(|b| b.toc_expansion_state.clone());
+        let marks = existing.and_then(|b| b.marks.clone());
 
         self.books.insert(
             key,
@@ -327,6 +334,7 @@ impl Bookmarks {
                 book_author,
                 absolute_path,
                 toc_expansion_state,
+                marks,
             },
         );
 
@@ -383,6 +391,7 @@ impl Bookmarks {
                     book_author,
                     absolute_path,
                     toc_expansion_state: None,
+                    marks: None,
                 },
             );
         }
@@ -428,6 +437,51 @@ impl Bookmarks {
                 log::error!("Failed to save TOC expansion state: {e}");
             }
         }
+    }
+
+    pub fn set_local_mark(&mut self, path: &str, ch: char, loc: MarkLocation) -> bool {
+        let key = match self.resolve_existing_key(path) {
+            Some(k) => k,
+            None => return false,
+        };
+        let Some(bookmark) = self.books.get_mut(&key) else {
+            return false;
+        };
+        bookmark
+            .marks
+            .get_or_insert_with(HashMap::new)
+            .insert(ch, loc);
+        if let Err(e) = self.save() {
+            log::error!("Failed to save local mark: {e}");
+        }
+        true
+    }
+
+    pub fn get_local_mark(&self, path: &str, ch: char) -> Option<&MarkLocation> {
+        let key = self.resolve_existing_key(path)?;
+        self.books.get(&key)?.marks.as_ref()?.get(&ch)
+    }
+
+    pub fn remove_local_mark(&mut self, path: &str, ch: char) -> bool {
+        let Some(key) = self.resolve_existing_key(path) else {
+            return false;
+        };
+        let Some(bookmark) = self.books.get_mut(&key) else {
+            return false;
+        };
+        let Some(marks) = bookmark.marks.as_mut() else {
+            return false;
+        };
+        if marks.remove(&ch).is_none() {
+            return false;
+        }
+        if marks.is_empty() {
+            bookmark.marks = None;
+        }
+        if let Err(e) = self.save() {
+            log::error!("Failed to save after removing local mark: {e}");
+        }
+        true
     }
 
     pub fn remove_bookmark(&mut self, path: &str) -> bool {

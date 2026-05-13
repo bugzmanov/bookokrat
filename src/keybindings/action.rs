@@ -91,6 +91,11 @@ pub enum Action {
     JumpForward,
     JumpBackward,
 
+    // === Marks ===
+    SetMark,
+    GotoMark,
+    ToggleMarksList,
+
     // === Display ===
     ToggleProfiling,
     ToggleRawHtml,
@@ -220,6 +225,9 @@ impl Action {
         Action::FirstNonBlank,
         Action::JumpForward,
         Action::JumpBackward,
+        Action::SetMark,
+        Action::GotoMark,
+        Action::ToggleMarksList,
         Action::ToggleProfiling,
         Action::ToggleRawHtml,
         Action::ToggleJustifyText,
@@ -354,6 +362,11 @@ impl Action {
             JumpForward => "Jump forward in the navigation history",
             JumpBackward => "Jump backward in the navigation history",
 
+            // Marks
+            SetMark => "Set a mark at the current position (next key picks the mark name)",
+            GotoMark => "Jump to a previously set mark (next key picks the mark name)",
+            ToggleMarksList => "Open the marks list popup",
+
             // Display
             ToggleProfiling => "Toggle the performance profiler overlay",
             ToggleRawHtml => "Toggle raw HTML view (EPUB)",
@@ -477,6 +490,7 @@ mod tests {
                 | RepeatFindReverse => a,
                 WordForward | WordBackward | WordEnd | LineStart | LineEnd | FirstNonBlank => a,
                 JumpForward | JumpBackward => a,
+                SetMark | GotoMark | ToggleMarksList => a,
                 ToggleProfiling | ToggleRawHtml | ToggleJustifyText | IncreaseMargin
                 | DecreaseMargin => a,
                 ZoomIn | ZoomOut | ZoomReset | ZoomFitWidth | ZoomEnhance | PanLeft | PanRight => a,

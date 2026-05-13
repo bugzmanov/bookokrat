@@ -19,6 +19,7 @@ pub enum KeyContext {
     PopupStats,
     PopupComments,
     PopupSettings,
+    PopupMarks,
 }
 
 /// Config file group keys that expand to multiple contexts.
@@ -48,6 +49,7 @@ impl KeyContext {
         KeyContext::PopupStats,
         KeyContext::PopupComments,
         KeyContext::PopupSettings,
+        KeyContext::PopupMarks,
     ];
 
     /// Short config key used in the YAML file.
@@ -65,6 +67,7 @@ impl KeyContext {
             KeyContext::PopupStats => "popup.stats",
             KeyContext::PopupComments => "popup.comments",
             KeyContext::PopupSettings => "popup.settings",
+            KeyContext::PopupMarks => "popup.marks",
         }
     }
 
@@ -90,6 +93,7 @@ pub const ALL_GROUP: &[KeyContext] = &[
     KeyContext::PopupStats,
     KeyContext::PopupComments,
     KeyContext::PopupSettings,
+    KeyContext::PopupMarks,
 ];
 
 /// Contexts that the `normal` group expands to.
@@ -103,6 +107,7 @@ pub const POPUP_GROUP: &[KeyContext] = &[
     KeyContext::PopupStats,
     KeyContext::PopupComments,
     KeyContext::PopupSettings,
+    KeyContext::PopupMarks,
 ];
 
 /// Resolve a config file key to a group or specific context.
@@ -145,13 +150,13 @@ mod tests {
 
     #[test]
     fn all_variants_covered() {
-        assert_eq!(KeyContext::ALL.len(), 12);
+        assert_eq!(KeyContext::ALL.len(), 13);
     }
 
     #[test]
     fn group_all_excludes_global() {
         assert!(!ALL_GROUP.contains(&KeyContext::Global));
-        assert_eq!(ALL_GROUP.len(), 11);
+        assert_eq!(ALL_GROUP.len(), 12);
     }
 
     #[test]

@@ -22,7 +22,8 @@ use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
 
 use super::state::{
-    ActiveSearchHighlight, CommentEditMode, InputAction, PdfReaderState, SEPARATOR_HEIGHT,
+    CommentEditMode, HighlightLocator, InputAction, PdfReaderState, PendingHighlight,
+    SEPARATOR_HEIGHT,
 };
 use super::types::{PageJumpMode, PendingScroll, QuickPageJump};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
@@ -295,7 +296,7 @@ impl PdfReaderState {
 
             if let Some(tx) = conversion_tx {
                 let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
-                if self.pending_search_highlight.is_some() {
+                if self.pending_highlight.is_some() {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
                 }
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
@@ -332,7 +333,7 @@ impl PdfReaderState {
 
             if let Some(tx) = conversion_tx {
                 let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
-                if self.pending_search_highlight.is_some() {
+                if self.pending_highlight.is_some() {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
                 }
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
@@ -444,6 +445,117 @@ impl PdfReaderState {
             KeyCode::Char('d') => self.delete_current_comment(),
             KeyCode::Esc | KeyCode::BackTab => self.stop_comment_nav(),
             _ => Some(InputAction::Redraw),
+        }
+    }
+
+    /// Capture the current cursor/scroll position as a `MarkLocation`.
+    pub fn capture_mark_location(&self) -> crate::marks::MarkLocation {
+        let scroll = self
+            .zoom
+            .as_ref()
+            .map(|z| z.global_scroll_offset)
+            .unwrap_or(self.non_kitty_scroll_offset);
+        let focus = self.focused_mark_line();
+        let page = focus.map(|(page, _)| page).unwrap_or(self.page);
+        let line_idx = focus.map(|(_, line_idx)| line_idx);
+        let snippet = line_idx
+            .and_then(|idx| self.page_snippet_from_line(page, idx, 140))
+            .or_else(|| self.current_page_snippet(140));
+
+        crate::marks::MarkLocation::Pdf {
+            path: self.name.clone(),
+            page,
+            scroll_offset: scroll,
+            snippet,
+            line_idx,
+        }
+    }
+
+    fn focused_mark_line(&self) -> Option<(usize, usize)> {
+        if self.normal_mode.active {
+            let cursor = self.normal_mode.cursor;
+            if self
+                .rendered
+                .get(cursor.page)
+                .and_then(|r| r.line_bounds.get(cursor.line_idx))
+                .is_some_and(|line| !line.chars.is_empty())
+            {
+                return Some((cursor.page, cursor.line_idx));
+            }
+        }
+
+        if self.is_kitty {
+            return self.find_first_visible_line().or_else(|| {
+                self.first_text_line_on_page(self.page)
+                    .map(|idx| (self.page, idx))
+            });
+        }
+
+        let line_bounds = self
+            .rendered
+            .get(self.page)
+            .map(|r| r.line_bounds.as_slice())?;
+        let visible = self.find_first_visible_line_non_kitty(self.page, line_bounds)?;
+        self.next_text_line_on_page(self.page, visible)
+            .map(|idx| (self.page, idx))
+    }
+
+    fn first_text_line_on_page(&self, page: usize) -> Option<usize> {
+        self.next_text_line_on_page(page, 0)
+    }
+
+    fn next_text_line_on_page(&self, page: usize, start_line: usize) -> Option<usize> {
+        self.rendered
+            .get(page)?
+            .line_bounds
+            .iter()
+            .enumerate()
+            .skip(start_line)
+            .find_map(|(idx, line)| (!line.chars.is_empty()).then_some(idx))
+    }
+
+    /// Extract a short text excerpt from the current page for use as a mark
+    /// label. Concatenates characters from the first text line into
+    /// space-separated lines, stops at `max_chars` or a sentence boundary.
+    pub fn current_page_snippet(&self, max_chars: usize) -> Option<String> {
+        let start_line = self.first_text_line_on_page(self.page).unwrap_or(0);
+        self.page_snippet_from_line(self.page, start_line, max_chars)
+    }
+
+    fn page_snippet_from_line(
+        &self,
+        page: usize,
+        start_line: usize,
+        max_chars: usize,
+    ) -> Option<String> {
+        let line_bounds = self.rendered.get(page).map(|r| &r.line_bounds)?;
+        let lines = line_bounds
+            .iter()
+            .skip(start_line)
+            .map(|line| line.chars.iter().map(|c| c.c).collect::<String>());
+        crate::marks::build_text_snippet(lines, max_chars)
+    }
+
+    /// Restore a previously captured PDF position. Returns an `InputAction` the
+    /// caller should apply, mirroring `handle_jump_list_key`.
+    pub fn jump_to_mark_position(&mut self, page: usize, scroll_offset: u32) -> InputAction {
+        if page != self.page {
+            self.set_page(page);
+        } else {
+            self.last_render.rect = Rect::default();
+            self.clear_pending_scroll();
+        }
+        if let Some(ref mut zoom) = self.zoom {
+            zoom.global_scroll_offset = scroll_offset;
+        } else {
+            self.non_kitty_scroll_offset = scroll_offset;
+        }
+        if self.normal_mode.active {
+            self.normal_mode.deactivate();
+        }
+        InputAction::JumpingToPage {
+            page,
+            viewport: self.current_viewport_update(),
         }
     }
 
@@ -895,6 +1007,8 @@ impl PdfReaderState {
             }
             Action::ZoomEnhance => InputResponse::handled(self.enhance_zoom()),
             Action::StartSearch => InputResponse::handled(self.start_page_search()),
+            Action::SetMark => InputResponse::handled(Some(InputAction::SetMarkPending)),
+            Action::GotoMark => InputResponse::handled(Some(InputAction::GotoMarkPending)),
             _ => InputResponse::unhandled(),
         }
     }
@@ -1032,6 +1146,8 @@ impl PdfReaderState {
                 None
             }
             Action::EnterCommentNav => self.start_comment_nav(),
+            Action::SetMark => Some(InputAction::SetMarkPending),
+            Action::GotoMark => Some(InputAction::GotoMarkPending),
             _ => None,
         }
     }
@@ -1218,12 +1334,7 @@ impl PdfReaderState {
 
         // Keep the semantic search target so the highlight can be recomputed
         // after zen / zoom / viewport-triggered rerenders.
-        self.pending_search_highlight = Some(ActiveSearchHighlight {
-            page,
-            query: query.to_string(),
-            line_index,
-            line_y_bounds,
-        });
+        self.set_search_highlight(page, query.to_string(), line_index, line_y_bounds);
 
         InputAction::CommentNavJump {
             page,
@@ -1285,16 +1396,29 @@ impl PdfReaderState {
         rects
     }
 
-    pub fn find_active_search_highlight_rects(
+    /// Build rects for a `Query`-locator pending highlight by re-running the
+    /// substring search against the page's text. Falls back to a line-bounds
+    /// approximation (using `line_index` / `line_y_bounds`) when no textual
+    /// match is found.
+    ///
+    /// Panics on the wrong locator variant — call sites filter to Query.
+    pub(crate) fn find_query_highlight_rects(
         &self,
-        highlight: &ActiveSearchHighlight,
+        highlight: &PendingHighlight,
     ) -> Vec<crate::pdf::SelectionRect> {
-        let rects = self.find_text_selection_rects(highlight.page, &highlight.query);
+        let HighlightLocator::Query {
+            query,
+            line_index,
+            line_y_bounds,
+        } = &highlight.locator
+        else {
+            return Vec::new();
+        };
+        let rects = self.find_text_selection_rects(highlight.page, query);
         if !rects.is_empty() {
             return rects;
         }
-
-        self.find_search_selection_rects_fallback(highlight)
+        self.find_search_selection_rects_fallback(highlight.page, *line_index, *line_y_bounds)
     }
 
     fn selection_rects_for_query_in_line(
@@ -1352,11 +1476,13 @@ impl PdfReaderState {
 
     fn find_search_selection_rects_fallback(
         &self,
-        highlight: &ActiveSearchHighlight,
+        page: usize,
+        line_index: Option<usize>,
+        line_y_bounds: Option<(f32, f32)>,
     ) -> Vec<crate::pdf::SelectionRect> {
         use crate::pdf::SelectionRect;
 
-        let Some(rendered) = self.rendered.get(highlight.page) else {
+        let Some(rendered) = self.rendered.get(page) else {
             return Vec::new();
         };
 
@@ -1364,11 +1490,10 @@ impl PdfReaderState {
             return Vec::new();
         }
 
-        let candidate_idx = highlight
-            .line_index
+        let candidate_idx = line_index
             .filter(|&idx| idx < rendered.line_bounds.len())
             .or_else(|| {
-                let (target_y0, target_y1) = highlight.line_y_bounds?;
+                let (target_y0, target_y1) = line_y_bounds?;
                 let scale = rendered.scale_factor.unwrap_or(1.0);
                 let scaled_y0 = target_y0 * scale;
                 let scaled_y1 = target_y1 * scale;
@@ -1400,17 +1525,13 @@ impl PdfReaderState {
         };
 
         let line = &rendered.line_bounds[line_idx];
-        let query_lower: Vec<char> = highlight.query.to_lowercase().chars().collect();
-        let query_len = query_lower.len();
 
-        let rects =
-            Self::selection_rects_for_query_in_line(highlight.page, line, &query_lower, query_len);
-        if !rects.is_empty() {
-            return rects;
-        }
-
+        // The locator stored a `Query` but find_text_selection_rects already
+        // failed; here we just outline the candidate line as a coarse
+        // fallback. (No re-search needed: we don't have the query string in
+        // this frame, but the caller has already exhausted exact-match.)
         vec![SelectionRect {
-            page: highlight.page,
+            page,
             topleft_x: line.x0.round() as u32,
             topleft_y: line.y0.round() as u32,
             bottomright_x: line.x1.round() as u32,
@@ -5700,7 +5821,7 @@ impl PdfReaderState {
                     }
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
-                if self.pending_search_highlight.is_some() {
+                if self.pending_highlight.is_some() {
                     send_conversion(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
                 }
                 self.last_sent_viewport = None;
@@ -5807,7 +5928,7 @@ impl PdfReaderState {
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
             InputAction::SelectionChanged(rects) => {
-                self.pending_search_highlight = None;
+                self.pending_highlight = None;
                 if !self.is_kitty {
                     self.force_redraw();
                 }
@@ -5926,6 +6047,8 @@ impl PdfReaderState {
             }
             // SyncTexInverse is handled by main_app, not here
             InputAction::SyncTexInverse { .. } => {}
+            // Mark actions are intercepted by main_app before reaching apply_input_action
+            InputAction::SetMarkPending | InputAction::GotoMarkPending => {}
         }
 
         InputOutcome::None

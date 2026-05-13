@@ -28,6 +28,7 @@
     ▸ Chapter-level search with fuzzy matching
     ▸ Book-wide search across all chapters
     ▸ Vim-style jump list (Ctrl+o/Ctrl+i)
+    ▸ Vim-style named marks: local a-z and cross-library global A-Z
     ▸ Internal anchor following with breadcrumb trail
     ▸ Quick chapter-to-chapter navigation
 
@@ -119,6 +120,10 @@ at the bottom of this document for the syntax.
 │  h / l         Previous / next chapter                                      │
 │  Ctrl+o        Jump backward in history                                     │
 │  Ctrl+i        Jump forward in history                                      │
+│  m<a-z>        Set a local mark in the current book                         │
+│  m<A-Z>        Set a global mark, available from any library                │
+│  `<mark>       Jump to a mark (`a / `A, also works with 'a / 'A)            │
+│  `` or ''      Open marks popup                                             │
 │  [n]gg (PDF)   Jump to page number n (e.g. 42gg)                            │
 │  z (PDF)       Zoom to fit height                                           │
 │  Z (PDF)       Zoom to fit width                                            │
@@ -192,6 +197,18 @@ at the bottom of this document for the syntax.
 │  gg / G        Jump to top / bottom                                         │
 │  Enter         Open selected book                                           │
 │  Esc           Close popup                                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ MARKS POPUP (`` or '')                                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  j / k         Navigate marks                                               │
+│  Ctrl+d / u    Scroll page down / up                                        │
+│  gg / G        Jump to top / bottom                                         │
+│  Tab / S-Tab   Switch Current Book / Global tabs                            │
+│  Enter         Jump to selected mark                                        │
+│  dd            Delete selected mark                                         │
+│  Esc / ` / '   Close popup                                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -287,6 +304,21 @@ PDF annotations require a graphics-capable terminal.
 
                               ADVANCED FEATURES
 
+  [BOOKMARKS & MARKS]
+    Automatic bookmarks save your last reading position per book so reopening
+    a title resumes where you left off.
+
+    Named marks are explicit jump targets:
+      • m<a-z> stores a local mark inside the current book's bookmark entry
+      • m<A-Z> stores a global mark that works from any library
+      • `<mark> or '<mark> jumps back to the saved EPUB/PDF position
+      • `` or '' opens the marks popup for browsing, jumping, and deleting
+
+    The marks popup has separate Current Book and Global tabs. Rows include
+    the mark name, book/chapter or page label, and a short snippet captured
+    when the mark was set. EPUB marks track paragraph offsets; PDF marks track
+    page/scroll position and highlight the captured line when available.
+
   [SYNCTEX - LaTeX ↔ PDF SYNCHRONIZATION]
     Bookokrat supports bidirectional SyncTeX navigation for LaTeX workflows.
     Compile with synctex enabled (e.g. pdflatex --synctex=1) so a .synctex.gz
@@ -351,6 +383,7 @@ PDF annotations require a graphics-capable terminal.
   ▸ Fast chapter navigation: Use h/l in reader to jump between chapters
   ▸ Quick book switching: Press Space+h for recent books
   ▸ Search workflow: Use / for chapter searches, Space+F for book-wide
+  ▸ Named marks: Use ma to set a local mark, `a to jump back, `` to browse
   ▸ Reading statistics: Press Space+d to see chapter counts and progress
   ▸ Debug view: Press ss to toggle raw HTML for rendering issues (EPUB)
   ▸ PDF settings: Press Space+s (or Ctrl+s) to toggle support and render mode
@@ -371,6 +404,7 @@ PDF annotations require a graphics-capable terminal.
     bookokrat is treated as an isolated library:
 
       • Bookmarks    <data_dir>/bookokrat/libraries/<library>/bookmarks.json
+      • Global marks <data_dir>/bookokrat/marks_global.json
       • Comments     <data_dir>/bookokrat/libraries/<library>/comments/
       • Image cache  <cache_dir>/bookokrat/libraries/<library>/temp_images/
       • Log file     <state_dir>/bookokrat/bookokrat.log

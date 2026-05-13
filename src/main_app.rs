@@ -24,6 +24,7 @@ use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
+use crate::widget::marks_popup::{MarkScopeKey, MarksPopup, MarksPopupAction};
 use crate::widget::popup::Popup;
 use image::GenericImageView;
 use log::warn;
@@ -335,6 +336,7 @@ pub struct App {
     terminal_size: Rect,
     profiler: Arc<Mutex<Option<ProfilerSlot>>>,
     book_stat: BookStat,
+    marks_popup: Option<MarksPopup>,
     jump_list: JumpList,
     book_search: Option<BookSearch>,
     help_popup: Option<HelpPopup>,
@@ -399,7 +401,31 @@ pub struct App {
     synctex_rx: Option<flume::Receiver<crate::pdf::synctex::SyncTexCommand>>,
     #[cfg(feature = "pdf")]
     pending_synctex_forward: Option<PendingSyncTexForward>,
+    pending_mark_op: Option<PendingMarkOp>,
+    global_marks: crate::marks::GlobalMarks,
     last_terminal_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingMarkOp {
+    Set,
+    Goto,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn load_app_global_marks() -> crate::marks::GlobalMarks {
+    crate::marks::GlobalMarks::ephemeral()
+}
+
+#[cfg(not(any(test, feature = "test-utils")))]
+fn load_app_global_marks() -> crate::marks::GlobalMarks {
+    match crate::library::global_marks_file() {
+        Ok(p) => crate::marks::GlobalMarks::load(p),
+        Err(e) => {
+            log::error!("Failed to resolve global marks path: {e}");
+            crate::marks::GlobalMarks::ephemeral()
+        }
+    }
 }
 
 #[cfg(feature = "pdf")]
@@ -454,6 +480,7 @@ pub enum MainPanel {
 pub enum PopupWindow {
     ReadingHistory,
     BookStats,
+    MarksList,
     ImagePopup,
     BookSearch,
     Help,
@@ -704,6 +731,7 @@ impl App {
             terminal_size,
             profiler: Arc::new(Mutex::new(None)),
             book_stat: BookStat::new(),
+            marks_popup: None,
             jump_list: JumpList::new(20),
             book_search: None,
             help_popup: None,
@@ -761,6 +789,8 @@ impl App {
             synctex_rx: None,
             #[cfg(feature = "pdf")]
             pending_synctex_forward: None,
+            pending_mark_op: None,
+            global_marks: load_app_global_marks(),
             last_terminal_title: None,
         };
 
@@ -3256,6 +3286,323 @@ impl App {
         Ok(())
     }
 
+    fn capture_current_mark_location(&mut self) -> Option<crate::marks::MarkLocation> {
+        #[cfg(feature = "pdf")]
+        if let Some(pdf_reader) = self.pdf_reader.as_ref() {
+            return Some(pdf_reader.capture_mark_location());
+        }
+        let snippet = self.text_reader.current_text_snippet(140);
+        let node = self.text_reader.focused_node_index();
+        let node_offset = self.text_reader.focused_node_char_offset();
+        let book = self.current_book.as_mut()?;
+        let chapter_title = book
+            .epub
+            .get_current_str()
+            .and_then(|(html, _)| extract_chapter_title(&html));
+        Some(crate::marks::MarkLocation::Epub {
+            path: book.file.clone(),
+            chapter: book.current_chapter(),
+            node,
+            node_offset,
+            snippet,
+            chapter_title,
+        })
+    }
+
+    fn set_pending_mark_op(&mut self, op: PendingMarkOp) {
+        self.pending_mark_op = Some(op);
+    }
+
+    /// Returns true if the key was consumed by the pending-mark state machine.
+    fn handle_pending_mark_input(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+        let Some(op) = self.pending_mark_op.take() else {
+            return false;
+        };
+        // Doubled trigger after Goto opens the marks-list popup. We do this
+        // here rather than in the keymap because binding `` ` ` `` (or `''`)
+        // in the keymap would turn the single-key form into a Prefix and
+        // break immediate goto.
+        if op == PendingMarkOp::Goto && matches!(key.code, KeyCode::Char('`') | KeyCode::Char('\''))
+        {
+            self.open_marks_popup();
+            return true;
+        }
+        match key.code {
+            KeyCode::Char(ch) if ch.is_ascii_alphabetic() => match op {
+                PendingMarkOp::Set => self.set_mark(ch),
+                PendingMarkOp::Goto => self.goto_mark(ch),
+            },
+            // Any other key (Esc, non-letter char, modifier-only) silently aborts —
+            // matches vim semantics.
+            _ => {}
+        }
+        true
+    }
+
+    fn set_mark(&mut self, ch: char) {
+        let Some(scope) = crate::marks::validate_mark_char(ch) else {
+            return;
+        };
+        let Some(loc) = self.capture_current_mark_location() else {
+            self.show_warning("No book is open; cannot set a mark.");
+            return;
+        };
+        match scope {
+            crate::marks::MarkScope::Local(c) => {
+                let path = loc.path().to_string();
+                if self
+                    .current_book_bookmarks_mut()
+                    .set_local_mark(&path, c, loc)
+                {
+                    self.show_info(format!("Set mark '{c}'"));
+                } else {
+                    self.show_warning(format!("Could not set mark '{c}': no bookmark entry."));
+                }
+            }
+            crate::marks::MarkScope::Global(c) => {
+                self.global_marks.set(c, loc);
+                self.show_info(format!("Set global mark '{c}'"));
+            }
+        }
+    }
+
+    fn goto_mark(&mut self, ch: char) {
+        let Some(scope) = crate::marks::validate_mark_char(ch) else {
+            return;
+        };
+        let mark = match scope {
+            crate::marks::MarkScope::Local(c) => {
+                let Some(path) = self.current_book_path_for_marks() else {
+                    self.show_warning("No book is open.");
+                    return;
+                };
+                match self.current_book_bookmarks().get_local_mark(&path, c) {
+                    Some(m) => m.clone().retarget_path(path),
+                    None => {
+                        self.show_warning(format!("No mark '{c}' in this book."));
+                        return;
+                    }
+                }
+            }
+            crate::marks::MarkScope::Global(c) => match self.global_marks.get(c) {
+                Some(m) => m.clone(),
+                None => {
+                    self.show_warning(format!("No global mark '{c}'."));
+                    return;
+                }
+            },
+        };
+        self.jump_to_mark(mark);
+    }
+
+    fn current_book_path_for_marks(&self) -> Option<String> {
+        if let Some(book) = self.current_book.as_ref() {
+            return Some(book.file.clone());
+        }
+        #[cfg(feature = "pdf")]
+        if let Some(reader) = self.pdf_reader.as_ref() {
+            return Some(reader.name.clone());
+        }
+        None
+    }
+
+    fn jump_to_mark(&mut self, mark: crate::marks::MarkLocation) {
+        let path = mark.path().to_string();
+        let path_exists = std::path::Path::new(&path).exists();
+        match mark {
+            crate::marks::MarkLocation::Epub {
+                chapter,
+                node,
+                node_offset,
+                ..
+            } => {
+                if !path_exists {
+                    self.show_error(format!("Book no longer exists: {path}"));
+                    return;
+                }
+                let mut jumped = false;
+                if self.current_book.as_ref().map(|x| &x.file) == Some(&path) {
+                    self.save_to_jump_list();
+                    if self.current_book.as_ref().map(|x| x.current_chapter()) != Some(chapter) {
+                        if let Err(e) = self.navigate_to_chapter(chapter) {
+                            self.show_error(format!("Failed to jump to mark: {e}"));
+                            return;
+                        }
+                    }
+                    match node_offset {
+                        Some(off) => self.text_reader.restore_to_node_position(node, off),
+                        None => self.text_reader.restore_to_node_index(node),
+                    }
+                    self.save_bookmark();
+                    jumped = true;
+                } else if let Err(e) =
+                    self.open_book_for_reading_by_path(&path, Some(OpenPosition::Chapter(chapter)))
+                {
+                    self.show_error(format!("Failed to open '{path}': {e}"));
+                } else {
+                    match node_offset {
+                        Some(off) => self.text_reader.restore_to_node_position(node, off),
+                        None => self.text_reader.restore_to_node_index(node),
+                    }
+                    self.save_bookmark();
+                    jumped = true;
+                }
+                if jumped {
+                    let duration = std::time::Duration::from_millis(1500);
+                    match node_offset {
+                        Some(off) => self
+                            .text_reader
+                            .flash_node_position_highlight(node, off, duration),
+                        None => self.text_reader.flash_node_highlight(node, duration),
+                    }
+                }
+            }
+            #[cfg(feature = "pdf")]
+            crate::marks::MarkLocation::Pdf {
+                page,
+                scroll_offset,
+                line_idx,
+                ..
+            } => {
+                if !path_exists {
+                    self.show_error(format!("Book no longer exists: {path}"));
+                    return;
+                }
+                let same_pdf = self
+                    .pdf_reader
+                    .as_ref()
+                    .map(|r| r.name == path)
+                    .unwrap_or(false);
+                if !same_pdf {
+                    if let Err(e) =
+                        self.open_book_for_reading_by_path(&path, Some(OpenPosition::Page(page)))
+                    {
+                        self.show_error(format!("Failed to open '{path}': {e}"));
+                        return;
+                    }
+                }
+                self.apply_pdf_mark_jump(page, scroll_offset, line_idx);
+            }
+            #[cfg(not(feature = "pdf"))]
+            crate::marks::MarkLocation::Pdf { .. } => {
+                self.show_error("PDF mark targets are not supported in this build.");
+            }
+        }
+    }
+
+    fn open_marks_popup(&mut self) {
+        if let FocusedPanel::Main(panel) = self.focused_panel {
+            self.previous_main_panel = panel;
+        }
+        let current_path = self.current_book_path_for_marks();
+        let mut popup = MarksPopup::new();
+        popup.rebuild(
+            current_path.as_deref(),
+            self.current_book_bookmarks(),
+            &self.global_marks,
+        );
+        popup.show();
+        self.marks_popup = Some(popup);
+        self.focused_panel = FocusedPanel::Popup(PopupWindow::MarksList);
+    }
+
+    fn handle_marks_popup_action(&mut self, action: MarksPopupAction) {
+        match action {
+            MarksPopupAction::Close => {
+                self.close_popup_to_previous();
+                self.marks_popup = None;
+            }
+            MarksPopupAction::Jump(loc) => {
+                self.close_popup_to_previous();
+                self.marks_popup = None;
+                self.jump_to_mark(loc);
+            }
+            MarksPopupAction::Delete(scope) => {
+                let removed = match scope {
+                    MarkScopeKey::Local { book_path, ch } => self
+                        .current_book_bookmarks_mut()
+                        .remove_local_mark(&book_path, ch),
+                    MarkScopeKey::Global { ch } => self.global_marks.remove(ch),
+                };
+                if removed {
+                    let current_path = self.current_book_path_for_marks();
+                    let mut popup = match self.marks_popup.take() {
+                        Some(p) => p,
+                        None => return,
+                    };
+                    popup.rebuild(
+                        current_path.as_deref(),
+                        self.current_book_bookmarks(),
+                        &self.global_marks,
+                    );
+                    self.marks_popup = Some(popup);
+                }
+            }
+        }
+    }
+
+    /// Tick the PDF mark-jump highlight expiry. Returns true if it just
+    /// expired (caller should request a redraw). Sends an empty selection
+    /// command to clear the on-page highlight.
+    #[cfg(feature = "pdf")]
+    fn tick_pdf_mark_jump_highlight(&mut self) -> bool {
+        let Some(reader) = self.pdf_reader.as_mut() else {
+            return false;
+        };
+        if reader.tick_pending_highlight() {
+            if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+                let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(Vec::new()));
+            }
+            return true;
+        }
+        false
+    }
+
+    #[cfg(feature = "pdf")]
+    fn apply_pdf_mark_jump(&mut self, page: usize, scroll_offset: u32, line_idx: Option<usize>) {
+        let toc_height = self.get_navigation_panel_area().height as usize;
+        let Some(mut pdf_reader) = self.pdf_reader.take() else {
+            return;
+        };
+        let action = pdf_reader.jump_to_mark_position(page, scroll_offset);
+        let _outcome = pdf_reader.apply_input_action(
+            action,
+            self.pdf_service.as_mut(),
+            self.pdf_conversion_tx.as_ref(),
+            &mut self.notifications,
+            self.current_context_override
+                .as_mut()
+                .map(LibraryContext::bookmarks_mut)
+                .unwrap_or_else(|| self.home_context.bookmarks_mut()),
+            &mut self.last_bookmark_save,
+            &mut self.navigation_panel.table_of_contents,
+            toc_height,
+            &self.profiler,
+        );
+        if !pdf_reader.is_kitty {
+            self.pdf_waiting_for_page = Some(page);
+        }
+        if let Some(line) = line_idx {
+            pdf_reader.start_mark_jump_highlight(
+                page,
+                line,
+                std::time::Duration::from_millis(1500),
+            );
+            // Dispatch immediately if line bounds are already available
+            // (same-document jump). For cross-document jumps the page won't
+            // be rendered yet — the converter will pick up the rects on the
+            // next render via the rendering loop hook.
+            let rects = pdf_reader.pending_highlight_rects();
+            if !rects.is_empty() {
+                if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(rects));
+                }
+            }
+        }
+        self.pdf_reader = Some(pdf_reader);
+    }
+
     /// Save current location to jump list before navigating away
     fn save_to_jump_list(&mut self) {
         if let Some(book) = &self.current_book {
@@ -3657,6 +4004,22 @@ impl App {
             self.book_stat.render(f, f.area());
         }
 
+        if matches!(
+            self.focused_panel,
+            FocusedPanel::Popup(PopupWindow::MarksList)
+        ) {
+            let dim_block = Block::default().style(
+                Style::default()
+                    .bg(Color::Rgb(10, 10, 10))
+                    .add_modifier(Modifier::DIM),
+            );
+            f.render_widget(dim_block, f.area());
+
+            if let Some(ref mut popup) = self.marks_popup {
+                popup.render(f, f.area());
+            }
+        }
+
         if matches!(self.focused_panel, FocusedPanel::Popup(PopupWindow::Help)) {
             let dim_block = Block::default().style(
                 Style::default()
@@ -4030,6 +4393,13 @@ impl App {
                     let reload = Self::key_for(KeyContext::Global, Action::ReloadKeybindings);
                     format!("{reload}: Reload | {esc}: Close")
                 }
+                FocusedPanel::Popup(PopupWindow::MarksList) => {
+                    let ctx = KeyContext::PopupMarks;
+                    let jk = Self::key_pair(ctx, Action::MoveDown, Action::MoveUp);
+                    let sel = Self::key_for(ctx, Action::Select);
+                    let del = Self::key_for(ctx, Action::DeleteEntry);
+                    format!("{jk}: Navigate | {sel}: Jump | {del}: Delete | {esc}/'/`: Close")
+                }
             };
             help_text
         };
@@ -4239,6 +4609,18 @@ impl App {
                 }
                 self.help_popup = Some(HelpPopup::new());
                 self.focused_panel = FocusedPanel::Popup(PopupWindow::Help);
+                true
+            }
+            Action::ToggleMarksList => {
+                if matches!(
+                    self.focused_panel,
+                    FocusedPanel::Popup(PopupWindow::MarksList)
+                ) {
+                    self.close_popup_to_previous();
+                    self.marks_popup = None;
+                } else {
+                    self.open_marks_popup();
+                }
                 true
             }
             Action::ForceRedraw => {
@@ -4874,6 +5256,14 @@ impl App {
                 }
                 true
             }
+            Action::SetMark => {
+                self.set_pending_mark_op(PendingMarkOp::Set);
+                true
+            }
+            Action::GotoMark => {
+                self.set_pending_mark_op(PendingMarkOp::Goto);
+                true
+            }
             _ => false,
         }
     }
@@ -5048,6 +5438,12 @@ impl App {
                     }
                 }
             }
+            Action::SetMark => {
+                self.set_pending_mark_op(PendingMarkOp::Set);
+            }
+            Action::GotoMark => {
+                self.set_pending_mark_op(PendingMarkOp::Goto);
+            }
             _ => {}
         }
         None
@@ -5068,6 +5464,12 @@ impl App {
                     return None;
                 }
             }
+        }
+
+        // Mark mode: m<x> sets mark, `<x> jumps to mark. The next char is consumed
+        // here regardless of which reader/context produced the pending state.
+        if self.handle_pending_mark_input(&key) {
+            return None;
         }
 
         // If image popup is shown, close it on any key press
@@ -5153,6 +5555,19 @@ impl App {
                     }
                 }
                 None => {}
+            }
+            return None;
+        }
+
+        // If marks popup is shown, handle keys for it
+        if self.focused_panel == FocusedPanel::Popup(PopupWindow::MarksList) {
+            let action = if let Some(ref mut popup) = self.marks_popup {
+                popup.handle_key(key, &mut self.key_sequence)
+            } else {
+                None
+            };
+            if let Some(action) = action {
+                self.handle_marks_popup_action(action);
             }
             return None;
         }
@@ -6666,7 +7081,7 @@ impl App {
 
             // Clear text selection, search state, and cached search matches
             pdf_reader.selection.clear();
-            pdf_reader.pending_search_highlight = None;
+            pdf_reader.clear_pending_highlight();
             pdf_reader.page_search.matches.clear();
             pdf_reader.page_search.matches_page = usize::MAX;
 
@@ -6929,6 +7344,23 @@ impl App {
     /// Returns Some(AppAction::Quit) if the app should quit
     #[cfg(feature = "pdf")]
     fn handle_pdf_event(&mut self, event: &crossterm::event::Event) -> PdfEventResult {
+        // Pending mark state (set after `m`/`` ` ``/`'`) consumes the next
+        // key as the mark name — must run before the key reaches the PDF
+        // reader, otherwise the PDF keymap eats the letter (e.g. `a` →
+        // AddComment). Skip when a PDF text input is active so search /
+        // comment editors keep their typing.
+        if let crossterm::event::Event::Key(key) = event {
+            if self.pending_mark_op.is_some()
+                && !self.pdf_text_input_active()
+                && self.handle_pending_mark_input(key)
+            {
+                return PdfEventResult {
+                    handled: true,
+                    action: None,
+                };
+            }
+        }
+
         let toc_height = self.get_navigation_panel_area().height as usize;
         let Some(mut pdf_reader) = self.pdf_reader.take() else {
             return PdfEventResult {
@@ -6962,6 +7394,17 @@ impl App {
             // Intercept SyncTeX inverse search before apply_input_action
             if let InputAction::SyncTexInverse { ref file, line } = action {
                 self.handle_synctex_inverse(file, line);
+                InputOutcome::None
+            } else if matches!(
+                action,
+                InputAction::SetMarkPending | InputAction::GotoMarkPending
+            ) {
+                let op = match action {
+                    InputAction::SetMarkPending => PendingMarkOp::Set,
+                    InputAction::GotoMarkPending => PendingMarkOp::Goto,
+                    _ => unreachable!(),
+                };
+                self.pending_mark_op = Some(op);
                 InputOutcome::None
             } else {
                 pdf_reader.apply_input_action(
@@ -7488,6 +7931,8 @@ where
                 .pdf_reader
                 .as_mut()
                 .is_some_and(|reader| reader.update_hud_message());
+            #[cfg(feature = "pdf")]
+            let pdf_mark_jump_expired = app.tick_pdf_mark_jump_highlight();
             let pdf_renders_ready = app.poll_pdf_renders();
             if images_loaded {
                 needs_redraw = true;
@@ -7505,6 +7950,10 @@ where
             }
             #[cfg(feature = "pdf")]
             if pdf_hud_expired {
+                needs_redraw = true;
+            }
+            #[cfg(feature = "pdf")]
+            if pdf_mark_jump_expired {
                 needs_redraw = true;
             }
             if pdf_renders_ready {

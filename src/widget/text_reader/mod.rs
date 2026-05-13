@@ -96,7 +96,16 @@ pub struct MarkdownTextReader {
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
-    pending_node_restore: Option<usize>,
+    /// Restore to apply once `rendered_content.lines` is populated. Tuple is
+    /// `(node_index, optional canonical char offset)`. `None` offset means
+    /// paragraph-level (first line of the node); `Some` means line-precise.
+    pending_node_restore: Option<(usize, Option<usize>)>,
+    /// Brief line highlight to apply once a `pending_node_restore` has put
+    /// the scroll in the right place — used by mark jumps that cross chapter
+    /// boundaries (where `rendered_content.lines` is still empty when the
+    /// jump fires). Tuple is `(node_index, optional canonical char offset,
+    /// duration)`. `None` offset means "first line of the node".
+    pending_node_highlight: Option<(usize, Option<usize>, std::time::Duration)>,
 
     // Raw HTML mode
     show_raw_html: bool,
@@ -259,6 +268,7 @@ impl MarkdownTextReader {
             inline_images_suppressed: false,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
+            pending_node_highlight: None,
             raw_html_content: None,
             show_raw_html: false,
             raw_html_wrapped_lines: Vec::new(),
@@ -485,8 +495,20 @@ impl MarkdownTextReader {
                 self.last_width = width;
                 self.last_focus_state = is_focused;
 
-                if let Some(node_index) = self.pending_node_restore.take() {
-                    self.perform_node_restore(node_index);
+                if let Some((node_index, char_offset)) = self.pending_node_restore.take() {
+                    match char_offset {
+                        Some(off) => self.perform_node_position_restore(node_index, off),
+                        None => self.perform_node_restore(node_index),
+                    }
+                }
+
+                if let Some((node_index, offset, duration)) = self.pending_node_highlight.take() {
+                    match offset {
+                        Some(off) => {
+                            self.flash_node_position_highlight(node_index, off, duration);
+                        }
+                        None => self.flash_node_highlight(node_index, duration),
+                    }
                 }
 
                 if let Some(anchor_id) = self.pending_anchor_scroll.take() {
