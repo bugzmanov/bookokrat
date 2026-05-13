@@ -5,6 +5,7 @@ pub mod help_popup;
 pub mod hud_message;
 pub mod keybinding_errors_popup;
 pub mod lookup_popup;
+pub mod marks_popup;
 pub mod navigation_panel;
 #[cfg(feature = "pdf")]
 pub mod pdf_reader;
