@@ -100,6 +100,7 @@ fn add_normal_layer(ctx: &mut ContextKeymap) {
     bind!(ctx, "v" => Action::EnterVisualMode);
     bind!(ctx, "V" => Action::EnterVisualLineMode);
     bind!(ctx, "y" => Action::StartYank);
+    bind!(ctx, "H" => Action::OpenHighlightPalette);
     bind!(ctx, "n" => Action::ToggleNormalMode);
     bind!(ctx, "m" => Action::SetMark);
     bind!(ctx, "`" => Action::GotoMark);

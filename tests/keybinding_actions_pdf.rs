@@ -229,6 +229,15 @@ pdf_binding_tests! {
     pdf_ctrl_c: KeyContext::PdfStandard, "<C-c>",
         setup = |state| {},
         check = |_state, action| action.is_none();
+    pdf_m: KeyContext::PdfStandard, "m",
+        setup = |state| {},
+        check = |_state, action| matches!(action, Some(InputAction::SetMarkPending));
+    pdf_grave: KeyContext::PdfStandard, "`",
+        setup = |state| {},
+        check = |_state, action| matches!(action, Some(InputAction::GotoMarkPending));
+    pdf_apostrophe: KeyContext::PdfStandard, "'",
+        setup = |state| {},
+        check = |_state, action| matches!(action, Some(InputAction::GotoMarkPending));
 
     // ── PdfNormal ────────────────────────────────────
     // Cursor motions return Some(InputAction::CursorChanged(...))
@@ -328,6 +337,19 @@ pdf_binding_tests! {
     pdf_normal_y: KeyContext::PdfNormal, "y",
         setup = |state| { state.normal_mode.active = true; },
         check = |_state, action| action.is_none();
+    pdf_normal_m: KeyContext::PdfNormal, "m",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| matches!(action, Some(InputAction::SetMarkPending));
+    pdf_normal_grave: KeyContext::PdfNormal, "`",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| matches!(action, Some(InputAction::GotoMarkPending));
+    pdf_normal_apostrophe: KeyContext::PdfNormal, "'",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| matches!(action, Some(InputAction::GotoMarkPending));
+    pdf_normal_h_upper: KeyContext::PdfNormal, "H",
+        setup = |state| { state.normal_mode.active = true; let _ = simulate(&mut state, "v"); },
+        check = |state, action| matches!(action, Some(InputAction::Redraw))
+            && state.highlight_palette_active;
     // n toggles normal mode OFF, returns ExitNormalMode
     pdf_normal_n: KeyContext::PdfNormal, "n",
         setup = |state| { state.normal_mode.active = true; },

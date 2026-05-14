@@ -484,11 +484,11 @@ impl CommentsViewer {
     #[cfg(feature = "pdf")]
     fn build_entries_for_pdf(
         comments: Arc<Mutex<BookComments>>,
-        _doc_id: &str,
+        doc_id: &str,
         toc_entries: &[TocEntry],
     ) -> Vec<CommentEntry> {
         let comments_guard = comments.lock().unwrap();
-        let all_comments = comments_guard.get_all_comments();
+        let all_comments = comments_guard.get_doc_comments(doc_id);
 
         // Build sorted list of (toc_page, toc_title, toc_href) for section lookup
         let mut toc_pages: Vec<(usize, String, String)> = toc_entries
@@ -612,7 +612,7 @@ impl CommentsViewer {
 
         if chapters.is_empty() {
             chapters.push(ChapterDisplay {
-                title: "No comments".to_string(),
+                title: "No annotations".to_string(),
                 href: None,
                 depth: 0,
                 comment_count: 0,
@@ -1241,7 +1241,24 @@ impl CommentsViewer {
 
     fn comment_header_text(entry: &CommentEntry, idx: usize, comment: &Comment) -> String {
         let timestamp = comment.updated_at.format("%m-%d-%y %H:%M").to_string();
-        let mut header = if let Some(line_range) = comment.target.line_range() {
+        let mut header = if let Some(color) = comment.highlight_color() {
+            let label = format!("{} highlight", color.label());
+            if let Some(line_range) = comment.target.line_range() {
+                if line_range.0 == line_range.1 {
+                    format!("{} line {} // {}", label, line_range.0 + 1, timestamp)
+                } else {
+                    format!(
+                        "{} lines {}-{} // {}",
+                        label,
+                        line_range.0 + 1,
+                        line_range.1 + 1,
+                        timestamp
+                    )
+                }
+            } else {
+                format!("{label} // {timestamp}")
+            }
+        } else if let Some(line_range) = comment.target.line_range() {
             if line_range.0 == line_range.1 {
                 format!("Line {} // {}", line_range.0 + 1, timestamp)
             } else {
@@ -1294,12 +1311,12 @@ impl CommentsViewer {
         self.last_popup_area = Some(popup_area);
         f.render_widget(Clear, popup_area);
 
-        let total_comments: usize = self
+        let total_annotations: usize = self
             .chapters
             .iter()
             .map(|chapter| chapter.comment_count)
             .sum();
-        let title = format!(" All Comments ({total_comments}) ");
+        let title = format!(" All Annotations ({total_annotations}) ");
         let outer_block = self.build_outer_block(title);
         let inner_area = outer_block.inner(popup_area);
         f.render_widget(outer_block, popup_area);
@@ -1444,7 +1461,7 @@ impl CommentsViewer {
             let line = Line::from(vec![
                 Span::styled(format!("({total})"), count_style),
                 Span::raw(" "),
-                Span::styled("Comments Search", style),
+                Span::styled("Annotations Search", style),
             ])
             .bg(background.bg.unwrap_or(current_theme().base_00));
 
@@ -1624,14 +1641,14 @@ impl CommentsViewer {
         let message = Paragraph::new(vec![
             Line::from(""),
             Line::from(Span::styled(
-                "No comments in this chapter",
+                "No annotations in this chapter",
                 Style::default()
                     .fg(current_theme().base_03)
                     .add_modifier(Modifier::ITALIC),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "Select text and press 'a' to add a note",
+                "Select text and press 'a' for a note or 'H' for a highlight",
                 Style::default().fg(current_theme().base_04),
             )),
         ])
@@ -1903,7 +1920,13 @@ impl CommentsViewer {
                     entry
                         .comments
                         .iter()
-                        .map(|c| c.content.clone())
+                        .map(|c| {
+                            if let Some(color) = c.highlight_color() {
+                                format!("{} highlight", color.label())
+                            } else {
+                                c.content.clone()
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(" ")
                 )
@@ -2179,7 +2202,7 @@ impl CommentsViewer {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<CommentsViewerAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
 
         // Handle export mode input
         if self.export_mode {

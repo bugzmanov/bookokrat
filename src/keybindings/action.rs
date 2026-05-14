@@ -62,6 +62,7 @@ pub enum Action {
 
     // === Content operations ===
     AddComment,
+    OpenHighlightPalette,
     DeleteComment,
     CopySelection,
     CopyChapterText,
@@ -201,6 +202,7 @@ impl Action {
         Action::ExpandNavPanel,
         Action::ResetNavPanelWidth,
         Action::AddComment,
+        Action::OpenHighlightPalette,
         Action::DeleteComment,
         Action::CopySelection,
         Action::CopyChapterText,
@@ -333,6 +335,7 @@ impl Action {
 
             // Content operations
             AddComment => "Add or edit a comment on the selection",
+            OpenHighlightPalette => "Open the visual selection highlight palette",
             DeleteComment => "Delete the comment under the cursor",
             CopySelection => "Copy the current selection to the clipboard",
             CopyChapterText => "Copy chapter text (EPUB) / page text (PDF)",
@@ -482,7 +485,7 @@ mod tests {
                 OpenBookSearch | OpenBookSearchFresh | OpenSettings | OpenThemeSelector
                 | OpenExternalViewer => a,
                 ShrinkNavPanel | ExpandNavPanel | ResetNavPanelWidth => a,
-                AddComment | DeleteComment => a,
+                AddComment | OpenHighlightPalette | DeleteComment => a,
                 CopySelection | CopyChapterText | CopyTocItem => a,
                 LookupSelection | FollowLink => a,
                 ToggleNormalMode | EnterVisualMode | EnterVisualLineMode | StartYank => a,

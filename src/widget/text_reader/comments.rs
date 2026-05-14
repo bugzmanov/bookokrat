@@ -1,4 +1,5 @@
 use super::types::*;
+use crate::annotations::HighlightColor;
 use crate::comments::{BookComments, Comment, CommentTarget};
 use crate::markdown_text_reader::text_selection::SelectionPoint;
 use crate::theme::Base16Palette;
@@ -16,6 +17,13 @@ struct CommentSelection {
 #[derive(Clone)]
 struct InlineCodeCommentHit {
     comment_id: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct HighlightRange {
+    pub start: usize,
+    pub end: usize,
+    pub color: HighlightColor,
 }
 
 impl crate::markdown_text_reader::MarkdownTextReader {
@@ -52,6 +60,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let comment = comments.get_comment_by_id(&selection.comment_id).cloned();
 
                 if let Some(comment) = comment {
+                    if !comment.is_comment() {
+                        return false;
+                    }
                     let content = comment.content.clone();
                     let comment_start_line = self.find_comment_visual_line(&comment.id);
 
@@ -101,6 +112,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Some((start, end)) = self.text_selection.get_selection_range() {
                 let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
                 if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    if self.selection_overlaps_annotation(&target) {
+                        self.set_error_hud("Selection overlaps an existing annotation");
+                        self.text_selection.clear_selection();
+                        return false;
+                    }
                     self.init_comment_textarea(target, norm_start.line, norm_end.line);
                     self.text_selection.clear_selection();
                     return true;
@@ -130,6 +146,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 };
                 let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
                 if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                    if self.selection_overlaps_annotation(&target) {
+                        self.set_error_hud("Selection overlaps an existing annotation");
+                        self.exit_visual_mode();
+                        return false;
+                    }
                     self.init_comment_textarea(target, norm_start.line, norm_end.line);
                     self.exit_visual_mode();
                     return true;
@@ -139,6 +160,90 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         false
+    }
+
+    fn selection_overlaps_annotation(&self, target: &CommentTarget) -> bool {
+        let Some(chapter_file) = self.current_chapter_file.as_deref() else {
+            return false;
+        };
+        let Some(comments_arc) = self.book_comments.as_ref() else {
+            return false;
+        };
+        let Ok(comments) = comments_arc.lock() else {
+            return false;
+        };
+        comments.has_overlapping_annotation(chapter_file, target)
+    }
+
+    pub fn add_highlight_from_visual_selection(&mut self, color: HighlightColor) -> bool {
+        if !self.is_visual_mode_active() {
+            self.set_error_hud("Select text first, then press H and a color");
+            return false;
+        }
+
+        let selected_text = self.get_selected_text();
+        let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
+        else {
+            self.set_error_hud("No visual selection");
+            return false;
+        };
+        let start = SelectionPoint {
+            line: start_line,
+            column: start_col,
+        };
+        let end = SelectionPoint {
+            line: end_line,
+            column: end_col,
+        };
+        let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+        let Some(target) = self.compute_selection_target(&norm_start, &norm_end) else {
+            self.set_error_hud("This selection cannot be highlighted");
+            self.exit_visual_mode();
+            return false;
+        };
+        let Some(chapter_file) = self.current_chapter_file.clone() else {
+            self.set_error_hud("No chapter loaded");
+            self.exit_visual_mode();
+            return false;
+        };
+
+        let Some(comments_arc) = self.book_comments.as_ref().cloned() else {
+            self.set_error_hud("Annotations are not available");
+            self.exit_visual_mode();
+            return false;
+        };
+
+        if let Ok(mut comments) = comments_arc.lock() {
+            if comments.has_overlapping_annotation(&chapter_file, &target) {
+                self.set_error_hud("Selection overlaps an existing annotation");
+                self.exit_visual_mode();
+                return false;
+            }
+
+            let highlight = Comment::new_highlight(
+                chapter_file,
+                target,
+                color,
+                chrono::Utc::now(),
+                selected_text,
+            );
+            if let Err(e) = comments.add_comment(highlight) {
+                warn!("Failed to add highlight: {e}");
+                self.set_error_hud(format!("Failed to add highlight: {e}"));
+                self.exit_visual_mode();
+                return false;
+            }
+        } else {
+            self.set_error_hud("Annotations are unavailable");
+            self.exit_visual_mode();
+            return false;
+        }
+
+        self.rebuild_chapter_comments();
+        self.exit_visual_mode();
+        self.cache_generation += 1;
+        self.set_normal_hud(format!("{} highlight", color.label()));
+        true
     }
 
     fn init_comment_textarea(&mut self, target: CommentTarget, start_line: usize, end_line: usize) {
@@ -647,7 +752,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_highlight_ranges(&self, node_index: Option<usize>) -> Vec<HighlightRange> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
             .collect()
     }
 
@@ -657,6 +774,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter(|c| {
                 c.target.subtarget().is_some_and(|s| {
                     matches!(
@@ -670,6 +788,29 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    pub fn get_highlight_ranges_for_legacy_list(
+        &self,
+        node_index: Option<usize>,
+    ) -> Vec<HighlightRange> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                c.target.subtarget().is_some_and(|s| {
+                    matches!(
+                        s,
+                        crate::comments::BlockSubtarget::ListItem { list_path, .. }
+                            if list_path.is_empty()
+                    )
+                })
+            })
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
+            .collect()
+    }
+
     /// Get annotation ranges for a specific list item
     pub fn get_annotation_ranges_for_list_item(
         &self,
@@ -678,9 +819,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter(|c| c.target.list_item_index() == Some(item_index))
             .filter(|c| c.target.list_path().is_none_or(|path| path.is_empty()))
             .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_highlight_ranges_for_list_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+    ) -> Vec<HighlightRange> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.list_item_index() == Some(item_index))
+            .filter(|c| c.target.list_path().is_none_or(|path| path.is_empty()))
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
             .collect()
     }
 
@@ -691,8 +850,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter(|c| c.target.list_path() == Some(list_path))
             .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_highlight_ranges_for_list_item_path(
+        &self,
+        node_index: Option<usize>,
+        list_path: &[usize],
+    ) -> Vec<HighlightRange> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.list_path() == Some(list_path))
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
             .collect()
     }
 
@@ -706,6 +882,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         use crate::comments::BlockSubtarget;
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter(|c| {
                 c.target.subtarget().is_some_and(|s| {
                     matches!(
@@ -722,6 +899,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .collect()
     }
 
+    pub fn get_highlight_ranges_for_definition_item(
+        &self,
+        node_index: Option<usize>,
+        item_index: usize,
+        is_term: bool,
+    ) -> Vec<HighlightRange> {
+        use crate::comments::BlockSubtarget;
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| {
+                c.target.subtarget().is_some_and(|s| {
+                    matches!(
+                        s,
+                        BlockSubtarget::DefinitionItem {
+                            item_index: idx,
+                            is_term: term,
+                            ..
+                        } if *idx == item_index && *term == is_term
+                    )
+                })
+            })
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
+            .collect()
+    }
+
     /// Get annotation ranges for a specific quote paragraph
     pub fn get_annotation_ranges_for_quote_paragraph(
         &self,
@@ -730,8 +936,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) -> Vec<(usize, usize)> {
         self.get_node_comments(node_index)
             .iter()
+            .filter(|c| c.is_comment())
             .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
             .filter_map(|c| c.target.word_range())
+            .collect()
+    }
+
+    pub fn get_highlight_ranges_for_quote_paragraph(
+        &self,
+        node_index: Option<usize>,
+        paragraph_index: usize,
+    ) -> Vec<HighlightRange> {
+        self.get_node_comments(node_index)
+            .iter()
+            .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
+            .filter_map(|c| {
+                let color = c.highlight_color()?;
+                let (start, end) = c.target.word_range()?;
+                Some(HighlightRange { start, end, color })
+            })
             .collect()
     }
 
@@ -749,7 +972,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         indent: usize,
     ) {
         let comments = self.get_node_comments(node_index);
-        for comment in comments {
+        for comment in comments.into_iter().filter(|comment| comment.is_comment()) {
             self.render_comment_as_quote(
                 &comment,
                 lines,

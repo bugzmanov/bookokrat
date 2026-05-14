@@ -30,6 +30,9 @@ use crate::settings::{
 };
 use crate::terminal_overlay;
 use crate::theme::{Base16Palette, current_theme};
+use crate::widget::highlight_palette::{
+    HighlightPaletteSwatchStyle, HighlightPaletteTheme, render_centered_highlight_palette,
+};
 use crate::{bookmarks::Bookmarks, navigation_panel::TableOfContents};
 
 use super::navigation::{get_pdf_chapter_title, save_pdf_bookmark, update_pdf_toc_active};
@@ -2563,6 +2566,8 @@ impl PdfReaderState {
             .map(|page| self.go_to_page_prompt_text(page));
         let comment_modal = self.comments_enabled && self.comment_input.is_active();
         let comment_target_bounds = Self::comment_target_bounds(self.comment_input.target.as_ref());
+        let highlight_palette_modal =
+            self.highlight_palette_active && self.normal_mode.is_visual_active();
         let page_scales = self
             .rendered
             .iter()
@@ -2626,6 +2631,7 @@ impl PdfReaderState {
             && is_kitty_with_zoom
             && !input_active
             && !comment_modal
+            && !highlight_palette_modal
             && !current_page_needs_display
         {
             frame.render_widget(ImageRegion, img_area);
@@ -2788,6 +2794,18 @@ impl PdfReaderState {
                         );
                     }
                 }
+            }
+
+            if highlight_palette_modal {
+                self.modal_overlay_rect = Self::render_highlight_palette_modal(
+                    frame,
+                    inner_area,
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                    &self.palette,
+                );
             }
 
             if let Some(ref msg) = modal_msg {
@@ -3033,6 +3051,18 @@ impl PdfReaderState {
                 }
             }
 
+            if highlight_palette_modal {
+                self.modal_overlay_rect = Self::render_highlight_palette_modal(
+                    frame,
+                    inner_area,
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                    &self.palette,
+                );
+            }
+
             if let Some(ref msg) = modal_msg {
                 self.modal_overlay_rect = Self::render_input_modal(
                     frame,
@@ -3171,6 +3201,17 @@ impl PdfReaderState {
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
+                );
+            }
+            if highlight_palette_modal {
+                self.modal_overlay_rect = Self::render_highlight_palette_modal(
+                    frame,
+                    inner_area,
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                    &self.palette,
                 );
             }
             DisplayBatch::Clear
@@ -3444,6 +3485,17 @@ impl PdfReaderState {
                     modal_panel_header_bg,
                 );
             }
+            if highlight_palette_modal {
+                self.modal_overlay_rect = Self::render_highlight_palette_modal(
+                    frame,
+                    inner_area,
+                    modal_fg,
+                    popup_border,
+                    modal_panel_bg,
+                    modal_panel_header_bg,
+                    &self.palette,
+                );
+            }
             DisplayBatch::Display(to_display)
         }
     }
@@ -3619,6 +3671,58 @@ impl PdfReaderState {
         Some((backing_x, backing_y, backing_w, backing_h))
     }
 
+    fn modal_y_near_selection(
+        area: Rect,
+        height: u16,
+        selection_screen_rows: Option<(u16, u16)>,
+    ) -> u16 {
+        if let Some((sel_top, sel_bot)) = selection_screen_rows {
+            let area_bottom = area.y + area.height;
+            let gap_below = 1u16;
+            let gap_above = 2u16;
+            let space_below = area_bottom
+                .saturating_sub(sel_bot)
+                .saturating_sub(gap_below);
+            let space_above = sel_top.saturating_sub(area.y).saturating_sub(gap_above);
+
+            if space_below >= height {
+                sel_bot + gap_below
+            } else if space_above >= height {
+                sel_top.saturating_sub(gap_above).saturating_sub(height)
+            } else if space_below >= space_above {
+                area_bottom.saturating_sub(height)
+            } else {
+                area.y
+            }
+        } else {
+            area.y + area.height.saturating_sub(height).saturating_sub(1)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_highlight_palette_modal(
+        frame: &mut Frame<'_>,
+        area: Rect,
+        fg_color: Color,
+        accent_color: Color,
+        panel_bg: Color,
+        header_bg: Color,
+        palette: &Base16Palette,
+    ) -> Option<(u16, u16, u16, u16)> {
+        render_centered_highlight_palette(
+            frame,
+            area,
+            palette,
+            HighlightPaletteTheme {
+                fg: fg_color,
+                accent: accent_color,
+                panel_bg,
+                header_bg,
+                swatch_style: HighlightPaletteSwatchStyle::ForegroundBlocks,
+            },
+        )
+    }
+
     /// Renders the comment textarea as a centered modal overlay on the PDF area.
     #[allow(clippy::too_many_arguments)]
     /// Renders the comment input modal and returns the backing area rect
@@ -3651,29 +3755,7 @@ impl PdfReaderState {
         let height = area.height.clamp(5, 10);
         let x = area.x + (area.width.saturating_sub(width)) / 2;
 
-        // Position near the selected text: prefer below, fall back to above,
-        // only overlap when neither side has enough room.
-        let y = if let Some((sel_top, sel_bot)) = selection_screen_rows {
-            let area_bottom = area.y + area.height;
-            let gap_below = 1u16;
-            let gap_above = 2u16;
-            let space_below = area_bottom
-                .saturating_sub(sel_bot)
-                .saturating_sub(gap_below);
-            let space_above = sel_top.saturating_sub(area.y).saturating_sub(gap_above);
-
-            if space_below >= height {
-                sel_bot + gap_below
-            } else if space_above >= height {
-                sel_top.saturating_sub(gap_above).saturating_sub(height)
-            } else if space_below >= space_above {
-                area_bottom.saturating_sub(height)
-            } else {
-                area.y
-            }
-        } else {
-            area.y + area.height.saturating_sub(height).saturating_sub(1)
-        };
+        let y = Self::modal_y_near_selection(area, height, selection_screen_rows);
 
         let modal_area = Rect {
             x,
@@ -4010,6 +4092,7 @@ impl PdfReaderState {
         locked
             .get_page_comments(&self.comments_doc_id, page)
             .into_iter()
+            .filter(|comment| comment.is_comment())
             .cloned()
             .collect()
     }
@@ -4024,6 +4107,9 @@ impl PdfReaderState {
 
         let mut by_page: HashMap<usize, Vec<crate::comments::Comment>> = HashMap::new();
         for comment in locked.get_doc_comments(&self.comments_doc_id) {
+            if !comment.is_comment() {
+                continue;
+            }
             let crate::comments::CommentTarget::Pdf { page, .. } = &comment.target else {
                 continue;
             };

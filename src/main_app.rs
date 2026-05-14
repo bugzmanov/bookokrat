@@ -1,3 +1,4 @@
+use crate::annotations::HighlightColor;
 use crate::book_manager::{BookFormat, BookManager};
 use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
@@ -23,6 +24,9 @@ use crate::table_of_contents::TocItem;
 use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
+use crate::widget::highlight_palette::{
+    HighlightPaletteSwatchStyle, HighlightPaletteTheme, render_centered_highlight_palette,
+};
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
 use crate::widget::marks_popup::{MarkScopeKey, MarksPopup, MarksPopupAction};
 use crate::widget::popup::Popup;
@@ -345,6 +349,7 @@ pub struct App {
     settings_popup: Option<SettingsPopup>,
     lookup_popup: Option<LookupPopup>,
     pending_visual_inner: bool,
+    pending_highlight_palette: bool,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -740,6 +745,7 @@ impl App {
             settings_popup: None,
             lookup_popup: None,
             pending_visual_inner: false,
+            pending_highlight_palette: false,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -1524,6 +1530,7 @@ impl App {
         pdf_reader.set_doc_title(doc_title);
         pdf_reader.toc_entries = toc_entries;
         let initial_comment_rects = pdf_reader.initial_comment_rects();
+        let initial_highlight_overlays = pdf_reader.initial_highlight_overlays();
         if page_count > 0 {
             let mut rendered = Vec::with_capacity(page_count);
             for _ in 0..page_count {
@@ -1606,6 +1613,11 @@ impl App {
             if !initial_comment_rects.is_empty() {
                 let _ = cmd_tx.send(crate::pdf::ConversionCommand::UpdateComments(
                     initial_comment_rects,
+                ));
+            }
+            if !initial_highlight_overlays.is_empty() {
+                let _ = cmd_tx.send(crate::pdf::ConversionCommand::UpdateHighlights(
+                    initial_highlight_overlays,
                 ));
             }
         }
@@ -3231,6 +3243,10 @@ impl App {
         self.text_reader.is_normal_mode_active()
     }
 
+    pub fn is_highlight_palette_active(&self) -> bool {
+        self.highlight_palette_active()
+    }
+
     pub fn current_chapter(&self) -> Option<usize> {
         self.current_book.as_ref().map(|b| b.current_chapter())
     }
@@ -3922,6 +3938,8 @@ impl App {
             self.help_bar_area = chunks[1];
         }
 
+        self.render_highlight_palette(f);
+
         #[cfg(feature = "pdf")]
         if self.has_active_popup()
             && let Some(ref pdf_reader) = self.pdf_reader
@@ -4100,6 +4118,35 @@ impl App {
                 draw_closure_elapsed.as_millis()
             );
         }
+    }
+
+    fn highlight_palette_active(&self) -> bool {
+        self.pending_highlight_palette && self.text_reader.is_visual_mode_active()
+    }
+
+    fn render_highlight_palette(&self, f: &mut ratatui::Frame) {
+        if !self.highlight_palette_active() {
+            return;
+        }
+
+        let screen = f.area();
+        if screen.width < 12 || screen.height < 5 {
+            return;
+        }
+
+        let palette = current_theme();
+        let _ = render_centered_highlight_palette(
+            f,
+            screen,
+            palette,
+            HighlightPaletteTheme {
+                fg: palette.base_05,
+                accent: palette.base_05,
+                panel_bg: palette.base_00,
+                header_bg: palette.base_00,
+                swatch_style: HighlightPaletteSwatchStyle::Background,
+            },
+        );
     }
 
     fn render_default_content(&self, f: &mut ratatui::Frame, area: Rect, content: &str) {
@@ -5110,6 +5157,52 @@ impl App {
         }
     }
 
+    fn show_highlight_palette_hud(&mut self) {
+        let choices = HighlightColor::ALL
+            .iter()
+            .map(|color| format!("{} {}", color.shortcut(), color.label()))
+            .collect::<Vec<_>>()
+            .join("  ");
+        self.text_reader
+            .set_normal_hud(format!("Highlight: {choices}"));
+    }
+
+    fn handle_highlight_palette_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::KeyCode;
+
+        if !self.pending_highlight_palette {
+            return false;
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.pending_highlight_palette = false;
+                self.text_reader.clear_count();
+                true
+            }
+            KeyCode::Char('?') => {
+                self.show_highlight_palette_hud();
+                true
+            }
+            KeyCode::Char(ch) => {
+                self.pending_highlight_palette = false;
+                if let Some(color) = HighlightColor::from_shortcut(ch) {
+                    self.text_reader.add_highlight_from_visual_selection(color);
+                } else {
+                    self.text_reader.set_error_hud("Unknown highlight color");
+                }
+                self.text_reader.clear_count();
+                true
+            }
+            _ => {
+                self.pending_highlight_palette = false;
+                self.text_reader.set_error_hud("Unknown highlight color");
+                self.text_reader.clear_count();
+                true
+            }
+        }
+    }
+
     fn dispatch_epub_normal_action(&mut self, action: crate::keybindings::action::Action) -> bool {
         use crate::keybindings::action::Action;
 
@@ -5262,6 +5355,14 @@ impl App {
             }
             Action::GotoMark => {
                 self.set_pending_mark_op(PendingMarkOp::Goto);
+                true
+            }
+            Action::OpenHighlightPalette => {
+                self.text_reader.clear_count();
+                if self.text_reader.is_visual_mode_active() {
+                    self.pending_highlight_palette = true;
+                    self.show_highlight_palette_hud();
+                }
                 true
             }
             _ => false,
@@ -5722,6 +5823,19 @@ impl App {
                                 if delete_success {
                                     if let Some(pdf_reader) = self.pdf_reader.as_mut() {
                                         pdf_reader.refresh_comment_rects();
+                                        pdf_reader.refresh_highlight_overlays();
+                                        if let Some(tx) = self.pdf_conversion_tx.as_ref() {
+                                            let _ = tx.send(
+                                                crate::pdf::ConversionCommand::UpdateComments(
+                                                    pdf_reader.comment_rects.clone(),
+                                                ),
+                                            );
+                                            let _ = tx.send(
+                                                crate::pdf::ConversionCommand::UpdateHighlights(
+                                                    pdf_reader.highlight_overlays.clone(),
+                                                ),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -5767,9 +5881,9 @@ impl App {
                                     viewer.remove_selected_comment();
                                 }
                                 let msg = if entry.comments.len() > 1 {
-                                    "Comments deleted"
+                                    "Annotations deleted"
                                 } else {
-                                    "Comment deleted"
+                                    "Annotation deleted"
                                 };
                                 self.show_info(msg);
                             }
@@ -6122,6 +6236,10 @@ impl App {
                 use crate::markdown_text_reader::VisualMode;
                 let visual_mode = self.text_reader.get_visual_mode();
 
+                if self.handle_highlight_palette_key(&key) {
+                    return None;
+                }
+
                 // Handle text objects: iw, iW (inner word/WORD)
                 if self.pending_visual_inner {
                     self.pending_visual_inner = false;
@@ -6182,16 +6300,19 @@ impl App {
                             self.cancel_current_search();
                             return None;
                         }
+                        self.pending_highlight_palette = false;
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
                     }
                     KeyCode::Char('v') if visual_mode == VisualMode::CharacterWise => {
+                        self.pending_highlight_palette = false;
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
                     }
                     KeyCode::Char('V') if visual_mode == VisualMode::LineWise => {
+                        self.pending_highlight_palette = false;
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
@@ -7086,11 +7207,17 @@ impl App {
             pdf_reader.page_search.matches_page = usize::MAX;
 
             // Notify converter
+            let comment_rects = pdf_reader.initial_comment_rects();
+            let highlight_overlays = pdf_reader.initial_highlight_overlays();
             if let Some(tx) = self.pdf_conversion_tx.as_ref() {
                 let _ = tx.send(crate::pdf::ConversionCommand::InvalidatePageCache);
                 let _ = tx.send(crate::pdf::ConversionCommand::UpdateSelection(vec![]));
                 let _ = tx.send(crate::pdf::ConversionCommand::SetPageCount(page_count));
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(pdf_reader.page));
+                let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(comment_rects));
+                let _ = tx.send(crate::pdf::ConversionCommand::UpdateHighlights(
+                    highlight_overlays,
+                ));
             }
 
             // Update page number tracker

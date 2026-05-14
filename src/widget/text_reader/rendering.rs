@@ -1,3 +1,4 @@
+use super::comments::HighlightRange;
 use super::types::*;
 use crate::comments::Comment;
 use crate::markdown::{
@@ -926,6 +927,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Check if this heading has annotations
         let annotation_ranges = self.get_annotation_ranges(node_index);
+        let highlight_ranges = self.get_highlight_ranges(node_index);
 
         let base_modifiers = match level {
             HeadingLevel::H3 => Modifier::BOLD | Modifier::UNDERLINED,
@@ -943,7 +945,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             // Apply precise underlines at annotation boundaries
             let line_len = wrapped_line.chars().count();
-            let styled_spans = if annotation_ranges.is_empty() {
+            let mut styled_spans = if annotation_ranges.is_empty() {
                 vec![Span::styled(wrapped_line.to_string(), base_style)]
             } else {
                 Self::split_text_at_annotation_boundaries(
@@ -954,6 +956,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette.base_0e,
                 )
             };
+            Self::apply_highlights_to_line_spans(
+                &mut styled_spans,
+                &highlight_ranges,
+                palette,
+                cumulative_char_pos,
+            );
 
             let mut spans = Vec::new();
             let mut raw_text = String::new();
@@ -1028,7 +1036,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render comments for this heading if any
         let heading_comments = self.get_node_comments(node_index);
-        if !heading_comments.is_empty() {
+        if heading_comments.iter().any(|comment| comment.is_comment()) {
             // Add empty line before comments
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
@@ -1097,6 +1105,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Collect annotation ranges for this node (for underline styling)
         let annotation_ranges = self.get_annotation_ranges(node_index);
+        let highlight_ranges = self.get_highlight_ranges(node_index);
         let underline_color = palette.base_0e; // Purple
 
         let mut current_rich_spans = Vec::new();
@@ -1127,6 +1136,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             current_rich_spans,
                             &annotation_ranges,
                             underline_color,
+                        );
+                        let styled_spans = Self::apply_highlight_backgrounds(
+                            styled_spans,
+                            &highlight_ranges,
+                            palette,
                         );
                         self.render_text_spans(
                             &styled_spans,
@@ -1170,6 +1184,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             current_rich_spans,
                             &annotation_ranges,
                             underline_color,
+                        );
+                        let styled_spans = Self::apply_highlight_backgrounds(
+                            styled_spans,
+                            &highlight_ranges,
+                            palette,
                         );
                         self.render_text_spans(
                             &styled_spans,
@@ -1235,6 +1254,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 &annotation_ranges,
                 underline_color,
             );
+            let styled_spans =
+                Self::apply_highlight_backgrounds(styled_spans, &highlight_ranges, palette);
             self.render_text_spans(
                 &styled_spans,
                 None,
@@ -1578,6 +1599,108 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         .0
     }
 
+    fn apply_highlight_backgrounds_with_offset(
+        rich_spans: Vec<RichSpan>,
+        highlight_ranges: &[HighlightRange],
+        palette: &Base16Palette,
+        char_offset: usize,
+    ) -> (Vec<RichSpan>, usize) {
+        let mut result = Vec::with_capacity(rich_spans.len());
+        let mut char_pos = char_offset;
+
+        if highlight_ranges.is_empty() {
+            for rich_span in &rich_spans {
+                let span_len = match rich_span {
+                    RichSpan::Text(s) => s.content.chars().count(),
+                    RichSpan::Link { span, .. } => span.content.chars().count(),
+                };
+                char_pos += span_len;
+            }
+            return (rich_spans, char_pos);
+        }
+
+        for rich_span in rich_spans {
+            let (span, link_info) = match rich_span {
+                RichSpan::Text(s) => (s, None),
+                RichSpan::Link { span, info } => (span, Some(info)),
+            };
+
+            let span_len = span.content.chars().count();
+            let span_start = char_pos;
+            let span_end = char_pos + span_len;
+
+            let overlapping_ranges: Vec<HighlightRange> = highlight_ranges
+                .iter()
+                .filter(|range| span_start < range.end && span_end > range.start)
+                .copied()
+                .collect();
+
+            if overlapping_ranges.is_empty() {
+                result.push(match link_info {
+                    Some(info) => RichSpan::Link { span, info },
+                    None => RichSpan::Text(span),
+                });
+            } else {
+                let chars: Vec<char> = span.content.chars().collect();
+                let base_style = span.style;
+                let mut boundaries: Vec<usize> = vec![0, span_len];
+                for range in &overlapping_ranges {
+                    if range.start > span_start && range.start < span_end {
+                        boundaries.push(range.start - span_start);
+                    }
+                    if range.end > span_start && range.end < span_end {
+                        boundaries.push(range.end - span_start);
+                    }
+                }
+                boundaries.sort_unstable();
+                boundaries.dedup();
+
+                for window in boundaries.windows(2) {
+                    let seg_start = window[0];
+                    let seg_end = window[1];
+                    if seg_start >= seg_end {
+                        continue;
+                    }
+
+                    let segment_text: String = chars[seg_start..seg_end].iter().collect();
+                    let abs_start = span_start + seg_start;
+                    let abs_end = span_start + seg_end;
+                    let style = overlapping_ranges
+                        .iter()
+                        .find(|range| abs_start >= range.start && abs_end <= range.end)
+                        .map(|range| {
+                            base_style.bg(crate::annotations::highlight_background_color(
+                                range.color,
+                                palette,
+                            ))
+                        })
+                        .unwrap_or(base_style);
+
+                    let sub_span = Span::styled(segment_text, style);
+                    result.push(match &link_info {
+                        Some(info) => RichSpan::Link {
+                            span: sub_span,
+                            info: info.clone(),
+                        },
+                        None => RichSpan::Text(sub_span),
+                    });
+                }
+            }
+
+            char_pos = span_end;
+        }
+
+        (result, char_pos)
+    }
+
+    fn apply_highlight_backgrounds(
+        rich_spans: Vec<RichSpan>,
+        highlight_ranges: &[HighlightRange],
+        palette: &Base16Palette,
+    ) -> Vec<RichSpan> {
+        Self::apply_highlight_backgrounds_with_offset(rich_spans, highlight_ranges, palette, 0).0
+    }
+
     /// Split plain text into spans at annotation boundaries.
     /// Returns spans with underline styling only on annotated portions.
     fn split_text_at_annotation_boundaries(
@@ -1741,6 +1864,81 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         char_pos
     }
 
+    fn apply_highlights_to_line_spans(
+        spans: &mut Vec<Span<'static>>,
+        highlight_ranges: &[HighlightRange],
+        palette: &Base16Palette,
+        char_offset: usize,
+    ) -> usize {
+        if highlight_ranges.is_empty() {
+            let mut char_pos = char_offset;
+            for span in spans.iter() {
+                char_pos += span.content.chars().count();
+            }
+            return char_pos;
+        }
+
+        let mut result = Vec::with_capacity(spans.len());
+        let mut char_pos = char_offset;
+
+        for span in spans.drain(..) {
+            let span_len = span.content.chars().count();
+            let span_start = char_pos;
+            let span_end = char_pos + span_len;
+
+            let overlapping_ranges: Vec<HighlightRange> = highlight_ranges
+                .iter()
+                .filter(|range| span_start < range.end && span_end > range.start)
+                .copied()
+                .collect();
+
+            if overlapping_ranges.is_empty() {
+                result.push(span);
+            } else {
+                let chars: Vec<char> = span.content.chars().collect();
+                let base_style = span.style;
+                let mut boundaries: Vec<usize> = vec![0, span_len];
+                for range in &overlapping_ranges {
+                    if range.start > span_start && range.start < span_end {
+                        boundaries.push(range.start - span_start);
+                    }
+                    if range.end > span_start && range.end < span_end {
+                        boundaries.push(range.end - span_start);
+                    }
+                }
+                boundaries.sort_unstable();
+                boundaries.dedup();
+
+                for window in boundaries.windows(2) {
+                    let seg_start = window[0];
+                    let seg_end = window[1];
+                    if seg_start >= seg_end {
+                        continue;
+                    }
+                    let segment_text: String = chars[seg_start..seg_end].iter().collect();
+                    let abs_start = span_start + seg_start;
+                    let abs_end = span_start + seg_end;
+                    let style = overlapping_ranges
+                        .iter()
+                        .find(|range| abs_start >= range.start && abs_end <= range.end)
+                        .map(|range| {
+                            base_style.bg(crate::annotations::highlight_background_color(
+                                range.color,
+                                palette,
+                            ))
+                        })
+                        .unwrap_or(base_style);
+                    result.push(Span::styled(segment_text, style));
+                }
+            }
+
+            char_pos = span_end;
+        }
+
+        *spans = result;
+        char_pos
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_code_block(
         &mut self,
@@ -1771,6 +1969,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let total_code_lines = code_lines.len();
 
         let mut coverage_counts = vec![0usize; total_code_lines];
+        let mut highlight_counts = vec![0usize; total_code_lines];
+        let mut line_highlight_colors: Vec<Option<crate::annotations::HighlightColor>> =
+            vec![None; total_code_lines];
         let mut inline_comments: Vec<Vec<Comment>> = vec![Vec::new(); total_code_lines];
 
         if let Some(node_idx) = node_index {
@@ -1785,10 +1986,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         if end < start {
                             std::mem::swap(&mut start, &mut end);
                         }
-                        for count in coverage_counts.iter_mut().take(end + 1).skip(start) {
-                            *count = count.saturating_add(1);
+                        if let Some(color) = comment.highlight_color() {
+                            for (idx, count) in highlight_counts
+                                .iter_mut()
+                                .enumerate()
+                                .take(end + 1)
+                                .skip(start)
+                            {
+                                *count = count.saturating_add(1);
+                                line_highlight_colors[idx].get_or_insert(color);
+                            }
+                        } else if comment.is_comment() {
+                            for count in coverage_counts.iter_mut().take(end + 1).skip(start) {
+                                *count = count.saturating_add(1);
+                            }
+                            inline_comments[end].push(comment.clone());
                         }
-                        inline_comments[end].push(comment.clone());
                     }
                 }
             }
@@ -1864,6 +2077,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     style = style
                         .underline_color(palette.base_0e)
                         .add_modifier(Modifier::UNDERLINED);
+                }
+                if highlight_counts.get(line_idx).copied().unwrap_or(0) > 0 {
+                    if let Some(color) = line_highlight_colors[line_idx] {
+                        style = style.bg(crate::annotations::highlight_background_color(
+                            color, palette,
+                        ));
+                    }
                 }
 
                 let styled_span = Span::styled(segment.clone(), style);
@@ -2076,6 +2296,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         } else {
             Vec::new()
         };
+        let highlight_ranges = if list_path.is_empty() {
+            self.get_highlight_ranges_for_legacy_list(node_index)
+        } else {
+            Vec::new()
+        };
         let underline_color = palette.base_0e; // Purple
 
         for (idx, item) in items.iter().enumerate() {
@@ -2088,6 +2313,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             };
             let item_annotation_ranges =
                 self.get_annotation_ranges_for_list_item_path(node_index, &item_path);
+            let item_highlight_ranges =
+                self.get_highlight_ranges_for_list_item_path(node_index, &item_path);
             let mut item_char_pos = 0;
 
             // Determine bullet/number for this item
@@ -2192,6 +2419,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     item_char_pos,
                                 )
                             };
+                            let styled_spans = if list_path.is_empty() {
+                                Self::apply_highlight_backgrounds_with_offset(
+                                    styled_spans,
+                                    &highlight_ranges,
+                                    palette,
+                                    *global_char_pos,
+                                )
+                                .0
+                            } else {
+                                Self::apply_highlight_backgrounds_with_offset(
+                                    styled_spans,
+                                    &item_highlight_ranges,
+                                    palette,
+                                    item_char_pos,
+                                )
+                                .0
+                            };
 
                             let lines_before = lines.len();
                             let raw_lines_before = self.raw_text_lines.len();
@@ -2325,6 +2569,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     line,
                                     &item_annotation_ranges,
                                     underline_color,
+                                );
+                                Self::apply_highlights_to_rendered_line(
+                                    line,
+                                    &item_highlight_ranges,
+                                    palette,
                                 );
                             }
                             self.apply_prefix_frame_to_lines(
@@ -2407,6 +2656,23 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     item_char_pos,
                                 )
                             };
+                            let styled_spans = if list_path.is_empty() {
+                                Self::apply_highlight_backgrounds_with_offset(
+                                    styled_spans,
+                                    &highlight_ranges,
+                                    palette,
+                                    *global_char_pos,
+                                )
+                                .0
+                            } else {
+                                Self::apply_highlight_backgrounds_with_offset(
+                                    styled_spans,
+                                    &item_highlight_ranges,
+                                    palette,
+                                    item_char_pos,
+                                )
+                                .0
+                            };
 
                             let canon_offset = if list_path.is_empty() {
                                 Some(*global_char_pos)
@@ -2520,6 +2786,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                     &item_annotation_ranges,
                                     underline_color,
                                 );
+                                Self::apply_highlights_to_rendered_line(
+                                    line,
+                                    &item_highlight_ranges,
+                                    palette,
+                                );
                             }
                             let advanced = Self::max_canonical_end(&lines[lines_before..])
                                 .map(|max_end| max_end.saturating_sub(canon_offset))
@@ -2547,7 +2818,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         } else {
             Vec::new()
         };
-        if !list_comments.is_empty() {
+        if list_comments.iter().any(|comment| comment.is_comment()) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -2740,7 +3011,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render comments for this table if any
         let table_comments = self.get_node_comments(node_index);
-        if !table_comments.is_empty() {
+        if table_comments.iter().any(|comment| comment.is_comment()) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -3119,6 +3390,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         line.spans = prefix_spans;
     }
 
+    fn apply_highlights_to_rendered_line(
+        line: &mut RenderedLine,
+        highlight_ranges: &[HighlightRange],
+        palette: &Base16Palette,
+    ) {
+        let Some(char_offset) = line.canonical_content_start else {
+            return;
+        };
+
+        let split_at = line.content_column_start.min(line.raw_text.chars().count());
+        let (mut prefix_spans, mut content_spans) =
+            Self::split_spans_at_column(&line.spans, split_at);
+        Self::apply_highlights_to_line_spans(
+            &mut content_spans,
+            highlight_ranges,
+            palette,
+            char_offset,
+        );
+        prefix_spans.extend(content_spans);
+        line.spans = prefix_spans;
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn render_quote(
         &mut self,
@@ -3138,6 +3431,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Collect annotation ranges for this quote (for underline styling)
         let annotation_ranges = self.get_annotation_ranges(node_index);
+        let highlight_ranges = self.get_highlight_ranges(node_index);
         let underline_color = palette.base_0e; // Purple
 
         // Track cumulative character position for annotation ranges
@@ -3241,9 +3535,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         underline_color,
                         cumulative_char_pos,
                     );
+                    let highlighted_spans = Self::apply_highlight_backgrounds_with_offset(
+                        underlined_spans,
+                        &highlight_ranges,
+                        palette,
+                        cumulative_char_pos,
+                    )
+                    .0;
 
                     self.render_text_spans(
-                        &underlined_spans,
+                        &highlighted_spans,
                         None,
                         lines,
                         total_height,
@@ -3308,6 +3609,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             &annotation_ranges,
                             underline_color,
                         );
+                        Self::apply_highlights_to_rendered_line(line, &highlight_ranges, palette);
                     }
 
                     if let Some(max_end) = Self::max_canonical_end(&lines[lines_before_block..]) {
@@ -3325,7 +3627,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render comments for this quote if any
         let quote_comments = self.get_node_comments(node_index);
-        if !quote_comments.is_empty() {
+        if quote_comments.iter().any(|comment| comment.is_comment()) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -3423,6 +3725,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
             let term_annotation_ranges =
                 self.get_annotation_ranges_for_definition_item(node_index, idx, true);
+            let term_highlight_ranges =
+                self.get_highlight_ranges_for_definition_item(node_index, idx, true);
 
             // Apply bold styling to all term rich spans
             let styled_term_rich_spans: Vec<RichSpan> = term_rich_spans
@@ -3449,6 +3753,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 underline_color,
                 cumulative_char_pos,
             );
+            let final_term_spans = Self::apply_highlight_backgrounds_with_offset(
+                final_term_spans,
+                &term_highlight_ranges,
+                palette,
+                cumulative_char_pos,
+            )
+            .0;
 
             let lines_before_term = lines.len();
 
@@ -3489,6 +3800,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     let lines_before_def = lines.len();
                     let definition_annotation_ranges =
                         self.get_annotation_ranges_for_definition_item(node_index, idx, false);
+                    let definition_highlight_ranges =
+                        self.get_highlight_ranges_for_definition_item(node_index, idx, false);
 
                     self.render_node(
                         block_node,
@@ -3531,6 +3844,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             &definition_annotation_ranges,
                             underline_color,
                         );
+                        Self::apply_highlights_to_rendered_line(
+                            line,
+                            &definition_highlight_ranges,
+                            palette,
+                        );
                     }
                     if let Some(max_end) = Self::max_canonical_end(&lines[lines_before_def..]) {
                         cumulative_char_pos = max_end;
@@ -3551,7 +3869,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render comments for this definition list if any
         let def_comments = self.get_node_comments(node_index);
-        if !def_comments.is_empty() {
+        if def_comments.iter().any(|comment| comment.is_comment()) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
@@ -3726,6 +4044,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut current_chunk_items: Vec<&TextOrInline> = Vec::new();
         let mut is_first_chunk = true;
         let mut para_canonical_offset: usize = canonical_offset.unwrap_or(0);
+        let annotation_ranges = self.get_annotation_ranges(node_index);
+        let highlight_ranges = self.get_highlight_ranges(node_index);
+        let underline_color = palette.base_0e;
 
         for item in content.iter() {
             match item {
@@ -3737,8 +4058,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             .map(|i| Self::text_or_inline_canonical_len(i))
                             .sum::<usize>();
                         let prefix = if is_first_chunk { first_prefix } else { None };
+                        let (styled_spans, _) = Self::apply_annotation_underlines_with_offset(
+                            current_rich_spans,
+                            &annotation_ranges,
+                            underline_color,
+                            para_canonical_offset,
+                        );
+                        let styled_spans = Self::apply_highlight_backgrounds_with_offset(
+                            styled_spans,
+                            &highlight_ranges,
+                            palette,
+                            para_canonical_offset,
+                        )
+                        .0;
                         self.render_text_spans(
-                            &current_rich_spans,
+                            &styled_spans,
                             prefix,
                             lines,
                             total_height,
@@ -3770,8 +4104,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             .map(|i| Self::text_or_inline_canonical_len(i))
                             .sum::<usize>();
                         let prefix = if is_first_chunk { first_prefix } else { None };
+                        let (styled_spans, _) = Self::apply_annotation_underlines_with_offset(
+                            current_rich_spans,
+                            &annotation_ranges,
+                            underline_color,
+                            para_canonical_offset,
+                        );
+                        let styled_spans = Self::apply_highlight_backgrounds_with_offset(
+                            styled_spans,
+                            &highlight_ranges,
+                            palette,
+                            para_canonical_offset,
+                        )
+                        .0;
                         self.render_text_spans(
-                            &current_rich_spans,
+                            &styled_spans,
                             prefix,
                             lines,
                             total_height,
@@ -3817,8 +4164,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Flush remaining text
         if !current_rich_spans.is_empty() {
             let prefix = if is_first_chunk { first_prefix } else { None };
+            let (styled_spans, _) = Self::apply_annotation_underlines_with_offset(
+                current_rich_spans,
+                &annotation_ranges,
+                underline_color,
+                para_canonical_offset,
+            );
+            let styled_spans = Self::apply_highlight_backgrounds_with_offset(
+                styled_spans,
+                &highlight_ranges,
+                palette,
+                para_canonical_offset,
+            )
+            .0;
             self.render_text_spans(
-                &current_rich_spans,
+                &styled_spans,
                 prefix,
                 lines,
                 total_height,

@@ -16,8 +16,8 @@ use crate::inputs::{KeySeq, MouseTracker};
 use crate::jump_list::JumpList;
 use crate::notification::NotificationManager;
 use crate::pdf::{
-    CursorRect, ExtractionRequest, NormalModeState, PageNumberTracker, SelectionRect,
-    TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
+    CursorRect, ExtractionRequest, HighlightOverlay, NormalModeState, PageNumberTracker,
+    SelectionRect, TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
 };
 use crate::theme::{Base16Palette, theme_background};
 use crate::widget::hud_message::{HudMessage, HudMode};
@@ -235,6 +235,7 @@ pub enum InputAction {
         rects: Vec<SelectionRect>,
         cursor_rect: Option<CursorRect>,
     },
+    HighlightSaved(Vec<HighlightOverlay>),
     CommentDeleted {
         rects: Vec<SelectionRect>,
         selection_rects: Vec<SelectionRect>,
@@ -374,6 +375,8 @@ pub struct PdfReaderState {
     pub comments_doc_id: String,
     /// Comment input state
     pub comment_input: CommentInputState,
+    /// Floating color palette for visual-mode highlight creation.
+    pub highlight_palette_active: bool,
     /// When set, a solid-color Kitty image is placed over this area after PDF
     /// images so active PDF modals have an opaque background. (col, row, width, height)
     pub modal_overlay_rect: Option<(u16, u16, u16, u16)>,
@@ -382,6 +385,8 @@ pub struct PdfReaderState {
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
     /// Comment selection rectangles for overlay rendering
     pub comment_rects: Vec<SelectionRect>,
+    /// Highlight rectangles for overlay rendering
+    pub highlight_overlays: Vec<HighlightOverlay>,
     /// Whether comment navigation is active
     pub comment_nav_active: bool,
     /// Current page for comment navigation
@@ -489,9 +494,11 @@ impl PdfReaderState {
             book_comments,
             comments_doc_id,
             comment_input: CommentInputState::default(),
+            highlight_palette_active: false,
             modal_overlay_rect: None,
             modal_overlay_sent: None,
             comment_rects: Vec::new(),
+            highlight_overlays: Vec::new(),
             comment_nav_active: false,
             comment_nav_page: 0,
             comment_nav_index: 0,
