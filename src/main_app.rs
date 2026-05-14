@@ -1,4 +1,3 @@
-use crate::annotations::HighlightColor;
 use crate::book_manager::{BookFormat, BookManager};
 use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
@@ -25,7 +24,8 @@ use crate::theme::{current_theme, current_theme_name, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::highlight_palette::{
-    HighlightPaletteSwatchStyle, HighlightPaletteTheme, render_centered_highlight_palette,
+    HighlightPaletteAction, HighlightPaletteSwatchStyle, HighlightPaletteTheme,
+    classify_palette_key, palette_hud_message, render_centered_highlight_palette,
 };
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
 use crate::widget::marks_popup::{MarkScopeKey, MarksPopup, MarksPopupAction};
@@ -5158,49 +5158,40 @@ impl App {
     }
 
     fn show_highlight_palette_hud(&mut self) {
-        let choices = HighlightColor::ALL
-            .iter()
-            .map(|color| format!("{} {}", color.shortcut(), color.label()))
-            .collect::<Vec<_>>()
-            .join("  ");
-        self.text_reader
-            .set_normal_hud(format!("Highlight: {choices}"));
+        self.text_reader.set_normal_hud(palette_hud_message());
+    }
+
+    /// Clear the pending-palette flag, mirroring PDF's `clear_highlight_palette`.
+    /// Use this on any path that exits visual mode so the modal can't outlive its selection.
+    fn clear_highlight_palette(&mut self) {
+        self.pending_highlight_palette = false;
     }
 
     fn handle_highlight_palette_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
-
         if !self.pending_highlight_palette {
             return false;
         }
 
-        match key.code {
-            KeyCode::Esc => {
-                self.pending_highlight_palette = false;
-                self.text_reader.clear_count();
-                true
-            }
-            KeyCode::Char('?') => {
+        match classify_palette_key(&key.code) {
+            HighlightPaletteAction::ShowHelp => {
                 self.show_highlight_palette_hud();
-                true
             }
-            KeyCode::Char(ch) => {
-                self.pending_highlight_palette = false;
-                if let Some(color) = HighlightColor::from_shortcut(ch) {
-                    self.text_reader.add_highlight_from_visual_selection(color);
-                } else {
-                    self.text_reader.set_error_hud("Unknown highlight color");
-                }
+            HighlightPaletteAction::Cancel => {
+                self.clear_highlight_palette();
                 self.text_reader.clear_count();
-                true
             }
-            _ => {
-                self.pending_highlight_palette = false;
+            HighlightPaletteAction::Apply(color) => {
+                self.clear_highlight_palette();
+                self.text_reader.add_highlight_from_visual_selection(color);
+                self.text_reader.clear_count();
+            }
+            HighlightPaletteAction::UnknownKey => {
+                self.clear_highlight_palette();
                 self.text_reader.set_error_hud("Unknown highlight color");
                 self.text_reader.clear_count();
-                true
             }
         }
+        true
     }
 
     fn dispatch_epub_normal_action(&mut self, action: crate::keybindings::action::Action) -> bool {
@@ -6300,19 +6291,19 @@ impl App {
                             self.cancel_current_search();
                             return None;
                         }
-                        self.pending_highlight_palette = false;
+                        self.clear_highlight_palette();
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
                     }
                     KeyCode::Char('v') if visual_mode == VisualMode::CharacterWise => {
-                        self.pending_highlight_palette = false;
+                        self.clear_highlight_palette();
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;
                     }
                     KeyCode::Char('V') if visual_mode == VisualMode::LineWise => {
-                        self.pending_highlight_palette = false;
+                        self.clear_highlight_palette();
                         self.text_reader.exit_visual_mode();
                         self.text_reader.clear_count();
                         return None;

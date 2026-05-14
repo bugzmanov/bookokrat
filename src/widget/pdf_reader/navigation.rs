@@ -21,6 +21,9 @@ use crate::pdf::{
 };
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
+use crate::widget::highlight_palette::{
+    HighlightPaletteAction, classify_palette_key, palette_hud_message,
+};
 
 use super::state::{
     CommentEditMode, HighlightLocator, InputAction, PdfReaderState, PendingHighlight,
@@ -798,47 +801,36 @@ impl PdfReaderState {
     }
 
     fn show_highlight_palette_hud(&mut self) {
-        let choices = HighlightColor::ALL
-            .iter()
-            .map(|color| format!("{} {}", color.shortcut(), color.label()))
-            .collect::<Vec<_>>()
-            .join("  ");
         self.set_hud_message(
-            format!("Highlight: {choices}"),
+            palette_hud_message(),
             crate::widget::hud_message::HudMode::Normal,
             std::time::Duration::from_secs(2),
         );
     }
 
     fn handle_visual_highlight_key(&mut self, key: &KeyEvent) -> Option<Option<InputAction>> {
-        if self.highlight_palette_active {
-            return Some(match key.code {
-                KeyCode::Esc => {
-                    self.clear_highlight_palette();
-                    Some(InputAction::Redraw)
-                }
-                KeyCode::Char('?') => {
-                    self.show_highlight_palette_hud();
-                    Some(InputAction::Redraw)
-                }
-                KeyCode::Char(ch) => {
-                    self.clear_highlight_palette();
-                    if let Some(color) = HighlightColor::from_shortcut(ch) {
-                        self.add_highlight_from_visual_selection(color)
-                    } else {
-                        self.set_error_hud("Unknown highlight color".to_string());
-                        Some(InputAction::Redraw)
-                    }
-                }
-                _ => {
-                    self.clear_highlight_palette();
-                    self.set_error_hud("Unknown highlight color".to_string());
-                    Some(InputAction::Redraw)
-                }
-            });
+        if !self.highlight_palette_active {
+            return None;
         }
-
-        None
+        Some(match classify_palette_key(&key.code) {
+            HighlightPaletteAction::ShowHelp => {
+                self.show_highlight_palette_hud();
+                Some(InputAction::Redraw)
+            }
+            HighlightPaletteAction::Cancel => {
+                self.clear_highlight_palette();
+                Some(InputAction::Redraw)
+            }
+            HighlightPaletteAction::Apply(color) => {
+                self.clear_highlight_palette();
+                self.add_highlight_from_visual_selection(color)
+            }
+            HighlightPaletteAction::UnknownKey => {
+                self.clear_highlight_palette();
+                self.set_error_hud("Unknown highlight color".to_string());
+                Some(InputAction::Redraw)
+            }
+        })
     }
 
     fn clear_highlight_palette(&mut self) {

@@ -1987,6 +1987,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             std::mem::swap(&mut start, &mut end);
                         }
                         if let Some(color) = comment.highlight_color() {
+                            // First color wins per line. Safe because `has_overlapping_annotation`
+                            // rejects new highlights that would share lines with existing ones,
+                            // so each line carries at most one highlight color in practice.
                             for (idx, count) in highlight_counts
                                 .iter_mut()
                                 .enumerate()

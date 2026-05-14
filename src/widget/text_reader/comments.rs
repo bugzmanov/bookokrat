@@ -26,6 +26,71 @@ pub struct HighlightRange {
     pub color: HighlightColor,
 }
 
+/// Identifies which annotations in a node should be considered when collecting ranges.
+/// Adding a new content variant means adding one enum case + one arm in [`scope_matches`].
+#[derive(Clone, Copy)]
+enum CommentScope<'a> {
+    /// Every comment on the node.
+    Node,
+    /// Top-level list items only (legacy list rendering).
+    LegacyList,
+    /// A specific list item at the top level.
+    ListItem { item_index: usize },
+    /// A specific list item at a nested path.
+    ListItemPath(&'a [usize]),
+    /// A definition list term/definition.
+    DefinitionItem { item_index: usize, is_term: bool },
+    /// A specific paragraph inside a quote block.
+    QuoteParagraph { paragraph_index: usize },
+}
+
+fn scope_matches(comment: &Comment, scope: CommentScope<'_>) -> bool {
+    use crate::comments::BlockSubtarget;
+    match scope {
+        CommentScope::Node => true,
+        CommentScope::LegacyList => comment.target.subtarget().is_some_and(
+            |s| matches!(s, BlockSubtarget::ListItem { list_path, .. } if list_path.is_empty()),
+        ),
+        CommentScope::ListItem { item_index } => {
+            comment.target.list_item_index() == Some(item_index)
+                && comment
+                    .target
+                    .list_path()
+                    .is_none_or(|path| path.is_empty())
+        }
+        CommentScope::ListItemPath(path) => comment.target.list_path() == Some(path),
+        CommentScope::DefinitionItem {
+            item_index,
+            is_term,
+        } => comment.target.subtarget().is_some_and(|s| {
+            matches!(
+                s,
+                BlockSubtarget::DefinitionItem {
+                    item_index: idx,
+                    is_term: term,
+                    ..
+                } if *idx == item_index && *term == is_term
+            )
+        }),
+        CommentScope::QuoteParagraph { paragraph_index } => {
+            comment.target.quote_paragraph_index() == Some(paragraph_index)
+        }
+    }
+}
+
+fn annotation_range_of(c: &Comment) -> Option<(usize, usize)> {
+    if !c.is_comment() {
+        return None;
+    }
+    c.target.word_range()
+}
+
+fn highlight_range_of(c: &Comment) -> Option<HighlightRange> {
+    let color = c.highlight_color()?;
+    let (start, end) = c.target.word_range()?;
+    Some(HighlightRange { start, end, color })
+}
+
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
         self.book_comments = Some(comments);
@@ -208,7 +273,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         };
 
         let Some(comments_arc) = self.book_comments.as_ref().cloned() else {
-            self.set_error_hud("Annotations are not available");
+            self.set_error_hud("Annotations are unavailable");
             self.exit_visual_mode();
             return false;
         };
@@ -748,82 +813,55 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or_default()
     }
 
-    /// Get annotation (word) ranges from comments for a node - used for underline styling
-    pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
+    fn collect_in_scope<R, F>(
+        &self,
+        node_index: Option<usize>,
+        scope: CommentScope<'_>,
+        extractor: F,
+    ) -> Vec<R>
+    where
+        F: Fn(&Comment) -> Option<R>,
+    {
         self.get_node_comments(node_index)
             .iter()
-            .filter(|c| c.is_comment())
-            .filter_map(|c| c.target.word_range())
+            .filter(|c| scope_matches(c, scope))
+            .filter_map(extractor)
             .collect()
     }
 
+    /// Get annotation (word) ranges from comments for a node - used for underline styling.
+    pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
+        self.collect_in_scope(node_index, CommentScope::Node, annotation_range_of)
+    }
+
     pub fn get_highlight_ranges(&self, node_index: Option<usize>) -> Vec<HighlightRange> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(node_index, CommentScope::Node, highlight_range_of)
     }
 
     pub fn get_annotation_ranges_for_legacy_list(
         &self,
         node_index: Option<usize>,
     ) -> Vec<(usize, usize)> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.is_comment())
-            .filter(|c| {
-                c.target.subtarget().is_some_and(|s| {
-                    matches!(
-                        s,
-                        crate::comments::BlockSubtarget::ListItem { list_path, .. }
-                            if list_path.is_empty()
-                    )
-                })
-            })
-            .filter_map(|c| c.target.word_range())
-            .collect()
+        self.collect_in_scope(node_index, CommentScope::LegacyList, annotation_range_of)
     }
 
     pub fn get_highlight_ranges_for_legacy_list(
         &self,
         node_index: Option<usize>,
     ) -> Vec<HighlightRange> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| {
-                c.target.subtarget().is_some_and(|s| {
-                    matches!(
-                        s,
-                        crate::comments::BlockSubtarget::ListItem { list_path, .. }
-                            if list_path.is_empty()
-                    )
-                })
-            })
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(node_index, CommentScope::LegacyList, highlight_range_of)
     }
 
-    /// Get annotation ranges for a specific list item
     pub fn get_annotation_ranges_for_list_item(
         &self,
         node_index: Option<usize>,
         item_index: usize,
     ) -> Vec<(usize, usize)> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.is_comment())
-            .filter(|c| c.target.list_item_index() == Some(item_index))
-            .filter(|c| c.target.list_path().is_none_or(|path| path.is_empty()))
-            .filter_map(|c| c.target.word_range())
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::ListItem { item_index },
+            annotation_range_of,
+        )
     }
 
     pub fn get_highlight_ranges_for_list_item(
@@ -831,16 +869,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         item_index: usize,
     ) -> Vec<HighlightRange> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.target.list_item_index() == Some(item_index))
-            .filter(|c| c.target.list_path().is_none_or(|path| path.is_empty()))
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::ListItem { item_index },
+            highlight_range_of,
+        )
     }
 
     pub fn get_annotation_ranges_for_list_item_path(
@@ -848,12 +881,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         list_path: &[usize],
     ) -> Vec<(usize, usize)> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.is_comment())
-            .filter(|c| c.target.list_path() == Some(list_path))
-            .filter_map(|c| c.target.word_range())
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::ListItemPath(list_path),
+            annotation_range_of,
+        )
     }
 
     pub fn get_highlight_ranges_for_list_item_path(
@@ -861,42 +893,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         list_path: &[usize],
     ) -> Vec<HighlightRange> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.target.list_path() == Some(list_path))
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::ListItemPath(list_path),
+            highlight_range_of,
+        )
     }
 
-    /// Get annotation ranges for a specific definition item (term or definition)
     pub fn get_annotation_ranges_for_definition_item(
         &self,
         node_index: Option<usize>,
         item_index: usize,
         is_term: bool,
     ) -> Vec<(usize, usize)> {
-        use crate::comments::BlockSubtarget;
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.is_comment())
-            .filter(|c| {
-                c.target.subtarget().is_some_and(|s| {
-                    matches!(
-                        s,
-                        BlockSubtarget::DefinitionItem {
-                            item_index: idx,
-                            is_term: term,
-                            ..
-                        } if *idx == item_index && *term == is_term
-                    )
-                })
-            })
-            .filter_map(|c| c.target.word_range())
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::DefinitionItem {
+                item_index,
+                is_term,
+            },
+            annotation_range_of,
+        )
     }
 
     pub fn get_highlight_ranges_for_definition_item(
@@ -905,41 +922,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         item_index: usize,
         is_term: bool,
     ) -> Vec<HighlightRange> {
-        use crate::comments::BlockSubtarget;
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| {
-                c.target.subtarget().is_some_and(|s| {
-                    matches!(
-                        s,
-                        BlockSubtarget::DefinitionItem {
-                            item_index: idx,
-                            is_term: term,
-                            ..
-                        } if *idx == item_index && *term == is_term
-                    )
-                })
-            })
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::DefinitionItem {
+                item_index,
+                is_term,
+            },
+            highlight_range_of,
+        )
     }
 
-    /// Get annotation ranges for a specific quote paragraph
     pub fn get_annotation_ranges_for_quote_paragraph(
         &self,
         node_index: Option<usize>,
         paragraph_index: usize,
     ) -> Vec<(usize, usize)> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.is_comment())
-            .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
-            .filter_map(|c| c.target.word_range())
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::QuoteParagraph { paragraph_index },
+            annotation_range_of,
+        )
     }
 
     pub fn get_highlight_ranges_for_quote_paragraph(
@@ -947,15 +949,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         node_index: Option<usize>,
         paragraph_index: usize,
     ) -> Vec<HighlightRange> {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| c.target.quote_paragraph_index() == Some(paragraph_index))
-            .filter_map(|c| {
-                let color = c.highlight_color()?;
-                let (start, end) = c.target.word_range()?;
-                Some(HighlightRange { start, end, color })
-            })
-            .collect()
+        self.collect_in_scope(
+            node_index,
+            CommentScope::QuoteParagraph { paragraph_index },
+            highlight_range_of,
+        )
     }
 
     /// Render all paragraph comments for a node as quote blocks.

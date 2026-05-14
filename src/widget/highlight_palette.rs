@@ -1,3 +1,4 @@
+use crossterm::event::KeyCode;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -9,6 +10,36 @@ use ratatui::{
 
 use crate::annotations::{HighlightColor, highlight_accent_color, highlight_background_color};
 use crate::theme::Base16Palette;
+
+/// What the palette key handler should do in response to a key press.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HighlightPaletteAction {
+    Apply(HighlightColor),
+    Cancel,
+    ShowHelp,
+    UnknownKey,
+}
+
+pub(crate) fn classify_palette_key(code: &KeyCode) -> HighlightPaletteAction {
+    match code {
+        KeyCode::Esc => HighlightPaletteAction::Cancel,
+        KeyCode::Char('?') => HighlightPaletteAction::ShowHelp,
+        KeyCode::Char(ch) => match HighlightColor::from_shortcut(*ch) {
+            Some(color) => HighlightPaletteAction::Apply(color),
+            None => HighlightPaletteAction::UnknownKey,
+        },
+        _ => HighlightPaletteAction::UnknownKey,
+    }
+}
+
+pub(crate) fn palette_hud_message() -> String {
+    let choices = HighlightColor::ALL
+        .iter()
+        .map(|color| format!("{} {}", color.shortcut(), color.label()))
+        .collect::<Vec<_>>()
+        .join("  ");
+    format!("Highlight: {choices}")
+}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HighlightPaletteTheme {

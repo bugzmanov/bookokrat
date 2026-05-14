@@ -1025,27 +1025,23 @@ impl BookComments {
             .unwrap_or_default()
     }
 
-    /// Get all PDF comments for a document
+    /// Get all PDF comments for a document. Order is unspecified — callers that need
+    /// a stable ordering must sort the result themselves.
     pub fn get_doc_comments(&self, doc_id: &str) -> Vec<&Comment> {
-        let Some(doc_map) = self.comments_by_location.get(doc_id) else {
-            return Vec::new();
-        };
-
-        let mut pages = doc_map.iter().collect::<Vec<_>>();
-        pages.sort_unstable_by_key(|(page, _)| **page);
-
-        pages
-            .into_iter()
-            .flat_map(|(_, indices)| indices.iter())
-            .filter_map(|&i| {
-                let comment = self.comments.get(i)?;
-                if comment.is_pdf() {
-                    Some(comment)
-                } else {
-                    None
-                }
+        self.comments_by_location
+            .get(doc_id)
+            .map(|doc_map| {
+                doc_map
+                    .values()
+                    .flat_map(|indices| {
+                        indices.iter().filter_map(|&i| {
+                            let c = self.comments.get(i)?;
+                            if c.is_pdf() { Some(c) } else { None }
+                        })
+                    })
+                    .collect()
             })
-            .collect()
+            .unwrap_or_default()
     }
 
     pub fn get_comment_by_id(&self, comment_id: &str) -> Option<&Comment> {
@@ -1435,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_doc_comments_returns_sorted_pdf_order() {
+    fn test_get_doc_comments_returns_all_pages() {
         let (_temp_dir, book_path, comments_dir) = create_test_env();
         let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
 
@@ -1477,11 +1473,12 @@ mod tests {
             ))
             .unwrap();
 
-        let pages = book_comments
+        let mut pages = book_comments
             .get_doc_comments("doc.pdf")
             .into_iter()
             .filter_map(|comment| comment.page())
             .collect::<Vec<_>>();
+        pages.sort_unstable();
         assert_eq!(pages, vec![0, 1, 2]);
     }
 
