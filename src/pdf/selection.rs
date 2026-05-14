@@ -92,6 +92,13 @@ pub struct SelectionRect {
     pub bottomright_y: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct HighlightOverlay {
+    pub rect: SelectionRect,
+    pub rgb: crate::annotations::RgbColor,
+    pub alpha: u8,
+}
+
 /// Request to extract text from selected regions
 #[derive(Clone, Debug)]
 pub struct ExtractionRequest {

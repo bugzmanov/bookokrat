@@ -1,4 +1,5 @@
-use bookokrat::comments::{Comment, CommentTarget};
+use bookokrat::annotations::HighlightColor;
+use bookokrat::comments::{AnnotationBody, Comment, CommentTarget};
 use bookokrat::main_app::{ChapterDirection, FPSCounter, OpenPosition};
 use bookokrat::settings::set_margin;
 use bookokrat::simple_fake_books::FakeBookConfig;
@@ -178,6 +179,7 @@ fn seed_sample_comments(app: &mut App) {
         chapter_href: chapter_a.clone(),
         target: CommentTarget::paragraph(0, None),
         content: "Launch plan looks solid.".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -187,6 +189,7 @@ fn seed_sample_comments(app: &mut App) {
         chapter_href: chapter_a.clone(),
         target: CommentTarget::paragraph(3, None),
         content: "Need to revisit risk section.".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time + chrono::Duration::minutes(5),
         quoted_text: None,
     });
@@ -201,6 +204,7 @@ fn seed_sample_comments(app: &mut App) {
                 chapter_href: chapter_b.clone(),
                 target: CommentTarget::paragraph(2, None),
                 content: "Great anecdote here.".to_string(),
+                body: AnnotationBody::Comment,
                 updated_at: base_time + chrono::Duration::minutes(10),
                 quoted_text: None,
             });
@@ -381,6 +385,7 @@ fn test_inline_comment_rendering_svg() {
         chapter_href: chapter_href.clone(),
         target: CommentTarget::paragraph(0, Some((0, 2))),
         content: "Title comment here".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -391,6 +396,7 @@ fn test_inline_comment_rendering_svg() {
         chapter_href: chapter_href.clone(),
         target: CommentTarget::paragraph(1, Some((0, 40))),
         content: "Paragraph comment here".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -501,6 +507,7 @@ fn test_list_comment_rendering_svg() {
             )
             .expect("missing unordered list comment target"),
         content: "Unordered list comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -518,6 +525,7 @@ fn test_list_comment_rendering_svg() {
             )
             .expect("missing ordered list comment target"),
         content: "Ordered list comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -535,6 +543,7 @@ fn test_list_comment_rendering_svg() {
             )
             .expect("missing definition list comment target"),
         content: "Definition list comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -633,6 +642,7 @@ fn test_quote_and_code_comment_rendering_svg() {
             )
             .expect("missing quote comment target"),
         content: "Quote comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -643,6 +653,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         chapter_href: chapter_href.clone(),
         target: CommentTarget::code_block(1, (2, 2)),
         content: "Single line code comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -653,6 +664,7 @@ fn test_quote_and_code_comment_rendering_svg() {
         chapter_href: chapter_href.clone(),
         target: CommentTarget::code_block(1, (3, 4)),
         content: "Multi-line code comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -773,6 +785,7 @@ fn test_list_comment_rendering_complex_svg() {
             )
             .expect("missing nested list comment target"),
         content: "Nested list comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -789,6 +802,7 @@ fn test_list_comment_rendering_complex_svg() {
             )
             .expect("missing multiline list item comment target"),
         content: "Second paragraph comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -805,6 +819,7 @@ fn test_list_comment_rendering_complex_svg() {
             )
             .expect("missing multiline range comment target"),
         content: "Second and third paragraph comment".to_string(),
+        body: AnnotationBody::Comment,
         updated_at: base_time,
         quoted_text: None,
     });
@@ -4315,6 +4330,172 @@ fn test_normal_mode_visual_selection_yank_svg() {
 
 #[test]
 #[parallel]
+fn test_epub_highlight_palette_modal_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_palette_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Highlight Palette Test</title>
+</head>
+<body>
+    <p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron.</p>
+    <p>Second paragraph keeps the modal over real reading content.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('v'));
+    app.press_key(crossterm::event::KeyCode::Char('e'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+
+    assert!(app.is_highlight_palette_active());
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_palette_modal.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_palette_modal.svg"),
+        "test_epub_highlight_palette_modal_svg",
+        create_test_failure_handler("test_epub_highlight_palette_modal_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_epub_highlights_all_colors_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_all_colors_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Highlight Colors Test</title>
+</head>
+<body>
+    <p>Red highlight sample marks the first category.</p>
+    <p>Green highlight sample marks the second category.</p>
+    <p>Blue highlight sample marks the third category.</p>
+    <p>Yellow highlight sample marks the fourth category.</p>
+    <p>Purple highlight sample marks the fifth category.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let base_time = Utc.with_ymd_and_hms(2024, 2, 1, 9, 0, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "highlight_all_colors_test.html".to_string());
+    let specs = [
+        ("Red highlight", HighlightColor::Red),
+        ("Green highlight", HighlightColor::Green),
+        ("Blue highlight", HighlightColor::Blue),
+        ("Yellow highlight", HighlightColor::Yellow),
+        ("Purple highlight", HighlightColor::Purple),
+    ];
+
+    for (idx, (needle, color)) in specs.iter().enumerate() {
+        let (start_line, start_col, end_line, end_col) =
+            selection_for_text(app.testing_rendered_lines(), needle, needle.chars().count());
+        let target = app
+            .testing_comment_target_for_selection(start_line, start_col, end_line, end_col)
+            .unwrap_or_else(|| panic!("missing highlight target for {needle}"));
+        app.testing_add_comment(Comment::new_highlight(
+            chapter_href.clone(),
+            target,
+            *color,
+            base_time + chrono::Duration::minutes(idx as i64),
+            Some((*needle).to_string()),
+        ));
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlights_all_colors.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlights_all_colors.svg"),
+        "test_epub_highlights_all_colors_svg",
+        create_test_failure_handler("test_epub_highlights_all_colors_svg"),
+    );
+}
+
+#[test]
+#[parallel]
 fn test_comment_input_placement_from_visual_selection_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(90, 16);
@@ -4824,6 +5005,7 @@ fn test_list_comment_target_stable_in_zen_margin_svg() {
             chapter_href: chapter_href.clone(),
             target,
             content: format!("Comment on {needle}"),
+            body: AnnotationBody::Comment,
             updated_at: base_time,
             quoted_text: None,
         });

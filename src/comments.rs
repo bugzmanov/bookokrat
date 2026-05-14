@@ -1,3 +1,4 @@
+use crate::annotations::HighlightColor;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -339,11 +340,40 @@ impl CommentTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationBody {
+    Comment,
+    Highlight { color: HighlightColor },
+}
+
+impl AnnotationBody {
+    fn serde_type(&self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Highlight { .. } => "highlight",
+        }
+    }
+
+    fn highlight_color(&self) -> Option<HighlightColor> {
+        match self {
+            Self::Comment => None,
+            Self::Highlight { color } => Some(*color),
+        }
+    }
+}
+
+impl Default for AnnotationBody {
+    fn default() -> Self {
+        Self::Comment
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
     pub id: String,
     pub chapter_href: String,
     pub target: CommentTarget,
     pub content: String,
+    pub body: AnnotationBody,
     pub updated_at: DateTime<Utc>,
     /// The quoted/selected text that this comment refers to (primarily for PDF)
     pub quoted_text: Option<String>,
@@ -363,9 +393,14 @@ struct CommentTextSerde {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub chapter_href: String,
+    #[serde(default, skip_serializing_if = "is_comment_annotation_type")]
+    pub annotation_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HighlightColor>,
     pub target_type: String, // "text"
     #[serde(flatten)]
     pub target: CommentTextTargetSerde,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content: String,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -378,9 +413,14 @@ struct CommentPdfSerde {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub chapter_href: String,
+    #[serde(default, skip_serializing_if = "is_comment_annotation_type")]
+    pub annotation_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HighlightColor>,
     pub target_type: String, // "pdf"
     pub page: usize,
     pub rects: Vec<PdfSelectionRect>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content: String,
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -469,6 +509,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
                 subtarget,
             },
             content: legacy.content,
+            body: AnnotationBody::Comment,
             updated_at: legacy.updated_at,
             quoted_text: None,
         }
@@ -482,6 +523,7 @@ impl From<CommentLegacyCodeBlockSerde> for Comment {
             chapter_href: legacy.chapter_href,
             target: CommentTarget::code_block(legacy.paragraph_index, legacy.line_range),
             content: legacy.content,
+            body: AnnotationBody::Comment,
             updated_at: legacy.updated_at,
             quoted_text: None,
         }
@@ -498,6 +540,7 @@ impl From<CommentModernLegacySerde> for Comment {
                 subtarget: modern.target.subtarget,
             },
             content: modern.content,
+            body: AnnotationBody::Comment,
             updated_at: modern.updated_at,
             quoted_text: None,
         }
@@ -514,6 +557,7 @@ impl From<CommentTextSerde> for Comment {
                 subtarget: text.target.subtarget,
             },
             content: text.content,
+            body: body_from_serde(&text.annotation_type, text.color),
             updated_at: text.updated_at,
             quoted_text: text.quoted_text,
         }
@@ -530,10 +574,25 @@ impl From<CommentPdfSerde> for Comment {
                 rects: pdf.rects,
             },
             content: pdf.content,
+            body: body_from_serde(&pdf.annotation_type, pdf.color),
             updated_at: pdf.updated_at,
             quoted_text: pdf.quoted_text,
         }
     }
+}
+
+fn body_from_serde(annotation_type: &str, color: Option<HighlightColor>) -> AnnotationBody {
+    if annotation_type.eq_ignore_ascii_case("highlight") {
+        AnnotationBody::Highlight {
+            color: color.unwrap_or(HighlightColor::Yellow),
+        }
+    } else {
+        AnnotationBody::Comment
+    }
+}
+
+fn is_comment_annotation_type(annotation_type: &String) -> bool {
+    annotation_type.is_empty() || annotation_type.eq_ignore_ascii_case("comment")
 }
 
 impl Serialize for Comment {
@@ -549,6 +608,8 @@ impl Serialize for Comment {
                 let serde = CommentTextSerde {
                     id: Some(self.id.clone()),
                     chapter_href: self.chapter_href.clone(),
+                    annotation_type: self.body.serde_type().to_string(),
+                    color: self.body.highlight_color(),
                     target_type: "text".to_string(),
                     target: CommentTextTargetSerde {
                         node_index: *node_index,
@@ -564,6 +625,8 @@ impl Serialize for Comment {
                 let serde = CommentPdfSerde {
                     id: Some(self.id.clone()),
                     chapter_href: self.chapter_href.clone(),
+                    annotation_type: self.body.serde_type().to_string(),
+                    color: self.body.highlight_color(),
                     target_type: "pdf".to_string(),
                     page: *page,
                     rects: rects.clone(),
@@ -604,6 +667,7 @@ impl Comment {
             chapter_href,
             target,
             content,
+            body: AnnotationBody::Comment,
             updated_at,
             quoted_text: None,
         }
@@ -621,8 +685,46 @@ impl Comment {
             chapter_href,
             target,
             content,
+            body: AnnotationBody::Comment,
             updated_at,
             quoted_text,
+        }
+    }
+
+    pub fn new_highlight(
+        chapter_href: String,
+        target: CommentTarget,
+        color: HighlightColor,
+        updated_at: DateTime<Utc>,
+        quoted_text: Option<String>,
+    ) -> Self {
+        Self {
+            id: generate_comment_id(),
+            chapter_href,
+            target,
+            content: String::new(),
+            body: AnnotationBody::Highlight { color },
+            updated_at,
+            quoted_text,
+        }
+    }
+
+    pub fn is_comment(&self) -> bool {
+        matches!(self.body, AnnotationBody::Comment)
+    }
+
+    pub fn is_highlight(&self) -> bool {
+        matches!(self.body, AnnotationBody::Highlight { .. })
+    }
+
+    pub fn highlight_color(&self) -> Option<HighlightColor> {
+        self.body.highlight_color()
+    }
+
+    fn body_order(&self) -> u8 {
+        match self.body {
+            AnnotationBody::Comment => 0,
+            AnnotationBody::Highlight { .. } => 1,
         }
     }
 
@@ -662,6 +764,102 @@ impl Comment {
     pub fn matches_location(&self, chapter_href: &str, target: &CommentTarget) -> bool {
         self.chapter_href == chapter_href && self.target == *target
     }
+
+    pub fn overlaps_target(&self, chapter_href: &str, target: &CommentTarget) -> bool {
+        self.chapter_href == chapter_href && self.target.overlaps(target)
+    }
+}
+
+impl CommentTarget {
+    pub fn overlaps(&self, other: &CommentTarget) -> bool {
+        match (self, other) {
+            (
+                CommentTarget::Text {
+                    node_index: a_node,
+                    subtarget: a_subtarget,
+                },
+                CommentTarget::Text {
+                    node_index: b_node,
+                    subtarget: b_subtarget,
+                },
+            ) => {
+                if a_node != b_node || !same_subtarget_scope(a_subtarget, b_subtarget) {
+                    return false;
+                }
+                match (a_subtarget.line_range(), b_subtarget.line_range()) {
+                    (Some(a), Some(b)) => inclusive_ranges_overlap(a, b),
+                    _ => ranges_overlap(
+                        a_subtarget.word_range().unwrap_or((0, usize::MAX)),
+                        b_subtarget.word_range().unwrap_or((0, usize::MAX)),
+                    ),
+                }
+            }
+            (CommentTarget::Pdf { rects: a, .. }, CommentTarget::Pdf { rects: b, .. }) => {
+                a.iter().any(|left| {
+                    b.iter()
+                        .any(|right| left.page == right.page && pdf_rects_overlap(left, right))
+                })
+            }
+            _ => false,
+        }
+    }
+}
+
+fn same_subtarget_scope(a: &BlockSubtarget, b: &BlockSubtarget) -> bool {
+    match (a, b) {
+        (BlockSubtarget::Paragraph { .. }, BlockSubtarget::Paragraph { .. }) => true,
+        (
+            BlockSubtarget::ListItem {
+                item_index: a_idx,
+                list_path: a_path,
+                ..
+            },
+            BlockSubtarget::ListItem {
+                item_index: b_idx,
+                list_path: b_path,
+                ..
+            },
+        ) => a_idx == b_idx && a_path == b_path,
+        (
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index: a_idx,
+                ..
+            },
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index: b_idx,
+                ..
+            },
+        ) => a_idx == b_idx,
+        (
+            BlockSubtarget::DefinitionItem {
+                item_index: a_idx,
+                is_term: a_term,
+                ..
+            },
+            BlockSubtarget::DefinitionItem {
+                item_index: b_idx,
+                is_term: b_term,
+                ..
+            },
+        ) => a_idx == b_idx && a_term == b_term,
+        (BlockSubtarget::CodeLines { .. }, BlockSubtarget::CodeLines { .. }) => true,
+        _ => false,
+    }
+}
+
+fn ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn inclusive_ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 <= b.1 && b.0 <= a.1
+}
+
+fn pdf_rects_overlap(a: &PdfSelectionRect, b: &PdfSelectionRect) -> bool {
+    a.topleft_x < b.bottomright_x
+        && b.topleft_x < a.bottomright_x
+        && a.topleft_y < b.bottomright_y
+        && b.topleft_y < a.bottomright_y
 }
 
 fn generate_comment_id() -> String {
@@ -827,7 +1025,8 @@ impl BookComments {
             .unwrap_or_default()
     }
 
-    /// Get all PDF comments for a document
+    /// Get all PDF comments for a document. Order is unspecified — callers that need
+    /// a stable ordering must sort the result themselves.
     pub fn get_doc_comments(&self, doc_id: &str) -> Vec<&Comment> {
         self.comments_by_location
             .get(doc_id)
@@ -865,6 +1064,14 @@ impl BookComments {
 
     pub fn get_all_comments(&self) -> &[Comment] {
         &self.comments
+    }
+
+    pub fn has_overlapping_annotation(&self, chapter_href: &str, target: &CommentTarget) -> bool {
+        // Comments and highlights share the same visual annotation layer, so
+        // new annotations are rejected when they would overlap an existing one.
+        self.comments
+            .iter()
+            .any(|comment| comment.overlaps_target(chapter_href, target))
     }
 
     fn compute_book_hash(book_path: &Path) -> String {
@@ -967,6 +1174,7 @@ impl BookComments {
                         .secondary_sort_key()
                         .cmp(&b.target.secondary_sort_key()),
                 )
+                .then(a.body_order().cmp(&b.body_order()))
                 .then(a.updated_at.cmp(&b.updated_at))
         });
 
@@ -1099,6 +1307,61 @@ mod tests {
     }
 
     #[test]
+    fn test_comment_serialization_keeps_comment_type_implicit() {
+        let comment = create_paragraph_comment("chapter.xhtml", 3, "plain note");
+        let yaml = serde_yaml::to_string(&vec![comment]).unwrap();
+
+        assert!(!yaml.contains("annotation_type"));
+        assert!(!yaml.contains("color:"));
+    }
+
+    #[test]
+    fn test_highlight_serialization_roundtrip() {
+        let highlight = Comment::new_highlight(
+            "chapter.xhtml".to_string(),
+            CommentTarget::paragraph(3, Some((2, 7))),
+            HighlightColor::Blue,
+            Utc::now(),
+            Some("quoted".to_string()),
+        );
+        let yaml = serde_yaml::to_string(&vec![highlight.clone()]).unwrap();
+
+        assert!(yaml.contains("annotation_type: highlight"));
+        assert!(yaml.contains("color: blue"));
+        assert!(!yaml.contains("content:"));
+
+        let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(parsed[0].is_highlight());
+        assert_eq!(parsed[0].highlight_color(), Some(HighlightColor::Blue));
+        assert_eq!(parsed[0].target, highlight.target);
+        assert_eq!(parsed[0].content, "");
+    }
+
+    #[test]
+    fn test_overlap_detection_uses_half_open_word_ranges() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let comment = Comment::new(
+            "chapter.xhtml".to_string(),
+            CommentTarget::paragraph(1, Some((2, 5))),
+            "note".to_string(),
+            Utc::now(),
+        );
+        book_comments.add_comment(comment).unwrap();
+
+        assert!(book_comments.has_overlapping_annotation(
+            "chapter.xhtml",
+            &CommentTarget::paragraph(1, Some((4, 7)))
+        ));
+        assert!(!book_comments.has_overlapping_annotation(
+            "chapter.xhtml",
+            &CommentTarget::paragraph(1, Some((5, 8)))
+        ));
+    }
+
+    #[test]
     fn test_legacy_comment_deserialize() {
         let legacy_yaml = r#"
 - chapter_href: ch.xhtml
@@ -1136,6 +1399,87 @@ mod tests {
         assert_eq!(all[1].node_index(), Some(1));
         assert!(all[1].is_paragraph_comment());
         assert!(all[2].target.is_code_block());
+    }
+
+    #[test]
+    fn test_sorting_orders_target_before_annotation_body() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let comment = Comment::new(
+            "chapter.xhtml".to_string(),
+            CommentTarget::paragraph(1, Some((10, 12))),
+            "later note".to_string(),
+            Utc::now(),
+        );
+        let highlight = Comment::new_highlight(
+            "chapter.xhtml".to_string(),
+            CommentTarget::paragraph(1, Some((2, 4))),
+            HighlightColor::Yellow,
+            Utc::now(),
+            None,
+        );
+
+        book_comments.add_comment(comment).unwrap();
+        book_comments.add_comment(highlight).unwrap();
+
+        let all = book_comments.get_all_comments();
+        assert!(all[0].is_highlight());
+        assert_eq!(all[0].target.word_range(), Some((2, 4)));
+        assert!(all[1].is_comment());
+        assert_eq!(all[1].target.word_range(), Some((10, 12)));
+    }
+
+    #[test]
+    fn test_get_doc_comments_returns_all_pages() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let rect = |page| {
+            vec![PdfSelectionRect {
+                page,
+                topleft_x: 10,
+                topleft_y: 20,
+                bottomright_x: 40,
+                bottomright_y: 50,
+            }]
+        };
+
+        book_comments
+            .add_comment(Comment::with_quoted_text(
+                "doc.pdf".to_string(),
+                CommentTarget::pdf(2, rect(2)),
+                "page 3".to_string(),
+                Utc::now(),
+                None,
+            ))
+            .unwrap();
+        book_comments
+            .add_comment(Comment::with_quoted_text(
+                "doc.pdf".to_string(),
+                CommentTarget::pdf(0, rect(0)),
+                "page 1".to_string(),
+                Utc::now(),
+                None,
+            ))
+            .unwrap();
+        book_comments
+            .add_comment(Comment::with_quoted_text(
+                "doc.pdf".to_string(),
+                CommentTarget::pdf(1, rect(1)),
+                "page 2".to_string(),
+                Utc::now(),
+                None,
+            ))
+            .unwrap();
+
+        let mut pages = book_comments
+            .get_doc_comments("doc.pdf")
+            .into_iter()
+            .filter_map(|comment| comment.page())
+            .collect::<Vec<_>>();
+        pages.sort_unstable();
+        assert_eq!(pages, vec![0, 1, 2]);
     }
 
     #[test]

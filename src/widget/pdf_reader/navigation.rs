@@ -9,17 +9,21 @@ use crossterm::event::{
 };
 use ratatui::{layout::Rect, style::Style};
 
+use crate::annotations::{HighlightColor, pdf_highlight_alpha, pdf_highlight_rgb};
 use crate::bookmarks::Bookmarks;
 use crate::inputs::text_area_utils::map_keys_to_input;
 use crate::jump_list::JumpLocation;
 use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
-use crate::pdf::CellSize;
+use crate::pdf::{CellSize, HighlightOverlay};
 use crate::pdf::{
     CursorPosition, LineBounds, MoveResult, PendingMotion, ScrollDirection, ViewportUpdate,
     VisualMode, Zoom, visual_rects_for_range,
 };
 use crate::table_of_contents::TocItem;
 use crate::vendored::ratatui_image::FontSize;
+use crate::widget::highlight_palette::{
+    HighlightPaletteAction, classify_palette_key, palette_hud_message,
+};
 
 use super::state::{
     CommentEditMode, HighlightLocator, InputAction, PdfReaderState, PendingHighlight,
@@ -213,6 +217,7 @@ impl PdfReaderState {
 
         // Exit normal/visual mode when toggling zen mode
         if self.normal_mode.active {
+            self.clear_highlight_palette();
             self.normal_mode.exit_visual();
             self.normal_mode.deactivate();
         }
@@ -250,6 +255,11 @@ impl PdfReaderState {
                 log::info!("PDF comments enabled");
             }
             Some(self.initial_comment_rects())
+        } else {
+            None
+        };
+        let highlight_overlays_to_send = if self.supports_comments {
+            Some(self.initial_highlight_overlays())
         } else {
             None
         };
@@ -303,6 +313,9 @@ impl PdfReaderState {
                 if let Some(rects) = comment_rects_to_send {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
                 }
+                if let Some(overlays) = highlight_overlays_to_send {
+                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateHighlights(overlays));
+                }
             }
             self.last_sent_viewport = None;
         } else {
@@ -339,6 +352,9 @@ impl PdfReaderState {
                 let _ = tx.send(crate::pdf::ConversionCommand::NavigateTo(page));
                 if let Some(rects) = comment_rects_to_send {
                     let _ = tx.send(crate::pdf::ConversionCommand::UpdateComments(rects));
+                }
+                if let Some(overlays) = highlight_overlays_to_send {
+                    let _ = tx.send(crate::pdf::ConversionCommand::UpdateHighlights(overlays));
                 }
             }
             self.last_sent_viewport = None;
@@ -719,6 +735,14 @@ impl PdfReaderState {
             self.normal_mode.active
         );
 
+        if self.normal_mode.is_visual_active() {
+            if let Some(action) = self.handle_visual_highlight_key(&key) {
+                return InputResponse::handled(action);
+            }
+        } else {
+            self.clear_highlight_palette();
+        }
+
         let input = key_event_to_input(&key);
         let km = crate::keybindings::keymap();
 
@@ -774,6 +798,46 @@ impl PdfReaderState {
                 }
             }
         }
+    }
+
+    fn show_highlight_palette_hud(&mut self) {
+        self.set_hud_message(
+            palette_hud_message(),
+            crate::widget::hud_message::HudMode::Normal,
+            std::time::Duration::from_secs(2),
+        );
+    }
+
+    fn handle_visual_highlight_key(&mut self, key: &KeyEvent) -> Option<Option<InputAction>> {
+        if !self.highlight_palette_active {
+            return None;
+        }
+        Some(match classify_palette_key(&key.code) {
+            HighlightPaletteAction::ShowHelp => {
+                self.show_highlight_palette_hud();
+                Some(InputAction::Redraw)
+            }
+            HighlightPaletteAction::Cancel => {
+                self.clear_highlight_palette();
+                Some(InputAction::Redraw)
+            }
+            HighlightPaletteAction::Apply(color) => {
+                self.clear_highlight_palette();
+                self.add_highlight_from_visual_selection(color)
+            }
+            HighlightPaletteAction::UnknownKey => {
+                self.clear_highlight_palette();
+                self.set_error_hud("Unknown highlight color".to_string());
+                Some(InputAction::Redraw)
+            }
+        })
+    }
+
+    fn clear_highlight_palette(&mut self) {
+        if self.highlight_palette_active {
+            self.force_redraw();
+        }
+        self.highlight_palette_active = false;
     }
 
     fn dispatch_pdf_normal_action(
@@ -943,12 +1007,18 @@ impl PdfReaderState {
             }
             Action::EnterVisualMode => {
                 self.normal_mode.toggle_visual_char();
+                if !self.normal_mode.is_visual_active() {
+                    self.clear_highlight_palette();
+                }
                 let all_lb = self.collect_all_line_bounds();
                 let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
                 InputResponse::handled(Some(InputAction::VisualChanged(rects, None)))
             }
             Action::EnterVisualLineMode => {
                 self.normal_mode.toggle_visual_line();
+                if !self.normal_mode.is_visual_active() {
+                    self.clear_highlight_palette();
+                }
                 let all_lb = self.collect_all_line_bounds();
                 let rects = self.normal_mode.get_visual_rects_multi(&all_lb);
                 InputResponse::handled(Some(InputAction::VisualChanged(rects, None)))
@@ -975,6 +1045,15 @@ impl PdfReaderState {
             Action::AddComment => {
                 if self.normal_mode.is_visual_active() || self.selection.has_selection() {
                     InputResponse::handled(self.start_comment_input())
+                } else {
+                    InputResponse::handled(None)
+                }
+            }
+            Action::OpenHighlightPalette => {
+                if self.normal_mode.is_visual_active() {
+                    self.highlight_palette_active = true;
+                    self.show_highlight_palette_hud();
+                    InputResponse::handled(Some(InputAction::Redraw))
                 } else {
                     InputResponse::handled(None)
                 }
@@ -1257,12 +1336,14 @@ impl PdfReaderState {
 
         // Exit visual mode first
         if self.normal_mode.active && self.normal_mode.is_visual_active() {
+            self.clear_highlight_palette();
             self.normal_mode.exit_visual();
             return Some(InputAction::ExitVisualMode(self.get_cursor_rect()));
         }
 
         // Exit normal mode
         if self.normal_mode.active {
+            self.clear_highlight_palette();
             self.normal_mode.deactivate();
             return Some(InputAction::ExitNormalMode);
         }
@@ -4092,6 +4173,16 @@ impl PdfReaderState {
         };
 
         let target = target?;
+        if self.has_overlapping_annotation(&target) {
+            self.set_error_hud("Selection overlaps an existing annotation".to_string());
+            if self.normal_mode.is_visual_active() {
+                self.clear_highlight_palette();
+                self.normal_mode.exit_visual();
+                return Some(InputAction::ExitVisualMode(self.get_cursor_rect()));
+            }
+            self.selection.clear();
+            return Some(InputAction::SelectionChanged(Vec::new()));
+        }
 
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("Type your comment here...");
@@ -4104,6 +4195,16 @@ impl PdfReaderState {
         self.comment_input.read_only = false;
 
         Some(InputAction::Redraw)
+    }
+
+    fn has_overlapping_annotation(&self, target: &CommentTarget) -> bool {
+        let Some(comments) = self.book_comments.as_ref() else {
+            return false;
+        };
+        let Ok(locked) = comments.lock() else {
+            return false;
+        };
+        locked.has_overlapping_annotation(&self.comments_doc_id, target)
     }
 
     fn handle_comment_input_key(&mut self, key: KeyEvent) -> Option<InputAction> {
@@ -4193,6 +4294,64 @@ impl PdfReaderState {
         self.comment_input.clear();
         self.force_redraw();
         Some(self.comment_rects.clone())
+    }
+
+    fn add_highlight_from_visual_selection(
+        &mut self,
+        color: HighlightColor,
+    ) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Annotations are unavailable".to_string());
+            return Some(InputAction::Redraw);
+        }
+
+        let Some(target) = self.comment_target_from_visual() else {
+            self.set_error_hud("This selection cannot be highlighted".to_string());
+            return Some(InputAction::Redraw);
+        };
+        let quoted_text = self.extract_visual_text().filter(|text| !text.is_empty());
+        let Some(comments) = self.book_comments.as_ref().cloned() else {
+            self.set_error_hud("Annotations are unavailable".to_string());
+            return Some(InputAction::Redraw);
+        };
+
+        let result = comments.lock().map(|mut locked| {
+            if locked.has_overlapping_annotation(&self.comments_doc_id, &target) {
+                return Err("Selection overlaps an existing annotation".to_string());
+            }
+
+            locked
+                .add_comment(Comment::new_highlight(
+                    self.comments_doc_id.clone(),
+                    target,
+                    color,
+                    chrono::Utc::now(),
+                    quoted_text,
+                ))
+                .map_err(|err| format!("Failed to add highlight: {err}"))
+        });
+
+        match result {
+            Ok(Ok(())) => {
+                self.refresh_highlight_overlays();
+                self.clear_highlight_palette();
+                self.normal_mode.exit_visual();
+                self.force_redraw();
+                Some(InputAction::HighlightSaved(self.highlight_overlays.clone()))
+            }
+            Ok(Err(message)) => {
+                self.clear_highlight_palette();
+                self.normal_mode.exit_visual();
+                self.set_error_hud(message);
+                Some(InputAction::ExitVisualMode(self.get_cursor_rect()))
+            }
+            Err(_) => {
+                self.clear_highlight_palette();
+                self.normal_mode.exit_visual();
+                self.set_error_hud("Annotations are unavailable".to_string());
+                Some(InputAction::ExitVisualMode(self.get_cursor_rect()))
+            }
+        }
     }
 
     fn comment_target_from_visual(&self) -> Option<CommentTarget> {
@@ -4682,6 +4841,7 @@ impl PdfReaderState {
         locked
             .get_page_comments(&self.comments_doc_id, page)
             .into_iter()
+            .filter(|comment| comment.is_comment())
             .cloned()
             .collect()
     }
@@ -4696,7 +4856,11 @@ impl PdfReaderState {
         let Ok(locked) = comments.lock() else {
             return 0;
         };
-        locked.get_page_comments(&self.comments_doc_id, page).len()
+        locked
+            .get_page_comments(&self.comments_doc_id, page)
+            .into_iter()
+            .filter(|comment| comment.is_comment())
+            .count()
     }
 
     pub fn refresh_comment_rects(&mut self) {
@@ -4719,6 +4883,24 @@ impl PdfReaderState {
         rects
     }
 
+    pub fn refresh_highlight_overlays(&mut self) {
+        if self.book_comments.is_none() {
+            self.highlight_overlays.clear();
+            return;
+        }
+        self.highlight_overlays = self.collect_highlight_overlays_normalized();
+    }
+
+    pub fn initial_highlight_overlays(&mut self) -> Vec<HighlightOverlay> {
+        if self.book_comments.is_none() {
+            self.highlight_overlays.clear();
+            return Vec::new();
+        }
+        let overlays = self.collect_highlight_overlays_normalized();
+        self.highlight_overlays = overlays.clone();
+        overlays
+    }
+
     fn collect_comment_rects_normalized(&self) -> Vec<crate::pdf::SelectionRect> {
         let Some(comments) = self.book_comments.as_ref() else {
             return Vec::new();
@@ -4730,6 +4912,7 @@ impl PdfReaderState {
         locked
             .get_doc_comments(&self.comments_doc_id)
             .into_iter()
+            .filter(|comment| comment.is_comment())
             .flat_map(|comment| {
                 let CommentTarget::Pdf { rects, .. } = &comment.target else {
                     return Vec::new();
@@ -4748,10 +4931,45 @@ impl PdfReaderState {
             .collect()
     }
 
+    fn collect_highlight_overlays_normalized(&self) -> Vec<HighlightOverlay> {
+        let Some(comments) = self.book_comments.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(locked) = comments.lock() else {
+            return Vec::new();
+        };
+
+        locked
+            .get_doc_comments(&self.comments_doc_id)
+            .into_iter()
+            .filter_map(|comment| {
+                let color = comment.highlight_color()?;
+                let CommentTarget::Pdf { rects, .. } = &comment.target else {
+                    return None;
+                };
+                let rgb = pdf_highlight_rgb(color, &self.palette, self.themed_rendering);
+                let alpha = pdf_highlight_alpha(color, self.themed_rendering);
+                Some(rects.iter().map(move |rect| HighlightOverlay {
+                    rect: crate::pdf::SelectionRect {
+                        page: rect.page,
+                        topleft_x: rect.topleft_x,
+                        topleft_y: rect.topleft_y,
+                        bottomright_x: rect.bottomright_x,
+                        bottomright_y: rect.bottomright_y,
+                    },
+                    rgb,
+                    alpha,
+                }))
+            })
+            .flatten()
+            .collect()
+    }
+
     // Normal mode handling
 
     fn toggle_normal_mode(&mut self) -> Option<InputAction> {
         if self.normal_mode.active {
+            self.clear_highlight_palette();
             self.normal_mode.deactivate();
             Some(InputAction::ExitNormalMode)
         } else {
@@ -5843,6 +6061,10 @@ impl PdfReaderState {
                     }
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                self.refresh_highlight_overlays();
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(
+                    self.highlight_overlays.clone(),
+                ));
                 self.last_sent_viewport = None;
             }
             InputAction::OpenExternalLink(url) => {
@@ -5924,6 +6146,10 @@ impl PdfReaderState {
                     service.request_page(self.page);
                 }
                 send_conversion(crate::pdf::ConversionCommand::InvalidatePageCache);
+                self.refresh_highlight_overlays();
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(
+                    self.highlight_overlays.clone(),
+                ));
                 self.last_sent_viewport = None;
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
@@ -6012,6 +6238,14 @@ impl PdfReaderState {
                 }
                 send_conversion(crate::pdf::ConversionCommand::UpdateComments(rects));
                 notifications.info("Saved comment");
+            }
+            InputAction::HighlightSaved(overlays) => {
+                send_conversion(crate::pdf::ConversionCommand::UpdateCursor(
+                    self.get_cursor_rect(),
+                ));
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(overlays));
+                send_conversion(crate::pdf::ConversionCommand::UpdateVisual(vec![]));
+                notifications.info("Saved highlight");
             }
             InputAction::CommentDeleted {
                 rects,

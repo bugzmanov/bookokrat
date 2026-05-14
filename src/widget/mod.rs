@@ -2,6 +2,7 @@ pub mod book_search;
 pub mod book_stat;
 pub mod comments_viewer;
 pub mod help_popup;
+pub(crate) mod highlight_palette;
 pub mod hud_message;
 pub mod keybinding_errors_popup;
 pub mod lookup_popup;

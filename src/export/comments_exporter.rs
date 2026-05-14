@@ -71,11 +71,11 @@ impl<'a> CommentsExporter<'a> {
                 }
                 output.push('\n');
 
-                // Render comments as plain text with timestamp at the end
+                // Render annotations as plain text with timestamp at the end
                 for comment in &entry.comments {
                     let timestamp = comment.updated_at.format("%m-%d-%Y %H:%M");
 
-                    output.push_str(&comment.content);
+                    output.push_str(&Self::annotation_export_text(comment));
                     output.push('\n');
                     output.push_str(&format!("*// {timestamp}*\n"));
                     output.push_str("\n---\n\n");
@@ -164,7 +164,8 @@ impl<'a> CommentsExporter<'a> {
                         .map(|(s, e)| s != e)
                         .unwrap_or(false);
 
-                    for (i, comment_line) in comment.content.lines().enumerate() {
+                    let annotation_text = Self::annotation_export_text(comment);
+                    for (i, comment_line) in annotation_text.lines().enumerate() {
                         if i == 0 {
                             if is_multiline {
                                 output.push_str(&format!("# └── {comment_line}\n"));
@@ -182,6 +183,22 @@ impl<'a> CommentsExporter<'a> {
         }
 
         output.push_str("```\n\n---\n\n");
+    }
+
+    fn annotation_export_text(comment: &Comment) -> String {
+        if let Some(color) = comment.highlight_color() {
+            let mut label = format!("{} highlight", color.label());
+            if let Some((start, end)) = comment.target.line_range() {
+                if start == end {
+                    label.push_str(&format!(" line {}", start + 1));
+                } else {
+                    label.push_str(&format!(" lines {}-{}", start + 1, end + 1));
+                }
+            }
+            label
+        } else {
+            comment.content.clone()
+        }
     }
 
     fn extract_full_context_for_export(&self, chapter_href: &str, comment: &Comment) -> String {
@@ -518,6 +535,75 @@ With multiple lines.
     }
 
     #[test]
+    fn test_export_paragraph_highlight() {
+        use crate::annotations::HighlightColor;
+        use crate::comments::CommentTarget;
+        use chrono::TimeZone;
+
+        let doc = Document {
+            blocks: vec![Node {
+                block: Block::Paragraph {
+                    content: vec![TextOrInline::Text(TextNode {
+                        content: "Highlighted paragraph text.".to_string(),
+                        style: None,
+                    })]
+                    .into(),
+                },
+                source_range: 0..100,
+                id: None,
+            }],
+        };
+
+        let highlight = Comment::new_highlight(
+            "chapter1.html".to_string(),
+            CommentTarget::paragraph(0, Some((0, 1))),
+            HighlightColor::Blue,
+            chrono::Utc
+                .with_ymd_and_hms(2025, 11, 9, 10, 30, 0)
+                .unwrap(),
+            None,
+        );
+
+        let entries = vec![CommentEntry {
+            chapter_title: "Chapter 1".to_string(),
+            chapter_href: "chapter1.html".to_string(),
+            quoted_text: "Highlighted".to_string(),
+            comments: vec![highlight],
+            render_start_line: 0,
+            render_end_line: 0,
+        }];
+
+        let chapters = vec![ChapterDisplay {
+            title: "Chapter 1".to_string(),
+            href: Some("chapter1.html".to_string()),
+            depth: 0,
+            comment_count: 1,
+        }];
+
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("chapter1.html".to_string(), doc);
+
+        let exporter = CommentsExporter::new(&entries, &chapters, "Test Book", &doc_cache);
+        let export = exporter.generate_markdown();
+
+        let expected = "\
+# Test Book
+
+## Chapter 1
+
+> Highlighted paragraph text.
+
+Blue highlight
+*// 11-09-2025 10:30*
+
+---
+
+";
+
+        assert_eq!(export, expected);
+    }
+
+    #[test]
     fn test_export_single_line_code_comment() {
         use crate::comments::CommentTarget;
         use chrono::TimeZone;
@@ -572,6 +658,72 @@ fn main() {
     println!(\"Hello\");
 # ^ This prints a greeting
     return 0;
+}
+```
+
+---
+
+";
+
+        assert_eq!(export, expected);
+    }
+
+    #[test]
+    fn test_export_single_line_code_highlight() {
+        use crate::annotations::HighlightColor;
+        use crate::comments::CommentTarget;
+        use chrono::TimeZone;
+
+        let doc = Document {
+            blocks: vec![Node {
+                block: Block::CodeBlock {
+                    content: "fn main() {\n    println!(\"Hello\");\n}".to_string(),
+                    language: Some("rust".to_string()),
+                },
+                source_range: 0..100,
+                id: None,
+            }],
+        };
+
+        let highlight = Comment::new_highlight(
+            "chapter1.html".to_string(),
+            CommentTarget::code_block(0, (1, 1)),
+            HighlightColor::Yellow,
+            chrono::Utc.with_ymd_and_hms(2025, 12, 1, 9, 0, 0).unwrap(),
+            None,
+        );
+
+        let entries = vec![CommentEntry {
+            chapter_title: "Chapter 1".to_string(),
+            chapter_href: "chapter1.html".to_string(),
+            quoted_text: "println".to_string(),
+            comments: vec![highlight],
+            render_start_line: 0,
+            render_end_line: 0,
+        }];
+
+        let chapters = vec![ChapterDisplay {
+            title: "Chapter 1".to_string(),
+            href: Some("chapter1.html".to_string()),
+            depth: 0,
+            comment_count: 1,
+        }];
+
+        let mut doc_cache = HashMap::new();
+        doc_cache.insert("chapter1.html".to_string(), doc);
+
+        let exporter = CommentsExporter::new(&entries, &chapters, "Code Book", &doc_cache);
+        let export = exporter.generate_markdown();
+
+        let expected = "\
+# Code Book
+
+## Chapter 1
+
+```rust
+fn main() {
+    println!(\"Hello\");
+# ^ Yellow highlight line 2
 }
 ```
 
