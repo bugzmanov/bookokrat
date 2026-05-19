@@ -37,8 +37,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_half_screen_up(&mut self, screen_height: usize) {
         let scroll_amount = screen_height / 2;
+        let old_offset = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
-        self.highlight_visual_line = Some(0);
+        self.highlight_visual_line = Some(Self::overlap_highlight_after_scroll_up(
+            old_offset,
+            self.scroll_offset,
+            screen_height,
+        ));
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         // Clear current match when manually scrolling so next 'n' finds from new position
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
@@ -50,7 +55,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let scroll_amount = screen_height / 2;
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
-        self.highlight_visual_line = Some(screen_height - 1);
+        self.highlight_visual_line = Some(Self::overlap_highlight_after_scroll_down());
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         // Clear current match when manually scrolling so next 'n' finds from new position
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
@@ -60,8 +65,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
         let scroll_amount = screen_height.saturating_sub(1);
+        let old_offset = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
-        self.highlight_visual_line = Some(0);
+        self.highlight_visual_line = Some(Self::overlap_highlight_after_scroll_up(
+            old_offset,
+            self.scroll_offset,
+            screen_height,
+        ));
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         // Clear current match when manually scrolling so next 'n' finds from new position
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
@@ -73,11 +83,25 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let scroll_amount = screen_height.saturating_sub(1);
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
-        self.highlight_visual_line = Some(screen_height.saturating_sub(1));
+        self.highlight_visual_line = Some(Self::overlap_highlight_after_scroll_down());
         self.highlight_end_time = Instant::now() + std::time::Duration::from_millis(150);
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
             self.search_state.current_match_index = None;
         }
+    }
+
+    fn overlap_highlight_after_scroll_down() -> usize {
+        0
+    }
+
+    fn overlap_highlight_after_scroll_up(
+        old_offset: usize,
+        new_offset: usize,
+        screen_height: usize,
+    ) -> usize {
+        old_offset
+            .saturating_sub(new_offset)
+            .min(screen_height.saturating_sub(1))
     }
 
     pub fn get_scroll_offset(&self) -> usize {
