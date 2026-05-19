@@ -7302,14 +7302,15 @@ impl App {
     /// Handle SyncTeX inverse search result: launch editor at the source location.
     #[cfg(feature = "pdf")]
     fn handle_synctex_inverse(&mut self, file: &str, line: u32) {
-        let basename = std::path::Path::new(file)
+        let editor_file = self.resolve_synctex_editor_file(file);
+        let basename = std::path::Path::new(&editor_file)
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| file.to_string());
+            .unwrap_or_else(|| editor_file.clone());
 
         if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
             let cmd = editor_cmd
-                .replace("{file}", file)
+                .replace("{file}", &editor_file)
                 .replace("{line}", &line.to_string())
                 .replace("{column}", "0");
             log::info!("SyncTeX inverse: launching editor: {cmd}");
@@ -7334,6 +7335,88 @@ impl App {
                 "SyncTeX: {basename}:{line} (set synctex_editor in config to open editor)"
             ));
         }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn resolve_synctex_editor_file(&self, file: &str) -> String {
+        let original = Path::new(file);
+        if let Some(existing) = Self::existing_synctex_source_path(original.to_path_buf()) {
+            return existing.to_string_lossy().into_owned();
+        }
+
+        let Some(pdf_dir) = self.pdf_document_path.as_ref().and_then(|p| p.parent()) else {
+            return file.to_string();
+        };
+
+        if let Some(existing) = Self::resolve_synctex_source_next_to_pdf(original, pdf_dir) {
+            log::info!(
+                "SyncTeX inverse: rebased missing source path '{}' to '{}'",
+                file,
+                existing.display()
+            );
+            return existing.to_string_lossy().into_owned();
+        }
+
+        if let Some(existing) = self.resolve_generated_synctex_file_to_tex(original, pdf_dir) {
+            log::info!(
+                "SyncTeX inverse: mapped generated source path '{}' to '{}'",
+                file,
+                existing.display()
+            );
+            return existing.to_string_lossy().into_owned();
+        }
+
+        file.to_string()
+    }
+
+    #[cfg(feature = "pdf")]
+    fn resolve_synctex_source_next_to_pdf(file: &Path, pdf_dir: &Path) -> Option<PathBuf> {
+        let parts: Vec<_> = file
+            .components()
+            .filter_map(|component| match component {
+                std::path::Component::Normal(part) => Some(part.to_os_string()),
+                _ => None,
+            })
+            .collect();
+
+        for start in 0..parts.len() {
+            let mut candidate = pdf_dir.to_path_buf();
+            for part in &parts[start..] {
+                candidate.push(part);
+            }
+            if let Some(existing) = Self::existing_synctex_source_path(candidate) {
+                return Some(existing);
+            }
+        }
+
+        None
+    }
+
+    #[cfg(feature = "pdf")]
+    fn resolve_generated_synctex_file_to_tex(
+        &self,
+        file: &Path,
+        pdf_dir: &Path,
+    ) -> Option<PathBuf> {
+        let extension = file.extension()?.to_string_lossy().to_ascii_lowercase();
+        if !matches!(
+            extension.as_str(),
+            "aux" | "toc" | "out" | "lof" | "lot" | "nav" | "snm"
+        ) {
+            return None;
+        }
+
+        let pdf_stem = self.pdf_document_path.as_ref()?.file_stem()?;
+        let candidate = pdf_dir.join(pdf_stem).with_extension("tex");
+        Self::existing_synctex_source_path(candidate)
+    }
+
+    #[cfg(feature = "pdf")]
+    fn existing_synctex_source_path(path: PathBuf) -> Option<PathBuf> {
+        if !path.is_file() {
+            return None;
+        }
+        Some(std::fs::canonicalize(&path).unwrap_or(path))
     }
 
     fn test_synctex_editor(&mut self) {

@@ -1088,6 +1088,7 @@ impl PdfReaderState {
             Action::StartSearch => InputResponse::handled(self.start_page_search()),
             Action::SetMark => InputResponse::handled(Some(InputAction::SetMarkPending)),
             Action::GotoMark => InputResponse::handled(Some(InputAction::GotoMarkPending)),
+            Action::SynctexInverse => InputResponse::handled(self.handle_synctex_normal_mode()),
             _ => InputResponse::unhandled(),
         }
     }
