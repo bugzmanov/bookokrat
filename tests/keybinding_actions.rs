@@ -12,6 +12,7 @@ use bookokrat::settings::set_margin;
 use bookokrat::theme::set_theme_by_index;
 use bookokrat::{App, FocusedPanel, MainPanel, PopupWindow};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use serial_test::serial;
 use std::collections::HashSet;
 use tempfile::TempDir;
 
@@ -105,6 +106,7 @@ macro_rules! binding_tests {
     );* $(;)?) => {
         $(
             #[test]
+            #[serial]
             fn $test_name() {
                 let ($app, $dir) = create_app();
                 let mut $app = $app;
@@ -1065,6 +1067,7 @@ binding_tests! {
 // ═══════════════════════════════════════════════════════════════
 
 #[test]
+#[serial]
 fn content_q_returns_quit() {
     let (mut app, _dir) = create_app_content_focused();
     let result = simulate(&mut app, "q");
@@ -1077,6 +1080,7 @@ fn content_q_returns_quit() {
 
 /// ? in help popup during search navigation should exit search, not close popup.
 #[test]
+#[serial]
 fn help_question_during_search_exits_search_not_popup() {
     let (mut app, _dir) = create_app();
     open_book(&mut app);
