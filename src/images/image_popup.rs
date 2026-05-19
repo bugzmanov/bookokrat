@@ -197,6 +197,6 @@ impl ImagePopup {
 
 impl Popup for ImagePopup {
     fn get_last_popup_area(&self) -> Option<Rect> {
-        return self.popup_area;
+        self.popup_area
     }
 }

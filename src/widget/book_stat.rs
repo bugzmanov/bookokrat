@@ -61,6 +61,7 @@ struct ChapterStat {
 #[derive(Clone, Copy, Debug)]
 enum StatUnit {
     Screens,
+    #[cfg(feature = "pdf")]
     Pages,
 }
 
@@ -74,6 +75,7 @@ impl StatUnit {
                     format!("{count} screens")
                 }
             }
+            #[cfg(feature = "pdf")]
             StatUnit::Pages => {
                 if count == 1 {
                     "1 page".to_string()
@@ -672,7 +674,7 @@ impl BookStat {
 
 impl Popup for BookStat {
     fn get_last_popup_area(&self) -> Option<Rect> {
-        return self.last_popup_area;
+        self.last_popup_area
     }
 }
 

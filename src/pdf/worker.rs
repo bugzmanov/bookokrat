@@ -1372,7 +1372,7 @@ fn render_djvu_page_rgb(
     page_num: usize,
     target_w: u32,
     target_h: u32,
-    themed: bool,
+    _themed: bool,
 ) -> Result<(Vec<u8>, u32, u32), WorkerFault> {
     let native_w = page.display_width();
     let native_h = page.display_height();
@@ -1398,12 +1398,12 @@ fn render_djvu_page_rgb(
 /// Called as `tint(params.white, params.black)` — so foreground replaces black,
 /// background replaces white.
 fn djvu_tint_rgb(pixels: &mut [u8], black: i32, white: i32) {
-    let br = ((black >> 16) & 0xFF) as i32;
-    let bg = ((black >> 8) & 0xFF) as i32;
-    let bb = (black & 0xFF) as i32;
-    let wr = ((white >> 16) & 0xFF) as i32;
-    let wg = ((white >> 8) & 0xFF) as i32;
-    let wb = (white & 0xFF) as i32;
+    let br = (black >> 16) & 0xFF;
+    let bg = (black >> 8) & 0xFF;
+    let bb = black & 0xFF;
+    let wr = (white >> 16) & 0xFF;
+    let wg = (white >> 8) & 0xFF;
+    let wb = white & 0xFF;
 
     for px in pixels.chunks_exact_mut(3) {
         let r = px[0] as i32;
@@ -1601,72 +1601,64 @@ fn extract_djvu_line_bounds_with_scales(
         chars
     }
 
-    fn collect(
-        tl: &rdjvu::TextLayer,
-        zone: &rdjvu::TextZone,
-        bounds: &mut Vec<LineBounds>,
+    struct DjvuLineCollector<'a, 'b> {
+        tl: &'a rdjvu::TextLayer,
+        bounds: &'b mut Vec<LineBounds>,
         page_h: f32,
         scale_x: f32,
         scale_y: f32,
-        current_block_id: Option<usize>,
-        next_id: &mut usize,
-    ) {
-        let current_block_id = match zone.kind {
-            TextZoneKind::Paragraph => Some(next_block_id(next_id)),
-            TextZoneKind::Column | TextZoneKind::Region if current_block_id.is_none() => {
-                Some(next_block_id(next_id))
+        next_id: &'b mut usize,
+    }
+
+    impl DjvuLineCollector<'_, '_> {
+        fn collect(&mut self, zone: &rdjvu::TextZone, current_block_id: Option<usize>) {
+            let current_block_id = match zone.kind {
+                TextZoneKind::Paragraph => Some(next_block_id(self.next_id)),
+                TextZoneKind::Column | TextZoneKind::Region if current_block_id.is_none() => {
+                    Some(next_block_id(self.next_id))
+                }
+                _ => current_block_id,
+            };
+
+            if zone.kind == TextZoneKind::Line {
+                // Convert bottom-left origin to top-left origin, then scale
+                let y0 = (self.page_h - (zone.y + zone.height) as f32) * self.scale_y;
+                let y1 = (self.page_h - zone.y as f32) * self.scale_y;
+                let x0 = zone.x as f32 * self.scale_x;
+                let x1 = (zone.x + zone.width) as f32 * self.scale_x;
+
+                let chars = collect_line_chars(self.tl, zone, self.scale_x);
+
+                if !chars.is_empty() {
+                    let block_id = current_block_id.unwrap_or_else(|| next_block_id(self.next_id));
+                    self.bounds.push(LineBounds {
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        chars,
+                        block_id,
+                    });
+                }
+                return;
             }
-            _ => current_block_id,
-        };
 
-        if zone.kind == TextZoneKind::Line {
-            // Convert bottom-left origin to top-left origin, then scale
-            let y0 = (page_h - (zone.y + zone.height) as f32) * scale_y;
-            let y1 = (page_h - zone.y as f32) * scale_y;
-            let x0 = zone.x as f32 * scale_x;
-            let x1 = (zone.x + zone.width) as f32 * scale_x;
-
-            let chars = collect_line_chars(tl, zone, scale_x);
-
-            if !chars.is_empty() {
-                let block_id = current_block_id.unwrap_or_else(|| next_block_id(next_id));
-                bounds.push(LineBounds {
-                    x0,
-                    y0,
-                    x1,
-                    y1,
-                    chars,
-                    block_id,
-                });
+            for child in &zone.children {
+                self.collect(child, current_block_id);
             }
-            return;
-        }
-
-        for child in &zone.children {
-            collect(
-                tl,
-                child,
-                bounds,
-                page_h,
-                scale_x,
-                scale_y,
-                current_block_id,
-                next_id,
-            );
         }
     }
 
     let mut next_id = 0;
-    collect(
-        &text_layer,
-        root,
-        &mut bounds,
-        page_height,
+    let mut collector = DjvuLineCollector {
+        tl: &text_layer,
+        bounds: &mut bounds,
+        page_h: page_height,
         scale_x,
         scale_y,
-        None,
-        &mut next_id,
-    );
+        next_id: &mut next_id,
+    };
+    collector.collect(root, None);
     bounds
 }
 

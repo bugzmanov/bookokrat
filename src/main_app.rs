@@ -662,17 +662,18 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
-        let mut book_manager = match book_directory {
+        let book_manager = match book_directory {
             Some(dir) => BookManager::new_with_directory(dir),
             None => BookManager::new(),
         };
 
         #[cfg(feature = "pdf")]
-        let startup_caps = crate::terminal::detect_terminal_with_probe();
-        #[cfg(feature = "pdf")]
-        {
+        let (book_manager, startup_caps) = {
+            let startup_caps = crate::terminal::detect_terminal_with_probe();
+            let mut book_manager = book_manager;
             book_manager.supports_graphics = startup_caps.supports_graphics;
-        }
+            (book_manager, startup_caps)
+        };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
         #[cfg(any(test, feature = "test-utils"))]
@@ -4287,8 +4288,8 @@ impl App {
         // If both share a prefix like "Ctrl+", compact it
         if let Some(prefix_end) = k1.rfind('+') {
             let prefix = &k1[..=prefix_end];
-            if k2.starts_with(prefix) {
-                return format!("{k1}/{}", &k2[prefix.len()..]);
+            if let Some(stripped) = k2.strip_prefix(prefix) {
+                return format!("{k1}/{stripped}");
             }
         }
         format!("{k1}/{k2}")
@@ -4354,7 +4355,7 @@ impl App {
             let c = Self::key_for(KeyContext::EpubContent, Action::CopySelection);
             format!("{a}: Add comment | {c}: Copy to clipboard | {esc}: Clear selection")
         } else {
-            let help_text = match self.focused_panel {
+            match self.focused_panel {
                 FocusedPanel::Main(MainPanel::NavigationList) => {
                     let ctx = KeyContext::Navigation;
                     let j = Self::key_for(ctx, Action::MoveDown);
@@ -4447,8 +4448,7 @@ impl App {
                     let del = Self::key_for(ctx, Action::DeleteEntry);
                     format!("{jk}: Navigate | {sel}: Jump | {del}: Delete | {esc}/'/`: Close")
                 }
-            };
-            help_text
+            }
         };
 
         let block = Block::default()
@@ -5071,11 +5071,6 @@ impl App {
         self.pdf_reader
             .as_ref()
             .is_some_and(|reader| reader.is_text_input_active())
-    }
-
-    #[cfg(not(feature = "pdf"))]
-    fn pdf_text_input_active(&self) -> bool {
-        false
     }
 
     fn handle_pending_find_motion(&mut self, key: &crossterm::event::KeyEvent) -> bool {

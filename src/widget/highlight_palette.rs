@@ -8,7 +8,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use crate::annotations::{HighlightColor, highlight_accent_color, highlight_background_color};
+#[cfg(feature = "pdf")]
+use crate::annotations::highlight_accent_color;
+use crate::annotations::{HighlightColor, highlight_background_color};
 use crate::theme::Base16Palette;
 
 /// What the palette key handler should do in response to a key press.
@@ -53,6 +55,7 @@ pub(crate) struct HighlightPaletteTheme {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum HighlightPaletteSwatchStyle {
     Background,
+    #[cfg(feature = "pdf")]
     ForegroundBlocks,
 }
 
@@ -127,6 +130,7 @@ fn highlight_palette_swatches(
                         .add_modifier(Modifier::BOLD),
                 ));
             }
+            #[cfg(feature = "pdf")]
             HighlightPaletteSwatchStyle::ForegroundBlocks => {
                 swatches.push(Span::styled(
                     "█",

@@ -1,6 +1,7 @@
 use std::env;
 use std::sync::OnceLock;
 
+#[cfg(feature = "pdf")]
 use log::warn;
 
 use crate::vendored::ratatui_image::picker::{Capability, Picker, ProtocolType};

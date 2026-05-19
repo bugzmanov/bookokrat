@@ -339,10 +339,13 @@ impl CommentTarget {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AnnotationBody {
+    #[default]
     Comment,
-    Highlight { color: HighlightColor },
+    Highlight {
+        color: HighlightColor,
+    },
 }
 
 impl AnnotationBody {
@@ -358,12 +361,6 @@ impl AnnotationBody {
             Self::Comment => None,
             Self::Highlight { color } => Some(*color),
         }
-    }
-}
-
-impl Default for AnnotationBody {
-    fn default() -> Self {
-        Self::Comment
     }
 }
 
@@ -591,7 +588,7 @@ fn body_from_serde(annotation_type: &str, color: Option<HighlightColor>) -> Anno
     }
 }
 
-fn is_comment_annotation_type(annotation_type: &String) -> bool {
+fn is_comment_annotation_type(annotation_type: &str) -> bool {
     annotation_type.is_empty() || annotation_type.eq_ignore_ascii_case("comment")
 }
 

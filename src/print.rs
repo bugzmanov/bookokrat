@@ -157,6 +157,9 @@ fn cmd_print_content(
     chapter: Option<usize>,
     pages: Option<usize>,
 ) -> Result<()> {
+    #[cfg(not(feature = "pdf"))]
+    let _ = pages;
+
     match format {
         Some(bookokrat::book_manager::BookFormat::Epub) => cmd_print_content_epub(file, chapter),
         #[cfg(feature = "pdf")]

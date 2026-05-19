@@ -177,9 +177,7 @@ impl MathBox {
                 Some(1) => grid_chars.push(ch),
                 Some(w) => {
                     grid_chars.push(ch);
-                    for _ in 1..w {
-                        grid_chars.push(' ');
-                    }
+                    grid_chars.extend(std::iter::repeat_n(' ', w - 1));
                 }
             }
         }

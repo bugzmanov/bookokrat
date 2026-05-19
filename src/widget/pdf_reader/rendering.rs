@@ -106,7 +106,7 @@ pub(crate) fn kitty_source_offset_px(
     if zoom_factor <= 0.0 || !zoom_factor.is_finite() {
         return 0;
     }
-    (((f32::from(offset_dest_cells) * px_per_cell_y as f32) / zoom_factor).floor() as u32).max(0)
+    ((f32::from(offset_dest_cells) * px_per_cell_y as f32) / zoom_factor).floor() as u32
 }
 
 fn kitty_rows_from_available(available_h_px: u32, px_per_cell_y: u32, zoom_factor: f32) -> u16 {
@@ -310,17 +310,16 @@ pub(crate) fn apply_render_responses(
 
                 // Re-apply any pending highlight (search match or mark-jump
                 // line) once line_bounds for this page are available.
-                if has_line_bounds {
-                    if pdf_reader
+                if has_line_bounds
+                    && pdf_reader
                         .pending_highlight
                         .as_ref()
                         .is_some_and(|h| h.page == page)
-                    {
-                        let rects = pdf_reader.pending_highlight_rects();
-                        if !rects.is_empty() {
-                            if let Some(tx) = conversion_tx {
-                                let _ = tx.send(ConversionCommand::UpdateSelection(rects));
-                            }
+                {
+                    let rects = pdf_reader.pending_highlight_rects();
+                    if !rects.is_empty() {
+                        if let Some(tx) = conversion_tx {
+                            let _ = tx.send(ConversionCommand::UpdateSelection(rects));
                         }
                     }
                 }
@@ -801,9 +800,9 @@ impl PdfReaderState {
         };
 
         let palette = current_theme();
-        let mode_title = if self.quick_page_jump.is_some() {
+        let mode_title = if let Some(quick_page_jump) = &self.quick_page_jump {
             let border_style = Style::default().fg(border_color);
-            let digits = &self.quick_page_jump.as_ref().unwrap().digits;
+            let digits = &quick_page_jump.digits;
             let digits_style = Style::default()
                 .fg(palette.base_07)
                 .bg(palette.base_0d)

@@ -117,6 +117,7 @@ macro_rules! binding_tests {
                     }
                 )?
                 let $app2 = &$app;
+                let _ = &$app2;
                 assert!($check,
                     "binding check failed: {} {}",
                     stringify!($test_name), $notation
@@ -163,7 +164,7 @@ binding_tests! {
         check = |app| {
             app.system_command_executor.as_any()
                 .downcast_ref::<bookokrat::system_command::MockSystemCommandExecutor>()
-                .map_or(false, |m| !m.get_executed_commands().is_empty())
+                .is_some_and(|m| !m.get_executed_commands().is_empty())
         };
     global_space_c: KeyContext::Global, "<Space>c",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
@@ -916,7 +917,7 @@ binding_tests! {
         check = |app| matches!(app.focused_panel, FocusedPanel::Popup(PopupWindow::CommentsViewer));
     popup_comments_space_e: KeyContext::PopupComments, "<Space>e",
         setup = |app, _dir| { open_book(&mut app); simulate(&mut app, "<Space>a"); },
-        check = |app| app.comments_viewer().map_or(false, |v| v.is_export_mode());
+        check = |app| app.comments_viewer().is_some_and(|v| v.is_export_mode());
     // Enter with no comment selected is a no-op (stays in popup)
     popup_comments_enter: KeyContext::PopupComments, "<CR>",
         setup = |app, _dir| { open_book(&mut app); simulate(&mut app, "<Space>a"); },

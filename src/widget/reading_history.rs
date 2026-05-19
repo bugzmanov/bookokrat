@@ -367,7 +367,7 @@ impl ReadingHistory {
         }
 
         let bottom_line = if let Some(hud) = &self.hud_message {
-            hud.styled_line(&palette)
+            hud.styled_line(palette)
         } else {
             match self.search_state.mode {
                 SearchMode::InputMode => {
@@ -413,7 +413,7 @@ impl ReadingHistory {
             ])
             .split(padded);
 
-        self.render_tabs(f, main_chunks[0], &palette);
+        self.render_tabs(f, main_chunks[0], palette);
         self.render_list(f, main_chunks[1]);
 
         let item_count = self.active_items().len();
@@ -888,7 +888,7 @@ impl ReadingHistory {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<ReadingHistoryAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
 
         if self.confirm_delete {
             match key.code {

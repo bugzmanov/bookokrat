@@ -381,7 +381,7 @@ impl HelpPopup {
 
 impl Popup for HelpPopup {
     fn get_last_popup_area(&self) -> Option<Rect> {
-        return self.last_popup_area;
+        self.last_popup_area
     }
 }
 

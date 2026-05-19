@@ -956,14 +956,16 @@ custom_themes:
     base00: "000000"
 "#;
 
-        let mut settings = Settings::default();
-        settings.version = CURRENT_VERSION;
-        settings.theme = "Oceanic Next".to_string();
-        settings.margin = 3;
-        settings.pdf_scale = 1.25;
-        settings.pdf_render_mode = PdfRenderMode::Scroll;
-        settings.lookup_command = Some("open dict://{}".to_string());
-        settings.lookup_display = LookupDisplay::FireAndForget;
+        let settings = Settings {
+            version: CURRENT_VERSION,
+            theme: "Oceanic Next".to_string(),
+            margin: 3,
+            pdf_scale: 1.25,
+            pdf_render_mode: PdfRenderMode::Scroll,
+            lookup_command: Some("open dict://{}".to_string()),
+            lookup_display: LookupDisplay::FireAndForget,
+            ..Default::default()
+        };
 
         let updated = update_settings_values(existing, &settings);
 
@@ -985,10 +987,12 @@ margin: 1
 my_custom_flag: true
 "#;
 
-        let mut settings = Settings::default();
-        settings.version = CURRENT_VERSION;
-        settings.theme = "New Theme".to_string();
-        settings.margin = 7;
+        let settings = Settings {
+            version: CURRENT_VERSION,
+            theme: "New Theme".to_string(),
+            margin: 7,
+            ..Default::default()
+        };
 
         let updated = update_settings_values(existing, &settings);
 
@@ -1002,8 +1006,10 @@ my_custom_flag: true
     #[test]
     fn targeted_update_appends_missing_app_managed_keys() {
         let existing = "lookup_command: \"dict {}\"\n";
-        let mut settings = Settings::default();
-        settings.lookup_command = Some("dict {}".to_string());
+        let settings = Settings {
+            lookup_command: Some("dict {}".to_string()),
+            ..Default::default()
+        };
 
         let updated = update_settings_values(existing, &settings);
 

@@ -567,10 +567,10 @@ impl HtmlToMarkdownConverter {
                             _ => true,
                         };
                         if should_add {
-                            if matches!(block_node.block, Block::Paragraph { .. }) {
-                                if block_node.id.is_none() {
-                                    block_node.id = div_id.clone();
-                                }
+                            if matches!(block_node.block, Block::Paragraph { .. })
+                                && block_node.id.is_none()
+                            {
+                                block_node.id = div_id.clone();
                             }
                             document.blocks.push(block_node);
                         }

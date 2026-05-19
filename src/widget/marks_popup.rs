@@ -220,7 +220,7 @@ impl MarksPopup {
             .constraints([Constraint::Length(2), Constraint::Min(1)])
             .split(padded);
 
-        self.render_tabs(frame, chunks[0], &palette);
+        self.render_tabs(frame, chunks[0], palette);
         self.render_list(frame, chunks[1]);
     }
 
@@ -291,7 +291,7 @@ impl MarksPopup {
         } else {
             self.active_rows()
                 .iter()
-                .map(|row| build_row_lines(row, inner_width, show_book_label, &palette))
+                .map(|row| build_row_lines(row, inner_width, show_book_label, palette))
                 .collect()
         };
 
@@ -303,7 +303,7 @@ impl MarksPopup {
             )
             .highlight_symbol("» ");
 
-        let mut state = self.active_state().clone();
+        let mut state = *self.active_state();
         f.render_stateful_widget(list, area, &mut state);
         // ListState may have updated `offset` for scrolling; persist it.
         *self.active_state_mut() = state;

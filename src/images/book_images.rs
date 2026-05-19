@@ -414,6 +414,7 @@ impl BookImages {
         Self::SVG_PADDING_PX.min(max_pad)
     }
 
+    #[cfg(feature = "svg")]
     fn unpremultiply_rgba(data: &mut [u8]) {
         for pixel in data.chunks_mut(4) {
             let alpha = pixel[3];

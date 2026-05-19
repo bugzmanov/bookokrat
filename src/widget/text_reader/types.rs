@@ -101,7 +101,7 @@ impl RenderedLine {
         let mut prev_canonical: Option<u16> = None;
         for (i, &ch) in raw_chars[ccs..].iter().enumerate() {
             let canonical = jmap.get(i).copied().unwrap_or(i as u16);
-            if prev_canonical.map_or(true, |p| canonical != p) {
+            if prev_canonical != Some(canonical) {
                 result.push(ch);
             }
             prev_canonical = Some(canonical);

@@ -1427,9 +1427,9 @@ impl SettingsPopup {
                 let rel_x = col.saturating_sub(tab_area.x);
                 // Tab positions: " General   Select Theme   Integrations"
                 //                  1..8       11..23          26..38
-                let new_tab = if cfg!(feature = "pdf") && rel_x >= 1 && rel_x < 11 {
+                let new_tab = if cfg!(feature = "pdf") && (1..11).contains(&rel_x) {
                     Some(SettingsTab::General)
-                } else if rel_x >= 11 && rel_x < 26 {
+                } else if (11..26).contains(&rel_x) {
                     Some(SettingsTab::Themes)
                 } else if rel_x >= 26 {
                     Some(SettingsTab::Integrations)
@@ -1606,7 +1606,7 @@ impl SettingsPopup {
         key: crossterm::event::KeyEvent,
         key_seq: &mut KeySeq,
     ) -> Option<SettingsAction> {
-        use crossterm::event::{KeyCode, KeyModifiers};
+        use crossterm::event::KeyCode;
 
         // When a text input is focused on the Integrations tab, route most
         // keys to the TextArea. Only Esc, Tab, and Up/Down escape.
@@ -1762,8 +1762,28 @@ impl SettingsPopup {
 
 impl Popup for SettingsPopup {
     fn get_last_popup_area(&self) -> Option<Rect> {
-        return self.last_popup_area;
+        self.last_popup_area
     }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 impl VimNavMotions for SettingsPopup {
@@ -1909,24 +1929,4 @@ mod tests {
             8
         );
     }
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
