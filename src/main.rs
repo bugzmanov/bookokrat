@@ -12,6 +12,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
 mod cli;
+mod extract;
 mod print;
 
 // Use modules from the library crate
@@ -164,6 +165,9 @@ fn main() -> Result<()> {
                 pages,
             } => {
                 return print::cmd_print(file, *toc, *info, *chapter, *pages);
+            }
+            cli::Command::Extract { file, output } => {
+                return extract::cmd_extract(file, output);
             }
         }
     }

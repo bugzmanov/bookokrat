@@ -70,4 +70,15 @@ pub enum Command {
         #[arg(long, conflicts_with = "chapter")]
         pages: Option<usize>,
     },
+
+    /// Extract an EPUB into a canonical directory of markdown chapters,
+    /// images, ToC, and metadata for use by downstream tools.
+    Extract {
+        /// EPUB file
+        file: String,
+
+        /// Output directory (created if missing)
+        #[arg(long, short = 'o')]
+        output: String,
+    },
 }
