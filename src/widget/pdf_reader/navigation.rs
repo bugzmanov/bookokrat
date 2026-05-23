@@ -825,6 +825,13 @@ impl PdfReaderState {
                 self.clear_highlight_palette();
                 self.add_highlight_from_visual_selection(color)
             }
+            HighlightPaletteAction::Remove => {
+                self.clear_highlight_palette();
+                self.set_error_hud(
+                    "Remove a PDF highlight from the annotations overview".to_string(),
+                );
+                Some(InputAction::Redraw)
+            }
             HighlightPaletteAction::UnknownKey => {
                 self.clear_highlight_palette();
                 self.set_error_hud("Unknown highlight color".to_string());

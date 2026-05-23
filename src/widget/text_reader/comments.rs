@@ -14,6 +14,13 @@ struct CommentSelection {
     comment_id: String,
 }
 
+/// A highlight annotation found under the cursor / selection.
+#[derive(Clone)]
+struct HighlightHit {
+    comment_id: String,
+    color: HighlightColor,
+}
+
 #[derive(Clone)]
 struct InlineCodeCommentHit {
     comment_id: String,
@@ -87,7 +94,12 @@ fn annotation_range_of(c: &Comment) -> Option<(usize, usize)> {
 
 fn highlight_range_of(c: &Comment) -> Option<HighlightRange> {
     let color = c.highlight_color()?;
-    let (start, end) = c.target.word_range()?;
+    // `word_range == None` is the legacy "whole block" shorthand. Treat it as
+    // a range that covers everything in scope so previously-saved
+    // whole-paragraph highlights still render. The render code already
+    // filters by node + subtarget, and clamps `end` against each span, so an
+    // unbounded end is safe here.
+    let (start, end) = c.target.word_range().unwrap_or((0, usize::MAX));
     Some(HighlightRange { start, end, color })
 }
 
@@ -542,14 +554,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         None
     }
 
-    /// Get all comments from current text selection, visual mode selection, or normal mode cursor.
-    fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
-        // Try mouse selection first
+    /// Resolve the active cursor position into a line/point range.
+    /// Prefers a mouse selection, then a visual-mode selection, then the
+    /// normal-mode cursor (a zero-width range on a single line).
+    fn cursor_selection_range(&self) -> Option<(usize, usize, SelectionPoint, SelectionPoint)> {
         if let Some((start, end)) = self.text_selection.get_selection_range() {
-            return self.find_comments_in_range(start.line, end.line, &start, &end);
+            return Some((start.line, end.line, start, end));
         }
 
-        // Try visual mode selection
         if self.is_visual_mode_active() {
             if let Some((start_line, start_col, end_line, end_col)) =
                 self.get_visual_selection_range()
@@ -562,22 +574,191 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     line: end_line,
                     column: end_col,
                 };
-                return self.find_comments_in_range(start_line, end_line, &start, &end);
+                return Some((start_line, end_line, start, end));
             }
         }
 
-        // Try normal mode cursor position (single line)
         if self.is_normal_mode_active() {
-            let cursor_line = self.normal_mode.cursor.line;
-            let cursor_col = self.normal_mode.cursor.column;
-            let point = SelectionPoint {
-                line: cursor_line,
-                column: cursor_col,
-            };
-            return self.find_comments_in_range(cursor_line, cursor_line, &point, &point);
+            let line = self.normal_mode.cursor.line;
+            let column = self.normal_mode.cursor.column;
+            let point = SelectionPoint { line, column };
+            return Some((line, line, point.clone(), point));
         }
 
-        Vec::new()
+        None
+    }
+
+    /// Get all comments and highlights from the current text selection,
+    /// visual mode selection, or normal mode cursor.
+    fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
+        let Some((start_line, end_line, start, end)) = self.cursor_selection_range() else {
+            return Vec::new();
+        };
+
+        let mut results = self.find_comments_in_range(start_line, end_line, &start, &end);
+        // Highlights render inline (not as their own lines), so the comment-line
+        // scan above never sees them. Fold in any highlight under the cursor.
+        for hit in self.highlight_hits_in_range(start_line, end_line, &start, &end) {
+            if !results
+                .iter()
+                .any(|entry| entry.comment_id == hit.comment_id)
+            {
+                results.push(CommentSelection {
+                    comment_id: hit.comment_id,
+                });
+            }
+        }
+        results
+    }
+
+    /// Find highlight annotations whose word range overlaps the given
+    /// selection range. When `start == end` (a bare cursor) the character
+    /// under the cursor is tested.
+    fn highlight_hits_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Vec<HighlightHit> {
+        let is_point = start_line == end_line && start.column == end.column;
+        let mut results: Vec<HighlightHit> = Vec::new();
+
+        for line_idx in start_line..=end_line {
+            let Some(line) = self.rendered_content.lines.get(line_idx) else {
+                continue;
+            };
+            let Some(node_index) = line.node_index else {
+                continue;
+            };
+            let Some(canon_start) = line.canonical_content_start else {
+                continue;
+            };
+            let col_start = line.content_column_start;
+            let content_len = canonical_content_len(line, col_start);
+            let line_canon_end = canon_start + content_len;
+
+            let map_col = |column: usize| -> usize {
+                let visual_rel = column.saturating_sub(col_start);
+                let rel = if let Some(ref jmap) = line.justify_map {
+                    jmap.get(visual_rel)
+                        .copied()
+                        .unwrap_or_else(|| jmap.last().copied().map(|v| v + 1).unwrap_or(0))
+                        as usize
+                } else {
+                    visual_rel
+                };
+                canon_start + rel.min(content_len)
+            };
+
+            let canon_lo = if line_idx == start_line {
+                map_col(start.column)
+            } else {
+                canon_start
+            };
+            let canon_hi = if is_point {
+                canon_lo + 1
+            } else if line_idx == end_line {
+                map_col(end.column)
+            } else {
+                line_canon_end
+            };
+            if canon_hi <= canon_lo {
+                continue;
+            }
+
+            for comment in self.get_node_comments(Some(node_index)) {
+                if !comment.is_highlight() {
+                    continue;
+                }
+                let Some(color) = comment.highlight_color() else {
+                    continue;
+                };
+                let Some((h_start, h_end)) = comment.target.word_range() else {
+                    continue;
+                };
+                if h_start < canon_hi
+                    && h_end > canon_lo
+                    && !results.iter().any(|entry| entry.comment_id == comment.id)
+                {
+                    results.push(HighlightHit {
+                        comment_id: comment.id.clone(),
+                        color,
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Resolve the highlight the highlight palette should act on: the first
+    /// highlight overlapping the current selection or sitting under the cursor.
+    ///
+    /// For a range selection this re-uses [`compute_selection_target`] +
+    /// [`BookComments::find_overlapping_highlight`] so that detection here can
+    /// never disagree with the overlap check inside
+    /// [`add_highlight_from_visual_selection`]. For a bare cursor we fall back
+    /// to the canonical-position scan in [`highlight_hits_in_range`].
+    pub fn highlight_for_palette(&self) -> Option<(String, HighlightColor)> {
+        let (start_line, end_line, start, end) = self.cursor_selection_range()?;
+        let is_point = start_line == end_line && start.column == end.column;
+
+        if !is_point {
+            let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                if let Some(chapter_href) = self.current_chapter_file.as_deref() {
+                    if let Some(comments_arc) = self.book_comments.as_ref() {
+                        if let Ok(comments) = comments_arc.lock() {
+                            if let Some(comment) =
+                                comments.find_overlapping_highlight(chapter_href, &target)
+                            {
+                                if let Some(color) = comment.highlight_color() {
+                                    return Some((comment.id.clone(), color));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.highlight_hits_in_range(start_line, end_line, &start, &end)
+            .into_iter()
+            .next()
+            .map(|hit| (hit.comment_id, hit.color))
+    }
+
+    /// Change the color of an existing highlight in place.
+    pub fn recolor_highlight(&mut self, comment_id: &str, color: HighlightColor) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
+
+        if let Some(comments_arc) = self.book_comments.as_ref().cloned() {
+            if let Ok(mut comments) = comments_arc.lock() {
+                if let Err(e) = comments.set_highlight_color_by_id(comment_id, color) {
+                    warn!("Failed to recolor highlight: {e}");
+                    self.set_error_hud(format!("Failed to recolor highlight: {e}"));
+                    return;
+                }
+            }
+        }
+
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+        self.set_normal_hud(format!("{} highlight", color.label()));
+    }
+
+    /// Delete an existing highlight by id.
+    pub fn remove_highlight_by_id(&mut self, comment_id: &str) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
+        self.delete_comment_by_id(comment_id);
+        self.set_normal_hud("Highlight removed".to_string());
     }
 
     fn find_comment_in_range(
@@ -1181,9 +1362,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if s >= e {
             return None;
         }
-        if s == 0 && e >= total_len {
-            return None;
-        }
+        // Always emit a concrete (start, end). The previous code collapsed a
+        // whole-block selection to `None` as a "no precise range" shorthand —
+        // but inline highlight rendering depends on `word_range()` being
+        // `Some`, so whole-paragraph highlights silently disappeared from the
+        // screen (the YAML had them but `highlight_range_of` returned None).
         Some((s, e.min(total_len)))
     }
 

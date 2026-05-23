@@ -3718,6 +3718,8 @@ impl PdfReaderState {
                 panel_bg,
                 header_bg,
                 swatch_style: HighlightPaletteSwatchStyle::ForegroundBlocks,
+                show_remove: false,
+                current_color: None,
             },
         )
     }

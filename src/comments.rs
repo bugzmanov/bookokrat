@@ -964,6 +964,22 @@ impl BookComments {
         self.save_to_disk()
     }
 
+    /// Change the color of an existing highlight in place, keeping its target.
+    pub fn set_highlight_color_by_id(
+        &mut self,
+        comment_id: &str,
+        color: HighlightColor,
+    ) -> Result<()> {
+        let idx = self
+            .find_comment_index_by_id(comment_id)
+            .context("Comment not found")?;
+
+        self.comments[idx].body = AnnotationBody::Highlight { color };
+        self.comments[idx].updated_at = Utc::now();
+
+        self.save_to_disk()
+    }
+
     pub fn delete_comment(&mut self, chapter_href: &str, target: &CommentTarget) -> Result<()> {
         let idx = self
             .find_comment_index(chapter_href, target)
@@ -1069,6 +1085,21 @@ impl BookComments {
         self.comments
             .iter()
             .any(|comment| comment.overlaps_target(chapter_href, target))
+    }
+
+    /// Find the first highlight whose target overlaps the given target.
+    /// Uses the same scope/overlap rules as `has_overlapping_annotation`, so
+    /// the highlight palette never disagrees with the add-highlight overlap
+    /// check (i.e. if `add_highlight` would reject the selection as
+    /// overlapping, this will return the offending highlight).
+    pub fn find_overlapping_highlight(
+        &self,
+        chapter_href: &str,
+        target: &CommentTarget,
+    ) -> Option<&Comment> {
+        self.comments
+            .iter()
+            .find(|comment| comment.is_highlight() && comment.overlaps_target(chapter_href, target))
     }
 
     fn compute_book_hash(book_path: &Path) -> String {

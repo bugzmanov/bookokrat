@@ -17,6 +17,7 @@ use crate::theme::Base16Palette;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HighlightPaletteAction {
     Apply(HighlightColor),
+    Remove,
     Cancel,
     ShowHelp,
     UnknownKey,
@@ -26,6 +27,7 @@ pub(crate) fn classify_palette_key(code: &KeyCode) -> HighlightPaletteAction {
     match code {
         KeyCode::Esc => HighlightPaletteAction::Cancel,
         KeyCode::Char('?') => HighlightPaletteAction::ShowHelp,
+        KeyCode::Char('x') | KeyCode::Char('X') => HighlightPaletteAction::Remove,
         KeyCode::Char(ch) => match HighlightColor::from_shortcut(*ch) {
             Some(color) => HighlightPaletteAction::Apply(color),
             None => HighlightPaletteAction::UnknownKey,
@@ -43,6 +45,15 @@ pub(crate) fn palette_hud_message() -> String {
     format!("Highlight: {choices}")
 }
 
+pub(crate) fn palette_edit_hud_message() -> String {
+    let choices = HighlightColor::ALL
+        .iter()
+        .map(|color| format!("{} {}", color.shortcut(), color.label()))
+        .collect::<Vec<_>>()
+        .join("  ");
+    format!("Edit highlight: {choices}  x Remove  (same color clears)")
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HighlightPaletteTheme {
     pub fg: Color,
@@ -50,6 +61,11 @@ pub(crate) struct HighlightPaletteTheme {
     pub panel_bg: Color,
     pub header_bg: Color,
     pub swatch_style: HighlightPaletteSwatchStyle,
+    /// When true the palette is editing an existing highlight: the title and a
+    /// hint line make the recolor / remove options explicit.
+    pub show_remove: bool,
+    /// The color of the highlight being edited, marked in the swatch row.
+    pub current_color: Option<HighlightColor>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,9 +103,14 @@ pub(crate) fn render_centered_highlight_palette(
 
     frame.render_widget(Clear, modal_area);
 
+    let title = if theme.show_remove {
+        " Edit highlight "
+    } else {
+        " Highlight "
+    };
     let block = Block::default()
         .title(Span::styled(
-            " Highlight ",
+            title,
             Style::default().fg(theme.accent).bg(theme.header_bg),
         ))
         .borders(Borders::ALL)
@@ -99,12 +120,16 @@ pub(crate) fn render_centered_highlight_palette(
     let inner = block.inner(modal_area);
     frame.render_widget(block, modal_area);
 
-    let paragraph = Paragraph::new(vec![
-        Line::raw(""),
-        highlight_palette_swatches(palette, theme),
-    ])
-    .style(Style::default().fg(theme.fg).bg(theme.panel_bg))
-    .alignment(Alignment::Center);
+    let mut lines = vec![Line::raw(""), highlight_palette_swatches(palette, theme)];
+    if theme.show_remove {
+        lines.push(Line::styled(
+            "x or the current color  →  remove",
+            Style::default().fg(theme.fg),
+        ));
+    }
+    let paragraph = Paragraph::new(lines)
+        .style(Style::default().fg(theme.fg).bg(theme.panel_bg))
+        .alignment(Alignment::Center);
     frame.render_widget(paragraph, inner);
 
     Some((backing_x, backing_y, backing_w, backing_h))
@@ -120,10 +145,17 @@ fn highlight_palette_swatches(
             swatches.push(Span::raw("  "));
         }
 
+        let is_current = theme.current_color == Some(*color);
+        let label = if is_current {
+            format!(" {} {} \u{2713} ", color.shortcut(), color.label())
+        } else {
+            format!(" {} {} ", color.shortcut(), color.label())
+        };
+
         match theme.swatch_style {
             HighlightPaletteSwatchStyle::Background => {
                 swatches.push(Span::styled(
-                    format!(" {} {} ", color.shortcut(), color.label()),
+                    label,
                     Style::default()
                         .fg(theme.fg)
                         .bg(highlight_background_color(*color, palette))
@@ -140,7 +172,7 @@ fn highlight_palette_swatches(
                 ));
                 swatches.push(Span::raw(" "));
                 swatches.push(Span::styled(
-                    format!("{} {}", color.shortcut(), color.label()),
+                    label.trim().to_string(),
                     Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
                 ));
             }

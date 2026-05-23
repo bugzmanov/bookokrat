@@ -4494,6 +4494,112 @@ fn test_epub_highlights_all_colors_svg() {
     );
 }
 
+/// Regression: selecting an entire paragraph (V → H → color) used to drop
+/// the highlight silently. `compute_canonical_word_range` collapsed
+/// `s == 0 && e >= total_len` to `None`, which made `highlight_range_of`
+/// return `None`, which made the renderer skip the highlight. The YAML
+/// recorded the highlight; the screen did not.
+///
+/// The earlier all-colors test never caught this because its selections only
+/// covered a 14-char prefix of a 47-char paragraph, so the boundary
+/// condition never fired. This test drives the same code path as the user
+/// (real key presses through the keymap) and selects a single-line paragraph
+/// in full via line-wise visual mode.
+#[test]
+#[parallel]
+fn test_epub_highlight_whole_paragraph_via_visual_line_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_whole_paragraph.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Whole Paragraph Highlight Test</title>
+</head>
+<body>
+    <p>Whole paragraph highlight test sample.</p>
+    <p>Second paragraph keeps the renderer honest.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // n -> normal mode, gg + 0 -> first paragraph, col 0,
+    // V -> linewise visual select (the whole line, which is also the whole
+    // paragraph for this single-line paragraph), H y -> Yellow highlight.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    // Targeted data-layer check: the highlight must be stored with a concrete
+    // `word_range`. The earlier bug returned `None` for whole-block
+    // selections, which `highlight_range_of` then silently dropped. We assert
+    // this BEFORE the snapshot so a regression here points straight at
+    // `compute_canonical_word_range` rather than at a colour mismatch.
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let comments = comments_arc.lock().expect("lock comments");
+        let all: Vec<_> = comments
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .collect();
+        assert_eq!(all.len(), 1, "expected exactly one highlight to be stored");
+        let range = all[0].target.word_range();
+        assert!(
+            matches!(range, Some((s, e)) if s < e),
+            "whole-paragraph highlight must store a concrete word_range, got {range:?}"
+        );
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_whole_paragraph.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_whole_paragraph.svg"),
+        "test_epub_highlight_whole_paragraph_via_visual_line_svg",
+        create_test_failure_handler("test_epub_highlight_whole_paragraph_via_visual_line_svg"),
+    );
+}
+
 #[test]
 #[parallel]
 fn test_comment_input_placement_from_visual_selection_svg() {

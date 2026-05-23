@@ -177,7 +177,7 @@ fn content_specifics(keymap: &mut Keymap) {
     bind!(ctx, "/" => Action::StartSearch);
     bind!(ctx, "n" => Action::ToggleNormalMode);
     bind!(ctx, "a" => Action::AddComment);
-    bind!(ctx, "d" => Action::DeleteComment);
+    bind!(ctx, "dd" => Action::DeleteComment);
     bind!(ctx, "c" => Action::CopySelection);
     bind!(ctx, "<C-i>" => Action::JumpForward);
     bind!(ctx, "<C-o>" => Action::JumpBackward);
@@ -198,7 +198,10 @@ fn content_specifics(keymap: &mut Keymap) {
 }
 
 fn epub_normal_specifics(keymap: &mut Keymap) {
-    let _ = keymap;
+    let ctx = keymap.context_mut(KeyContext::EpubNormal);
+    // `dd` deletes the comment or highlight under the cursor (or covered by
+    // the visual selection). Mirrors the EpubContent binding.
+    bind!(ctx, "dd" => Action::DeleteComment);
 }
 
 fn pdf_specifics(keymap: &mut Keymap) {
