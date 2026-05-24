@@ -134,15 +134,34 @@ impl BlockSubtarget {
     }
 }
 
+/// One contiguous slice of EPUB text inside a single block.
+/// A multi-paragraph highlight is a `CommentTarget::Text` whose `slices`
+/// contains one of these per touched block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextSlice {
+    pub node_index: usize,
+    #[serde(flatten)]
+    pub subtarget: BlockSubtarget,
+}
+
+impl TextSlice {
+    pub fn new(node_index: usize, subtarget: BlockSubtarget) -> Self {
+        Self {
+            node_index,
+            subtarget,
+        }
+    }
+}
+
 /// Identifies the location of a comment within the document.
 /// Supports both EPUB text-based targeting and PDF pixel-based targeting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommentTarget {
-    /// EPUB text-based targeting (original format)
-    Text {
-        node_index: usize,
-        subtarget: BlockSubtarget,
-    },
+    /// EPUB text-based targeting. A comment may span multiple blocks
+    /// (e.g. a highlight across two paragraphs); each touched block
+    /// contributes one `TextSlice`. The vec is non-empty by construction —
+    /// callers can rely on `slices.first()` always being `Some` for `Text`.
+    Text { slices: Vec<TextSlice> },
     /// PDF pixel-based targeting
     Pdf {
         page: usize,
@@ -151,12 +170,28 @@ pub enum CommentTarget {
 }
 
 impl CommentTarget {
+    /// Build a Text target from one or more slices. Caller's responsibility
+    /// to ensure `slices` is non-empty.
+    pub fn from_slices(slices: Vec<TextSlice>) -> Self {
+        debug_assert!(
+            !slices.is_empty(),
+            "Text target must have at least one slice"
+        );
+        Self::Text { slices }
+    }
+
+    fn from_single(node_index: usize, subtarget: BlockSubtarget) -> Self {
+        Self::Text {
+            slices: vec![TextSlice {
+                node_index,
+                subtarget,
+            }],
+        }
+    }
+
     /// Create a Text target for EPUB paragraph
     pub fn paragraph(node_index: usize, word_range: Option<(usize, usize)>) -> Self {
-        Self::Text {
-            node_index,
-            subtarget: BlockSubtarget::Paragraph { word_range },
-        }
+        Self::from_single(node_index, BlockSubtarget::Paragraph { word_range })
     }
 
     /// Create a Text target for EPUB list item
@@ -165,14 +200,14 @@ impl CommentTarget {
         item_index: usize,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self::Text {
+        Self::from_single(
             node_index,
-            subtarget: BlockSubtarget::ListItem {
+            BlockSubtarget::ListItem {
                 item_index,
                 list_path: Vec::new(),
                 word_range,
             },
-        }
+        )
     }
 
     /// Create a Text target for EPUB list item with path
@@ -182,14 +217,14 @@ impl CommentTarget {
         word_range: Option<(usize, usize)>,
     ) -> Self {
         let item_index = list_path.last().copied().unwrap_or(0);
-        Self::Text {
+        Self::from_single(
             node_index,
-            subtarget: BlockSubtarget::ListItem {
+            BlockSubtarget::ListItem {
                 item_index,
                 list_path,
                 word_range,
             },
-        }
+        )
     }
 
     /// Create a Text target for EPUB quote paragraph
@@ -198,13 +233,13 @@ impl CommentTarget {
         paragraph_index: usize,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self::Text {
+        Self::from_single(
             node_index,
-            subtarget: BlockSubtarget::QuoteParagraph {
+            BlockSubtarget::QuoteParagraph {
                 paragraph_index,
                 word_range,
             },
-        }
+        )
     }
 
     /// Create a Text target for EPUB definition item
@@ -214,22 +249,19 @@ impl CommentTarget {
         is_term: bool,
         word_range: Option<(usize, usize)>,
     ) -> Self {
-        Self::Text {
+        Self::from_single(
             node_index,
-            subtarget: BlockSubtarget::DefinitionItem {
+            BlockSubtarget::DefinitionItem {
                 item_index,
                 is_term,
                 word_range,
             },
-        }
+        )
     }
 
     /// Create a Text target for EPUB code block
     pub fn code_block(node_index: usize, line_range: (usize, usize)) -> Self {
-        Self::Text {
-            node_index,
-            subtarget: BlockSubtarget::CodeLines { line_range },
-        }
+        Self::from_single(node_index, BlockSubtarget::CodeLines { line_range })
     }
 
     /// Create a Pdf target for PDF selection
@@ -237,12 +269,30 @@ impl CommentTarget {
         Self::Pdf { page, rects }
     }
 
-    /// Returns the node index for Text targets, or None for Pdf targets
-    pub fn node_index(&self) -> Option<usize> {
+    /// All slices for a Text target. Empty slice for Pdf.
+    pub fn slices(&self) -> &[TextSlice] {
         match self {
-            Self::Text { node_index, .. } => Some(*node_index),
-            Self::Pdf { .. } => None,
+            Self::Text { slices } => slices.as_slice(),
+            Self::Pdf { .. } => &[],
         }
+    }
+
+    /// Number of EPUB blocks this comment spans (`>1` for multi-segment
+    /// highlights). Always `0` for PDF.
+    pub fn slice_count(&self) -> usize {
+        self.slices().len()
+    }
+
+    /// Convenience: the first slice for a Text target.
+    pub fn first_slice(&self) -> Option<&TextSlice> {
+        self.slices().first()
+    }
+
+    /// Returns the node index of the **first** slice for Text targets, or None
+    /// for Pdf targets. Callers that need to walk every block this comment
+    /// touches must use `slices()` instead.
+    pub fn node_index(&self) -> Option<usize> {
+        self.first_slice().map(|s| s.node_index)
     }
 
     /// Returns the page for Pdf targets, or None for Text targets
@@ -263,51 +313,47 @@ impl CommentTarget {
         matches!(self, Self::Pdf { .. })
     }
 
+    /// Word range of the **first** slice. Multi-slice callers should
+    /// iterate `slices()` directly to get each block's range.
     pub fn word_range(&self) -> Option<(usize, usize)> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.word_range(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice().and_then(|s| s.subtarget.word_range())
     }
 
     pub fn list_item_index(&self) -> Option<usize> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.list_item_index(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice()
+            .and_then(|s| s.subtarget.list_item_index())
     }
 
     pub fn definition_item_index(&self) -> Option<usize> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.definition_item_index(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice()
+            .and_then(|s| s.subtarget.definition_item_index())
     }
 
     pub fn quote_paragraph_index(&self) -> Option<usize> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.quote_paragraph_index(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice()
+            .and_then(|s| s.subtarget.quote_paragraph_index())
     }
 
     pub fn line_range(&self) -> Option<(usize, usize)> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.line_range(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice().and_then(|s| s.subtarget.line_range())
     }
 
     pub fn kind_order(&self) -> u8 {
         match self {
-            Self::Text { subtarget, .. } => subtarget.kind_order(),
+            Self::Text { .. } => self
+                .first_slice()
+                .map(|s| s.subtarget.kind_order())
+                .unwrap_or(0),
             Self::Pdf { .. } => 10, // PDF comments sort after text comments
         }
     }
 
     pub fn secondary_sort_key(&self) -> (usize, usize) {
         match self {
-            Self::Text { subtarget, .. } => subtarget.secondary_sort_key(),
+            Self::Text { .. } => self
+                .first_slice()
+                .map(|s| s.subtarget.secondary_sort_key())
+                .unwrap_or((0, 0)),
             Self::Pdf { page, rects } => {
                 let y = rects.first().map(|r| r.topleft_y as usize).unwrap_or(0);
                 (*page, y)
@@ -315,27 +361,26 @@ impl CommentTarget {
         }
     }
 
+    /// True when every slice is a code-block target. Code highlights never
+    /// cross blocks today, but we check all slices to be defensive — a future
+    /// mixed selection would otherwise silently render as a normal highlight.
     pub fn is_code_block(&self) -> bool {
         match self {
-            Self::Text { subtarget, .. } => subtarget.is_code(),
+            Self::Text { slices } => {
+                !slices.is_empty() && slices.iter().all(|s| s.subtarget.is_code())
+            }
             Self::Pdf { .. } => false,
         }
     }
 
-    /// Returns the subtarget for Text targets, or None for Pdf targets
+    /// Subtarget of the **first** slice. Multi-slice callers should iterate.
     pub fn subtarget(&self) -> Option<&BlockSubtarget> {
-        match self {
-            Self::Text { subtarget, .. } => Some(subtarget),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice().map(|s| &s.subtarget)
     }
 
-    /// Returns the list path for Text list item targets, or None otherwise
+    /// Returns the list path for Text list item targets (first slice), or None
     pub fn list_path(&self) -> Option<&[usize]> {
-        match self {
-            Self::Text { subtarget, .. } => subtarget.list_path(),
-            Self::Pdf { .. } => None,
-        }
+        self.first_slice().and_then(|s| s.subtarget.list_path())
     }
 }
 
@@ -424,6 +469,30 @@ struct CommentPdfSerde {
     pub quoted_text: Option<String>,
 }
 
+/// New multi-slice format for EPUB text comments. Distinguished from the
+/// legacy single-slice format by the presence of a `slices` array (and the
+/// absence of a top-level `node_index`). Both shapes share the same
+/// untagged enum, with this one ordered before the single-slice variant so
+/// it wins when both fields are absent (e.g. an empty multi-slice — which
+/// shouldn't happen but defensive).
+#[derive(Serialize, Deserialize)]
+struct CommentTextMultiSerde {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub chapter_href: String,
+    #[serde(default, skip_serializing_if = "is_comment_annotation_type")]
+    pub annotation_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<HighlightColor>,
+    pub target_type: String, // "text"
+    pub slices: Vec<TextSlice>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quoted_text: Option<String>,
+}
+
 /// Legacy modern format (has node_index but no target_type, assumed to be Text)
 #[derive(Serialize, Deserialize)]
 struct CommentModernLegacySerde {
@@ -466,11 +535,28 @@ struct CommentLegacyCodeBlockSerde {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum CommentSerde {
+    // TextMulti is tried first: it owns the `slices` field that no legacy
+    // variant has, so it matches only when the new format is present.
+    TextMulti(CommentTextMultiSerde),
     Text(CommentTextSerde),
     Pdf(CommentPdfSerde),
     ModernLegacy(CommentModernLegacySerde),
     LegacyCodeBlock(CommentLegacyCodeBlockSerde),
     LegacyParagraph(CommentLegacyParagraphSerde),
+}
+
+impl From<CommentTextMultiSerde> for Comment {
+    fn from(s: CommentTextMultiSerde) -> Self {
+        Comment {
+            id: s.id.unwrap_or_else(generate_comment_id),
+            chapter_href: s.chapter_href,
+            target: CommentTarget::Text { slices: s.slices },
+            content: s.content,
+            body: body_from_serde(&s.annotation_type, s.color),
+            updated_at: s.updated_at,
+            quoted_text: s.quoted_text,
+        }
+    }
 }
 
 impl From<CommentLegacyParagraphSerde> for Comment {
@@ -501,10 +587,7 @@ impl From<CommentLegacyParagraphSerde> for Comment {
         Comment {
             id: generate_comment_id(),
             chapter_href: legacy.chapter_href,
-            target: CommentTarget::Text {
-                node_index: legacy.paragraph_index,
-                subtarget,
-            },
+            target: CommentTarget::from_single(legacy.paragraph_index, subtarget),
             content: legacy.content,
             body: AnnotationBody::Comment,
             updated_at: legacy.updated_at,
@@ -532,10 +615,7 @@ impl From<CommentModernLegacySerde> for Comment {
         Comment {
             id: modern.id.unwrap_or_else(generate_comment_id),
             chapter_href: modern.chapter_href,
-            target: CommentTarget::Text {
-                node_index: modern.target.node_index,
-                subtarget: modern.target.subtarget,
-            },
+            target: CommentTarget::from_single(modern.target.node_index, modern.target.subtarget),
             content: modern.content,
             body: AnnotationBody::Comment,
             updated_at: modern.updated_at,
@@ -549,10 +629,7 @@ impl From<CommentTextSerde> for Comment {
         Comment {
             id: text.id.unwrap_or_else(generate_comment_id),
             chapter_href: text.chapter_href,
-            target: CommentTarget::Text {
-                node_index: text.target.node_index,
-                subtarget: text.target.subtarget,
-            },
+            target: CommentTarget::from_single(text.target.node_index, text.target.subtarget),
             content: text.content,
             body: body_from_serde(&text.annotation_type, text.color),
             updated_at: text.updated_at,
@@ -598,25 +675,44 @@ impl Serialize for Comment {
         S: Serializer,
     {
         match &self.target {
-            CommentTarget::Text {
-                node_index,
-                subtarget,
-            } => {
-                let serde = CommentTextSerde {
-                    id: Some(self.id.clone()),
-                    chapter_href: self.chapter_href.clone(),
-                    annotation_type: self.body.serde_type().to_string(),
-                    color: self.body.highlight_color(),
-                    target_type: "text".to_string(),
-                    target: CommentTextTargetSerde {
-                        node_index: *node_index,
-                        subtarget: subtarget.clone(),
-                    },
-                    content: self.content.clone(),
-                    updated_at: self.updated_at,
-                    quoted_text: self.quoted_text.clone(),
-                };
-                serde.serialize(serializer)
+            CommentTarget::Text { slices } => {
+                // Smart-emit: single-slice highlights keep the legacy
+                // top-level `node_index + subtarget` shape so older app
+                // versions can still read them. Only multi-slice comments
+                // (new in this refactor) emit the `slices:` array, which
+                // older apps can't parse and will preserve verbatim via the
+                // fault-tolerant loader.
+                if slices.len() == 1 {
+                    let first = &slices[0];
+                    let serde = CommentTextSerde {
+                        id: Some(self.id.clone()),
+                        chapter_href: self.chapter_href.clone(),
+                        annotation_type: self.body.serde_type().to_string(),
+                        color: self.body.highlight_color(),
+                        target_type: "text".to_string(),
+                        target: CommentTextTargetSerde {
+                            node_index: first.node_index,
+                            subtarget: first.subtarget.clone(),
+                        },
+                        content: self.content.clone(),
+                        updated_at: self.updated_at,
+                        quoted_text: self.quoted_text.clone(),
+                    };
+                    serde.serialize(serializer)
+                } else {
+                    let serde = CommentTextMultiSerde {
+                        id: Some(self.id.clone()),
+                        chapter_href: self.chapter_href.clone(),
+                        annotation_type: self.body.serde_type().to_string(),
+                        color: self.body.highlight_color(),
+                        target_type: "text".to_string(),
+                        slices: slices.clone(),
+                        content: self.content.clone(),
+                        updated_at: self.updated_at,
+                        quoted_text: self.quoted_text.clone(),
+                    };
+                    serde.serialize(serializer)
+                }
             }
             CommentTarget::Pdf { page, rects } => {
                 let serde = CommentPdfSerde {
@@ -643,6 +739,7 @@ impl<'de> Deserialize<'de> for Comment {
         D: Deserializer<'de>,
     {
         match CommentSerde::deserialize(deserializer)? {
+            CommentSerde::TextMulti(multi) => Ok(Comment::from(multi)),
             CommentSerde::Text(text) => Ok(Comment::from(text)),
             CommentSerde::Pdf(pdf) => Ok(Comment::from(pdf)),
             CommentSerde::ModernLegacy(modern) => Ok(Comment::from(modern)),
@@ -735,12 +832,15 @@ impl Comment {
         self.target.page()
     }
 
-    /// Returns the index key used for storage lookup (node_index for Text, page for Pdf)
+    /// Returns the primary index key used for storage lookup (first slice's
+    /// node_index for Text, page for Pdf). Multi-slice indexing happens
+    /// separately in `BookComments::add_to_indices` which inserts under
+    /// every slice.
     pub fn index_key(&self) -> usize {
-        match &self.target {
-            CommentTarget::Text { node_index, .. } => *node_index,
-            CommentTarget::Pdf { page, .. } => *page,
-        }
+        self.target
+            .node_index()
+            .or_else(|| self.target.page())
+            .unwrap_or(0)
     }
 
     /// Returns true if this is a Text (EPUB) comment
@@ -771,25 +871,17 @@ impl CommentTarget {
     pub fn overlaps(&self, other: &CommentTarget) -> bool {
         match (self, other) {
             (
-                CommentTarget::Text {
-                    node_index: a_node,
-                    subtarget: a_subtarget,
-                },
-                CommentTarget::Text {
-                    node_index: b_node,
-                    subtarget: b_subtarget,
-                },
+                CommentTarget::Text { slices: a_slices },
+                CommentTarget::Text { slices: b_slices },
             ) => {
-                if a_node != b_node || !same_subtarget_scope(a_subtarget, b_subtarget) {
-                    return false;
-                }
-                match (a_subtarget.line_range(), b_subtarget.line_range()) {
-                    (Some(a), Some(b)) => inclusive_ranges_overlap(a, b),
-                    _ => ranges_overlap(
-                        a_subtarget.word_range().unwrap_or((0, usize::MAX)),
-                        b_subtarget.word_range().unwrap_or((0, usize::MAX)),
-                    ),
-                }
+                // Multi-slice ↔ multi-slice: any pair of slices that targets
+                // the same (node_index, subtarget scope) and whose
+                // word/line ranges intersect makes the whole comments
+                // overlap. One overlapping slice is enough — we shouldn't
+                // let users hide a real conflict behind other paragraphs.
+                a_slices
+                    .iter()
+                    .any(|a| b_slices.iter().any(|b| slices_overlap(a, b)))
             }
             (CommentTarget::Pdf { rects: a, .. }, CommentTarget::Pdf { rects: b, .. }) => {
                 a.iter().any(|left| {
@@ -799,6 +891,19 @@ impl CommentTarget {
             }
             _ => false,
         }
+    }
+}
+
+fn slices_overlap(a: &TextSlice, b: &TextSlice) -> bool {
+    if a.node_index != b.node_index || !same_subtarget_scope(&a.subtarget, &b.subtarget) {
+        return false;
+    }
+    match (a.subtarget.line_range(), b.subtarget.line_range()) {
+        (Some(la), Some(lb)) => inclusive_ranges_overlap(la, lb),
+        _ => ranges_overlap(
+            a.subtarget.word_range().unwrap_or((0, usize::MAX)),
+            b.subtarget.word_range().unwrap_or((0, usize::MAX)),
+        ),
     }
 }
 
@@ -852,6 +957,56 @@ fn inclusive_ranges_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
 }
 
+/// Eager migration from the legacy "group" model: N single-slice highlights
+/// sharing a `group_id` become **one** multi-slice highlight whose `slices`
+/// concatenate the original members in their stored order. The first member
+/// keeps the merged Comment's id; the rest are discarded. Input pairs each
+/// Comment with the `group_id` we read out of its YAML before deserialising
+/// — that field doesn't exist on `Comment` anymore.
+fn merge_legacy_groups(items: Vec<(Comment, Option<String>)>) -> Vec<Comment> {
+    use std::collections::HashMap;
+
+    let mut groups: HashMap<String, usize> = HashMap::new(); // group_id -> output idx
+    let mut out: Vec<Comment> = Vec::with_capacity(items.len());
+
+    for (c, gid) in items {
+        let Some(gid) = gid else {
+            out.push(c);
+            continue;
+        };
+        // Only the first member's slices are kept verbatim; later members
+        // append their slices to it. For non-Text targets (PDF) the group
+        // semantics are undefined — pass them through unchanged.
+        match groups.get(&gid).copied() {
+            Some(idx) => {
+                let merged_into_existing = matches!(
+                    (&out[idx].target, &c.target),
+                    (CommentTarget::Text { .. }, CommentTarget::Text { .. })
+                );
+                if merged_into_existing {
+                    if let (
+                        CommentTarget::Text { slices: existing },
+                        CommentTarget::Text { slices: more },
+                    ) = (&mut out[idx].target, c.target)
+                    {
+                        existing.extend(more);
+                    }
+                } else {
+                    // Mixed-target group — shouldn't happen in practice.
+                    // Keep the orphan as its own Comment so we don't silently drop it.
+                    out.push(c);
+                }
+            }
+            None => {
+                groups.insert(gid, out.len());
+                out.push(c);
+            }
+        }
+    }
+
+    out
+}
+
 fn pdf_rects_overlap(a: &PdfSelectionRect, b: &PdfSelectionRect) -> bool {
     a.topleft_x < b.bottomright_x
         && b.topleft_x < a.bottomright_x
@@ -873,6 +1028,10 @@ pub struct BookComments {
     // chapter_href -> node_index -> comment indices
     comments_by_location: HashMap<String, HashMap<usize, Vec<usize>>>,
     comments_by_id: HashMap<String, usize>,
+    /// YAML entries we couldn't deserialize at load time — preserved verbatim
+    /// so a save round-trip doesn't destroy comments written by a newer app
+    /// version. Appended after the parseable entries on save.
+    unparseable_entries: Vec<serde_yaml::Value>,
 }
 
 impl BookComments {
@@ -899,14 +1058,15 @@ impl BookComments {
             comments: Vec::new(),
             comments_by_location: HashMap::new(),
             comments_by_id: HashMap::new(),
+            unparseable_entries: Vec::new(),
         }
     }
 
     fn new_with_path(file_path: PathBuf) -> Result<Self> {
-        let comments = if file_path.exists() {
+        let (comments, unparseable_entries) = if file_path.exists() {
             Self::load_from_file(&file_path)?
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
 
         let mut book_comments = Self {
@@ -914,6 +1074,7 @@ impl BookComments {
             comments: Vec::new(),
             comments_by_location: HashMap::new(),
             comments_by_id: HashMap::new(),
+            unparseable_entries,
         };
 
         for comment in comments {
@@ -965,6 +1126,8 @@ impl BookComments {
     }
 
     /// Change the color of an existing highlight in place, keeping its target.
+    /// Multi-slice highlights are now a single Comment, so no fan-out is
+    /// needed — one Comment ↔ one logical highlight.
     pub fn set_highlight_color_by_id(
         &mut self,
         comment_id: &str,
@@ -992,15 +1155,16 @@ impl BookComments {
         self.save_to_disk()
     }
 
+    /// Delete a comment by id. Returns `Ok` when the id is absent — kept
+    /// idempotent so legacy call sites that iterated over former group
+    /// members (when one logical highlight was N storage comments) don't
+    /// spuriously fail after the migration.
     pub fn delete_comment_by_id(&mut self, comment_id: &str) -> Result<()> {
-        let idx = self
-            .find_comment_index_by_id(comment_id)
-            .context("Comment not found")?;
-
-        let _comment = self.comments.remove(idx);
-
+        let Some(idx) = self.find_comment_index_by_id(comment_id) else {
+            return Ok(());
+        };
+        self.comments.remove(idx);
         self.rebuild_indices();
-
         self.save_to_disk()
     }
 
@@ -1064,15 +1228,22 @@ impl BookComments {
     }
 
     pub fn get_chapter_comments(&self, chapter_href: &str) -> Vec<&Comment> {
-        self.comments_by_location
-            .get(chapter_href)
-            .map(|chapter_map| {
-                chapter_map
-                    .values()
-                    .flat_map(|indices| indices.iter().map(|&i| &self.comments[i]))
-                    .collect()
-            })
-            .unwrap_or_default()
+        // A multi-slice comment is registered under every slice's node, so
+        // flat-mapping the buckets returns the same Comment N times. Dedupe
+        // by storage index so callers see each Comment exactly once.
+        let Some(chapter_map) = self.comments_by_location.get(chapter_href) else {
+            return Vec::new();
+        };
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for indices in chapter_map.values() {
+            for &i in indices {
+                if seen.insert(i) {
+                    out.push(&self.comments[i]);
+                }
+            }
+        }
+        out
     }
 
     pub fn get_all_comments(&self) -> &[Comment] {
@@ -1133,14 +1304,54 @@ impl BookComments {
         Ok(comments_dir)
     }
 
-    fn load_from_file(file_path: &Path) -> Result<Vec<Comment>> {
+    /// Returns `(parseable_comments, unparseable_raw_yaml_entries)`.
+    /// Per-element fault tolerance: a single corrupt or future-format entry
+    /// must not abort loading every annotation in the file. Unparseable
+    /// entries are kept in raw form so `save_to_disk` can write them back —
+    /// otherwise an older app version round-tripping a newer file would
+    /// silently destroy comments it didn't recognise.
+    fn load_from_file(file_path: &Path) -> Result<(Vec<Comment>, Vec<serde_yaml::Value>)> {
         let content = fs::read_to_string(file_path).context("Failed to read comments file")?;
 
         if content.trim().is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
-        serde_yaml::from_str(&content).context("Failed to parse comments YAML")
+        let raw: Vec<serde_yaml::Value> =
+            serde_yaml::from_str(&content).context("Failed to parse comments YAML as a list")?;
+
+        let mut items: Vec<(Comment, Option<String>)> = Vec::with_capacity(raw.len());
+        let mut unparseable: Vec<serde_yaml::Value> = Vec::new();
+        for (idx, value) in raw.into_iter().enumerate() {
+            // `group_id` only exists in legacy single-slice YAML. Pull it
+            // out of the raw Value here so we can feed it to the merge pass
+            // — `Comment` itself no longer carries the field, and serde
+            // happily ignores unknown YAML keys on deserialise.
+            // `group_id` only appears in legacy single-slice YAML. Pull it
+            // out of the raw Value here so we can feed it to the merge pass
+            // — `Comment` itself no longer carries the field, and serde
+            // happily ignores unknown YAML keys on deserialise.
+            let group_id = value.as_mapping().and_then(|m| {
+                m.get(serde_yaml::Value::String("group_id".to_string()))
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+            });
+            match serde_yaml::from_value::<Comment>(value.clone()) {
+                Ok(comment) => items.push((comment, group_id)),
+                Err(e) => {
+                    log::warn!(
+                        "Preserving unparseable comment at index {idx} in {} across save round-trip: {e}",
+                        file_path.display()
+                    );
+                    unparseable.push(value);
+                }
+            }
+        }
+        // One-way upgrade: legacy YAML stored N single-slice Comments tied
+        // by a shared `group_id`. The new model represents them as one
+        // multi-slice Comment, so we eagerly merge them here.
+        let comments = merge_legacy_groups(items);
+        Ok((comments, unparseable))
     }
 
     fn save_to_disk(&self) -> Result<()> {
@@ -1149,7 +1360,18 @@ impl BookComments {
             return Ok(());
         }
 
-        let yaml = serde_yaml::to_string(&self.comments).context("Failed to serialize comments")?;
+        // Preserve unparseable entries (written by newer app versions or
+        // hand-edited oddities) by re-emitting them after the parseable ones.
+        // Without this an older app reading a newer file would silently
+        // destroy any comment it couldn't recognise on the next save.
+        let mut all: Vec<serde_yaml::Value> =
+            Vec::with_capacity(self.comments.len() + self.unparseable_entries.len());
+        for comment in &self.comments {
+            all.push(serde_yaml::to_value(comment).context("Failed to serialize a comment")?);
+        }
+        all.extend(self.unparseable_entries.iter().cloned());
+
+        let yaml = serde_yaml::to_string(&all).context("Failed to serialize comments")?;
 
         fs::write(&self.file_path, yaml).context("Failed to write comments file")?;
 
@@ -1166,28 +1388,60 @@ impl BookComments {
         self.comments_by_id.get(comment_id).copied()
     }
 
+    /// Insert this comment into the location index under every key it
+    /// touches. A multi-slice text comment lives in one bucket per
+    /// `node_index`, so `get_node_comments(chapter, n)` finds it regardless
+    /// of which of its blocks `n` refers to. PDF comments index under page
+    /// (matching their existing single-key behaviour).
     fn add_to_indices(&mut self, comment: &Comment) {
         let idx = self.comments.len();
-        self.comments_by_location
+        let chapter_map = self
+            .comments_by_location
             .entry(comment.chapter_href.clone())
-            .or_default()
-            .entry(comment.index_key())
-            .or_default()
-            .push(idx);
+            .or_default();
+        for key in Self::index_keys_for(comment) {
+            let bucket = chapter_map.entry(key).or_default();
+            // Defensive: avoid duplicate entries if a multi-slice comment
+            // happens to have two slices on the same block.
+            if !bucket.contains(&idx) {
+                bucket.push(idx);
+            }
+        }
         self.comments_by_id.insert(comment.id.clone(), idx);
     }
 
     fn rebuild_indices(&mut self) {
         self.comments_by_location.clear();
         self.comments_by_id.clear();
-        for (idx, comment) in self.comments.iter().enumerate() {
-            self.comments_by_location
-                .entry(comment.chapter_href.clone())
-                .or_default()
-                .entry(comment.index_key())
-                .or_default()
-                .push(idx);
-            self.comments_by_id.insert(comment.id.clone(), idx);
+        for idx in 0..self.comments.len() {
+            // Mirror add_to_indices but skipping the assumed-fresh-idx
+            // semantics. We rebuild after every mutation that could shift
+            // positions, so duplicate-key guards still apply.
+            let (chapter_href, keys) = {
+                let comment = &self.comments[idx];
+                (comment.chapter_href.clone(), Self::index_keys_for(comment))
+            };
+            let chapter_map = self.comments_by_location.entry(chapter_href).or_default();
+            for key in keys {
+                let bucket = chapter_map.entry(key).or_default();
+                if !bucket.contains(&idx) {
+                    bucket.push(idx);
+                }
+            }
+            self.comments_by_id
+                .insert(self.comments[idx].id.clone(), idx);
+        }
+    }
+
+    fn index_keys_for(comment: &Comment) -> Vec<usize> {
+        match &comment.target {
+            CommentTarget::Text { slices } => {
+                let mut keys: Vec<usize> = slices.iter().map(|s| s.node_index).collect();
+                keys.sort_unstable();
+                keys.dedup();
+                keys
+            }
+            CommentTarget::Pdf { page, .. } => vec![*page],
         }
     }
 
@@ -1344,6 +1598,74 @@ mod tests {
     }
 
     #[test]
+    fn test_multi_slice_highlight_roundtrip() {
+        let highlight = Comment {
+            id: "multi-1".to_string(),
+            chapter_href: "ch.xhtml".to_string(),
+            target: CommentTarget::Text {
+                slices: vec![
+                    TextSlice::new(
+                        2,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 10)),
+                        },
+                    ),
+                    TextSlice::new(
+                        4,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 8)),
+                        },
+                    ),
+                ],
+            },
+            content: String::new(),
+            body: AnnotationBody::Highlight {
+                color: HighlightColor::Green,
+            },
+            updated_at: Utc::now(),
+            quoted_text: Some("first ... last".to_string()),
+        };
+
+        let yaml = serde_yaml::to_string(&vec![highlight.clone()]).unwrap();
+        assert!(
+            yaml.contains("slices:"),
+            "multi-slice highlight must serialize with slices array, got:\n{yaml}"
+        );
+
+        // Roundtrip equality covers the "shape preserved" claim better than
+        // raw-text inspection.
+        let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].target.slices().len(), 2);
+        assert_eq!(parsed[0].target.slices()[0].node_index, 2);
+        assert_eq!(parsed[0].target.slices()[1].node_index, 4);
+        assert_eq!(parsed[0].highlight_color(), Some(HighlightColor::Green));
+    }
+
+    #[test]
+    fn test_single_slice_still_uses_legacy_shape() {
+        // Back-compat with older apps: single-slice highlights must emit
+        // the top-level node_index format so old versions of bookokrat keep
+        // reading them. Only multi-slice flips to the new shape.
+        let highlight = Comment::new_highlight(
+            "ch.xhtml".to_string(),
+            CommentTarget::paragraph(3, Some((2, 7))),
+            HighlightColor::Yellow,
+            Utc::now(),
+            None,
+        );
+        let yaml = serde_yaml::to_string(&vec![highlight]).unwrap();
+        assert!(
+            yaml.contains("node_index: 3"),
+            "single-slice highlight must keep legacy node_index shape, got:\n{yaml}"
+        );
+        assert!(
+            !yaml.contains("slices:"),
+            "single-slice must not emit a slices array, got:\n{yaml}"
+        );
+    }
+
+    #[test]
     fn test_highlight_serialization_roundtrip() {
         let highlight = Comment::new_highlight(
             "chapter.xhtml".to_string(),
@@ -1400,13 +1722,11 @@ mod tests {
         let parsed: Vec<Comment> = serde_yaml::from_str(legacy_yaml).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].target.node_index(), Some(5));
-        assert!(matches!(
-            &parsed[0].target,
-            CommentTarget::Text {
-                subtarget: BlockSubtarget::Paragraph { .. },
-                ..
-            }
-        ));
+        let first = parsed[0]
+            .target
+            .first_slice()
+            .expect("Text target has slices");
+        assert!(matches!(first.subtarget, BlockSubtarget::Paragraph { .. }));
     }
 
     #[test]
@@ -1528,5 +1848,347 @@ mod tests {
         assert_eq!(comments[0].content, "First note");
         assert_eq!(comments[1].content, "Second note");
         assert_eq!(comments[2].content, "Third note");
+    }
+
+    // Pre-Option-B "group_id" tests have been removed: multi-slice
+    // highlights are one Comment now, so the previously-tested fan-out
+    // semantics (delete one → all gone, recolor one → all recoloured) are
+    // structurally guaranteed by the data model rather than by helpers.
+    // The legacy-group migration path is covered by
+    // `test_legacy_group_id_yaml_migrates_to_multi_slice_comment`.
+
+    #[test]
+    fn test_loader_drops_unparseable_entries_keeps_good_ones() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let book_hash = BookComments::compute_book_hash(&book_path);
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
+
+        // Mixed YAML: one valid modern highlight, one structurally-correct
+        // but unrecognized "future format", one valid legacy paragraph note.
+        // The future-format entry must be dropped, the surrounding two must
+        // both load.
+        let yaml = r#"
+- id: keep-1
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 1
+  subtarget_kind: paragraph
+  updated_at: "2024-01-01T12:00:00Z"
+- id: drop-me
+  chapter_href: ch.xhtml
+  target_type: future_unknown_shape
+  payload:
+    something: 42
+  updated_at: "2024-01-01T12:00:00Z"
+- chapter_href: ch.xhtml
+  paragraph_index: 2
+  content: legacy survived
+  updated_at: "2024-01-01T12:00:00Z"
+"#;
+        fs::write(&file_path, yaml).unwrap();
+
+        let book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        let loaded: Vec<_> = book_comments.get_all_comments().to_vec();
+        assert_eq!(
+            loaded.len(),
+            2,
+            "expected 2 surviving comments, got {}: {loaded:?}",
+            loaded.len()
+        );
+        assert!(loaded.iter().any(|c| c.id == "keep-1"));
+        assert!(loaded.iter().any(|c| c.content == "legacy survived"));
+    }
+
+    #[test]
+    fn test_legacy_group_id_yaml_migrates_to_multi_slice_comment() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let book_hash = BookComments::compute_book_hash(&book_path);
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
+
+        // Pre-refactor YAML: three highlights sharing a group_id, plus an
+        // unrelated standalone highlight. The standalone must survive
+        // independently; the three group members must merge into one
+        // multi-slice Comment with three slices.
+        let yaml = r#"
+- id: g1-a
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 1
+  subtarget_kind: paragraph
+  group_id: hg-legacy
+  updated_at: "2024-01-01T12:00:00Z"
+- id: g1-b
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 3
+  subtarget_kind: paragraph
+  group_id: hg-legacy
+  updated_at: "2024-01-01T12:00:00Z"
+- id: g1-c
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 5
+  subtarget_kind: paragraph
+  group_id: hg-legacy
+  updated_at: "2024-01-01T12:00:00Z"
+- id: standalone
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: blue
+  target_type: text
+  node_index: 99
+  subtarget_kind: paragraph
+  updated_at: "2024-01-01T12:00:00Z"
+"#;
+        fs::write(&file_path, yaml).unwrap();
+
+        let book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        let all = book_comments.get_all_comments();
+        assert_eq!(
+            all.len(),
+            2,
+            "3 group members collapse to 1 + 1 standalone = 2, got {}",
+            all.len()
+        );
+
+        let merged = all
+            .iter()
+            .find(|c| c.id == "g1-a")
+            .expect("group head kept");
+        let slices = merged.target.slices();
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        nodes.sort_unstable();
+        assert_eq!(
+            nodes,
+            vec![1, 3, 5],
+            "merged slices must cover all group members"
+        );
+        // group_id is no longer a field on Comment — the merge consumed it
+        // from the raw YAML and produced a multi-slice target instead.
+        assert_eq!(
+            slices.len(),
+            3,
+            "merged target must have one slice per legacy member"
+        );
+
+        let standalone = all
+            .iter()
+            .find(|c| c.id == "standalone")
+            .expect("standalone preserved");
+        assert_eq!(standalone.target.slices().len(), 1);
+    }
+
+    #[test]
+    fn test_get_chapter_comments_dedupes_multi_slice_comments() {
+        // A multi-slice comment is registered under every slice's node. The
+        // previous flat-map over location buckets returned it once per
+        // bucket — which then caused the text reader to render its
+        // `Note // …` block twice for a two-paragraph comment. Dedupe by
+        // storage index so each Comment surfaces exactly once.
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let multi = Comment::new(
+            "ch.xhtml".to_string(),
+            CommentTarget::Text {
+                slices: vec![
+                    TextSlice::new(
+                        1,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 5)),
+                        },
+                    ),
+                    TextSlice::new(
+                        3,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 4)),
+                        },
+                    ),
+                ],
+            },
+            "shared note".to_string(),
+            Utc::now(),
+        );
+        let id = multi.id.clone();
+        book_comments.add_comment(multi).unwrap();
+
+        let listed = book_comments.get_chapter_comments("ch.xhtml");
+        assert_eq!(
+            listed.len(),
+            1,
+            "multi-slice comment must surface exactly once, got {}: ids={:?}",
+            listed.len(),
+            listed.iter().map(|c| &c.id).collect::<Vec<_>>()
+        );
+        assert_eq!(listed[0].id, id);
+    }
+
+    #[test]
+    fn test_multi_slice_comment_is_findable_via_every_node_index() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let highlight = Comment {
+            id: "multi-idx".to_string(),
+            chapter_href: "ch.xhtml".to_string(),
+            target: CommentTarget::Text {
+                slices: vec![
+                    TextSlice::new(
+                        3,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 5)),
+                        },
+                    ),
+                    TextSlice::new(
+                        7,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 8)),
+                        },
+                    ),
+                ],
+            },
+            content: String::new(),
+            body: AnnotationBody::Highlight {
+                color: HighlightColor::Blue,
+            },
+            updated_at: Utc::now(),
+            quoted_text: None,
+        };
+        book_comments.add_comment(highlight).unwrap();
+
+        let from_first = book_comments.get_node_comments("ch.xhtml", 3);
+        let from_second = book_comments.get_node_comments("ch.xhtml", 7);
+        assert_eq!(
+            from_first.len(),
+            1,
+            "node 3 should find the multi-slice comment"
+        );
+        assert_eq!(from_second.len(), 1, "node 7 should find the same comment");
+        assert_eq!(from_first[0].id, "multi-idx");
+        assert_eq!(from_second[0].id, "multi-idx");
+        // Nodes the comment doesn't touch must NOT see it.
+        assert!(book_comments.get_node_comments("ch.xhtml", 4).is_empty());
+    }
+
+    #[test]
+    fn test_unparseable_entries_survive_save_roundtrip() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let book_hash = BookComments::compute_book_hash(&book_path);
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
+
+        // One parseable + one future-format entry. After loading, adding a
+        // new comment (which triggers a save), and re-reading from disk, the
+        // future-format entry must still be there: otherwise an older app
+        // reading a newer file silently destroys data on the first save.
+        let yaml = r#"
+- id: keep-1
+  chapter_href: ch.xhtml
+  annotation_type: highlight
+  color: yellow
+  target_type: text
+  node_index: 1
+  subtarget_kind: paragraph
+  updated_at: "2024-01-01T12:00:00Z"
+- id: future-1
+  chapter_href: ch.xhtml
+  target_type: future_unknown_shape
+  payload:
+    something: 42
+  updated_at: "2024-01-01T12:00:00Z"
+"#;
+        fs::write(&file_path, yaml).unwrap();
+
+        {
+            let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+            // Add a new comment to force a save_to_disk pass.
+            book_comments
+                .add_comment(create_paragraph_comment(
+                    "ch.xhtml",
+                    5,
+                    "added by current version",
+                ))
+                .unwrap();
+        }
+
+        let on_disk = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            on_disk.contains("future-1"),
+            "unparseable future entry must round-trip through save, got:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("future_unknown_shape"),
+            "unparseable target_type must round-trip, got:\n{on_disk}"
+        );
+        assert!(
+            on_disk.contains("added by current version"),
+            "newly-added comment must also be present, got:\n{on_disk}"
+        );
+    }
+
+    #[test]
+    fn test_loader_returns_error_when_root_is_not_a_sequence() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let book_hash = BookComments::compute_book_hash(&book_path);
+        let file_path = comments_dir.join(format!("book_{book_hash}.yaml"));
+        // Top-level structural corruption is genuinely bad data — we should
+        // surface it as an error, not silently treat the whole file as empty.
+        fs::write(&file_path, "not a list, just a scalar string").unwrap();
+
+        let result = BookComments::new(&book_path, Some(&comments_dir));
+        assert!(
+            result.is_err(),
+            "loader must surface structural corruption, got Ok"
+        );
+    }
+
+    #[test]
+    fn test_recolor_by_id_changes_color_in_place() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+
+        let highlight = Comment::new_highlight(
+            "ch.xhtml".to_string(),
+            CommentTarget::Text {
+                slices: vec![
+                    TextSlice::new(
+                        1,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 10)),
+                        },
+                    ),
+                    TextSlice::new(
+                        2,
+                        BlockSubtarget::Paragraph {
+                            word_range: Some((0, 8)),
+                        },
+                    ),
+                ],
+            },
+            HighlightColor::Yellow,
+            Utc::now(),
+            None,
+        );
+        let id = highlight.id.clone();
+        book_comments.add_comment(highlight).unwrap();
+
+        book_comments
+            .set_highlight_color_by_id(&id, HighlightColor::Red)
+            .unwrap();
+
+        let updated = book_comments
+            .get_comment_by_id(&id)
+            .expect("highlight still present");
+        assert_eq!(updated.highlight_color(), Some(HighlightColor::Red));
+        // Multi-slice → one Comment, so the color change applies to the
+        // whole logical highlight by virtue of being on a single struct.
+        assert_eq!(updated.target.slices().len(), 2);
     }
 }

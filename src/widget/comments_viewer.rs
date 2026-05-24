@@ -430,15 +430,29 @@ impl CommentsViewer {
             };
 
             let chapter_title = Self::find_chapter_title(&comment.chapter_href, toc_items, epub);
-            let quoted_text = Self::extract_quoted_text_from_cache(
-                &doc_cache,
-                &comment.chapter_href,
-                node_index,
-                comment.target.word_range(),
-                comment.target.list_item_index(),
-                comment.target.definition_item_index(),
-                comment.target.quote_paragraph_index(),
-            );
+            // Multi-slice highlights cover more than one block. Render an
+            // abbreviated `first … last` snippet of the user's selected
+            // text — otherwise the row shows every paragraph verbatim and
+            // dwarfs every other entry. Single-slice still uses the
+            // per-segment cache extraction (which already abbreviates by
+            // virtue of being block-scoped).
+            let quoted_text = if comment.target.slice_count() > 1 {
+                Self::build_multi_slice_preview(
+                    &doc_cache,
+                    &comment.chapter_href,
+                    comment.target.slices(),
+                )
+            } else {
+                Self::extract_quoted_text_from_cache(
+                    &doc_cache,
+                    &comment.chapter_href,
+                    node_index,
+                    comment.target.word_range(),
+                    comment.target.list_item_index(),
+                    comment.target.definition_item_index(),
+                    comment.target.quote_paragraph_index(),
+                )
+            };
 
             let entry_index = if comment.target.is_code_block() {
                 let key = (comment.chapter_href.clone(), node_index);
@@ -842,6 +856,72 @@ impl CommentsViewer {
             .to_string()
     }
 
+    /// Render a multi-slice highlight's quoted text with a visually distinct
+    /// "[…]" separator between the first and last slices:
+    ///
+    /// ```text
+    /// first paragraph text wrapped across rows...
+    /// [...]
+    /// last paragraph text wrapped across rows...
+    /// ```
+    ///
+    /// The renderer wraps each `\n`-separated chunk independently, so the
+    /// shape stays clear at any row width — the user can tell at a glance
+    /// that the highlight skipped intermediate blocks. Skipping the middle
+    /// matches `comment.target.slices().first/last`, not the canonical
+    /// stored `quoted_text` (which is a flat normalised string).
+    fn build_multi_slice_preview(
+        doc_cache: &HashMap<String, crate::markdown::Document>,
+        chapter_href: &str,
+        slices: &[crate::comments::TextSlice],
+    ) -> String {
+        let Some(first) = slices.first() else {
+            return String::new();
+        };
+        let Some(last) = slices.last() else {
+            return String::new();
+        };
+
+        let first_text = Self::extract_slice_text(doc_cache, chapter_href, first);
+        if slices.len() == 1 {
+            return first_text;
+        }
+        let last_text = Self::extract_slice_text(doc_cache, chapter_href, last);
+        format!("{first_text}\n[...]\n{last_text}")
+    }
+
+    fn extract_slice_text(
+        doc_cache: &HashMap<String, crate::markdown::Document>,
+        chapter_href: &str,
+        slice: &crate::comments::TextSlice,
+    ) -> String {
+        use crate::comments::BlockSubtarget;
+        let word_range = slice.subtarget.word_range();
+        let list_item_index = match &slice.subtarget {
+            BlockSubtarget::ListItem { item_index, .. } => Some(*item_index),
+            _ => None,
+        };
+        let definition_item_index = match &slice.subtarget {
+            BlockSubtarget::DefinitionItem { item_index, .. } => Some(*item_index),
+            _ => None,
+        };
+        let quote_paragraph_index = match &slice.subtarget {
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index, ..
+            } => Some(*paragraph_index),
+            _ => None,
+        };
+        Self::extract_quoted_text_from_cache(
+            doc_cache,
+            chapter_href,
+            slice.node_index,
+            word_range,
+            list_item_index,
+            definition_item_index,
+            quote_paragraph_index,
+        )
+    }
+
     fn extract_quoted_text_from_cache(
         doc_cache: &HashMap<String, crate::markdown::Document>,
         chapter_href: &str,
@@ -861,7 +941,14 @@ impl CommentsViewer {
             return "[Unable to retrieve text]".to_string();
         };
 
-        let text = match &node.block {
+        // Single-block highlights now render their full quoted text in the
+        // overview — the row renderer wraps long quotes onto multiple lines.
+        // Previously we capped at 80 chars + "..." which truncated a typical
+        // sentence mid-clause; the truncation only made sense back when
+        // multi-paragraph highlights didn't exist. Multi-slice highlights
+        // get their own ellipsis treatment via `abbreviate_quoted_text` in
+        // `build_entries`.
+        match &node.block {
             Block::Paragraph { content } | Block::Heading { content, .. } => {
                 let full_text = Self::extract_text_from_text(content);
                 Self::apply_word_range(full_text, word_range)
@@ -888,14 +975,7 @@ impl CommentsViewer {
                 Self::apply_word_range_with_item(full_text, adjusted_range, item_range)
             }
             _ => Self::extract_text_from_node(node),
-        };
-
-        let max_chars = 80;
-        if text.chars().count() > max_chars {
-            let truncated: String = text.chars().take(max_chars).collect();
-            return format!("{truncated}...");
         }
-        text
     }
 
     fn apply_word_range(text: String, word_range: Option<(usize, usize)>) -> String {
@@ -1871,6 +1951,13 @@ impl CommentsViewer {
         self.rendered_entries.get(self.selected_index)
     }
 
+    /// Total number of overview rows the viewer holds, regardless of the
+    /// active chapter filter. Multi-segment highlights count once here
+    /// (members collapsed via `group_id`).
+    pub fn entry_count(&self) -> usize {
+        self.all_entries.len()
+    }
+
     pub fn remove_selected_comment(&mut self) -> Vec<Comment> {
         if self.rendered_entries.is_empty() {
             return Vec::new();
@@ -2395,5 +2482,91 @@ impl CommentsViewer {
             &self.book_title,
             &self.doc_cache,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CommentsViewer;
+    use crate::comments::{BlockSubtarget, TextSlice};
+    use crate::markdown::{Block, Document, Node, Text, TextNode, TextOrInline};
+    use std::collections::HashMap;
+
+    fn paragraph_node(text: &str) -> Node {
+        let mut content = Text::default();
+        content.push(TextOrInline::Text(TextNode {
+            content: text.to_string(),
+            style: None,
+        }));
+        Node {
+            block: Block::Paragraph { content },
+            source_range: 0..0,
+            id: None,
+        }
+    }
+
+    fn doc_with_blocks(blocks: Vec<Node>) -> Document {
+        Document { blocks }
+    }
+
+    #[test]
+    fn multi_slice_preview_renders_first_separator_last_with_middle_omitted() {
+        let mut cache: HashMap<String, Document> = HashMap::new();
+        cache.insert(
+            "ch.xhtml".to_string(),
+            doc_with_blocks(vec![
+                paragraph_node("First paragraph content here."),
+                paragraph_node("Middle paragraph that should be elided."),
+                paragraph_node("Last paragraph content here."),
+            ]),
+        );
+
+        let slices = vec![
+            TextSlice::new(0, BlockSubtarget::Paragraph { word_range: None }),
+            TextSlice::new(1, BlockSubtarget::Paragraph { word_range: None }),
+            TextSlice::new(2, BlockSubtarget::Paragraph { word_range: None }),
+        ];
+
+        let out = CommentsViewer::build_multi_slice_preview(&cache, "ch.xhtml", &slices);
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(
+            lines,
+            vec![
+                "First paragraph content here.",
+                "[...]",
+                "Last paragraph content here."
+            ],
+            "expected first/[...]/last shape, got {lines:?}"
+        );
+        // The MIDDLE paragraph must never appear — that's the whole point
+        // of `first [...] last` rather than concatenation.
+        assert!(
+            !out.contains("Middle paragraph"),
+            "middle slice text must be omitted, got {out:?}"
+        );
+    }
+
+    #[test]
+    fn multi_slice_preview_two_paragraphs_still_shows_separator() {
+        let mut cache: HashMap<String, Document> = HashMap::new();
+        cache.insert(
+            "ch.xhtml".to_string(),
+            doc_with_blocks(vec![
+                paragraph_node("Paragraph A."),
+                paragraph_node("Paragraph B."),
+            ]),
+        );
+        let slices = vec![
+            TextSlice::new(0, BlockSubtarget::Paragraph { word_range: None }),
+            TextSlice::new(1, BlockSubtarget::Paragraph { word_range: None }),
+        ];
+
+        let out = CommentsViewer::build_multi_slice_preview(&cache, "ch.xhtml", &slices);
+        let lines: Vec<&str> = out.split('\n').collect();
+        assert_eq!(
+            lines,
+            vec!["Paragraph A.", "[...]", "Paragraph B."],
+            "two-slice highlight still needs the visible [...] separator so users can tell it's not one continuous block"
+        );
     }
 }
