@@ -219,6 +219,9 @@ binding_tests! {
     global_space_s_upper: KeyContext::Global, "<Space>S",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| true; // PDF only
+    global_space_g: KeyContext::Global, "<Space>g",
+        setup = |app, _dir| { open_book(&mut app); },
+        check = |app| true; // PDF only — opens go-to-page input on PdfReader
     // Without text selection, Space+l shows an info notification instead of running lookup
     global_space_l: KeyContext::Global, "<Space>l",
         setup = |app, _dir| { open_book(&mut app); },

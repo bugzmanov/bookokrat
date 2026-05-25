@@ -358,6 +358,14 @@ impl MarksPopup {
                         self.handle_ctrl_u();
                         None
                     }
+                    Action::ScrollPageDown => {
+                        self.handle_ctrl_f();
+                        None
+                    }
+                    Action::ScrollPageUp => {
+                        self.handle_ctrl_b();
+                        None
+                    }
                     Action::NextTab | Action::PrevTab => {
                         self.switch_tab();
                         None

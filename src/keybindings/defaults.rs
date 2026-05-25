@@ -131,6 +131,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>w" => Action::TogglePdfWatching);
     bind!(ctx, "<Space>D" => Action::TogglePdfPageLayout);
     bind!(ctx, "<Space>S" => Action::TogglePdfRenderMode);
+    bind!(ctx, "<Space>g" => Action::GoToPage);
     bind!(ctx, "<Space>l" => Action::LookupSelection);
     bind!(ctx, "<Space><lt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
@@ -219,7 +220,6 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "H" => Action::PanLeft);
     bind!(ctx, "L" => Action::PanRight);
     bind!(ctx, "gd" => Action::SynctexInverse);
-    bind!(ctx, "<Space>g" => Action::GoToPage);
     bind!(ctx, "n" => Action::ToggleNormalMode);
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "i" => Action::ToggleInvertImages);

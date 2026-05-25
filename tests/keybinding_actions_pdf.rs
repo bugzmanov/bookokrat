@@ -143,9 +143,6 @@ pdf_binding_tests! {
     pdf_gd: KeyContext::PdfStandard, "gd",
         setup = |state| {},
         check = |_state, action| action.is_none();
-    pdf_space_g: KeyContext::PdfStandard, "<Space>g",
-        setup = |state| {},
-        check = |state, _action| state.go_to_page_input.is_some();
     pdf_ctrl_d: KeyContext::PdfStandard, "<C-d>",
         setup = |state| {},
         check = |_state, action| matches!(action, Some(InputAction::Redraw));

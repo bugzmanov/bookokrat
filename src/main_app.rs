@@ -4994,6 +4994,15 @@ impl App {
                 }
                 true
             }
+            Action::GoToPage => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        pdf_reader.start_go_to_page_input();
+                    }
+                }
+                true
+            }
             Action::TogglePdfRenderMode => {
                 #[cfg(feature = "pdf")]
                 if self.is_pdf_mode() {
@@ -8031,9 +8040,26 @@ where
                             continue;
                         }
 
+                        // Pending mark state (after `m`/`` ` ``/`'`) consumes the next
+                        // key as the mark name. Must run before global hotkeys, otherwise
+                        // a Global-bound key (Ctrl+Z, ?, etc.) fires its action AND
+                        // leaves the mark pending to eat the next innocent keystroke.
+                        if app.pending_mark_op.is_some()
+                            && !app.pdf_text_input_active()
+                            && app.handle_pending_mark_input(key)
+                        {
+                            continue;
+                        }
+
                         // Route through global hotkeys (keymap-based) before PDF handler.
                         // This handles Space-prefixed sequences, Ctrl+Z/Q/L, ?, <, >, etc.
                         if !app.pdf_text_input_active() && app.handle_global_hotkeys(*key) {
+                            // Global owns a separate key_sequence from pdf_reader.key_seq.
+                            // Reset PDF's pending prefix so a stale `g` (etc.) doesn't
+                            // resolve against the next keystroke as `gg`/`gd`.
+                            if let Some(ref mut pdf_reader) = app.pdf_reader {
+                                pdf_reader.key_seq.clear();
+                            }
                             continue;
                         }
 
@@ -8046,6 +8072,9 @@ where
                         }
 
                         if !app.pdf_text_input_active() && app.handle_global_hotkeys(*key) {
+                            if let Some(ref mut pdf_reader) = app.pdf_reader {
+                                pdf_reader.key_seq.clear();
+                            }
                             continue;
                         }
                         if key.code == KeyCode::Char('/') && !app.pdf_text_input_active() {

@@ -2882,7 +2882,7 @@ impl PdfReaderState {
         }
     }
 
-    fn start_go_to_page_input(&mut self) -> Option<InputAction> {
+    pub(crate) fn start_go_to_page_input(&mut self) -> Option<InputAction> {
         let mode = if self.content_page_mode_available() {
             PageJumpMode::Content
         } else {
