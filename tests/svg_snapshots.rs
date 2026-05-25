@@ -4494,6 +4494,873 @@ fn test_epub_highlights_all_colors_svg() {
     );
 }
 
+/// Regression: selecting an entire paragraph (V → H → color) used to drop
+/// the highlight silently. `compute_canonical_word_range` collapsed
+/// `s == 0 && e >= total_len` to `None`, which made `highlight_range_of`
+/// return `None`, which made the renderer skip the highlight. The YAML
+/// recorded the highlight; the screen did not.
+///
+/// The earlier all-colors test never caught this because its selections only
+/// covered a 14-char prefix of a 47-char paragraph, so the boundary
+/// condition never fired. This test drives the same code path as the user
+/// (real key presses through the keymap) and selects a single-line paragraph
+/// in full via line-wise visual mode.
+#[test]
+#[parallel]
+fn test_epub_highlight_whole_paragraph_via_visual_line_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_whole_paragraph.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Whole Paragraph Highlight Test</title>
+</head>
+<body>
+    <p>Whole paragraph highlight test sample.</p>
+    <p>Second paragraph keeps the renderer honest.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // n -> normal mode, gg + 0 -> first paragraph, col 0,
+    // V -> linewise visual select (the whole line, which is also the whole
+    // paragraph for this single-line paragraph), H y -> Yellow highlight.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    // Targeted data-layer check: the highlight must be stored with a concrete
+    // `word_range`. The earlier bug returned `None` for whole-block
+    // selections, which `highlight_range_of` then silently dropped. We assert
+    // this BEFORE the snapshot so a regression here points straight at
+    // `compute_canonical_word_range` rather than at a colour mismatch.
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let comments = comments_arc.lock().expect("lock comments");
+        let all: Vec<_> = comments
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .collect();
+        assert_eq!(all.len(), 1, "expected exactly one highlight to be stored");
+        let range = all[0].target.word_range();
+        assert!(
+            matches!(range, Some((s, e)) if s < e),
+            "whole-paragraph highlight must store a concrete word_range, got {range:?}"
+        );
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_whole_paragraph.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_whole_paragraph.svg"),
+        "test_epub_highlight_whole_paragraph_via_visual_line_svg",
+        create_test_failure_handler("test_epub_highlight_whole_paragraph_via_visual_line_svg"),
+    );
+}
+
+/// Snapshot the new multi-slice overview shape:
+///   > first paragraph wrapped...
+///   > [...]
+///   > last paragraph wrapped...
+/// The `[...]` separator is what telegraphs "this highlight skipped
+/// intermediate blocks" — without it the overview row looked like a single
+/// continuous quote.
+#[test]
+#[parallel]
+fn test_multi_slice_highlight_overview_shape_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("multi_slice_overview_shape.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Multi Slice Overview Shape</title>
+</head>
+<body>
+    <p>First paragraph holds the anchor end of the multi paragraph selection.</p>
+    <p>Middle paragraph that the highlight crosses but should NOT appear in the overview row.</p>
+    <p>Last paragraph holds the focus end of the multi paragraph selection.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // V-highlight across all three paragraphs. The middle paragraph is part
+    // of the highlight in the reader, but the overview row should show
+    // only first + [...] + last.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    for _ in 0..6 {
+        app.press_key(crossterm::event::KeyCode::Char('j'));
+    }
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    open_comments_viewer(&mut app);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    // Quick text-level sanity check before the SVG diff: the middle
+    // paragraph's body must not appear in the rendered overview, and
+    // both `[...]` separator + first/last contents must be present.
+    let rendered_text: String = svg_output
+        .lines()
+        .filter(|l| l.contains("<tspan"))
+        .map(|l| {
+            let mut s = l.to_string();
+            while let (Some(lt), Some(gt)) = (s.find('<'), s.find('>')) {
+                if lt < gt {
+                    s.replace_range(lt..=gt, "");
+                } else {
+                    break;
+                }
+            }
+            s
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let normalized: String = rendered_text
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(
+        normalized.contains("[...]"),
+        "overview must show the [...] separator for multi-slice quotes"
+    );
+    assert!(
+        normalized.contains("Firstparagraphholds"),
+        "overview must render the first slice's text"
+    );
+    assert!(
+        normalized.contains("Lastparagraphholds"),
+        "overview must render the last slice's text"
+    );
+    assert!(
+        !normalized.contains("Middleparagraphthat"),
+        "overview must NOT include the middle slice's text — that's the whole point of first/[...]/last"
+    );
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_multi_slice_highlight_overview_shape.svg",
+        &svg_output,
+    )
+    .unwrap();
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/multi_slice_highlight_overview_shape.svg"),
+        "test_multi_slice_highlight_overview_shape_svg",
+        create_test_failure_handler("test_multi_slice_highlight_overview_shape_svg"),
+    );
+}
+
+/// Multi-slice highlight spanning a list item AND a following paragraph.
+/// Exercises the non-paragraph capture path: the first slice is a
+/// `BlockSubtarget::ListItem` and the second is `BlockSubtarget::Paragraph`,
+/// produced by the same `compute_selection_target` call. Confirms the
+/// slice-level scope match (`slice_matches_scope`) finds the right slice
+/// inside each block's own render path (list rendering vs. paragraph
+/// rendering use different highlight-collection entry points).
+#[test]
+#[parallel]
+fn test_multi_slice_across_list_item_and_paragraph_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("multi_slice_list_paragraph.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>List Item Plus Paragraph</title>
+</head>
+<body>
+    <ul>
+        <li>First list item content for the multi-slice highlight.</li>
+    </ul>
+    <p>Following paragraph after the list ends here.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // n -> normal, gg -> top, 0 -> col 0. V starts line-wise visual at the
+    // list item line, then enough j's to cross into the paragraph. The
+    // capture must produce ONE multi-slice highlight with two slices of
+    // DIFFERENT subtarget shapes.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    // Walk down past the list item, the implicit blank, and onto the paragraph.
+    // Linewise V "sticks" cursor to end-of-line so extra j's are harmless.
+    for _ in 0..6 {
+        app.press_key(crossterm::event::KeyCode::Char('j'));
+    }
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    use bookokrat::comments::BlockSubtarget;
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let comments = comments_arc.lock().expect("lock comments");
+        let highlights: Vec<_> = comments
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .cloned()
+            .collect();
+        assert_eq!(
+            highlights.len(),
+            1,
+            "expected one multi-slice highlight, got {}",
+            highlights.len()
+        );
+        let slices = highlights[0].target.slices();
+        assert_eq!(
+            slices.len(),
+            2,
+            "expected slices for the list item AND the paragraph, got {}",
+            slices.len()
+        );
+
+        // Subtarget kinds must mirror the structurally different blocks the
+        // user crossed: one ListItem, one Paragraph. The order depends on
+        // document layout but the SET should match.
+        let mut kinds: Vec<&'static str> = slices
+            .iter()
+            .map(|s| match s.subtarget {
+                BlockSubtarget::ListItem { .. } => "list_item",
+                BlockSubtarget::Paragraph { .. } => "paragraph",
+                BlockSubtarget::QuoteParagraph { .. } => "quote_paragraph",
+                BlockSubtarget::DefinitionItem { .. } => "definition_item",
+                BlockSubtarget::CodeLines { .. } => "code_lines",
+            })
+            .collect();
+        kinds.sort_unstable();
+        assert_eq!(
+            kinds,
+            vec!["list_item", "paragraph"],
+            "expected exactly one ListItem + one Paragraph slice, got {kinds:?}"
+        );
+
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "slices must target distinct AST nodes (the list block + the paragraph), got {nodes:?}"
+        );
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_multi_slice_list_paragraph.svg",
+        &svg_output,
+    )
+    .unwrap();
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/multi_slice_list_paragraph.svg"),
+        "test_multi_slice_across_list_item_and_paragraph_svg",
+        create_test_failure_handler("test_multi_slice_across_list_item_and_paragraph_svg"),
+    );
+}
+
+/// Partial overlap across multi-slice: existing single-slice highlight on
+/// paragraph 1, user then V-selects across paragraphs 1+2 and picks a
+/// different colour. The palette's range overlap detection
+/// (`find_overlapping_highlight`, slice-aware) catches the existing
+/// highlight, so the dispatcher takes the visual-mode REPLACE path:
+/// delete-the-old then add-the-new-from-selection. Final state: ONE
+/// yellow multi-slice highlight covering both paragraphs; the original
+/// green single-slice is gone. This exercises:
+///   - per-slice overlap detection against an incoming multi-slice target;
+///   - the palette's choice of "replace" rather than "reject" when overlap
+///     is found in visual mode;
+///   - `delete_comment_by_id` + `add_highlight_from_visual_selection` as
+///     a clean atomic pair (no leaked stale comment, no double-write).
+#[test]
+#[parallel]
+fn test_multi_slice_overlap_in_visual_mode_replaces_existing_highlight_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("multi_slice_overlap.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Multi Slice Overlap Test</title>
+</head>
+<body>
+    <p>First paragraph that will hold the existing highlight.</p>
+    <p>Second paragraph that the multi-slice attempt would also touch.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Step 1: place a SINGLE-slice green highlight on paragraph 1.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+
+    let original_id = {
+        let comments_arc = app.text_reader().get_comments();
+        let guard = comments_arc.lock().expect("lock comments");
+        let h = guard
+            .get_all_comments()
+            .iter()
+            .find(|c| c.is_highlight())
+            .cloned()
+            .expect("first highlight saved");
+        assert_eq!(h.target.slices().len(), 1, "step 1 must be single-slice");
+        assert_eq!(h.highlight_color(), Some(crate::HighlightColor::Green));
+        h.id.clone()
+    };
+
+    // Step 2: V across BOTH paragraphs and pick a DIFFERENT colour. The
+    // selection overlaps the existing green highlight, so the palette
+    // takes the visual-mode replace path.
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let guard = comments_arc.lock().expect("lock comments");
+        let highlights: Vec<_> = guard
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .cloned()
+            .collect();
+        assert_eq!(
+            highlights.len(),
+            1,
+            "replace must keep total count at 1, got {} highlights — a leaked stale comment or a double-write",
+            highlights.len()
+        );
+        assert_ne!(
+            highlights[0].id, original_id,
+            "the surviving highlight must be the NEW one (delete-then-add), not the original"
+        );
+        assert_eq!(
+            highlights[0].highlight_color(),
+            Some(crate::HighlightColor::Yellow),
+            "color must be the freshly-picked one"
+        );
+        assert_eq!(
+            highlights[0].target.slices().len(),
+            2,
+            "the replacement must be a multi-slice covering both paragraphs"
+        );
+        let mut nodes: Vec<_> = highlights[0]
+            .target
+            .slices()
+            .iter()
+            .map(|s| s.node_index)
+            .collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "the two slices must target distinct paragraph nodes, got {nodes:?}"
+        );
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_multi_slice_overlap_replace.svg",
+        &svg_output,
+    )
+    .unwrap();
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/multi_slice_overlap_replace.svg"),
+        "test_multi_slice_overlap_in_visual_mode_replaces_existing_highlight_svg",
+        create_test_failure_handler(
+            "test_multi_slice_overlap_in_visual_mode_replaces_existing_highlight_svg",
+        ),
+    );
+}
+
+/// Regression: when the cursor lands inside the SECOND slice of a multi-
+/// paragraph highlight, the highlight palette must still recognise it.
+/// `highlight_hits_in_range` previously did `comment.target.word_range()`
+/// which always returned the *first* slice's range, so a cursor positioned
+/// PAST the first slice's range (i.e. inside the second paragraph but at a
+/// column the first paragraph doesn't reach) silently missed the
+/// highlight.
+///
+/// Construction: paragraph 1 is short (~25 chars), paragraph 2 is long
+/// (~120 chars). After V-highlighting both, slice 1's word_range is
+/// (0, ~25) and slice 2's is (0, ~120). With cursor at the END of
+/// paragraph 2 (column ~119), pre-fix code checks 119 against slice 1's
+/// (0, 25) — fails — and reports no hit. Post-fix it checks against
+/// slice 2's (0, 120) and finds the highlight.
+#[test]
+#[parallel]
+fn test_highlight_palette_finds_multi_slice_under_cursor_past_first_slice_length() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(160, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("palette_mismatched_slices.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Palette Mismatched Slices Test</title>
+</head>
+<body>
+    <p>Short first paragraph.</p>
+    <p>Long second paragraph with lots of words to push the column position well past the first paragraph's length boundary today.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // V-highlight both paragraphs → one multi-slice yellow highlight.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    // G $ → last line, end of line. Cursor lands at the end of paragraph 2,
+    // which is past paragraph 1's length. With the bug this position would
+    // be outside slice 1's range and the highlight is not detected.
+    app.press_key(crossterm::event::KeyCode::Char('G'));
+    app.press_key(crossterm::event::KeyCode::Char('$'));
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let hit = app.text_reader().highlight_for_palette();
+    assert!(
+        hit.is_some(),
+        "highlight_for_palette must find the multi-slice highlight when the cursor is past slice 1's range — pre-fix used target.word_range() which only returned slice 1, missing cursors in slice 2's domain"
+    );
+    let (_, color) = hit.unwrap();
+    assert_eq!(color, crate::HighlightColor::Yellow);
+}
+
+/// Multi-paragraph highlight via line-wise visual mode produces a group of
+/// per-paragraph highlights sharing a `group_id`. Drives the real key path
+/// (n / gg / 0 / V / j / j / H / y) so the entire capture pipeline is
+/// exercised — selection target computation, multi-segment split, group_id
+/// assignment, and persistence.
+#[test]
+#[parallel]
+fn test_epub_highlight_across_two_paragraphs_via_visual_line_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_two_paragraphs.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Multi Paragraph Highlight Test</title>
+</head>
+<body>
+    <p>First paragraph holds the anchor end of the selection.</p>
+    <p>Second paragraph holds the focus end of the selection.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // n -> normal mode, gg + 0 -> first paragraph col 0,
+    // V -> linewise visual, j j -> extend through the blank line into the
+    // second paragraph, H y -> Yellow highlight.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+    app.press_key(crossterm::event::KeyCode::Char('y'));
+
+    // Data-layer asserts: ONE multi-slice highlight (was N grouped Comments
+    // pre-refactor). Two slices targeting distinct paragraph node indices.
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let comments = comments_arc.lock().expect("lock comments");
+        let all: Vec<_> = comments
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .cloned()
+            .collect();
+        assert_eq!(
+            all.len(),
+            1,
+            "expected exactly one multi-slice highlight, got {}",
+            all.len()
+        );
+        let slices = all[0].target.slices();
+        assert_eq!(
+            slices.len(),
+            2,
+            "expected two slices for a two-paragraph selection, got {}",
+            slices.len()
+        );
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "expected two distinct node indices, got {nodes:?}"
+        );
+    }
+
+    // Open the comments overview: the single multi-slice highlight must
+    // render as ONE row. The viewer no longer needs special group_map
+    // collapse logic — one Comment = one entry by construction.
+    open_comments_viewer(&mut app);
+    let entry_count_before = app.comments_viewer().expect("viewer opened").entry_count();
+    assert_eq!(
+        entry_count_before, 1,
+        "multi-slice highlight must render as a single overview row, got {entry_count_before}"
+    );
+
+    // Delete-by-id removes the whole multi-slice Comment in one shot.
+    // No fan-out needed — there's only one Comment to delete.
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let first_id = {
+            let guard = comments_arc.lock().expect("lock comments");
+            guard
+                .get_all_comments()
+                .iter()
+                .find(|c| c.is_highlight())
+                .map(|c| c.id.clone())
+                .expect("highlight present")
+        };
+        {
+            let mut guard = comments_arc.lock().expect("lock comments");
+            guard
+                .delete_comment_by_id(&first_id)
+                .expect("delete succeeds");
+        }
+        let guard = comments_arc.lock().expect("lock comments");
+        let surviving: Vec<_> = guard
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_highlight())
+            .collect();
+        assert!(
+            surviving.is_empty(),
+            "delete must remove the multi-slice highlight, surviving={}",
+            surviving.len()
+        );
+    }
+}
+
+/// Selecting two paragraphs in visual-line mode and pressing `a` produces
+/// exactly ONE multi-slice Comment (not two). Drives the real key path
+/// through capture so this guards both the unified `compute_selection_target`
+/// and `save_comment` paths against regressing to per-block N-Comments.
+#[test]
+#[parallel]
+fn test_epub_comment_across_two_paragraphs_via_visual_line_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("comment_two_paragraphs.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Multi Paragraph Comment Test</title>
+</head>
+<body>
+    <p>First paragraph holds the anchor end of the comment selection.</p>
+    <p>Second paragraph holds the focus end of the comment selection.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // n -> normal mode, gg + 0 -> first paragraph col 0,
+    // V -> linewise visual, j j -> through the blank line into the
+    // second paragraph, a -> open comment textarea.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('V'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    // Type the comment body. tui-textarea consumes each char in turn.
+    for ch in "spans two paragraphs".chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+    // Esc saves and exits comment input mode.
+    app.press_key(crossterm::event::KeyCode::Esc);
+
+    // Data-layer asserts: ONE multi-slice Comment carrying the typed body,
+    // two slices targeting distinct paragraph node indices. If the capture
+    // ever regresses to N single-slice Comments (one per paragraph) this
+    // count flips to 2 and the assertion fires before the SVG diff.
+    {
+        let comments_arc = app.text_reader().get_comments();
+        let comments = comments_arc.lock().expect("lock comments");
+        let all: Vec<_> = comments
+            .get_all_comments()
+            .iter()
+            .filter(|c| c.is_comment())
+            .cloned()
+            .collect();
+        assert_eq!(
+            all.len(),
+            1,
+            "expected exactly one multi-slice comment, got {}",
+            all.len()
+        );
+        assert_eq!(all[0].content, "spans two paragraphs");
+        let slices = all[0].target.slices();
+        assert_eq!(
+            slices.len(),
+            2,
+            "expected two slices for a two-paragraph comment, got {}",
+            slices.len()
+        );
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        nodes.sort_unstable();
+        nodes.dedup();
+        assert_eq!(
+            nodes.len(),
+            2,
+            "expected two distinct node indices, got {nodes:?}"
+        );
+    }
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_comment_across_two_paragraphs.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_comment_across_two_paragraphs.svg"),
+        "test_epub_comment_across_two_paragraphs_via_visual_line_svg",
+        create_test_failure_handler("test_epub_comment_across_two_paragraphs_via_visual_line_svg"),
+    );
+}
+
 #[test]
 #[parallel]
 fn test_comment_input_placement_from_visual_selection_svg() {

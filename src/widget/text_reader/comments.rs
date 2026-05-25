@@ -14,6 +14,13 @@ struct CommentSelection {
     comment_id: String,
 }
 
+/// A highlight annotation found under the cursor / selection.
+#[derive(Clone)]
+struct HighlightHit {
+    comment_id: String,
+    color: HighlightColor,
+}
+
 #[derive(Clone)]
 struct InlineCodeCommentHit {
     comment_id: String,
@@ -44,50 +51,72 @@ enum CommentScope<'a> {
     QuoteParagraph { paragraph_index: usize },
 }
 
-fn scope_matches(comment: &Comment, scope: CommentScope<'_>) -> bool {
+/// Slice-level scope match. Each rendered block asks `does this slice
+/// belong here?` — multi-slice highlights now have one slice per touched
+/// block, so the rendering pipeline pulls only the slice that targets the
+/// node it's currently drawing.
+fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'_>) -> bool {
     use crate::comments::BlockSubtarget;
     match scope {
         CommentScope::Node => true,
-        CommentScope::LegacyList => comment.target.subtarget().is_some_and(
-            |s| matches!(s, BlockSubtarget::ListItem { list_path, .. } if list_path.is_empty()),
+        CommentScope::LegacyList => matches!(
+            &slice.subtarget,
+            BlockSubtarget::ListItem { list_path, .. } if list_path.is_empty()
         ),
-        CommentScope::ListItem { item_index } => {
-            comment.target.list_item_index() == Some(item_index)
-                && comment
-                    .target
-                    .list_path()
-                    .is_none_or(|path| path.is_empty())
-        }
-        CommentScope::ListItemPath(path) => comment.target.list_path() == Some(path),
+        CommentScope::ListItem { item_index } => match &slice.subtarget {
+            BlockSubtarget::ListItem {
+                item_index: idx,
+                list_path,
+                ..
+            } => *idx == item_index && list_path.is_empty(),
+            _ => false,
+        },
+        CommentScope::ListItemPath(path) => matches!(
+            &slice.subtarget,
+            BlockSubtarget::ListItem { list_path, .. } if list_path.as_slice() == path
+        ),
         CommentScope::DefinitionItem {
             item_index,
             is_term,
-        } => comment.target.subtarget().is_some_and(|s| {
-            matches!(
-                s,
-                BlockSubtarget::DefinitionItem {
-                    item_index: idx,
-                    is_term: term,
-                    ..
-                } if *idx == item_index && *term == is_term
-            )
-        }),
-        CommentScope::QuoteParagraph { paragraph_index } => {
-            comment.target.quote_paragraph_index() == Some(paragraph_index)
-        }
+        } => matches!(
+            &slice.subtarget,
+            BlockSubtarget::DefinitionItem {
+                item_index: idx,
+                is_term: term,
+                ..
+            } if *idx == item_index && *term == is_term
+        ),
+        CommentScope::QuoteParagraph { paragraph_index } => matches!(
+            &slice.subtarget,
+            BlockSubtarget::QuoteParagraph {
+                paragraph_index: idx,
+                ..
+            } if *idx == paragraph_index
+        ),
     }
 }
 
-fn annotation_range_of(c: &Comment) -> Option<(usize, usize)> {
+fn slice_annotation_range(
+    c: &Comment,
+    slice: &crate::comments::TextSlice,
+) -> Option<(usize, usize)> {
     if !c.is_comment() {
         return None;
     }
-    c.target.word_range()
+    slice.subtarget.word_range()
 }
 
-fn highlight_range_of(c: &Comment) -> Option<HighlightRange> {
+fn slice_highlight_range(
+    c: &Comment,
+    slice: &crate::comments::TextSlice,
+) -> Option<HighlightRange> {
     let color = c.highlight_color()?;
-    let (start, end) = c.target.word_range()?;
+    // `word_range == None` is the legacy "whole block" shorthand. Treat it as
+    // a range covering everything in scope so previously-saved
+    // whole-paragraph highlights still render. The render code already
+    // filters by node + subtarget, and clamps `end` against each span, so an
+    // unbounded end is safe here.
+    let (start, end) = slice.subtarget.word_range().unwrap_or((0, usize::MAX));
     Some(HighlightRange { start, end, color })
 }
 
@@ -97,20 +126,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.rebuild_chapter_comments();
     }
 
-    /// Rebuild the comment lookup for the current chapter
+    /// Rebuild the comment lookup for the current chapter. A multi-slice
+    /// comment is filed under every block index it touches so each block's
+    /// render pass finds it via `get_node_comments(block_idx)`.
     pub fn rebuild_chapter_comments(&mut self) {
+        use std::collections::HashSet;
         self.current_chapter_comments.clear();
 
         if let Some(chapter_file) = &self.current_chapter_file {
             if let Some(comments_arc) = &self.book_comments {
                 if let Ok(comments) = comments_arc.lock() {
                     for comment in comments.get_chapter_comments(chapter_file) {
-                        // Text reader only handles EPUB Text comments
-                        if let Some(node_index) = comment.node_index() {
-                            self.current_chapter_comments
-                                .entry(node_index)
-                                .or_default()
-                                .push(comment.clone());
+                        // Text reader only handles EPUB Text comments. The
+                        // slices vec is empty for PDF comments, so they
+                        // contribute nothing here — exactly what we want.
+                        let mut seen: HashSet<usize> = HashSet::new();
+                        for slice in comment.target.slices() {
+                            if seen.insert(slice.node_index) {
+                                self.current_chapter_comments
+                                    .entry(slice.node_index)
+                                    .or_default()
+                                    .push(comment.clone());
+                            }
                         }
                     }
                 }
@@ -261,11 +298,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             column: end_col,
         };
         let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+
+        // One unified target: single-block selections produce a 1-slice
+        // target, cross-block selections produce a multi-slice target.
+        // Either way the result is exactly one Comment in storage.
         let Some(target) = self.compute_selection_target(&norm_start, &norm_end) else {
             self.set_error_hud("This selection cannot be highlighted");
             self.exit_visual_mode();
             return false;
         };
+
         let Some(chapter_file) = self.current_chapter_file.clone() else {
             self.set_error_hud("No chapter loaded");
             self.exit_visual_mode();
@@ -326,6 +368,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.comment_input.edit_mode = Some(CommentEditMode::Creating);
     }
 
+    /// Build a single `CommentTarget` for a visual selection. Single-block
+    /// selections produce a 1-slice target; selections that cross multiple
+    /// AnnotatableSegments produce a multi-slice target with one slice per
+    /// touched block. Code-block selections still produce a single-slice
+    /// code target — code never crosses blocks today.
     fn compute_selection_target(
         &self,
         start: &SelectionPoint,
@@ -339,11 +386,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             return None;
         }
 
+        // Code lines short-circuit the slice flow. Mixed code + prose, or
+        // code lines from different code blocks, return None — same gate as
+        // before. Code highlights always stay single-slice.
         let mut has_code = false;
         let mut min_code = usize::MAX;
         let mut max_code = 0;
         let mut code_node_idx = None;
-
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(meta) = &line.code_line {
@@ -359,65 +408,100 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 }
             }
         }
-
         if has_code {
-            if let Some(found_node_idx) = code_node_idx {
-                return Some(CommentTarget::code_block(
-                    found_node_idx,
-                    (min_code, max_code),
-                ));
+            return code_node_idx.map(|n| CommentTarget::code_block(n, (min_code, max_code)));
+        }
+
+        // Walk the selection top-down, grouping consecutive lines that
+        // belong to the same AnnotatableSegment. The result is one entry
+        // per distinct block the selection touches.
+        let mut segments: Vec<(AnnotatableSegment, usize, usize)> = Vec::new();
+        for idx in start.line..=end.line {
+            let Some(line) = self.rendered_content.lines.get(idx) else {
+                continue;
+            };
+            let Some(seg) = line.annotatable_segment.clone() else {
+                continue;
+            };
+            match segments.last_mut() {
+                Some((existing, _, last_line)) if *existing == seg => {
+                    *last_line = idx;
+                }
+                _ => segments.push((seg, idx, idx)),
             }
+        }
+        if segments.is_empty() {
             return None;
         }
 
-        let mut selected_segment: Option<AnnotatableSegment> = None;
-        for idx in start.line..=end.line {
-            if let Some(segment) = self
-                .rendered_content
-                .lines
-                .get(idx)
-                .and_then(|line| line.annotatable_segment.clone())
-            {
-                if let Some(existing) = &selected_segment {
-                    if *existing != segment {
-                        return None;
-                    }
-                } else {
-                    selected_segment = Some(segment);
+        let mut slices: Vec<crate::comments::TextSlice> = Vec::with_capacity(segments.len());
+        for (seg, first_line, last_line) in segments {
+            // Per-segment selection endpoints. For the segment containing
+            // the global start, use it verbatim; same for the global end.
+            // For segments fully in the middle of the selection, synthesise
+            // endpoints at the segment's first/last line — `map_point` in
+            // `compute_canonical_word_range` requires the point to land on
+            // one of the filtered lines.
+            let seg_start = if start.line >= first_line && start.line <= last_line {
+                start.clone()
+            } else {
+                SelectionPoint {
+                    line: first_line,
+                    column: 0,
                 }
-            }
+            };
+            let seg_end = if end.line >= first_line && end.line <= last_line {
+                end.clone()
+            } else {
+                let last_text_len = self
+                    .rendered_content
+                    .lines
+                    .get(last_line)
+                    .map(|l| l.raw_text.chars().count())
+                    .unwrap_or(0);
+                SelectionPoint {
+                    line: last_line,
+                    column: last_text_len,
+                }
+            };
+
+            let seg_ref = seg.clone();
+            let word_range =
+                self.compute_canonical_word_range(seg.node_index, &seg_start, &seg_end, |line| {
+                    line.annotatable_segment.as_ref() == Some(&seg_ref)
+                });
+
+            let subtarget = match seg.target {
+                AnnotatableTarget::Paragraph => {
+                    crate::comments::BlockSubtarget::Paragraph { word_range }
+                }
+                AnnotatableTarget::ListItem {
+                    item_index,
+                    list_path,
+                } => crate::comments::BlockSubtarget::ListItem {
+                    item_index,
+                    list_path,
+                    word_range,
+                },
+                AnnotatableTarget::QuoteParagraph { paragraph_index } => {
+                    crate::comments::BlockSubtarget::QuoteParagraph {
+                        paragraph_index,
+                        word_range,
+                    }
+                }
+                AnnotatableTarget::DefinitionItem {
+                    item_index,
+                    is_term,
+                } => crate::comments::BlockSubtarget::DefinitionItem {
+                    item_index,
+                    is_term,
+                    word_range,
+                },
+            };
+            slices.push(crate::comments::TextSlice::new(seg.node_index, subtarget));
         }
 
-        let segment = selected_segment?;
-        let word_range =
-            self.compute_canonical_word_range(segment.node_index, start, end, |line| {
-                line.annotatable_segment.as_ref() == Some(&segment)
-            });
-
-        Some(match segment.target {
-            AnnotatableTarget::Paragraph => {
-                CommentTarget::paragraph(segment.node_index, word_range)
-            }
-            AnnotatableTarget::ListItem {
-                item_index,
-                list_path,
-            } => {
-                if list_path.is_empty() {
-                    CommentTarget::list_item(segment.node_index, item_index, word_range)
-                } else {
-                    CommentTarget::list_item_with_path(segment.node_index, list_path, word_range)
-                }
-            }
-            AnnotatableTarget::QuoteParagraph { paragraph_index } => {
-                CommentTarget::quote_paragraph(segment.node_index, paragraph_index, word_range)
-            }
-            AnnotatableTarget::DefinitionItem {
-                item_index,
-                is_term,
-            } => {
-                CommentTarget::definition_item(segment.node_index, item_index, is_term, word_range)
-            }
-        })
+        Some(CommentTarget::from_slices(slices))
     }
 
     /// Handle input events when in comment mode
@@ -542,14 +626,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         None
     }
 
-    /// Get all comments from current text selection, visual mode selection, or normal mode cursor.
-    fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
-        // Try mouse selection first
+    /// Resolve the active cursor position into a line/point range.
+    /// Prefers a mouse selection, then a visual-mode selection, then the
+    /// normal-mode cursor (a zero-width range on a single line).
+    fn cursor_selection_range(&self) -> Option<(usize, usize, SelectionPoint, SelectionPoint)> {
         if let Some((start, end)) = self.text_selection.get_selection_range() {
-            return self.find_comments_in_range(start.line, end.line, &start, &end);
+            return Some((start.line, end.line, start, end));
         }
 
-        // Try visual mode selection
         if self.is_visual_mode_active() {
             if let Some((start_line, start_col, end_line, end_col)) =
                 self.get_visual_selection_range()
@@ -562,22 +646,201 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     line: end_line,
                     column: end_col,
                 };
-                return self.find_comments_in_range(start_line, end_line, &start, &end);
+                return Some((start_line, end_line, start, end));
             }
         }
 
-        // Try normal mode cursor position (single line)
         if self.is_normal_mode_active() {
-            let cursor_line = self.normal_mode.cursor.line;
-            let cursor_col = self.normal_mode.cursor.column;
-            let point = SelectionPoint {
-                line: cursor_line,
-                column: cursor_col,
-            };
-            return self.find_comments_in_range(cursor_line, cursor_line, &point, &point);
+            let line = self.normal_mode.cursor.line;
+            let column = self.normal_mode.cursor.column;
+            let point = SelectionPoint { line, column };
+            return Some((line, line, point.clone(), point));
         }
 
-        Vec::new()
+        None
+    }
+
+    /// Get all comments and highlights from the current text selection,
+    /// visual mode selection, or normal mode cursor.
+    fn get_comments_at_cursor(&self) -> Vec<CommentSelection> {
+        let Some((start_line, end_line, start, end)) = self.cursor_selection_range() else {
+            return Vec::new();
+        };
+
+        let mut results = self.find_comments_in_range(start_line, end_line, &start, &end);
+        // Highlights render inline (not as their own lines), so the comment-line
+        // scan above never sees them. Fold in any highlight under the cursor.
+        for hit in self.highlight_hits_in_range(start_line, end_line, &start, &end) {
+            if !results
+                .iter()
+                .any(|entry| entry.comment_id == hit.comment_id)
+            {
+                results.push(CommentSelection {
+                    comment_id: hit.comment_id,
+                });
+            }
+        }
+        results
+    }
+
+    /// Find highlight annotations whose word range overlaps the given
+    /// selection range. When `start == end` (a bare cursor) the character
+    /// under the cursor is tested.
+    fn highlight_hits_in_range(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        start: &SelectionPoint,
+        end: &SelectionPoint,
+    ) -> Vec<HighlightHit> {
+        let is_point = start_line == end_line && start.column == end.column;
+        let mut results: Vec<HighlightHit> = Vec::new();
+
+        for line_idx in start_line..=end_line {
+            let Some(line) = self.rendered_content.lines.get(line_idx) else {
+                continue;
+            };
+            let Some(node_index) = line.node_index else {
+                continue;
+            };
+            let Some(canon_start) = line.canonical_content_start else {
+                continue;
+            };
+            let col_start = line.content_column_start;
+            let content_len = canonical_content_len(line, col_start);
+            let line_canon_end = canon_start + content_len;
+
+            let map_col = |column: usize| -> usize {
+                let visual_rel = column.saturating_sub(col_start);
+                let rel = if let Some(ref jmap) = line.justify_map {
+                    jmap.get(visual_rel)
+                        .copied()
+                        .unwrap_or_else(|| jmap.last().copied().map(|v| v + 1).unwrap_or(0))
+                        as usize
+                } else {
+                    visual_rel
+                };
+                canon_start + rel.min(content_len)
+            };
+
+            let canon_lo = if line_idx == start_line {
+                map_col(start.column)
+            } else {
+                canon_start
+            };
+            let canon_hi = if is_point {
+                canon_lo + 1
+            } else if line_idx == end_line {
+                map_col(end.column)
+            } else {
+                line_canon_end
+            };
+            if canon_hi <= canon_lo {
+                continue;
+            }
+
+            for comment in self.get_node_comments(Some(node_index)) {
+                if !comment.is_highlight() {
+                    continue;
+                }
+                let Some(color) = comment.highlight_color() else {
+                    continue;
+                };
+                // For multi-slice highlights, `target.word_range()` returns
+                // the FIRST slice's range — which is wrong when the cursor
+                // is in any other block this highlight touches. Pull the
+                // slice that targets *this* node.
+                let Some((h_start, h_end)) = comment
+                    .target
+                    .slices()
+                    .iter()
+                    .find(|s| s.node_index == node_index)
+                    .and_then(|s| s.subtarget.word_range())
+                else {
+                    continue;
+                };
+                if h_start < canon_hi
+                    && h_end > canon_lo
+                    && !results.iter().any(|entry| entry.comment_id == comment.id)
+                {
+                    results.push(HighlightHit {
+                        comment_id: comment.id.clone(),
+                        color,
+                    });
+                }
+            }
+        }
+
+        results
+    }
+
+    /// Resolve the highlight the highlight palette should act on: the first
+    /// highlight overlapping the current selection or sitting under the cursor.
+    ///
+    /// For a range selection this re-uses [`compute_selection_target`] +
+    /// [`BookComments::find_overlapping_highlight`] so that detection here can
+    /// never disagree with the overlap check inside
+    /// [`add_highlight_from_visual_selection`]. For a bare cursor we fall back
+    /// to the canonical-position scan in [`highlight_hits_in_range`].
+    pub fn highlight_for_palette(&self) -> Option<(String, HighlightColor)> {
+        let (start_line, end_line, start, end) = self.cursor_selection_range()?;
+        let is_point = start_line == end_line && start.column == end.column;
+
+        if !is_point {
+            let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
+            if let Some(target) = self.compute_selection_target(&norm_start, &norm_end) {
+                if let Some(chapter_href) = self.current_chapter_file.as_deref() {
+                    if let Some(comments_arc) = self.book_comments.as_ref() {
+                        if let Ok(comments) = comments_arc.lock() {
+                            if let Some(comment) =
+                                comments.find_overlapping_highlight(chapter_href, &target)
+                            {
+                                if let Some(color) = comment.highlight_color() {
+                                    return Some((comment.id.clone(), color));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        self.highlight_hits_in_range(start_line, end_line, &start, &end)
+            .into_iter()
+            .next()
+            .map(|hit| (hit.comment_id, hit.color))
+    }
+
+    /// Change the color of an existing highlight in place.
+    pub fn recolor_highlight(&mut self, comment_id: &str, color: HighlightColor) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
+
+        if let Some(comments_arc) = self.book_comments.as_ref().cloned() {
+            if let Ok(mut comments) = comments_arc.lock() {
+                if let Err(e) = comments.set_highlight_color_by_id(comment_id, color) {
+                    warn!("Failed to recolor highlight: {e}");
+                    self.set_error_hud(format!("Failed to recolor highlight: {e}"));
+                    return;
+                }
+            }
+        }
+
+        self.rebuild_chapter_comments();
+        self.cache_generation += 1;
+        self.set_normal_hud(format!("{} highlight", color.label()));
+    }
+
+    /// Delete an existing highlight by id.
+    pub fn remove_highlight_by_id(&mut self, comment_id: &str) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
+        self.delete_comment_by_id(comment_id);
+        self.set_normal_hud("Highlight removed".to_string());
     }
 
     fn find_comment_in_range(
@@ -813,6 +1076,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or_default()
     }
 
+    /// Walk every comment indexed under `node_index`, then walk each of its
+    /// slices that targets this exact node, pass the (comment, slice) pair
+    /// through the extractor. This is how a multi-slice highlight renders
+    /// the right range in each block it spans: the same Comment lives in
+    /// multiple node buckets, and the extractor pulls the slice for the
+    /// node currently being drawn.
     fn collect_in_scope<R, F>(
         &self,
         node_index: Option<usize>,
@@ -820,36 +1089,49 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         extractor: F,
     ) -> Vec<R>
     where
-        F: Fn(&Comment) -> Option<R>,
+        F: Fn(&Comment, &crate::comments::TextSlice) -> Option<R>,
     {
-        self.get_node_comments(node_index)
-            .iter()
-            .filter(|c| scope_matches(c, scope))
-            .filter_map(extractor)
-            .collect()
+        let Some(target_node) = node_index else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for comment in self.get_node_comments(Some(target_node)).iter() {
+            for slice in comment.target.slices() {
+                if slice.node_index != target_node {
+                    continue;
+                }
+                if !slice_matches_scope(slice, scope) {
+                    continue;
+                }
+                if let Some(r) = extractor(comment, slice) {
+                    out.push(r);
+                }
+            }
+        }
+        out
     }
 
     /// Get annotation (word) ranges from comments for a node - used for underline styling.
     pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
-        self.collect_in_scope(node_index, CommentScope::Node, annotation_range_of)
+        self.collect_in_scope(node_index, CommentScope::Node, slice_annotation_range)
     }
 
     pub fn get_highlight_ranges(&self, node_index: Option<usize>) -> Vec<HighlightRange> {
-        self.collect_in_scope(node_index, CommentScope::Node, highlight_range_of)
+        self.collect_in_scope(node_index, CommentScope::Node, slice_highlight_range)
     }
 
     pub fn get_annotation_ranges_for_legacy_list(
         &self,
         node_index: Option<usize>,
     ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(node_index, CommentScope::LegacyList, annotation_range_of)
+        self.collect_in_scope(node_index, CommentScope::LegacyList, slice_annotation_range)
     }
 
     pub fn get_highlight_ranges_for_legacy_list(
         &self,
         node_index: Option<usize>,
     ) -> Vec<HighlightRange> {
-        self.collect_in_scope(node_index, CommentScope::LegacyList, highlight_range_of)
+        self.collect_in_scope(node_index, CommentScope::LegacyList, slice_highlight_range)
     }
 
     pub fn get_annotation_ranges_for_list_item(
@@ -860,7 +1142,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::ListItem { item_index },
-            annotation_range_of,
+            slice_annotation_range,
         )
     }
 
@@ -872,7 +1154,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::ListItem { item_index },
-            highlight_range_of,
+            slice_highlight_range,
         )
     }
 
@@ -884,7 +1166,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::ListItemPath(list_path),
-            annotation_range_of,
+            slice_annotation_range,
         )
     }
 
@@ -896,7 +1178,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::ListItemPath(list_path),
-            highlight_range_of,
+            slice_highlight_range,
         )
     }
 
@@ -912,7 +1194,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_index,
                 is_term,
             },
-            annotation_range_of,
+            slice_annotation_range,
         )
     }
 
@@ -928,7 +1210,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_index,
                 is_term,
             },
-            highlight_range_of,
+            slice_highlight_range,
         )
     }
 
@@ -940,7 +1222,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::QuoteParagraph { paragraph_index },
-            annotation_range_of,
+            slice_annotation_range,
         )
     }
 
@@ -952,7 +1234,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             node_index,
             CommentScope::QuoteParagraph { paragraph_index },
-            highlight_range_of,
+            slice_highlight_range,
         )
     }
 
@@ -971,6 +1253,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     ) {
         let comments = self.get_node_comments(node_index);
         for comment in comments.into_iter().filter(|comment| comment.is_comment()) {
+            // Multi-slice comments are indexed under every node they touch
+            // (so inline highlight/underline ranges render in each block).
+            // The `Note // …` block, however, should appear exactly once —
+            // attach it to the LAST slice's node so it sits after the
+            // entire annotated range.
+            let render_at = comment.target.slices().last().map(|s| s.node_index);
+            if render_at != node_index {
+                continue;
+            }
             self.render_comment_as_quote(
                 &comment,
                 lines,
@@ -1181,9 +1472,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if s >= e {
             return None;
         }
-        if s == 0 && e >= total_len {
-            return None;
-        }
+        // Always emit a concrete (start, end). The previous code collapsed a
+        // whole-block selection to `None` as a "no precise range" shorthand —
+        // but inline highlight rendering depends on `word_range()` being
+        // `Some`, so whole-paragraph highlights silently disappeared from the
+        // screen (the YAML had them but `slice_highlight_range` returned None).
         Some((s, e.min(total_len)))
     }
 

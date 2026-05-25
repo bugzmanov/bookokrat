@@ -421,8 +421,8 @@ binding_tests! {
     content_a: KeyContext::EpubContent, "a",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| !app.text_reader().is_comment_input_active(); // no selection → no-op
-    // 'd' without cursor on comment is a no-op
-    content_d: KeyContext::EpubContent, "d",
+    // 'dd' without cursor on an annotation is a no-op
+    content_dd: KeyContext::EpubContent, "dd",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| !app.text_reader().is_comment_input_active();
     // 'c' without selection is a no-op (clipboard write)
@@ -597,6 +597,11 @@ binding_tests! {
     epub_normal_h_upper: KeyContext::EpubNormal, "H",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); simulate(&mut app, "v"); },
         check = |app| app.is_highlight_palette_active();
+    // `dd` deletes the comment/highlight under the cursor; with no annotation at the
+    // cursor the press is a no-op (notification check mirrors content_dd).
+    epub_normal_dd: KeyContext::EpubNormal, "dd",
+        setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
+        check = |app| !app.text_reader().is_comment_input_active();
     epub_normal_n: KeyContext::EpubNormal, "n",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); simulate(&mut app, "n"); },
         check = |app| !app.is_normal_mode(); // toggles OFF

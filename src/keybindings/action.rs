@@ -335,8 +335,8 @@ impl Action {
 
             // Content operations
             AddComment => "Add or edit a comment on the selection",
-            OpenHighlightPalette => "Open the visual selection highlight palette",
-            DeleteComment => "Delete the comment under the cursor",
+            OpenHighlightPalette => "Add a highlight, or recolor/remove the one under the cursor",
+            DeleteComment => "Delete the comment or highlight under the cursor",
             CopySelection => "Copy the current selection to the clipboard",
             CopyChapterText => "Copy chapter text (EPUB) / page text (PDF)",
             CopyTocItem => "Copy the selected TOC entry (PDF)",

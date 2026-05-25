@@ -506,7 +506,7 @@ impl HtmlToMarkdownConverter {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 self.handle_heading(tag_name, attrs, node, document);
             }
-            "div" | "section" | "article" => {
+            "div" | "section" | "article" | "main" => {
                 let div_id = self.get_attr_value(attrs, "id");
                 let start_len = document.blocks.len();
 
@@ -2072,7 +2072,7 @@ impl HtmlToMarkdownConverter {
                                 content.push(Node::new(list_block, 0..0));
                             }
                         }
-                        "div" | "section" | "article" => {
+                        "div" | "section" | "article" | "main" => {
                             // For wrapper elements like div, recursively process their children
                             let mut temp_doc = Document::new();
                             for grandchild in child.children.borrow().iter() {
@@ -2697,6 +2697,7 @@ impl HtmlToMarkdownConverter {
                     if matches!(
                         tag,
                         "div"
+                            | "main"
                             | "section"
                             | "article"
                             | "p"
@@ -2762,6 +2763,7 @@ impl HtmlToMarkdownConverter {
         matches!(
             tag,
             "div"
+                | "main"
                 | "section"
                 | "article"
                 | "p"
@@ -3412,6 +3414,47 @@ The protocol operates on multiple layers:
 - **Encoding Layer:** Steganographic embedding in computational data
 - **Routing Layer:** Messages distributed through research collaboration networks
 - **Command Layer:** Encrypted instructions disguised as algorithm parameters
+
+"#;
+
+        assert_eq!(rendered, expected);
+    }
+
+    #[test]
+    fn test_main_wrapper_preserves_nested_blocks() {
+        let mut converter = HtmlToMarkdownConverter::new();
+        let renderer = MarkdownRenderer::new();
+
+        let html = r#"
+            <div data-md-component="container">
+                <main data-md-component="main">
+                    <div data-md-component="content">
+                        <article>
+                            <p>First paragraph.</p>
+                            <p>Second paragraph.</p>
+                            <h2>Durable threads</h2>
+                            <p>Paragraph after heading.</p>
+                            <ul>
+                                <li>List item</li>
+                            </ul>
+                        </article>
+                    </div>
+                </main>
+            </div>
+        "#;
+
+        let doc = converter.convert(html);
+        let rendered = renderer.render(&doc);
+
+        let expected = r#"First paragraph.
+
+Second paragraph.
+
+## Durable threads
+
+Paragraph after heading.
+
+- List item
 
 "#;
 

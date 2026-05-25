@@ -12,6 +12,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use simplelog::{LevelFilter, WriteLogger};
 
 mod cli;
+mod extract;
 mod print;
 
 // Use modules from the library crate
@@ -165,6 +166,9 @@ fn main() -> Result<()> {
             } => {
                 return print::cmd_print(file, *toc, *info, *chapter, *pages);
             }
+            cli::Command::Extract { file, output } => {
+                return extract::cmd_extract(file, output);
+            }
         }
     }
 
@@ -303,7 +307,15 @@ fn main() -> Result<()> {
         );
         if caps.env.tmux {
             bookokrat::pdf::kittyv2::set_tmux(true);
+            // Only Kitty currently handles Unicode-placeholder-relative
+            // placements correctly through tmux. Ghostty+tmux advertises the
+            // Kitty protocol, but this anchor path misplaces/leaks pages there.
+            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
+                caps.kind == terminal::TerminalKind::Kitty,
+            );
             terminal::enable_tmux_passthrough();
+        } else {
+            bookokrat::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(false);
         }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));

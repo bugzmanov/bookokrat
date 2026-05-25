@@ -25,7 +25,8 @@ use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::highlight_palette::{
     HighlightPaletteAction, HighlightPaletteSwatchStyle, HighlightPaletteTheme,
-    classify_palette_key, palette_hud_message, render_centered_highlight_palette,
+    classify_palette_key, palette_edit_hud_message, palette_hud_message,
+    render_centered_highlight_palette,
 };
 use crate::widget::lookup_popup::{LookupPopup, LookupPopupAction};
 use crate::widget::marks_popup::{MarkScopeKey, MarksPopup, MarksPopupAction};
@@ -350,6 +351,10 @@ pub struct App {
     lookup_popup: Option<LookupPopup>,
     pending_visual_inner: bool,
     pending_highlight_palette: bool,
+    /// When the highlight palette targets an existing highlight (recolor /
+    /// remove), this holds its comment id and current color. `None` means the
+    /// palette will create a new highlight from the visual selection.
+    highlight_palette_target: Option<(String, crate::annotations::HighlightColor)>,
     notifications: NotificationManager,
     help_bar_area: Rect,
     zen_mode: bool,
@@ -747,6 +752,7 @@ impl App {
             lookup_popup: None,
             pending_visual_inner: false,
             pending_highlight_palette: false,
+            highlight_palette_target: None,
             notifications: NotificationManager::new(),
             help_bar_area: Rect::default(),
             zen_mode: false,
@@ -1354,6 +1360,9 @@ impl App {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal_with_probe(),
         };
+        crate::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
+            caps.env.tmux && caps.kind == crate::terminal::TerminalKind::Kitty,
+        );
         self.pdf_supports_graphics = caps.supports_graphics;
         self.book_manager.supports_graphics = caps.supports_graphics;
         self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
@@ -1509,6 +1518,12 @@ impl App {
             book_comments,
             path.to_string(),
         );
+        if use_kitty
+            && initial_page > 0
+            && crate::settings::get_pdf_render_mode() == crate::settings::PdfRenderMode::Scroll
+        {
+            pdf_reader.pending_initial_scroll_page = Some(initial_page);
+        }
         if let Some(inverted) = bookmark_invert {
             pdf_reader.invert_images = inverted;
             if !inverted {
@@ -4122,7 +4137,8 @@ impl App {
     }
 
     fn highlight_palette_active(&self) -> bool {
-        self.pending_highlight_palette && self.text_reader.is_visual_mode_active()
+        self.pending_highlight_palette
+            && (self.text_reader.is_visual_mode_active() || self.highlight_palette_target.is_some())
     }
 
     fn render_highlight_palette(&self, f: &mut ratatui::Frame) {
@@ -4136,6 +4152,10 @@ impl App {
         }
 
         let palette = current_theme();
+        let (show_remove, current_color) = match &self.highlight_palette_target {
+            Some((_, color)) => (true, Some(*color)),
+            None => (false, None),
+        };
         let _ = render_centered_highlight_palette(
             f,
             screen,
@@ -4146,6 +4166,8 @@ impl App {
                 panel_bg: palette.base_00,
                 header_bg: palette.base_00,
                 swatch_style: HighlightPaletteSwatchStyle::Background,
+                show_remove,
+                current_color,
             },
         );
     }
@@ -5153,13 +5175,19 @@ impl App {
     }
 
     fn show_highlight_palette_hud(&mut self) {
-        self.text_reader.set_normal_hud(palette_hud_message());
+        let message = if self.highlight_palette_target.is_some() {
+            palette_edit_hud_message()
+        } else {
+            palette_hud_message()
+        };
+        self.text_reader.set_normal_hud(message);
     }
 
     /// Clear the pending-palette flag, mirroring PDF's `clear_highlight_palette`.
     /// Use this on any path that exits visual mode so the modal can't outlive its selection.
     fn clear_highlight_palette(&mut self) {
         self.pending_highlight_palette = false;
+        self.highlight_palette_target = None;
     }
 
     fn handle_highlight_palette_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
@@ -5176,8 +5204,43 @@ impl App {
                 self.text_reader.clear_count();
             }
             HighlightPaletteAction::Apply(color) => {
+                let target = self.highlight_palette_target.take();
                 self.clear_highlight_palette();
-                self.text_reader.add_highlight_from_visual_selection(color);
+                let visual = self.text_reader.is_visual_mode_active();
+                match target {
+                    // Re-picking the highlight's own color clears it (toggle off).
+                    Some((id, existing)) if existing == color => {
+                        self.text_reader.remove_highlight_by_id(&id);
+                    }
+                    // In visual mode, recolor means "replace": drop the
+                    // existing highlight and create a new one covering the
+                    // user's current selection range. Without this the user's
+                    // selection range silently doesn't apply and only the old
+                    // highlight changes color.
+                    Some((id, _)) if visual => {
+                        self.text_reader.delete_comment_by_id(&id);
+                        self.text_reader.add_highlight_from_visual_selection(color);
+                    }
+                    // Cursor sits inside a highlight (no selection): change
+                    // color in place.
+                    Some((id, _)) => {
+                        self.text_reader.recolor_highlight(&id, color);
+                    }
+                    None => {
+                        self.text_reader.add_highlight_from_visual_selection(color);
+                    }
+                }
+                self.text_reader.clear_count();
+            }
+            HighlightPaletteAction::Remove => {
+                let target = self.highlight_palette_target.take();
+                self.clear_highlight_palette();
+                match target {
+                    Some((id, _)) => self.text_reader.remove_highlight_by_id(&id),
+                    None => self
+                        .text_reader
+                        .set_error_hud("No highlight here to remove"),
+                }
                 self.text_reader.clear_count();
             }
             HighlightPaletteAction::UnknownKey => {
@@ -5343,11 +5406,41 @@ impl App {
                 self.set_pending_mark_op(PendingMarkOp::Goto);
                 true
             }
+            Action::DeleteComment => {
+                if !self.text_reader.is_comment_input_active() {
+                    match self.text_reader.delete_comment_at_cursor() {
+                        Ok(true) => {
+                            info!("Annotation deleted successfully");
+                            self.show_info("Annotation removed");
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            error!("Failed to delete annotation: {e}");
+                            self.show_error(format!("Failed to delete annotation: {e}"));
+                        }
+                    }
+                }
+                true
+            }
             Action::OpenHighlightPalette => {
                 self.text_reader.clear_count();
+                let existing = self.text_reader.highlight_for_palette();
                 if self.text_reader.is_visual_mode_active() {
+                    // In visual mode the palette acts on the selection: create a
+                    // new highlight, or recolor/remove one the selection overlaps.
+                    self.highlight_palette_target = existing;
                     self.pending_highlight_palette = true;
                     self.show_highlight_palette_hud();
+                } else if existing.is_some() {
+                    // No selection, but the cursor sits inside a highlight:
+                    // open the palette to recolor or remove it.
+                    self.highlight_palette_target = existing;
+                    self.pending_highlight_palette = true;
+                    self.show_highlight_palette_hud();
+                } else {
+                    self.text_reader.set_error_hud(
+                        "Select text, or place the cursor on a highlight, then press H",
+                    );
                 }
                 true
             }
@@ -5443,13 +5536,13 @@ impl App {
                 if !self.text_reader.is_comment_input_active() {
                     match self.text_reader.delete_comment_at_cursor() {
                         Ok(true) => {
-                            info!("Comment deleted successfully");
-                            self.show_info("Comment deleted");
+                            info!("Annotation deleted successfully");
+                            self.show_info("Annotation removed");
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            error!("Failed to delete comment: {e}");
-                            self.show_error(format!("Failed to delete comment: {e}"));
+                            error!("Failed to delete annotation: {e}");
+                            self.show_error(format!("Failed to delete annotation: {e}"));
                         }
                     }
                 }
@@ -6262,24 +6355,6 @@ impl App {
                         self.text_reader.clear_count();
                         return None;
                     }
-                    KeyCode::Char('d') => {
-                        // Delete annotation on visual selection
-                        match self.text_reader.delete_comment_at_cursor() {
-                            Ok(true) => {
-                                info!("Comment deleted successfully");
-                                self.show_info("Comment deleted");
-                            }
-                            Ok(false) => {
-                                // Selection not on a comment, ignore
-                            }
-                            Err(e) => {
-                                error!("Failed to delete comment: {e}");
-                                self.show_error(format!("Failed to delete comment: {e}"));
-                            }
-                        }
-                        self.text_reader.clear_count();
-                        return None;
-                    }
                     KeyCode::Esc => {
                         // Clear search first if active (pressing Esc again will exit visual mode)
                         if self.text_reader.is_searching() {
@@ -6323,6 +6398,13 @@ impl App {
                         }
                     }
                 }
+                return None;
+            }
+
+            // Highlight palette opened via H while the cursor sits inside an
+            // existing highlight (no visual selection). Must intercept before
+            // the keymap so color keys aren't consumed as vim motions.
+            if self.handle_highlight_palette_key(&key) {
                 return None;
             }
 

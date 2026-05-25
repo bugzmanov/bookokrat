@@ -172,7 +172,7 @@ at the bottom of this document for the syntax.
 │  Space+C       Copy TOC selection (PDF, requires TOC focus)                 │
 │  Space+z       Copy debug transcript                                        │
 │  a             Add/edit comment on selection                                │
-│  d             Delete comment under cursor                                  │
+│  dd            Delete comment or highlight under cursor                     │
 │  ss            Toggle raw HTML view (EPUB/HTML only)                        │
 │  Enter         Open image popup (when cursor on image)                      │
 │  p             Toggle performance profiler overlay (`profile` builds)       │
@@ -277,7 +277,7 @@ Add notes directly to your books:
   [2] Press 'a' to create or edit a comment
   [3] Type your note in the popup editor
   [4] Press Esc to save the comment
-  [5] Press 'd' when on a commented passage to delete it
+  [5] Press 'dd' when on a commented or highlighted passage to delete it
 
 Code block annotations:
 

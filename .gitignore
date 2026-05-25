@@ -21,6 +21,7 @@ flamegraph.svg
 .agentastic/
 result/
 *.djvu
+tldr-cache/
 
 # LaTeX build artifacts
 *.aux

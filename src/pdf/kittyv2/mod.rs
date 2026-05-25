@@ -12,7 +12,7 @@ pub mod terminal_canvas;
 use std::io::{self, Read, Write};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::time::{Duration, Instant};
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
@@ -20,6 +20,7 @@ use ratatui::layout::Position;
 use std::os::unix::io::AsRawFd;
 
 static IS_TMUX: OnceLock<bool> = OnceLock::new();
+static USE_KITTY_TMUX_PLACEHOLDER_ANCHORS: AtomicBool = AtomicBool::new(false);
 static PANE_TOP: AtomicU16 = AtomicU16::new(0);
 static PANE_LEFT: AtomicU16 = AtomicU16::new(0);
 
@@ -32,6 +33,14 @@ pub fn set_tmux(value: bool) {
 
 pub fn is_tmux_mode() -> bool {
     *IS_TMUX.get().unwrap_or(&false)
+}
+
+pub fn set_kitty_tmux_placeholder_anchors(value: bool) {
+    USE_KITTY_TMUX_PLACEHOLDER_ANCHORS.store(value, Ordering::Relaxed);
+}
+
+pub(crate) fn use_kitty_tmux_placeholder_anchors() -> bool {
+    is_tmux_mode() && USE_KITTY_TMUX_PLACEHOLDER_ANCHORS.load(Ordering::Relaxed)
 }
 
 pub fn refresh_pane_offset() {
@@ -72,6 +81,18 @@ pub use terminal_canvas::{
 /// above the terminal background, allowing ratatui overlays (comments, HUD)
 /// to appear on top. Must be > -(2^30) to stay above cell backgrounds.
 pub const IMAGE_Z_INDEX: i32 = -1;
+const TMUX_ANCHOR_Z_INDEX: i32 = IMAGE_Z_INDEX - 1;
+const TMUX_ANCHOR_PLACEMENT_MAX: u32 = 0x00ff_ffff;
+
+pub(crate) fn tmux_anchor_placement_id(image_id: u32) -> u32 {
+    let image_placement_id = image_id & TMUX_ANCHOR_PLACEMENT_MAX;
+    let anchor_id = TMUX_ANCHOR_PLACEMENT_MAX ^ image_placement_id;
+    if anchor_id == 0 {
+        TMUX_ANCHOR_PLACEMENT_MAX - 1
+    } else {
+        anchor_id
+    }
+}
 
 /// Display location configuration for an image.
 #[derive(Debug, Clone, Copy, Default)]
@@ -152,6 +173,9 @@ pub fn execute_display_batch_with_failures(batch: DisplayBatch) -> io::Result<Ve
 /// Display a single image using kittyv2 protocol.
 fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<()> {
     let tmux = is_tmux_mode();
+    if use_kitty_tmux_placeholder_anchors() {
+        return display_image_relative_to_tmux_anchor(request, stdout);
+    }
 
     // Compute cursor position (1-based CUP coordinates).
     // In tmux mode, convert to absolute screen coordinates so the cursor move
@@ -268,6 +292,95 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
     }
 
     Ok(())
+}
+
+fn display_image_relative_to_tmux_anchor(
+    request: ImageRequest,
+    stdout: &mut io::Stdout,
+) -> io::Result<()> {
+    let loc = request.location;
+    let has_source_rect = loc.x > 0 || loc.y > 0 || loc.width > 0 || loc.height > 0;
+
+    let image_id = match request.image {
+        ImageState::Queued(image) => {
+            let dims = image.dimensions();
+            let image_id = image.id.id.get();
+            let new_id = ImageId::new(image.id.id);
+            let anchor_placement_id = tmux_anchor_placement_id(image_id);
+
+            match &mut image.transmission {
+                Transmission::SharedMemory { shm } => {
+                    let lease = shm
+                        .take()
+                        .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
+                    let cmd = TransmitCommand::new(dims.width, dims.height)
+                        .format(Format::Rgb)
+                        .image_id(image_id)
+                        .placement_id(anchor_placement_id)
+                        .quiet(Quiet::ErrorsOnly)
+                        .no_cursor_move(true)
+                        .virtual_placement()
+                        .dest_cells(1, 1)
+                        .z_index(TMUX_ANCHOR_Z_INDEX);
+                    if let Err(err) = cmd.write_to(stdout, lease.path(), true) {
+                        *shm = Some(lease);
+                        return Err(err);
+                    }
+                    lease.handoff_to_tracker(request.page as i64, &mut tracker().lock().unwrap());
+                }
+                Transmission::Direct { .. } => {
+                    return Err(io::Error::other(
+                        "Kitty tmux placeholder anchors require SHM transmission",
+                    ));
+                }
+            }
+
+            *request.image = ImageState::Uploaded(new_id);
+            image_id
+        }
+        ImageState::Uploaded(image_id) => {
+            let image_id = image_id.id.get();
+            display_tmux_anchor_placement(stdout, image_id)?;
+            image_id
+        }
+    };
+
+    place_image_relative_to_tmux_anchor(stdout, image_id, loc, has_source_rect)
+}
+
+fn display_tmux_anchor_placement(stdout: &mut io::Stdout, image_id: u32) -> io::Result<()> {
+    DisplayCommand::new(image_id)
+        .placement_id(tmux_anchor_placement_id(image_id))
+        .quiet(Quiet::ErrorsOnly)
+        .no_cursor_move(true)
+        .virtual_placement()
+        .dest_cells(1, 1)
+        .z_index(TMUX_ANCHOR_Z_INDEX)
+        .write_to(stdout, true)
+}
+
+fn place_image_relative_to_tmux_anchor(
+    stdout: &mut io::Stdout,
+    image_id: u32,
+    loc: DisplayLocation,
+    has_source_rect: bool,
+) -> io::Result<()> {
+    let mut cmd = DisplayCommand::new(image_id)
+        .placement_id(image_id)
+        .quiet(Quiet::ErrorsOnly)
+        .no_cursor_move(true)
+        .relative_to(image_id, tmux_anchor_placement_id(image_id), 0, 0)
+        .z_index(IMAGE_Z_INDEX);
+
+    if loc.columns > 0 || loc.rows > 0 {
+        cmd = cmd.dest_cells(loc.columns, loc.rows);
+    }
+
+    if has_source_rect {
+        cmd = cmd.source_rect(loc.x, loc.y, loc.width, loc.height);
+    }
+
+    cmd.write_to(stdout, true)
 }
 
 /// Delete all images.
