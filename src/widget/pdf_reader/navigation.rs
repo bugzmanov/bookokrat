@@ -214,6 +214,7 @@ impl PdfReaderState {
             self.comment_nav_active = false;
         }
         self.pending_enhance = None;
+        self.pending_initial_scroll_page = None;
 
         // Exit normal/visual mode when toggling zen mode
         if self.normal_mode.active {
@@ -1630,6 +1631,7 @@ impl PdfReaderState {
 
     fn reset_zoom_to_fit(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
+        self.pending_initial_scroll_page = None;
         if self.is_kitty {
             let fit_display_factor = self.fit_to_height_zoom_factor();
             let fit_effective =
@@ -1664,6 +1666,7 @@ impl PdfReaderState {
 
     fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
+        self.pending_initial_scroll_page = None;
         if self.is_kitty {
             let fit_display_factor = self.fit_to_width_zoom_factor();
             let fit_effective =
@@ -1918,6 +1921,7 @@ impl PdfReaderState {
 
     fn update_zoom(&mut self, f: impl FnOnce(&mut Zoom)) -> Option<InputAction> {
         self.pending_enhance = None;
+        self.pending_initial_scroll_page = None;
         if let Some(z) = &mut self.zoom {
             f(z);
         }
@@ -1931,6 +1935,7 @@ impl PdfReaderState {
     #[expect(clippy::unnecessary_wraps)]
     fn update_zoom_keep_page(&mut self, f: impl FnOnce(&mut Zoom)) -> Option<InputAction> {
         self.pending_enhance = None;
+        self.pending_initial_scroll_page = None;
         let page = self.page;
 
         // In page mode, preserve relative scroll position within the page
@@ -2617,6 +2622,7 @@ impl PdfReaderState {
         if !self.is_kitty {
             return None;
         }
+        self.pending_initial_scroll_page = None;
         let zoom = self.zoom.as_ref()?;
         let display_factor = zoom.factor();
 
@@ -2811,6 +2817,7 @@ impl PdfReaderState {
     pub(crate) fn set_page(&mut self, page: usize) {
         if page != self.page {
             self.pending_enhance = None;
+            self.pending_initial_scroll_page = None;
             self.last_render.rect = Rect::default();
             self.clear_pending_scroll();
             self.page = page;

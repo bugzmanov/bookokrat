@@ -428,6 +428,8 @@ pub struct PdfReaderState {
     pub synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
     /// Pending Kitty zoom enhancement waiting for the converted frame.
     pub pending_enhance: Option<PendingEnhance>,
+    /// One-shot scroll alignment for a restored Kitty scroll-mode page.
+    pub pending_initial_scroll_page: Option<usize>,
 }
 
 impl PdfReaderState {
@@ -521,6 +523,7 @@ impl PdfReaderState {
             quick_page_jump: None,
             synctex_scanner: None,
             pending_enhance: None,
+            pending_initial_scroll_page: None,
         }
     }
 

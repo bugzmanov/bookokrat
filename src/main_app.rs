@@ -1518,6 +1518,12 @@ impl App {
             book_comments,
             path.to_string(),
         );
+        if use_kitty
+            && initial_page > 0
+            && crate::settings::get_pdf_render_mode() == crate::settings::PdfRenderMode::Scroll
+        {
+            pdf_reader.pending_initial_scroll_page = Some(initial_page);
+        }
         if let Some(inverted) = bookmark_invert {
             pdf_reader.invert_images = inverted;
             if !inverted {

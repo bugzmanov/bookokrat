@@ -2890,9 +2890,21 @@ impl PdfReaderState {
                 .collect::<Vec<_>>();
 
             let mut zoom = self.zoom.take().unwrap();
-            if self.page > 0 && zoom.global_scroll_offset == 0 {
-                let heights = self.page_heights_scaled(zoom_factor);
-                zoom.global_scroll_offset = self.scroll_offset_for_page_start(self.page, &heights);
+            if let Some(pending_page) = self.pending_initial_scroll_page {
+                if pending_page != self.page || zoom.global_scroll_offset != 0 {
+                    self.pending_initial_scroll_page = None;
+                } else {
+                    let has_page_metrics = self
+                        .rendered
+                        .iter()
+                        .any(|page| page.img.is_some() || page.full_cell_size.is_some());
+                    if has_page_metrics {
+                        let heights = self.page_heights_scaled(zoom_factor);
+                        zoom.global_scroll_offset =
+                            self.scroll_offset_for_page_start(self.page, &heights);
+                        self.pending_initial_scroll_page = None;
+                    }
+                }
             }
 
             let sidebar_page_hint = self.page;
