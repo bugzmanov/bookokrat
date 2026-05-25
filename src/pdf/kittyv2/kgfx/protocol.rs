@@ -126,6 +126,40 @@ pub struct DestCells {
     pub rows: u16,
 }
 
+/// Relative placement target using Kitty's `P/Q/H/V` placement keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelativePlacement {
+    pub parent_image_id: u32,
+    pub parent_placement_id: u32,
+    pub horizontal_offset: i32,
+    pub vertical_offset: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlacementMode {
+    Normal,
+    Virtual,
+    Relative(RelativePlacement),
+}
+
+impl PlacementMode {
+    fn write_params(self, params: &mut String) {
+        match self {
+            Self::Normal => {}
+            Self::Virtual => params.push_str(",U=1"),
+            Self::Relative(relative) => {
+                params.push_str(&format!(
+                    ",P={},Q={},H={},V={}",
+                    relative.parent_image_id,
+                    relative.parent_placement_id,
+                    relative.horizontal_offset,
+                    relative.vertical_offset
+                ));
+            }
+        }
+    }
+}
+
 /// Builds and writes a Kitty graphics protocol transmit command.
 ///
 /// Uses shared memory transmission (`t=s`) with the provided SHM path.
@@ -141,6 +175,7 @@ pub struct TransmitCommand {
     dest_cells: Option<DestCells>,
     cursor_at: Option<(u32, u32)>,
     z_index: Option<i32>,
+    placement_mode: PlacementMode,
 }
 
 impl TransmitCommand {
@@ -158,6 +193,7 @@ impl TransmitCommand {
             dest_cells: None,
             cursor_at: None,
             z_index: None,
+            placement_mode: PlacementMode::Normal,
         }
     }
 
@@ -226,6 +262,12 @@ impl TransmitCommand {
         self
     }
 
+    /// Creates a virtual placement for Unicode placeholder display.
+    pub fn virtual_placement(mut self) -> Self {
+        self.placement_mode = PlacementMode::Virtual;
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
     ///
     /// The `shm_path` is the POSIX shared memory path (e.g., `/kgfx_12345`).
@@ -255,6 +297,8 @@ impl TransmitCommand {
         if self.no_cursor_move {
             params.push_str(",C=1");
         }
+
+        self.placement_mode.write_params(&mut params);
 
         if let Some(q) = self.quiet.code() {
             params.push_str(&format!(",q={q}"));
@@ -743,6 +787,7 @@ pub struct DisplayCommand {
     no_cursor_move: bool,
     cursor_at: Option<(u32, u32)>,
     z_index: Option<i32>,
+    placement_mode: PlacementMode,
 }
 
 impl DisplayCommand {
@@ -757,6 +802,7 @@ impl DisplayCommand {
             no_cursor_move: true,
             cursor_at: None,
             z_index: None,
+            placement_mode: PlacementMode::Normal,
         }
     }
 
@@ -807,6 +853,29 @@ impl DisplayCommand {
         self
     }
 
+    /// Creates a virtual placement for Unicode placeholder display.
+    pub fn virtual_placement(mut self) -> Self {
+        self.placement_mode = PlacementMode::Virtual;
+        self
+    }
+
+    /// Places this image relative to another placement.
+    pub fn relative_to(
+        mut self,
+        parent_image_id: u32,
+        parent_placement_id: u32,
+        horizontal_offset: i32,
+        vertical_offset: i32,
+    ) -> Self {
+        self.placement_mode = PlacementMode::Relative(RelativePlacement {
+            parent_image_id,
+            parent_placement_id,
+            horizontal_offset,
+            vertical_offset,
+        });
+        self
+    }
+
     /// Writes the escape sequence to the given writer.
     pub fn write_to<W: Write>(&self, writer: &mut W, is_tmux: bool) -> io::Result<()> {
         let mut params = format!("a=p,i={}", self.image_id);
@@ -818,6 +887,8 @@ impl DisplayCommand {
         if let Some(q) = self.quiet.code() {
             params.push_str(&format!(",q={q}"));
         }
+
+        self.placement_mode.write_params(&mut params);
 
         if let Some(ref rect) = self.source_rect {
             params.push_str(&format!(

@@ -674,7 +674,7 @@ static DIACRITICS: [char; 297] = [
     '\u{1D244}',
 ];
 #[inline]
-fn diacritic(y: u16) -> char {
+pub(crate) fn diacritic(y: u16) -> char {
     *DIACRITICS
         .get(usize::from(y))
         .unwrap_or_else(|| &DIACRITICS[0])

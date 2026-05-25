@@ -36,7 +36,7 @@ use crate::widget::highlight_palette::{
 use crate::{bookmarks::Bookmarks, navigation_panel::TableOfContents};
 
 use super::navigation::{get_pdf_chapter_title, save_pdf_bookmark, update_pdf_toc_active};
-use super::region::ImageRegion;
+use super::region::{ImageRegion, KittyTmuxAnchorCell};
 use super::state::{CommentEditMode, CommentInputState, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{
     DisplayBatch, ImageRequest, LastRender, PdfDisplayPlan, PdfDisplayRequest, PendingScroll,
@@ -1069,6 +1069,36 @@ pub(crate) fn build_display_plan(display_batch: DisplayBatch<'_>) -> PdfDisplayP
     }
 }
 
+fn render_tmux_anchors(frame: &mut Frame<'_>, display_batch: &DisplayBatch<'_>) {
+    if !crate::pdf::kittyv2::use_kitty_tmux_placeholder_anchors() {
+        return;
+    }
+
+    let DisplayBatch::Display(requests) = display_batch else {
+        return;
+    };
+
+    for request in requests {
+        let image_id = match &*request.image {
+            ImageState::Queued(image) => image.id.id.get(),
+            ImageState::Uploaded(image_id) => image_id.id.get(),
+        };
+        let anchor_cell_area = Rect {
+            x: request.position.x,
+            y: request.position.y,
+            width: 1,
+            height: 1,
+        };
+        frame.render_widget(
+            KittyTmuxAnchorCell {
+                image_id,
+                placement_id: crate::pdf::kittyv2::tmux_anchor_placement_id(image_id),
+            },
+            anchor_cell_area,
+        );
+    }
+}
+
 pub(crate) fn execute_display_plan(
     plan: PdfDisplayPlan,
     pdf_reader: &mut PdfReaderState,
@@ -1310,7 +1340,19 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
         return;
     };
 
+    let overlay_rect = (col, row, width, height);
+    let overlay_changed = pdf_reader.modal_overlay_sent != Some(overlay_rect);
+
+    // Page images use tmux-owned Unicode placeholder anchors. This modal
+    // overlay is emitted after ratatui has finished rendering the frame, so
+    // there is no buffer cell here to own an anchor; keep the legacy cursor
+    // placement path for this short-lived solid-color overlay. Refresh the
+    // pane offset only when the overlay geometry changes to avoid spawning
+    // tmux on every modal frame.
     let cursor = if tmux {
+        if overlay_changed {
+            crate::pdf::kittyv2::refresh_pane_offset();
+        }
         let (pane_top, pane_left) = crate::pdf::kittyv2::pane_offset();
         (
             pane_top as u32 + row as u32 + 1,
@@ -1321,7 +1363,7 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     };
 
     // If the overlay rect hasn't changed, just re-place the existing image.
-    if pdf_reader.modal_overlay_sent == Some((col, row, width, height)) {
+    if !overlay_changed {
         let _ = crate::pdf::kittyv2::DisplayCommand::new(MODAL_OVERLAY_IMAGE_ID)
             .placement_id(MODAL_OVERLAY_IMAGE_ID)
             .quiet(crate::pdf::kittyv2::Quiet::Silent)
@@ -1363,7 +1405,7 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
             .z_index(crate::pdf::kittyv2::IMAGE_Z_INDEX)
             .send(&mut stdout, &pixels, tmux);
 
-        pdf_reader.modal_overlay_sent = Some((col, row, width, height));
+        pdf_reader.modal_overlay_sent = Some(overlay_rect);
     }
 
     // Position the terminal cursor at the textarea caret after all Kitty
@@ -2599,6 +2641,10 @@ impl PdfReaderState {
         let use_scroll_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Scroll;
         let use_page_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Page;
         let page_layout_mode = get_pdf_page_layout_mode();
+        // tmux anchors are Unicode placeholders in the ratatui buffer; the
+        // frame must keep emitting the anchor cell so tmux owns the image.
+        let tmux_requires_anchor_refresh =
+            crate::pdf::kittyv2::use_kitty_tmux_placeholder_anchors();
 
         // NoChange optimization for Kitty modes
         // Skip if current page has a Queued image that needs to be displayed (e.g., cursor/selection update)
@@ -2628,6 +2674,7 @@ impl PdfReaderState {
 
         if size == self.last_render.rect
             && is_kitty_with_zoom
+            && !tmux_requires_anchor_refresh
             && !input_active
             && !comment_modal
             && !highlight_palette_modal
@@ -2710,6 +2757,8 @@ impl PdfReaderState {
                     &self.palette,
                 )
             };
+
+            render_tmux_anchors(frame, &result);
 
             self.zoom = Some(zoom);
 
@@ -2869,6 +2918,7 @@ impl PdfReaderState {
                 page_layout_mode,
                 &self.palette,
             );
+            render_tmux_anchors(frame, &result);
             self.zoom = Some(zoom);
 
             if let Some(page) = current_page {

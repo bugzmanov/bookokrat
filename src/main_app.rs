@@ -1360,6 +1360,9 @@ impl App {
             Some(picker) => crate::terminal::detect_terminal_with_picker(picker),
             None => crate::terminal::detect_terminal_with_probe(),
         };
+        crate::pdf::kittyv2::set_kitty_tmux_placeholder_anchors(
+            caps.env.tmux && caps.kind == crate::terminal::TerminalKind::Kitty,
+        );
         self.pdf_supports_graphics = caps.supports_graphics;
         self.book_manager.supports_graphics = caps.supports_graphics;
         self.pdf_supports_scroll_mode = caps.pdf.supports_scroll_mode;
