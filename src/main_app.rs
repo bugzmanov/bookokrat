@@ -687,6 +687,8 @@ impl App {
         let mut text_reader = MarkdownTextReader::new();
         text_reader.set_margin(settings::get_margin());
         text_reader.set_justify_text(settings::is_justify_text());
+        text_reader
+            .set_dual_columns(settings::get_epub_column_mode() == settings::EpubColumnMode::Dual);
         let home_context = LibraryContext::new(
             Bookmarks::load_or_ephemeral(bookmark_file),
             comments_dir.map(|p| p.to_path_buf()),
@@ -3192,6 +3194,14 @@ impl App {
                     self.navigation_panel.scroll_up(nav_panel_height);
                 }
             }
+        } else if self.text_reader.is_dual_active() {
+            // In the book-spread layout one wheel gesture flips a single
+            // spread, regardless of how many notches batched together.
+            if scroll_amount > 0 {
+                self.scroll_down();
+            } else {
+                self.scroll_up();
+            }
         } else if scroll_amount > 0 {
             for _ in 0..scroll_amount.min(10) {
                 self.scroll_down();
@@ -4975,8 +4985,11 @@ impl App {
                 }
             }
             Action::TogglePdfPageLayout => {
+                // `<Space>D` toggles "dual" layout for whichever reader is
+                // active: side-by-side pages for PDF, a two-column book spread
+                // for EPUB.
                 #[cfg(feature = "pdf")]
-                if self.is_pdf_mode() {
+                let handled_pdf = if self.is_pdf_mode() {
                     use crate::settings::{
                         PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
                     };
@@ -4997,6 +5010,36 @@ impl App {
                             std::time::Duration::from_secs(2),
                         );
                     }
+                    true
+                } else {
+                    false
+                };
+                #[cfg(not(feature = "pdf"))]
+                let handled_pdf = false;
+
+                if !handled_pdf && self.current_book.is_some() {
+                    // EPUB: toggle the two-column "book spread" layout. It only
+                    // renders in zen mode, so hint at that when enabling it from
+                    // the split-pane view.
+                    use crate::settings::{
+                        EpubColumnMode, get_epub_column_mode, set_epub_column_mode,
+                    };
+                    let new_mode = match get_epub_column_mode() {
+                        EpubColumnMode::Single => EpubColumnMode::Dual,
+                        EpubColumnMode::Dual => EpubColumnMode::Single,
+                    };
+                    set_epub_column_mode(new_mode);
+                    let current_node = self.text_reader.get_current_node_index();
+                    self.text_reader
+                        .set_dual_columns(new_mode == EpubColumnMode::Dual);
+                    self.text_reader.restore_to_node_index(current_node);
+                    let msg = match (new_mode, self.zen_mode) {
+                        (EpubColumnMode::Dual, false) => {
+                            "Two-column layout: on (applies in zen mode — Space+z)".to_string()
+                        }
+                        (mode, _) => format!("Column layout: {}", mode.as_str()),
+                    };
+                    self.notifications.info(msg);
                 }
                 true
             }
@@ -6026,6 +6069,14 @@ impl App {
                             pdf_reader.last_sent_viewport = None;
                             pdf_reader.force_redraw();
                         }
+                        // Keep the EPUB reader's column layout in sync with the
+                        // setting the user just changed in the popup.
+                        let current_node = self.text_reader.get_current_node_index();
+                        self.text_reader.set_dual_columns(
+                            crate::settings::get_epub_column_mode()
+                                == crate::settings::EpubColumnMode::Dual,
+                        );
+                        self.text_reader.restore_to_node_index(current_node);
                     }
                     SettingsAction::SettingsChanged => {
                         // Invalidate render cache for theme changes

@@ -276,20 +276,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.last_copied_text.clone()
     }
 
-    /// Convert screen coordinates to logical text coordinates (like TextReader does)
+    /// Convert screen coordinates to logical text coordinates (like TextReader does).
+    ///
+    /// In dual-column (book spread) mode a click in the right column maps to a
+    /// different range of buffer lines than the left column, so the target
+    /// column is resolved from the x coordinate before mapping.
     pub fn screen_to_text_coords(
         &self,
         screen_x: u16,
         screen_y: u16,
         content_area: Rect,
     ) -> Option<(usize, usize)> {
-        self.text_selection.screen_to_text_coords(
-            screen_x,
-            screen_y,
-            self.scroll_offset,
-            content_area.x,
-            content_area.y,
-        )
+        let (area, col_start) = self.column_at_x(screen_x, content_area);
+        self.text_selection
+            .screen_to_text_coords(screen_x, screen_y, col_start, area.x, area.y)
+    }
+
+    /// Resolve which column an x coordinate falls into, returning that column's
+    /// text rect and the buffer line it starts at. Falls back to the supplied
+    /// area / current scroll offset when not in dual-column mode.
+    fn column_at_x(&self, screen_x: u16, default_area: Rect) -> (Rect, usize) {
+        if let Some(right) = self.last_right_column {
+            if screen_x >= right.x {
+                return (right, self.scroll_offset + self.last_column_height);
+            }
+            if let Some(left) = self.last_inner_text_area {
+                return (left, self.scroll_offset);
+            }
+        }
+        (default_area, self.scroll_offset)
     }
 
     fn set_normal_mode_cursor(&mut self, line: usize, column: usize) {

@@ -37,6 +37,7 @@ fn create_test_app_isolated() -> (App, TempDir) {
     set_margin(0);
     bookokrat::settings::set_justify_text(false);
     bookokrat::settings::set_nav_panel_width(None);
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = App::new_with_config(
         Some("tests/testdata"),
@@ -4198,6 +4199,53 @@ fn test_zen_mode_svg() {
     );
 }
 
+/// Two-column "book spread" layout for EPUB in zen mode (`Space+D`). Text
+/// flows continuously from the left column into the right within a single
+/// bordered frame.
+#[test]
+#[serial]
+fn test_epub_dual_column_zen_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    app.set_zen_mode(true);
+
+    // Toggle the two-column spread via <Space>D.
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('D'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_dual_column_zen.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // Reset so the global column setting cannot leak into other tests.
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_dual_column_zen.svg"),
+        "test_epub_dual_column_zen_svg",
+        create_test_failure_handler("test_epub_dual_column_zen_svg"),
+    );
+}
+
 #[test]
 #[parallel]
 fn test_margin_change_no_position_jump_svg() {
@@ -6138,6 +6186,7 @@ fn test_search_with_justified_text_svg() {
     set_margin(0);
     bookokrat::settings::set_justify_text(false);
     bookokrat::settings::set_nav_panel_width(None);
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = App::new_with_config(

@@ -4,7 +4,33 @@ use crate::search::SearchMode;
 use std::time::Instant;
 
 impl crate::markdown_text_reader::MarkdownTextReader {
+    /// Advance by one full spread. In dual-column mode every scroll/paging
+    /// motion routes through this so both pages flip to fresh content at once,
+    /// rather than sliding the right column's lines into the left.
+    fn page_forward(&mut self) {
+        let step = self.visible_height.max(1);
+        let max_offset = self.get_max_scroll_offset();
+        self.scroll_offset = (self.scroll_offset + step).min(max_offset);
+        self.last_scroll_time = Instant::now();
+        if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
+            self.search_state.current_match_index = None;
+        }
+    }
+
+    fn page_backward(&mut self) {
+        let step = self.visible_height.max(1);
+        self.scroll_offset = self.scroll_offset.saturating_sub(step);
+        self.last_scroll_time = Instant::now();
+        if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
+            self.search_state.current_match_index = None;
+        }
+    }
+
     pub fn scroll_up(&mut self) {
+        if self.dual_active {
+            self.page_backward();
+            return;
+        }
         if self.scroll_offset > 0 {
             self.scroll_offset = self.scroll_offset.saturating_sub(self.scroll_speed);
             self.last_scroll_time = Instant::now();
@@ -15,6 +41,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_down(&mut self) {
+        if self.dual_active {
+            self.page_forward();
+            return;
+        }
         let max_offset = self.get_max_scroll_offset();
         if self.scroll_offset < max_offset {
             self.scroll_offset = (self.scroll_offset + self.scroll_speed).min(max_offset);
@@ -26,16 +56,28 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_paragraph_up(&mut self) {
+        if self.dual_active {
+            self.page_backward();
+            return;
+        }
         let target = self.find_prev_paragraph_boundary(self.scroll_offset);
         self.scroll_offset = target;
     }
 
     pub fn scroll_paragraph_down(&mut self) {
+        if self.dual_active {
+            self.page_forward();
+            return;
+        }
         let target = self.find_next_paragraph_boundary(self.scroll_offset);
         self.scroll_offset = target.min(self.get_max_scroll_offset());
     }
 
     pub fn scroll_half_screen_up(&mut self, screen_height: usize) {
+        if self.dual_active {
+            self.page_backward();
+            return;
+        }
         let scroll_amount = screen_height / 2;
         let old_offset = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
@@ -52,6 +94,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
+        if self.dual_active {
+            self.page_forward();
+            return;
+        }
         let scroll_amount = screen_height / 2;
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);
@@ -64,6 +110,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
+        if self.dual_active {
+            self.page_backward();
+            return;
+        }
         let scroll_amount = screen_height.saturating_sub(1);
         let old_offset = self.scroll_offset;
         self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
@@ -80,6 +130,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_down(&mut self, screen_height: usize) {
+        if self.dual_active {
+            self.page_forward();
+            return;
+        }
         let scroll_amount = screen_height.saturating_sub(1);
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = (self.scroll_offset + scroll_amount).min(max_offset);

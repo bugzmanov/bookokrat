@@ -389,7 +389,7 @@ impl Action {
             ToggleInvertImages => "Toggle image inversion in themed mode (PDF)",
             TogglePdfTheming => "Toggle themed vs original PDF rendering",
             TogglePdfWatching => "Toggle file watching / auto-reload (PDF)",
-            TogglePdfPageLayout => "Toggle single / dual page layout (PDF)",
+            TogglePdfPageLayout => "Toggle dual layout (PDF pages / EPUB columns)",
             TogglePdfRenderMode => "Toggle scroll / page render mode (PDF)",
             DumpDebugState => "Dump PDF debug state to the log",
             SynctexInverse => "SyncTeX inverse search: jump to LaTeX source",

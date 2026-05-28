@@ -100,6 +100,26 @@ impl PdfPageLayoutMode {
     }
 }
 
+/// EPUB column layout mode (two-page spread in zen mode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EpubColumnMode {
+    /// Single column of text
+    #[default]
+    Single,
+    /// Two columns side by side (book spread)
+    Dual,
+}
+
+impl EpubColumnMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EpubColumnMode::Single => "Single",
+            EpubColumnMode::Dual => "Dual",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -128,6 +148,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub pdf_page_layout_mode: PdfPageLayoutMode,
+
+    #[serde(default)]
+    pub epub_column_mode: EpubColumnMode,
 
     /// True if user has seen/configured PDF settings (used for migration prompt)
     #[serde(default)]
@@ -188,6 +211,7 @@ impl Default for Settings {
             pdf_render_mode: PdfRenderMode::default(),
             pdf_enabled: true,
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
+            epub_column_mode: EpubColumnMode::default(),
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             justify_text: false,
@@ -515,6 +539,13 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 PdfPageLayoutMode::Dual => "dual".into(),
             },
         ),
+        (
+            "epub_column_mode".into(),
+            match settings.epub_column_mode {
+                EpubColumnMode::Single => "single".into(),
+                EpubColumnMode::Dual => "dual".into(),
+            },
+        ),
         ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
         (
             "pdf_settings_configured".into(),
@@ -587,6 +618,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         PdfPageLayoutMode::Dual => "dual",
     };
     content.push_str(&format!("pdf_page_layout_mode: {}\n", layout_mode_str));
+    let epub_column_str = match settings.epub_column_mode {
+        EpubColumnMode::Single => "single",
+        EpubColumnMode::Dual => "dual",
+    };
+    content.push_str(&format!("epub_column_mode: {}\n", epub_column_str));
     content.push_str(&format!("pdf_enabled: {}\n", settings.pdf_enabled));
     content.push_str(&format!(
         "pdf_settings_configured: {}\n",
@@ -814,6 +850,20 @@ pub fn get_pdf_page_layout_mode() -> PdfPageLayoutMode {
 pub fn set_pdf_page_layout_mode(mode: PdfPageLayoutMode) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.pdf_page_layout_mode = mode;
+    }
+    save_settings();
+}
+
+pub fn get_epub_column_mode() -> EpubColumnMode {
+    SETTINGS
+        .read()
+        .map(|s| s.epub_column_mode)
+        .unwrap_or_default()
+}
+
+pub fn set_epub_column_mode(mode: EpubColumnMode) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.epub_column_mode = mode;
     }
     save_settings();
 }

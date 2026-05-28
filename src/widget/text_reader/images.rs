@@ -205,15 +205,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn check_image_click(&self, x: u16, y: u16) -> Option<String> {
-        // Use the inner text area if available
-        let text_area = self.last_inner_text_area?;
-
-        // Check if click is within the text area
-        if x < text_area.x
-            || x >= text_area.x + text_area.width
-            || y < text_area.y
-            || y >= text_area.y + text_area.height
-        {
+        // Click must land in one of the rendered text columns (left column is
+        // `last_inner_text_area`; `last_right_column` is set only in dual mode).
+        let within = |area: ratatui::layout::Rect| {
+            x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height
+        };
+        let in_text_area = self.last_inner_text_area.is_some_and(within)
+            || self.last_right_column.is_some_and(within);
+        if !in_text_area {
             return None;
         }
 

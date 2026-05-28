@@ -1,11 +1,11 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
-    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_invert_scroll_direction,
-    is_pdf_enabled, is_transparent_background, set_integrations, set_invert_scroll_direction,
-    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
-    set_transparent_background,
+    EpubColumnMode, LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_epub_column_mode,
+    get_lookup_command, get_lookup_display, get_pdf_page_layout_mode, get_pdf_render_mode,
+    get_synctex_editor, is_invert_scroll_direction, is_pdf_enabled, is_transparent_background,
+    set_epub_column_mode, set_integrations, set_invert_scroll_direction, set_lookup_display,
+    set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -265,8 +265,8 @@ impl SettingsPopup {
     }
 
     fn general_max_selectable_idx(&self) -> usize {
-        // Scroll direction options (6,7) are always available
-        7
+        // EPUB column options (8,9) are always available
+        9
     }
 
     fn render_mode_available(&self) -> bool {
@@ -425,12 +425,12 @@ impl SettingsPopup {
             SettingsTab::General => {
                 // PDF section (3) + spacer (1) + Render Mode (4) + spacer (1) +
                 // Page Layout (4) + spacer (1) + Info (≤2) + spacer (1) +
-                // Scrolling section (4)
+                // Scrolling section (4) + spacer (1) + EPUB Layout section (4)
                 let pdf_enabled = is_pdf_enabled();
                 let info_h = self
                     .get_pdf_info_lines(current_theme(), pdf_enabled, get_pdf_render_mode())
                     .len() as u16;
-                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1) + 1 + 4
+                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1) + 1 + 4 + 1 + 4
             }
             SettingsTab::Themes => {
                 let truecolor_note_height = if crate::color_mode::supports_true_color() {
@@ -453,12 +453,13 @@ impl SettingsPopup {
         match self.current_tab {
             SettingsTab::General => {
                 // chunks[1] holds idx 0,1; chunks[5] holds idx 2,3; chunks[9] holds idx 4,5;
-                // chunks[15] holds idx 6,7.
+                // chunks[15] holds idx 6,7; chunks[19] holds idx 8,9.
                 let (chunk_idx, sub) = match self.general_selected_idx {
                     0 | 1 => (1usize, self.general_selected_idx),
                     2 | 3 => (5, self.general_selected_idx - 2),
                     4 | 5 => (9, self.general_selected_idx - 4),
                     6 | 7 => (15, self.general_selected_idx - 6),
+                    8 | 9 => (19, self.general_selected_idx - 8),
                     _ => return None,
                 };
                 let r = self.content_chunks.get(chunk_idx)?;
@@ -584,6 +585,10 @@ impl SettingsPopup {
                 Constraint::Length(1),                       // 13: Scrolling header
                 Constraint::Length(1),                       // 14: empty line
                 Constraint::Length(2),                       // 15: Scrolling options
+                Constraint::Length(1),                       // 16: spacer
+                Constraint::Length(1),                       // 17: EPUB Layout header
+                Constraint::Length(1),                       // 18: empty line
+                Constraint::Length(2),                       // 19: EPUB Layout options
             ])
             .split(area);
 
@@ -842,6 +847,53 @@ impl SettingsPopup {
             palette,
         );
         Paragraph::new(inverted_line).render(scrolling_chunks[1], buf);
+
+        // ── EPUB Layout section ──
+        let current_column_mode = get_epub_column_mode();
+        self.render_section_header(buf, chunks[17], "EPUB Layout", palette, palette.base_06);
+
+        let column_options_area = Rect {
+            x: chunks[19].x + 2,
+            y: chunks[19].y,
+            width: chunks[19].width.saturating_sub(2),
+            height: chunks[19].height,
+        };
+        let column_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(column_options_area);
+
+        let column_option_style = Style::default().fg(palette.base_06);
+
+        let single_column_radio = if current_column_mode == EpubColumnMode::Single {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let single_column_line = self.render_radio_option(
+            single_column_radio,
+            "Single",
+            Some("one column"),
+            column_option_style,
+            is_general && self.general_selected_idx == 8,
+            palette,
+        );
+        Paragraph::new(single_column_line).render(column_chunks[0], buf);
+
+        let dual_column_radio = if current_column_mode == EpubColumnMode::Dual {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let dual_column_line = self.render_radio_option(
+            dual_column_radio,
+            "Dual",
+            Some("two columns, zen mode"),
+            column_option_style,
+            is_general && self.general_selected_idx == 9,
+            palette,
+        );
+        Paragraph::new(dual_column_line).render(column_chunks[1], buf);
     }
 
     fn render_themes_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
@@ -1143,6 +1195,7 @@ impl SettingsPopup {
             4 => self.render_mode_available(), // Page mode
             5 => self.render_mode_available() && self.supports_scroll_mode, // Scroll mode
             6 | 7 => true,                     // Scroll direction (always available)
+            8 | 9 => true,                     // EPUB column layout (always available)
             _ => false,
         }
     }
@@ -1227,6 +1280,21 @@ impl SettingsPopup {
                 if !is_invert_scroll_direction() {
                     set_invert_scroll_direction(true);
                     return Some(SettingsAction::SettingsChanged);
+                }
+                None
+            }
+            // EPUB column layout
+            8 => {
+                if get_epub_column_mode() != EpubColumnMode::Single {
+                    set_epub_column_mode(EpubColumnMode::Single);
+                    return Some(SettingsAction::PageLayoutChanged);
+                }
+                None
+            }
+            9 => {
+                if get_epub_column_mode() != EpubColumnMode::Dual {
+                    set_epub_column_mode(EpubColumnMode::Dual);
+                    return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
@@ -1588,6 +1656,18 @@ impl SettingsPopup {
                     {
                         let sub = (virtual_row - r.y) as usize;
                         self.general_selected_idx = 6 + sub;
+                        return self.apply_general_selected();
+                    }
+                }
+                // chunks[19]: EPUB Layout options (idx 8,9)
+                if let Some(r) = chunks.get(19) {
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
+                        self.general_selected_idx = 8 + sub;
                         return self.apply_general_selected();
                     }
                 }

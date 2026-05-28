@@ -83,6 +83,13 @@ pub struct MarkdownTextReader {
     last_content_area: Option<Rect>,
 
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
+    /// In dual-column (book spread) mode, the right column's text area. None
+    /// when rendering a single column. The left column reuses
+    /// `last_inner_text_area`.
+    last_right_column: Option<Rect>,
+    /// Lines drawn per column at the last render (used to map a click in the
+    /// right column to the correct line range).
+    last_column_height: usize,
     auto_scroll_active: bool,
     auto_scroll_speed: f32,
     mouse_down_screen_y: Option<u16>,
@@ -154,6 +161,16 @@ pub struct MarkdownTextReader {
 
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
+
+    /// Whether two-column (book spread) layout is enabled. Only takes effect
+    /// in zen mode when the pane is wide enough; otherwise falls back to a
+    /// single column.
+    dual_column_enabled: bool,
+
+    /// Whether the last render actually drew two columns (enabled + zen + wide
+    /// enough). Navigation reads this to page by whole spreads instead of
+    /// scrolling line-by-line, which would slide content between columns.
+    dual_active: bool,
 
     /// Vim normal mode state
     normal_mode: NormalModeState,
@@ -258,6 +275,8 @@ impl MarkdownTextReader {
             last_copied_text: None,
             last_content_area: None,
             last_inner_text_area: None,
+            last_right_column: None,
+            last_column_height: 0,
             auto_scroll_active: false,
             auto_scroll_speed: 1.0,
             mouse_down_screen_y: None,
@@ -288,6 +307,8 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             justify_text: false,
+            dual_column_enabled: false,
+            dual_active: false,
             normal_mode: NormalModeState::new(),
             hud_message: None,
         }
@@ -462,8 +483,6 @@ impl MarkdownTextReader {
     ) {
         // Store content area for hit-testing and mouse interactions
         self.last_content_area = Some(area);
-        // Trim borders plus footer space to get actual viewport height
-        self.visible_height = area.height.saturating_sub(3) as usize;
 
         if self.show_raw_html {
             self.render_raw_html(
@@ -477,11 +496,55 @@ impl MarkdownTextReader {
             return;
         }
 
-        // Account for borders, side padding, and content margin
-        let margin_width = (self.content_margin * 2) as usize;
-        let width = (area.width.saturating_sub(4) as usize)
-            .saturating_sub(margin_width * 2)
-            .max(1);
+        // Base content rectangle inside the border. This is the single-column
+        // text area; in dual mode it is split into two side-by-side columns.
+        let base_inner = self.content_inner_rect(area);
+
+        // Two-column "book spread": only in zen mode and only when the pane is
+        // wide enough to give each column a comfortable measure.
+        const COLUMN_GUTTER: u16 = 3;
+        const MIN_COLUMN_WIDTH: u16 = 32;
+        let dual = self.dual_column_enabled
+            && zen_mode
+            && base_inner.width >= 2 * MIN_COLUMN_WIDTH + COLUMN_GUTTER;
+        self.dual_active = dual;
+
+        // The reader's scroll math treats `visible_height` as the number of
+        // buffer lines shown at once. In dual mode that is both columns
+        // combined, which makes all paging/scrolling math span the spread
+        // without any per-mode special-casing elsewhere.
+        let column_lines = base_inner.height as usize;
+        self.visible_height = if dual { 2 * column_lines } else { column_lines };
+
+        // Each column is paired with the first buffer line it shows. `width` is
+        // the text-wrap measure that applies to a column.
+        let (columns, width): (Vec<(usize, Rect)>, usize) = if dual {
+            let col_w = (base_inner.width - COLUMN_GUTTER) / 2;
+            let left = Rect {
+                x: base_inner.x,
+                y: base_inner.y,
+                width: col_w,
+                height: base_inner.height,
+            };
+            let right = Rect {
+                x: base_inner.x + col_w + COLUMN_GUTTER,
+                y: base_inner.y,
+                width: base_inner.width - col_w - COLUMN_GUTTER,
+                height: base_inner.height,
+            };
+            (
+                vec![
+                    (self.scroll_offset, left),
+                    (self.scroll_offset + column_lines, right),
+                ],
+                (col_w.saturating_sub(2)).max(1) as usize,
+            )
+        } else {
+            (
+                vec![(self.scroll_offset, base_inner)],
+                (base_inner.width.saturating_sub(2)).max(1) as usize,
+            )
+        };
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -628,19 +691,20 @@ impl MarkdownTextReader {
             }
         }
 
-        // Remove borders so the text sits inside the frame cleanly
-        let mut inner_area = block.inner(area);
-        inner_area.y = inner_area.y.saturating_add(1);
-        inner_area.height = inner_area.height.saturating_sub(1);
-        inner_area.x = inner_area.x.saturating_add(1);
-
-        // Apply content margin
-        let margin_pixels = self.content_margin * 2;
-        inner_area.x = inner_area.x.saturating_add(margin_pixels);
-        inner_area.width = inner_area.width.saturating_sub(margin_pixels * 2);
-
-        // Remember the focused text area for mouse hover/selection logic
-        self.last_inner_text_area = Some(inner_area);
+        // Remember the column text areas for mouse hover/selection logic.
+        match columns.as_slice() {
+            [(_, left), (_, right)] => {
+                self.last_inner_text_area = Some(*left);
+                self.last_right_column = Some(*right);
+                self.last_column_height = left.height as usize;
+            }
+            _ => {
+                self.last_inner_text_area = columns.first().map(|(_, r)| *r);
+                self.last_right_column = None;
+                self.last_column_height =
+                    columns.first().map(|(_, r)| r.height as usize).unwrap_or(0);
+            }
+        }
 
         let image_clear_style = RatatuiStyle::default().bg(theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
@@ -655,7 +719,7 @@ impl MarkdownTextReader {
                 self.scroll_offset,
                 self.cache_generation,
                 self.rendered_content.generation,
-                inner_area,
+                base_inner,
             );
             let content_moved = self.last_overlay_cleanup_key != Some(cleanup_key);
             if terminal_overlay::kitty_delete_overlay_hack_enabled() && content_moved {
@@ -672,11 +736,6 @@ impl MarkdownTextReader {
             self.last_overlay_cleanup_key = Some(cleanup_key);
         }
 
-        // First pass: render text lines (no images yet)
-        let mut visible_lines = Vec::new();
-        let end_offset =
-            (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
-
         // Selection background depends on focus state
         let selection_bg = if is_focused {
             palette.base_02
@@ -685,7 +744,9 @@ impl MarkdownTextReader {
         };
 
         // Reserve empty lines where the comment textarea will be drawn.
-        let textarea_layout = self.compute_comment_textarea_layout(self.scroll_offset, end_offset);
+        let spread_end =
+            (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
+        let textarea_layout = self.compute_comment_textarea_layout(self.scroll_offset, spread_end);
         let textarea_lines_to_insert = textarea_layout
             .as_ref()
             .map(|layout| layout.lines_to_insert)
@@ -694,7 +755,101 @@ impl MarkdownTextReader {
             .as_ref()
             .and_then(|layout| layout.insert_position);
 
-        for line_idx in self.scroll_offset..end_offset {
+        // Draw the bordered frame once around the whole spread.
+        let paragraph = Paragraph::new(vec![])
+            .block(block.clone())
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        frame.render_widget(paragraph, area);
+
+        // Clear overlay images when suppressing (e.g., popup is shown).
+        if suppress_images {
+            if !self.inline_images_suppressed {
+                if terminal_overlay::kitty_delete_overlay_hack_enabled() {
+                    terminal_overlay::emit_kitty_delete_all();
+                }
+                if terminal_overlay::overlay_force_clear_enabled() {
+                    terminal_overlay::clear_rects_direct(
+                        self.last_rendered_image_rects.values().copied(),
+                    );
+                }
+            }
+            self.inline_images_suppressed = true;
+        } else {
+            self.inline_images_suppressed = false;
+        }
+
+        if !suppress_images {
+            self.check_for_loaded_images();
+        }
+
+        // Draw each column: text first, then inline images over it.
+        let mut current_image_rects = HashMap::new();
+        for &(col_start, col_rect) in &columns {
+            let col_end =
+                (col_start + col_rect.height as usize).min(self.rendered_content.lines.len());
+            let visible_lines = self.build_column_lines(
+                col_start,
+                col_end,
+                palette,
+                selection_bg,
+                textarea_insert_position,
+                textarea_lines_to_insert,
+            );
+            let inner_text_paragraph =
+                Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
+            frame.render_widget(inner_text_paragraph, col_rect);
+
+            if !self.show_raw_html && !suppress_images {
+                self.render_column_images(
+                    frame,
+                    col_start,
+                    col_rect,
+                    textarea_insert_position,
+                    textarea_lines_to_insert,
+                    &mut current_image_rects,
+                );
+            }
+        }
+        self.last_rendered_image_rects = current_image_rects;
+
+        // Draw the comment editing textarea in whichever column holds it.
+        if let Some(layout) = textarea_layout {
+            if let Some(&(col_start, col_rect)) = columns.iter().find(|&&(cs, cr)| {
+                layout.draw_start_line >= cs && layout.draw_start_line < cs + cr.height as usize
+            }) {
+                self.draw_comment_textarea_column(frame, layout, col_start, col_rect, palette);
+            }
+        }
+    }
+
+    /// The content rectangle inside the reader's border (single-column text
+    /// area). In dual mode this rect is split into two columns.
+    fn content_inner_rect(&self, area: Rect) -> Rect {
+        let mut inner = Block::default().borders(Borders::ALL).inner(area);
+        inner.y = inner.y.saturating_add(1);
+        inner.height = inner.height.saturating_sub(1);
+        inner.x = inner.x.saturating_add(1);
+        let margin_pixels = self.content_margin * 2;
+        inner.x = inner.x.saturating_add(margin_pixels);
+        inner.width = inner.width.saturating_sub(margin_pixels * 2);
+        inner
+    }
+
+    /// Build the styled lines for one column, covering buffer lines
+    /// `[col_start, col_end)`. Highlights (selection, search, yank, visual,
+    /// cursor) are keyed on the absolute buffer line index, so they render
+    /// identically regardless of which column a line lands in.
+    fn build_column_lines(
+        &self,
+        col_start: usize,
+        col_end: usize,
+        palette: &Base16Palette,
+        selection_bg: ratatui::style::Color,
+        textarea_insert_position: Option<usize>,
+        textarea_lines_to_insert: usize,
+    ) -> Vec<Line<'static>> {
+        let mut visible_lines = Vec::new();
+        for line_idx in col_start..col_end {
             if let Some(insert_pos) = textarea_insert_position {
                 if line_idx == insert_pos {
                     for _ in 0..textarea_lines_to_insert {
@@ -704,7 +859,7 @@ impl MarkdownTextReader {
             }
 
             if let Some(rendered_line) = self.rendered_content.lines.get(line_idx) {
-                let visual_line_idx = line_idx - self.scroll_offset;
+                let visual_line_idx = line_idx.wrapping_sub(self.scroll_offset);
 
                 let skip_placeholder =
                     if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
@@ -758,214 +913,185 @@ impl MarkdownTextReader {
                 visible_lines.push(Line::from(line_spans));
             }
         }
+        visible_lines
+    }
 
-        let paragraph = Paragraph::new(vec![])
-            .block(block.clone())
-            .wrap(ratatui::widgets::Wrap { trim: false });
+    /// Draw inline images that overlap one column's line range, placing them
+    /// relative to that column's rect.
+    fn render_column_images(
+        &self,
+        frame: &mut Frame,
+        col_start: usize,
+        col_rect: Rect,
+        textarea_insert_position: Option<usize>,
+        textarea_lines_to_insert: usize,
+        current_image_rects: &mut HashMap<String, Rect>,
+    ) {
+        if self.embedded_images.borrow().is_empty() || self.image_picker.is_none() {
+            return;
+        }
+        let area_height = col_rect.height as usize;
 
-        frame.render_widget(paragraph, area);
+        for (src, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+            let image_height_cells = embedded_image.height_cells as usize;
+            let mut image_start_line = embedded_image.lines_before_image;
+            let mut image_end_line = image_start_line + image_height_cells;
 
-        let inner_text_paragraph =
-            Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
-
-        frame.render_widget(inner_text_paragraph, inner_area);
-
-        // Second pass: draw inline images over the text block
-        let scroll_offset = self.scroll_offset;
-
-        let mut current_image_rects = HashMap::new();
-
-        // Clear overlay images when suppressing (e.g., popup is shown)
-        if suppress_images {
-            if !self.inline_images_suppressed {
-                if terminal_overlay::kitty_delete_overlay_hack_enabled() {
-                    terminal_overlay::emit_kitty_delete_all();
-                }
-                if terminal_overlay::overlay_force_clear_enabled() {
-                    terminal_overlay::clear_rects_direct(
-                        self.last_rendered_image_rects.values().copied(),
-                    );
+            if let Some(insert_pos) = textarea_insert_position {
+                if image_start_line >= insert_pos {
+                    image_start_line += textarea_lines_to_insert;
+                    image_end_line += textarea_lines_to_insert;
                 }
             }
-            self.inline_images_suppressed = true;
-        } else {
-            self.inline_images_suppressed = false;
-        }
 
-        if !self.show_raw_html && !suppress_images {
-            self.check_for_loaded_images();
-            if !self.embedded_images.borrow().is_empty() && self.image_picker.is_some() {
-                let area_height = inner_area.height as usize;
+            if col_start < image_end_line && col_start + area_height > image_start_line {
+                if let ImageLoadState::Loaded {
+                    ref image,
+                    ref mut protocol,
+                } = embedded_image.state
+                {
+                    let scaled_image = image;
 
-                for (src, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
-                    let image_height_cells = embedded_image.height_cells as usize;
-                    let mut image_start_line = embedded_image.lines_before_image;
-                    let mut image_end_line = image_start_line + image_height_cells;
+                    if let Some(ref picker) = self.image_picker {
+                        let image_screen_start = image_start_line.saturating_sub(col_start);
 
-                    if let Some(insert_pos) = textarea_insert_position {
-                        if image_start_line >= insert_pos {
-                            image_start_line += textarea_lines_to_insert;
-                            image_end_line += textarea_lines_to_insert;
-                        }
-                    }
+                        // Clip the top portion if the image starts above the column
+                        let image_top_clipped = col_start.saturating_sub(image_start_line);
 
-                    if scroll_offset < image_end_line
-                        && scroll_offset + area_height > image_start_line
-                    {
-                        if let ImageLoadState::Loaded {
-                            ref image,
-                            ref mut protocol,
-                        } = embedded_image.state
-                        {
-                            let scaled_image = image;
+                        let visible_image_height = (image_height_cells - image_top_clipped)
+                            .min(area_height - image_screen_start);
 
-                            if let Some(ref picker) = self.image_picker {
-                                let image_screen_start =
-                                    image_start_line.saturating_sub(scroll_offset);
+                        if visible_image_height > 0 {
+                            let image_height_cells = calculate_image_height_in_cells(scaled_image);
 
-                                // Clip the top portion if the image starts above the viewport
-                                let image_top_clipped =
-                                    scroll_offset.saturating_sub(image_start_line);
+                            let (render_y, render_height) = if image_top_clipped > 0 {
+                                (
+                                    col_rect.y,
+                                    ((image_height_cells as usize)
+                                        .saturating_sub(image_top_clipped))
+                                    .min(area_height) as u16,
+                                )
+                            } else {
+                                (
+                                    col_rect.y + image_screen_start as u16,
+                                    (image_height_cells as usize)
+                                        .min(area_height.saturating_sub(image_screen_start))
+                                        as u16,
+                                )
+                            };
 
-                                let visible_image_height = (image_height_cells - image_top_clipped)
-                                    .min(area_height - image_screen_start);
+                            // Determine the terminal width required for the pixels
+                            let (image_width_pixels, _image_height_pixels) =
+                                scaled_image.dimensions();
+                            let font_size = picker.font_size();
+                            let image_width_cells =
+                                (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
 
-                                if visible_image_height > 0 {
-                                    let image_height_cells =
-                                        calculate_image_height_in_cells(scaled_image);
+                            // Center the image horizontally in the column
+                            let text_area_width = col_rect.width;
+                            let image_display_width = image_width_cells.min(text_area_width);
+                            let x_offset =
+                                (text_area_width.saturating_sub(image_display_width)) / 2;
 
-                                    let (render_y, render_height) = if image_top_clipped > 0 {
-                                        (
-                                            inner_area.y,
-                                            ((image_height_cells as usize)
-                                                .saturating_sub(image_top_clipped))
-                                            .min(area_height)
-                                                as u16,
-                                        )
-                                    } else {
-                                        (
-                                            inner_area.y + image_screen_start as u16,
-                                            (image_height_cells as usize)
-                                                .min(area_height.saturating_sub(image_screen_start))
-                                                as u16,
-                                        )
-                                    };
+                            let image_area = Rect {
+                                x: col_rect.x + x_offset,
+                                y: render_y,
+                                width: image_display_width,
+                                height: render_height,
+                            };
 
-                                    // Determine the terminal width required for the pixels
-                                    let (image_width_pixels, _image_height_pixels) =
-                                        scaled_image.dimensions();
-                                    let font_size = picker.font_size();
-                                    let image_width_cells =
-                                        (image_width_pixels as f32 / font_size.0 as f32).ceil()
-                                            as u16;
+                            // Render using the ratatui_image viewport for scrolling
+                            let current_font_size = picker.font_size();
+                            let y_offset_pixels =
+                                (image_top_clipped as f32 * current_font_size.1 as f32) as u32;
 
-                                    // Center the image horizontally in the text area
-                                    let text_area_width = inner_area.width;
-                                    let image_display_width =
-                                        image_width_cells.min(text_area_width);
-                                    let x_offset =
-                                        (text_area_width.saturating_sub(image_display_width)) / 2;
+                            let viewport_options = ViewportOptions {
+                                y_offset: y_offset_pixels,
+                                x_offset: 0, // No horizontal scrolling for now
+                            };
 
-                                    let image_area = Rect {
-                                        x: inner_area.x + x_offset,
-                                        y: render_y,
-                                        width: image_display_width,
-                                        height: render_height,
-                                    };
+                            let image_widget =
+                                StatefulImage::new().resize(Resize::Viewport(viewport_options));
 
-                                    // Render using the ratatui_image viewport for scrolling
-                                    let current_font_size = picker.font_size();
-                                    let y_offset_pixels = (image_top_clipped as f32
-                                        * current_font_size.1 as f32)
-                                        as u32;
-
-                                    let viewport_options = ViewportOptions {
-                                        y_offset: y_offset_pixels,
-                                        x_offset: 0, // No horizontal scrolling for now
-                                    };
-
-                                    let image_widget = StatefulImage::new()
-                                        .resize(Resize::Viewport(viewport_options));
-
-                                    frame.render_stateful_widget(
-                                        image_widget,
-                                        image_area,
-                                        protocol,
-                                    );
-                                    current_image_rects.insert(src.clone(), image_area);
-                                }
-                            }
+                            frame.render_stateful_widget(image_widget, image_area, protocol);
+                            current_image_rects.insert(src.clone(), image_area);
                         }
                     }
                 }
             }
         }
+    }
 
-        self.last_rendered_image_rects = current_image_rects;
+    /// Draw the comment editing textarea overlay within a single column.
+    fn draw_comment_textarea_column(
+        &mut self,
+        frame: &mut Frame,
+        layout: CommentTextareaLayout,
+        col_start: usize,
+        col_rect: Rect,
+        palette: &Base16Palette,
+    ) {
+        let Some(textarea) = self.comment_input.textarea.as_mut() else {
+            return;
+        };
+        let visual_position = layout.draw_start_line.saturating_sub(col_start);
+        let textarea_y = col_rect.y + visual_position as u16;
 
-        if let (Some(layout), Some(textarea)) =
-            (textarea_layout, self.comment_input.textarea.as_mut())
-        {
-            let visual_position = layout.draw_start_line.saturating_sub(self.scroll_offset);
-            let textarea_y = inner_area.y + visual_position as u16;
+        if textarea_y < col_rect.y + col_rect.height {
+            // Compute minimum height so borders never collapse.
+            let content_lines = textarea.lines().len();
+            let min_lines = 3;
+            let actual_content_lines = content_lines.max(min_lines);
+            let desired_height = (actual_content_lines + 2) as u16;
 
-            if textarea_y < inner_area.y + inner_area.height {
-                // Compute minimum height so borders never collapse.
-                let content_lines = textarea.lines().len();
-                let min_lines = 3;
-                let actual_content_lines = content_lines.max(min_lines);
-                let desired_height = (actual_content_lines + 2) as u16;
+            // Constrain height to the remaining view.
+            let textarea_height = desired_height.min(col_rect.y + col_rect.height - textarea_y);
 
-                // Constrain height to the remaining view.
-                let textarea_height =
-                    desired_height.min(inner_area.y + inner_area.height - textarea_y);
+            // Shift left to align with paragraph text (col_rect.x already has padding).
+            let left_adjust = 2;
 
-                // Shift left to align with paragraph text (inner_area.x already has padding).
-                let left_adjust = 2;
+            let textarea_rect = Rect {
+                x: col_rect.x.saturating_sub(left_adjust),
+                y: textarea_y,
+                width: col_rect.width + left_adjust,
+                height: textarea_height,
+            };
 
-                let textarea_rect = Rect {
-                    x: inner_area.x.saturating_sub(left_adjust),
-                    y: textarea_y,
-                    width: inner_area.width + left_adjust,
-                    height: textarea_height,
-                };
+            let clear_block =
+                Block::default().style(RatatuiStyle::default().bg(theme_background()));
+            frame.render_widget(clear_block, textarea_rect);
 
-                let clear_block =
-                    Block::default().style(RatatuiStyle::default().bg(theme_background()));
-                frame.render_widget(clear_block, textarea_rect);
+            let padded_rect = Rect {
+                x: textarea_rect.x + 2,
+                y: textarea_y,
+                width: textarea_rect.width.saturating_sub(4),
+                height: textarea_height,
+            };
 
-                let padded_rect = Rect {
-                    x: textarea_rect.x + 2,
-                    y: textarea_y,
-                    width: textarea_rect.width.saturating_sub(4),
-                    height: textarea_height,
-                };
+            textarea.set_style(
+                RatatuiStyle::default()
+                    .fg(palette.base_05)
+                    .bg(theme_background()),
+            );
+            textarea.set_cursor_style(
+                RatatuiStyle::default()
+                    .fg(palette.base_00)
+                    .bg(palette.base_05),
+            );
+            textarea.set_cursor_line_style(RatatuiStyle::default());
 
-                textarea.set_style(
-                    RatatuiStyle::default()
-                        .fg(palette.base_05)
-                        .bg(theme_background()),
-                );
-                textarea.set_cursor_style(
-                    RatatuiStyle::default()
-                        .fg(palette.base_00)
-                        .bg(palette.base_05),
-                );
-                textarea.set_cursor_line_style(RatatuiStyle::default());
+            let title = match self.comment_input.edit_mode {
+                Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
+                _ => "Add Comment (Esc to save)",
+            };
+            let block = Block::default().borders(Borders::ALL).title(title).style(
+                RatatuiStyle::default()
+                    .fg(palette.base_04)
+                    .bg(theme_background()),
+            );
+            textarea.set_block(block);
 
-                let title = match self.comment_input.edit_mode {
-                    Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
-                    _ => "Add Comment (Esc to save)",
-                };
-                let block = Block::default().borders(Borders::ALL).title(title).style(
-                    RatatuiStyle::default()
-                        .fg(palette.base_04)
-                        .bg(theme_background()),
-                );
-                textarea.set_block(block);
-
-                frame.render_widget(&*textarea, padded_rect);
-            }
+            frame.render_widget(&*textarea, padded_rect);
         }
     }
 
@@ -1273,6 +1399,27 @@ impl MarkdownTextReader {
 
     pub fn is_justify_text(&self) -> bool {
         self.justify_text
+    }
+
+    pub fn set_dual_columns(&mut self, enabled: bool) {
+        self.dual_column_enabled = enabled;
+        self.cache_generation += 1;
+    }
+
+    pub fn toggle_dual_columns(&mut self) -> bool {
+        self.dual_column_enabled = !self.dual_column_enabled;
+        self.cache_generation += 1;
+        self.dual_column_enabled
+    }
+
+    pub fn is_dual_columns(&self) -> bool {
+        self.dual_column_enabled
+    }
+
+    /// Whether the reader is currently drawing a two-column spread (the layout
+    /// is enabled, in zen mode, and the pane is wide enough).
+    pub fn is_dual_active(&self) -> bool {
+        self.dual_active
     }
 
     pub fn invalidate_render_cache(&mut self) {
