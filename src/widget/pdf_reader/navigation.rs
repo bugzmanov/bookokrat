@@ -1317,6 +1317,16 @@ impl PdfReaderState {
                 _ => None,
             }
         } else {
+            let direction = if crate::settings::is_invert_scroll_direction() {
+                match direction {
+                    ScrollDirection::Up => ScrollDirection::Down,
+                    ScrollDirection::Down => ScrollDirection::Up,
+                    ScrollDirection::Left => ScrollDirection::Right,
+                    ScrollDirection::Right => ScrollDirection::Left,
+                }
+            } else {
+                direction
+            };
             self.scroll_line(direction)
         }
     }

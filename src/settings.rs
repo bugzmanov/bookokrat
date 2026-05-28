@@ -140,6 +140,9 @@ pub struct Settings {
     pub justify_text: bool,
 
     #[serde(default)]
+    pub invert_scroll_direction: bool,
+
+    #[serde(default)]
     pub book_sort_order: BookSortOrder,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,6 +191,7 @@ impl Default for Settings {
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             justify_text: false,
+            invert_scroll_direction: false,
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
@@ -518,6 +522,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
         ),
         ("justify_text".into(), format!("{}", settings.justify_text)),
         (
+            "invert_scroll_direction".into(),
+            format!("{}", settings.invert_scroll_direction),
+        ),
+        (
             "book_sort_order".into(),
             match settings.book_sort_order {
                 BookSortOrder::ByName => "by_name".into(),
@@ -589,6 +597,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByType => "by_type",
     };
     content.push_str(&format!("justify_text: {}\n", settings.justify_text));
+    content.push_str(&format!(
+        "invert_scroll_direction: {}\n",
+        settings.invert_scroll_direction
+    ));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     if let Some(w) = settings.nav_panel_width {
         content.push_str(&format!("nav_panel_width: {}\n", w));
@@ -838,6 +850,20 @@ pub fn is_justify_text() -> bool {
 pub fn set_justify_text(justify: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.justify_text = justify;
+    }
+    save_settings();
+}
+
+pub fn is_invert_scroll_direction() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.invert_scroll_direction)
+        .unwrap_or(false)
+}
+
+pub fn set_invert_scroll_direction(invert: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.invert_scroll_direction = invert;
     }
     save_settings();
 }

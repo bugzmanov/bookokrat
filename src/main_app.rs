@@ -3065,6 +3065,12 @@ impl App {
             return;
         }
 
+        let scroll_amount = if crate::settings::is_invert_scroll_direction() {
+            -scroll_amount
+        } else {
+            scroll_amount
+        };
+
         if matches!(
             self.focused_panel,
             FocusedPanel::Popup(PopupWindow::BookSearch)

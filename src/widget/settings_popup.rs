@@ -2,9 +2,10 @@ use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
     LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_lookup_command, get_lookup_display,
-    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_pdf_enabled,
-    is_transparent_background, set_integrations, set_lookup_display, set_pdf_enabled,
-    set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
+    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_invert_scroll_direction,
+    is_pdf_enabled, is_transparent_background, set_integrations, set_invert_scroll_direction,
+    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
+    set_transparent_background,
 };
 use crate::terminal;
 use crate::theme::{
@@ -264,10 +265,8 @@ impl SettingsPopup {
     }
 
     fn general_max_selectable_idx(&self) -> usize {
-        if !is_pdf_enabled() || !self.supports_graphics {
-            return 1; // PDF enabled/disabled (0-1)
-        }
-        5 // + render mode (2-3) + layout (4-5)
+        // Scroll direction options (6,7) are always available
+        7
     }
 
     fn render_mode_available(&self) -> bool {
@@ -425,12 +424,13 @@ impl SettingsPopup {
         match self.current_tab {
             SettingsTab::General => {
                 // PDF section (3) + spacer (1) + Render Mode (4) + spacer (1) +
-                // Page Layout (4) + spacer (1) + Info (≤2)
+                // Page Layout (4) + spacer (1) + Info (≤2) + spacer (1) +
+                // Scrolling section (4)
                 let pdf_enabled = is_pdf_enabled();
                 let info_h = self
                     .get_pdf_info_lines(current_theme(), pdf_enabled, get_pdf_render_mode())
                     .len() as u16;
-                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1)
+                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1) + 1 + 4
             }
             SettingsTab::Themes => {
                 let truecolor_note_height = if crate::color_mode::supports_true_color() {
@@ -452,11 +452,13 @@ impl SettingsPopup {
     fn selected_row_range(&self) -> Option<(u16, u16)> {
         match self.current_tab {
             SettingsTab::General => {
-                // chunks[1] holds idx 0,1; chunks[5] holds idx 2,3; chunks[9] holds idx 4,5.
+                // chunks[1] holds idx 0,1; chunks[5] holds idx 2,3; chunks[9] holds idx 4,5;
+                // chunks[15] holds idx 6,7.
                 let (chunk_idx, sub) = match self.general_selected_idx {
                     0 | 1 => (1usize, self.general_selected_idx),
                     2 | 3 => (5, self.general_selected_idx - 2),
                     4 | 5 => (9, self.general_selected_idx - 4),
+                    6 | 7 => (15, self.general_selected_idx - 6),
                     _ => return None,
                 };
                 let r = self.content_chunks.get(chunk_idx)?;
@@ -578,6 +580,10 @@ impl SettingsPopup {
                 Constraint::Length(2),                       //  9: Page Layout options
                 Constraint::Length(1),                       // 10: spacer
                 Constraint::Length(info_lines_count.max(1)), // 11: Info message
+                Constraint::Length(1),                       // 12: spacer
+                Constraint::Length(1),                       // 13: Scrolling header
+                Constraint::Length(1),                       // 14: empty line
+                Constraint::Length(2),                       // 15: Scrolling options
             ])
             .split(area);
 
@@ -789,6 +795,53 @@ impl SettingsPopup {
         // Info message
         let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
         Paragraph::new(info_lines).render(chunks[11], buf);
+
+        // Scrolling section
+        self.render_section_header(buf, chunks[13], "Scrolling", palette, palette.base_06);
+
+        let scrolling_options_area = Rect {
+            x: chunks[15].x + 2,
+            y: chunks[15].y,
+            width: chunks[15].width.saturating_sub(2),
+            height: chunks[15].height,
+        };
+        let scrolling_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1)])
+            .split(scrolling_options_area);
+
+        let invert_scroll = is_invert_scroll_direction();
+        let scroll_option_style = Style::default().fg(palette.base_06);
+
+        let normal_radio = if !invert_scroll {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let normal_line = self.render_radio_option(
+            normal_radio,
+            "Normal",
+            None,
+            scroll_option_style,
+            is_general && self.general_selected_idx == 6,
+            palette,
+        );
+        Paragraph::new(normal_line).render(scrolling_chunks[0], buf);
+
+        let inverted_radio = if invert_scroll {
+            radio_selected
+        } else {
+            radio_unselected
+        };
+        let inverted_line = self.render_radio_option(
+            inverted_radio,
+            "Inverted",
+            None,
+            scroll_option_style,
+            is_general && self.general_selected_idx == 7,
+            palette,
+        );
+        Paragraph::new(inverted_line).render(scrolling_chunks[1], buf);
     }
 
     fn render_themes_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
@@ -1089,7 +1142,7 @@ impl SettingsPopup {
             2 | 3 => self.supports_graphics,   // PDF enabled/disabled
             4 => self.render_mode_available(), // Page mode
             5 => self.render_mode_available() && self.supports_scroll_mode, // Scroll mode
-            6 | 7 => self.render_mode_available(), // Page layout
+            6 | 7 => true,                     // Scroll direction (always available)
             _ => false,
         }
     }
@@ -1159,6 +1212,21 @@ impl SettingsPopup {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
+                }
+                None
+            }
+            // Scroll direction
+            6 => {
+                if is_invert_scroll_direction() {
+                    set_invert_scroll_direction(false);
+                    return Some(SettingsAction::SettingsChanged);
+                }
+                None
+            }
+            7 => {
+                if !is_invert_scroll_direction() {
+                    set_invert_scroll_direction(true);
+                    return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
@@ -1508,6 +1576,18 @@ impl SettingsPopup {
                     {
                         let sub = (virtual_row - r.y) as usize;
                         self.general_selected_idx = 4 + sub;
+                        return self.apply_general_selected();
+                    }
+                }
+                // chunks[15]: Scrolling options (idx 6,7)
+                if let Some(r) = chunks.get(15) {
+                    if col >= r.x
+                        && col < r.x + r.width
+                        && virtual_row >= r.y
+                        && virtual_row < r.y + r.height
+                    {
+                        let sub = (virtual_row - r.y) as usize;
+                        self.general_selected_idx = 6 + sub;
                         return self.apply_general_selected();
                     }
                 }
