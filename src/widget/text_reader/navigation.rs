@@ -4,31 +4,102 @@ use crate::search::SearchMode;
 use std::time::Instant;
 
 impl crate::markdown_text_reader::MarkdownTextReader {
-    /// Advance by one full spread. In dual-column mode every scroll/paging
-    /// motion routes through this so both pages flip to fresh content at once,
-    /// rather than sliding the right column's lines into the left.
-    fn page_forward(&mut self) {
-        let step = self.visible_height.max(1);
-        let max_offset = self.get_max_scroll_offset();
-        self.scroll_offset = (self.scroll_offset + step).min(max_offset);
+    pub(super) fn dual_line_to_vrow_for(
+        line: usize,
+        page_height: usize,
+        stride: usize,
+    ) -> Option<usize> {
+        if page_height == 0 || stride == 0 {
+            return None;
+        }
+        let page = line / page_height;
+        let spread = page / 2;
+        let offset = line % page_height;
+        Some(spread * stride + offset)
+    }
+
+    fn dual_line_to_vrow(&self, line: usize) -> Option<usize> {
+        Self::dual_line_to_vrow_for(line, self.dual_page_height, self.dual_stride)
+    }
+
+    pub(super) fn dual_scroll_to_line(&mut self, line: usize) {
+        if let Some(vrow) = self.dual_line_to_vrow(line) {
+            self.dual_vtop = vrow.min(self.dual_max_vtop);
+            self.sync_dual_scroll();
+        } else {
+            self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
+            self.dual_last_synced_scroll = usize::MAX;
+        }
+    }
+
+    pub(super) fn dual_center_line(&mut self, line: usize) {
+        if let Some(vrow) = self.dual_line_to_vrow(line) {
+            let half_page = self.dual_page_height / 2;
+            self.dual_vtop = vrow.saturating_sub(half_page).min(self.dual_max_vtop);
+            self.sync_dual_scroll();
+        } else {
+            self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
+            self.dual_last_synced_scroll = usize::MAX;
+        }
+    }
+
+    pub(super) fn ensure_dual_line_visible(&mut self, line: usize, scrolloff: usize) {
+        let Some(vrow) = self.dual_line_to_vrow(line) else {
+            self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
+            self.dual_last_synced_scroll = usize::MAX;
+            return;
+        };
+        let page_height = self.dual_page_height.max(1);
+        let top = self.dual_vtop;
+        let bottom = top + page_height;
+        let scrolloff = scrolloff.min(page_height.saturating_sub(1));
+
+        if vrow < top + scrolloff {
+            self.dual_vtop = vrow.saturating_sub(scrolloff).min(self.dual_max_vtop);
+            self.sync_dual_scroll();
+        } else if vrow >= bottom.saturating_sub(scrolloff) {
+            let target = vrow + scrolloff + 1;
+            self.dual_vtop = target.saturating_sub(page_height).min(self.dual_max_vtop);
+            self.sync_dual_scroll();
+        }
+    }
+
+    /// Scroll the dual-column page grid by `delta` screen rows (line-by-line),
+    /// then keep `scroll_offset` in sync with the new top row.
+    pub(super) fn dual_scroll(&mut self, delta: isize) {
+        let new_vtop =
+            (self.dual_vtop as isize + delta).clamp(0, self.dual_max_vtop as isize) as usize;
+        self.dual_vtop = new_vtop;
+        self.sync_dual_scroll();
         self.last_scroll_time = Instant::now();
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
             self.search_state.current_match_index = None;
         }
     }
 
-    fn page_backward(&mut self) {
-        let step = self.visible_height.max(1);
-        self.scroll_offset = self.scroll_offset.saturating_sub(step);
-        self.last_scroll_time = Instant::now();
-        if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
-            self.search_state.current_match_index = None;
-        }
+    /// Derive `scroll_offset` (the top-left visible buffer line) from the grid's
+    /// virtual scroll position so bookmarks, marks, and "current node" stay
+    /// correct in dual mode.
+    pub(super) fn sync_dual_scroll(&mut self) {
+        let total = self.rendered_content.lines.len();
+        let top = Self::dual_body_line(
+            self.dual_vtop,
+            self.dual_page_height,
+            self.dual_stride,
+            total,
+        );
+        self.scroll_offset = top;
+        self.dual_last_synced_scroll = top;
+    }
+
+    /// Step size for half-screen motions in the page grid.
+    fn dual_half_step(&self) -> isize {
+        (self.dual_page_height / 2).max(1) as isize
     }
 
     pub fn scroll_up(&mut self) {
         if self.dual_active {
-            self.page_backward();
+            self.dual_scroll(-(self.scroll_speed as isize));
             return;
         }
         if self.scroll_offset > 0 {
@@ -42,7 +113,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_down(&mut self) {
         if self.dual_active {
-            self.page_forward();
+            self.dual_scroll(self.scroll_speed as isize);
             return;
         }
         let max_offset = self.get_max_scroll_offset();
@@ -57,7 +128,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_paragraph_up(&mut self) {
         if self.dual_active {
-            self.page_backward();
+            self.dual_scroll(-self.dual_half_step());
             return;
         }
         let target = self.find_prev_paragraph_boundary(self.scroll_offset);
@@ -66,7 +137,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_paragraph_down(&mut self) {
         if self.dual_active {
-            self.page_forward();
+            self.dual_scroll(self.dual_half_step());
             return;
         }
         let target = self.find_next_paragraph_boundary(self.scroll_offset);
@@ -75,7 +146,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_half_screen_up(&mut self, screen_height: usize) {
         if self.dual_active {
-            self.page_backward();
+            self.dual_scroll(-self.dual_half_step());
             return;
         }
         let scroll_amount = screen_height / 2;
@@ -95,7 +166,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
         if self.dual_active {
-            self.page_forward();
+            self.dual_scroll(self.dual_half_step());
             return;
         }
         let scroll_amount = screen_height / 2;
@@ -111,7 +182,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
         if self.dual_active {
-            self.page_backward();
+            self.dual_scroll(-(self.dual_page_height as isize));
             return;
         }
         let scroll_amount = screen_height.saturating_sub(1);
@@ -131,7 +202,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn scroll_full_screen_down(&mut self, screen_height: usize) {
         if self.dual_active {
-            self.page_forward();
+            self.dual_scroll(self.dual_page_height as isize);
             return;
         }
         let scroll_amount = screen_height.saturating_sub(1);
@@ -163,10 +234,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn get_max_scroll_offset(&self) -> usize {
+        if self.dual_active {
+            return self.rendered_content.lines.len().saturating_sub(1);
+        }
         self.total_wrapped_lines.saturating_sub(self.visible_height)
     }
 
     pub fn scroll_to_line(&mut self, target_line: usize) {
+        if self.dual_active {
+            self.dual_scroll_to_line(target_line);
+            return;
+        }
         // Center target line in viewport if possible
         let desired_offset = if target_line > self.visible_height / 2 {
             target_line // - self.visible_height  / 2
@@ -179,6 +257,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn jump_to_line(&mut self, line_idx: usize) {
         if line_idx < self.rendered_content.lines.len() {
+            if self.dual_active {
+                self.dual_center_line(line_idx);
+                return;
+            }
             // Center the line in the viewport if possible
             let half_height = self.visible_height / 2;
             self.scroll_offset = line_idx.saturating_sub(half_height);
@@ -455,6 +537,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// pending state; safe to call from the render-time pending processor.
     pub fn perform_node_position_restore(&mut self, node_index: usize, char_offset: usize) {
         if let Some(line_idx) = self.find_line_for_node_offset(node_index, char_offset) {
+            if self.dual_active {
+                self.dual_scroll_to_line(line_idx);
+                return;
+            }
             self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
         } else {
             self.perform_node_restore(node_index);
@@ -491,6 +577,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let Some(node_idx) = line.node_index {
                 if node_idx >= node_index {
+                    if self.dual_active {
+                        self.dual_scroll_to_line(line_idx);
+                        return;
+                    }
                     self.scroll_offset = line_idx.min(self.get_max_scroll_offset());
                     return;
                 }
@@ -629,10 +719,20 @@ impl VimNavMotions for crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn handle_gg(&mut self) {
+        if self.dual_active {
+            self.dual_vtop = 0;
+            self.sync_dual_scroll();
+            return;
+        }
         self.scroll_offset = 0;
     }
 
     fn handle_upper_g(&mut self) {
+        if self.dual_active {
+            self.dual_vtop = self.dual_max_vtop;
+            self.sync_dual_scroll();
+            return;
+        }
         let max_offset = self.get_max_scroll_offset();
         self.scroll_offset = max_offset;
     }

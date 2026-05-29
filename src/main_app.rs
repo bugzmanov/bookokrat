@@ -3194,14 +3194,6 @@ impl App {
                     self.navigation_panel.scroll_up(nav_panel_height);
                 }
             }
-        } else if self.text_reader.is_dual_active() {
-            // In the book-spread layout one wheel gesture flips a single
-            // spread, regardless of how many notches batched together.
-            if scroll_amount > 0 {
-                self.scroll_down();
-            } else {
-                self.scroll_up();
-            }
         } else if scroll_amount > 0 {
             for _ in 0..scroll_amount.min(10) {
                 self.scroll_down();
@@ -5018,9 +5010,8 @@ impl App {
                 let handled_pdf = false;
 
                 if !handled_pdf && self.current_book.is_some() {
-                    // EPUB: toggle the two-column "book spread" layout. It only
-                    // renders in zen mode, so hint at that when enabling it from
-                    // the split-pane view.
+                    // EPUB: toggle the two-column "book spread" layout. It
+                    // renders whenever the reader pane is wide enough.
                     use crate::settings::{
                         EpubColumnMode, get_epub_column_mode, set_epub_column_mode,
                     };
@@ -5033,12 +5024,7 @@ impl App {
                     self.text_reader
                         .set_dual_columns(new_mode == EpubColumnMode::Dual);
                     self.text_reader.restore_to_node_index(current_node);
-                    let msg = match (new_mode, self.zen_mode) {
-                        (EpubColumnMode::Dual, false) => {
-                            "Two-column layout: on (applies in zen mode — Space+z)".to_string()
-                        }
-                        (mode, _) => format!("Column layout: {}", mode.as_str()),
-                    };
+                    let msg = format!("Column layout: {}", new_mode.as_str());
                     self.notifications.info(msg);
                 }
                 true
@@ -7073,6 +7059,20 @@ impl App {
         let comments_arc = self.text_reader.get_comments();
         if let Ok(mut guard) = comments_arc.lock() {
             let _ = guard.add_comment(comment.clone());
+        }
+        self.text_reader.rebuild_chapter_comments();
+        self.text_reader.invalidate_render_cache();
+    }
+
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_set_all_comment_timestamps(
+        &mut self,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) {
+        let comments_arc = self.text_reader.get_comments();
+        if let Ok(mut guard) = comments_arc.lock() {
+            guard.testing_set_all_updated_at(updated_at);
         }
         self.text_reader.rebuild_chapter_comments();
         self.text_reader.invalidate_render_cache();

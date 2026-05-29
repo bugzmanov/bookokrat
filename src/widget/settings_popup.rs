@@ -888,7 +888,7 @@ impl SettingsPopup {
         let dual_column_line = self.render_radio_option(
             dual_column_radio,
             "Dual",
-            Some("two columns, zen mode"),
+            Some("two columns when wide"),
             column_option_style,
             is_general && self.general_selected_idx == 9,
             palette,

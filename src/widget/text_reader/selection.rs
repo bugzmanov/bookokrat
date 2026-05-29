@@ -276,35 +276,48 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.last_copied_text.clone()
     }
 
-    /// Convert screen coordinates to logical text coordinates (like TextReader does).
+    /// Convert screen coordinates to logical text coordinates.
     ///
-    /// In dual-column (book spread) mode a click in the right column maps to a
-    /// different range of buffer lines than the left column, so the target
-    /// column is resolved from the x coordinate before mapping.
+    /// In dual-column (page-grid) mode each screen row maps to a specific
+    /// buffer line per column via the row maps recorded at render time, so the
+    /// click is resolved against those rather than a contiguous range.
     pub fn screen_to_text_coords(
         &self,
         screen_x: u16,
         screen_y: u16,
         content_area: Rect,
     ) -> Option<(usize, usize)> {
-        let (area, col_start) = self.column_at_x(screen_x, content_area);
-        self.text_selection
-            .screen_to_text_coords(screen_x, screen_y, col_start, area.x, area.y)
+        if self.is_dual_active() {
+            return self.dual_screen_to_text_coords(screen_x, screen_y);
+        }
+        self.text_selection.screen_to_text_coords(
+            screen_x,
+            screen_y,
+            self.scroll_offset,
+            content_area.x,
+            content_area.y,
+        )
     }
 
-    /// Resolve which column an x coordinate falls into, returning that column's
-    /// text rect and the buffer line it starts at. Falls back to the supplied
-    /// area / current scroll offset when not in dual-column mode.
-    fn column_at_x(&self, screen_x: u16, default_area: Rect) -> (Rect, usize) {
-        if let Some(right) = self.last_right_column {
-            if screen_x >= right.x {
-                return (right, self.scroll_offset + self.last_column_height);
+    fn dual_screen_to_text_coords(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
+        let left = self.last_inner_text_area?;
+        let (rect, rows) = match self.last_right_column {
+            Some(right) if screen_x >= right.x && screen_x < right.x + right.width => {
+                (right, &self.dual_right_rows)
             }
-            if let Some(left) = self.last_inner_text_area {
-                return (left, self.scroll_offset);
+            _ if screen_x >= left.x && screen_x < left.x + left.width => {
+                (left, &self.dual_left_rows)
             }
+            _ => return None,
+        };
+        if screen_y < rect.y || screen_y >= rect.y + rect.height {
+            return None;
         }
-        (default_area, self.scroll_offset)
+        let row = (screen_y - rect.y) as usize;
+        // `None` means a separator/blank row — not a text hit.
+        let line = (*rows.get(row)?)?;
+        let column = screen_x.saturating_sub(rect.x) as usize;
+        Some((line, column))
     }
 
     fn set_normal_mode_cursor(&mut self, line: usize, column: usize) {

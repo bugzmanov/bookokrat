@@ -40,6 +40,11 @@ use std::time::{Duration, Instant};
 const HUD_NORMAL_DURATION: Duration = Duration::from_secs(2);
 const HUD_ERROR_DURATION: Duration = Duration::from_secs(5);
 
+/// Rows reserved for the page-break gap between stacked spreads in the
+/// dual-column page-grid layout: a blank line, the dotted rule, then a blank
+/// line, so the break reads clearly.
+const DUAL_SEPARATOR_ROWS: usize = 3;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CommentTextareaPlacement {
     Below,
@@ -162,15 +167,35 @@ pub struct MarkdownTextReader {
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
 
-    /// Whether two-column (book spread) layout is enabled. Only takes effect
-    /// in zen mode when the pane is wide enough; otherwise falls back to a
-    /// single column.
+    /// Whether two-column (book spread) layout is enabled. Takes effect in both
+    /// zen and normal mode when the pane is wide enough; otherwise falls back to
+    /// a single column.
     dual_column_enabled: bool,
 
-    /// Whether the last render actually drew two columns (enabled + zen + wide
-    /// enough). Navigation reads this to page by whole spreads instead of
-    /// scrolling line-by-line, which would slide content between columns.
+    /// Whether the last render actually drew two columns (enabled + wide
+    /// enough). When true the reader uses the paginated page-grid layout below.
     dual_active: bool,
+
+    /// Page-grid scroll state (dual mode). The chapter is paginated into
+    /// screen-tall pages laid out two-up (left = even pages, right = odd),
+    /// spreads stacked vertically with a separator row between them. `dual_vtop`
+    /// is the top virtual row of that stacked layout; the grid scrolls
+    /// line-by-line through it.
+    dual_vtop: usize,
+    /// Page body height (lines per page) used by the last dual render.
+    dual_page_height: usize,
+    /// Virtual rows per spread (page height + separator).
+    dual_stride: usize,
+    /// Maximum `dual_vtop` for the current content.
+    dual_max_vtop: usize,
+    /// Per-screen-row buffer line shown in each column at the last dual render
+    /// (`None` = separator/blank). Used to map clicks back to text.
+    dual_left_rows: Vec<Option<usize>>,
+    dual_right_rows: Vec<Option<usize>>,
+    /// The `scroll_offset` value last derived from `dual_vtop`; lets the next
+    /// render detect an external scroll (search jump, mark restore) and rebuild
+    /// `dual_vtop` from it.
+    dual_last_synced_scroll: usize,
 
     /// Vim normal mode state
     normal_mode: NormalModeState,
@@ -309,6 +334,13 @@ impl MarkdownTextReader {
             justify_text: false,
             dual_column_enabled: false,
             dual_active: false,
+            dual_vtop: 0,
+            dual_page_height: 0,
+            dual_stride: 0,
+            dual_max_vtop: 0,
+            dual_left_rows: Vec::new(),
+            dual_right_rows: Vec::new(),
+            dual_last_synced_scroll: usize::MAX,
             normal_mode: NormalModeState::new(),
             hud_message: None,
         }
@@ -500,13 +532,13 @@ impl MarkdownTextReader {
         // text area; in dual mode it is split into two side-by-side columns.
         let base_inner = self.content_inner_rect(area);
 
-        // Two-column "book spread": only in zen mode and only when the pane is
-        // wide enough to give each column a comfortable measure.
+        // Two-column "book spread": active whenever the pane is wide enough to
+        // give each column a comfortable measure (available in zen and normal
+        // mode alike); falls back to a single column when too narrow.
         const COLUMN_GUTTER: u16 = 3;
         const MIN_COLUMN_WIDTH: u16 = 32;
-        let dual = self.dual_column_enabled
-            && zen_mode
-            && base_inner.width >= 2 * MIN_COLUMN_WIDTH + COLUMN_GUTTER;
+        let dual =
+            self.dual_column_enabled && base_inner.width >= 2 * MIN_COLUMN_WIDTH + COLUMN_GUTTER;
         self.dual_active = dual;
 
         // The reader's scroll math treats `visible_height` as the number of
@@ -516,9 +548,9 @@ impl MarkdownTextReader {
         let column_lines = base_inner.height as usize;
         self.visible_height = if dual { 2 * column_lines } else { column_lines };
 
-        // Each column is paired with the first buffer line it shows. `width` is
-        // the text-wrap measure that applies to a column.
-        let (columns, width): (Vec<(usize, Rect)>, usize) = if dual {
+        // Per-column text-wrap width and the on-screen column rects. In dual
+        // mode the content area is split into two columns with a gutter.
+        let (width, left_rect, right_rect): (usize, Rect, Option<Rect>) = if dual {
             let col_w = (base_inner.width - COLUMN_GUTTER) / 2;
             let left = Rect {
                 x: base_inner.x,
@@ -532,17 +564,12 @@ impl MarkdownTextReader {
                 width: base_inner.width - col_w - COLUMN_GUTTER,
                 height: base_inner.height,
             };
-            (
-                vec![
-                    (self.scroll_offset, left),
-                    (self.scroll_offset + column_lines, right),
-                ],
-                (col_w.saturating_sub(2)).max(1) as usize,
-            )
+            ((col_w.saturating_sub(2)).max(1) as usize, left, Some(right))
         } else {
             (
-                vec![(self.scroll_offset, base_inner)],
                 (base_inner.width.saturating_sub(2)).max(1) as usize,
+                base_inner,
+                None,
             )
         };
 
@@ -692,19 +719,9 @@ impl MarkdownTextReader {
         }
 
         // Remember the column text areas for mouse hover/selection logic.
-        match columns.as_slice() {
-            [(_, left), (_, right)] => {
-                self.last_inner_text_area = Some(*left);
-                self.last_right_column = Some(*right);
-                self.last_column_height = left.height as usize;
-            }
-            _ => {
-                self.last_inner_text_area = columns.first().map(|(_, r)| *r);
-                self.last_right_column = None;
-                self.last_column_height =
-                    columns.first().map(|(_, r)| r.height as usize).unwrap_or(0);
-            }
-        }
+        self.last_inner_text_area = Some(left_rect);
+        self.last_right_column = right_rect;
+        self.last_column_height = left_rect.height as usize;
 
         let image_clear_style = RatatuiStyle::default().bg(theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
@@ -746,7 +763,11 @@ impl MarkdownTextReader {
         // Reserve empty lines where the comment textarea will be drawn.
         let spread_end =
             (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
-        let textarea_layout = self.compute_comment_textarea_layout(self.scroll_offset, spread_end);
+        let textarea_layout = if dual {
+            None
+        } else {
+            self.compute_comment_textarea_layout(self.scroll_offset, spread_end)
+        };
         let textarea_lines_to_insert = textarea_layout
             .as_ref()
             .map(|layout| layout.lines_to_insert)
@@ -782,11 +803,22 @@ impl MarkdownTextReader {
             self.check_for_loaded_images();
         }
 
-        // Draw each column: text first, then inline images over it.
-        let mut current_image_rects = HashMap::new();
-        for &(col_start, col_rect) in &columns {
+        if let Some(right_rect) = right_rect {
+            // Paginated two-up "book spread" with line-by-line scrolling.
+            self.render_dual_grid(
+                frame,
+                base_inner,
+                left_rect,
+                right_rect,
+                palette,
+                selection_bg,
+                suppress_images,
+            );
+        } else {
+            // Single column: draw the text, then inline images over it.
+            let col_start = self.scroll_offset;
             let col_end =
-                (col_start + col_rect.height as usize).min(self.rendered_content.lines.len());
+                (col_start + left_rect.height as usize).min(self.rendered_content.lines.len());
             let visible_lines = self.build_column_lines(
                 col_start,
                 col_end,
@@ -797,27 +829,27 @@ impl MarkdownTextReader {
             );
             let inner_text_paragraph =
                 Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
-            frame.render_widget(inner_text_paragraph, col_rect);
+            frame.render_widget(inner_text_paragraph, left_rect);
 
+            let mut current_image_rects = HashMap::new();
             if !self.show_raw_html && !suppress_images {
                 self.render_column_images(
                     frame,
                     col_start,
-                    col_rect,
+                    left_rect,
                     textarea_insert_position,
                     textarea_lines_to_insert,
                     &mut current_image_rects,
                 );
             }
-        }
-        self.last_rendered_image_rects = current_image_rects;
+            self.last_rendered_image_rects = current_image_rects;
 
-        // Draw the comment editing textarea in whichever column holds it.
-        if let Some(layout) = textarea_layout {
-            if let Some(&(col_start, col_rect)) = columns.iter().find(|&&(cs, cr)| {
-                layout.draw_start_line >= cs && layout.draw_start_line < cs + cr.height as usize
-            }) {
-                self.draw_comment_textarea_column(frame, layout, col_start, col_rect, palette);
+            if let Some(layout) = textarea_layout {
+                if layout.draw_start_line >= col_start
+                    && layout.draw_start_line < col_start + left_rect.height as usize
+                {
+                    self.draw_comment_textarea_column(frame, layout, col_start, left_rect, palette);
+                }
             }
         }
     }
@@ -835,10 +867,68 @@ impl MarkdownTextReader {
         inner
     }
 
-    /// Build the styled lines for one column, covering buffer lines
-    /// `[col_start, col_end)`. Highlights (selection, search, yank, visual,
-    /// cursor) are keyed on the absolute buffer line index, so they render
-    /// identically regardless of which column a line lands in.
+    /// Style a single rendered buffer line into a `Line`, applying every
+    /// highlight layer (visual-line flash, selection, search, yank, visual
+    /// mode, cursor). All highlights key on the absolute buffer line index, so
+    /// a line renders identically regardless of which column it lands in.
+    /// Returns a blank line for an out-of-range index or a loaded image
+    /// placeholder (the image is drawn as an overlay separately).
+    fn styled_line(
+        &self,
+        line_idx: usize,
+        palette: &Base16Palette,
+        selection_bg: ratatui::style::Color,
+    ) -> Line<'static> {
+        let Some(rendered_line) = self.rendered_content.lines.get(line_idx) else {
+            return Line::from("");
+        };
+        let visual_line_idx = line_idx.wrapping_sub(self.scroll_offset);
+
+        if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
+            if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
+                if matches!(embedded_image.state, ImageLoadState::Loaded { .. }) {
+                    return Line::from("");
+                }
+            }
+        }
+
+        let mut line_spans = if self.highlight_visual_line == Some(visual_line_idx) {
+            rendered_line
+                .spans
+                .iter()
+                .map(|span| Span::styled(span.content.clone(), span.style.bg(palette.base_02)))
+                .collect()
+        } else {
+            rendered_line.spans.clone()
+        };
+
+        if self.text_selection.has_selection() {
+            let line_with_selection = self.text_selection.apply_selection_highlighting(
+                line_idx,
+                line_spans,
+                selection_bg,
+            );
+            line_spans = line_with_selection.spans;
+        }
+
+        line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
+
+        // Apply yank highlight (before cursor so cursor shows on top)
+        line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
+
+        // Apply visual mode selection highlight
+        line_spans = self.apply_visual_highlight(line_idx, line_spans, palette);
+
+        if self.normal_mode.is_active() {
+            line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);
+        }
+
+        Line::from(line_spans)
+    }
+
+    /// Build the styled lines for one contiguous column (single-column mode),
+    /// covering buffer lines `[col_start, col_end)`, reserving blank lines
+    /// where the comment textarea will be drawn.
     fn build_column_lines(
         &self,
         col_start: usize,
@@ -858,62 +948,311 @@ impl MarkdownTextReader {
                 }
             }
 
-            if let Some(rendered_line) = self.rendered_content.lines.get(line_idx) {
-                let visual_line_idx = line_idx.wrapping_sub(self.scroll_offset);
-
-                let skip_placeholder =
-                    if let LineType::ImagePlaceholder { src } = &rendered_line.line_type {
-                        if let Some(embedded_image) = self.embedded_images.borrow().get(src) {
-                            matches!(embedded_image.state, ImageLoadState::Loaded { .. })
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-
-                if skip_placeholder {
-                    visible_lines.push(Line::from(""));
-                    continue;
-                }
-
-                let mut line_spans = if self.highlight_visual_line == Some(visual_line_idx) {
-                    rendered_line
-                        .spans
-                        .iter()
-                        .map(|span| {
-                            Span::styled(span.content.clone(), span.style.bg(palette.base_02))
-                        })
-                        .collect()
-                } else {
-                    rendered_line.spans.clone()
-                };
-
-                if self.text_selection.has_selection() {
-                    let line_with_selection = self.text_selection.apply_selection_highlighting(
-                        line_idx,
-                        line_spans,
-                        selection_bg,
-                    );
-                    line_spans = line_with_selection.spans;
-                }
-
-                line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
-
-                // Apply yank highlight (before cursor so cursor shows on top)
-                line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
-
-                // Apply visual mode selection highlight
-                line_spans = self.apply_visual_highlight(line_idx, line_spans, palette);
-
-                if self.normal_mode.is_active() {
-                    line_spans = self.apply_normal_mode_cursor(line_idx, line_spans, palette);
-                }
-
-                visible_lines.push(Line::from(line_spans));
+            if self.rendered_content.lines.get(line_idx).is_some() {
+                visible_lines.push(self.styled_line(line_idx, palette, selection_bg));
             }
         }
         visible_lines
+    }
+
+    /// Map a top virtual row to the topmost visible body buffer line (skipping
+    /// a separator row to the next spread's first line).
+    fn dual_body_line(vtop: usize, page_height: usize, stride: usize, total: usize) -> usize {
+        if page_height == 0 || stride == 0 || total == 0 {
+            return 0;
+        }
+        let spread = vtop / stride;
+        let offset = vtop % stride;
+        let line = if offset < page_height {
+            2 * spread * page_height + offset
+        } else {
+            2 * (spread + 1) * page_height
+        };
+        line.min(total.saturating_sub(1))
+    }
+
+    /// Render the paginated two-up page grid: left column = even pages, right
+    /// column = odd pages, spreads stacked vertically with dotted separators,
+    /// scrolled line-by-line via `dual_vtop`.
+    #[allow(clippy::too_many_arguments)]
+    fn render_dual_grid(
+        &mut self,
+        frame: &mut Frame,
+        base_inner: Rect,
+        left_rect: Rect,
+        right_rect: Rect,
+        palette: &Base16Palette,
+        selection_bg: ratatui::style::Color,
+        suppress_images: bool,
+    ) {
+        let page_height = base_inner.height as usize;
+        if page_height == 0 {
+            return;
+        }
+        let stride = page_height + DUAL_SEPARATOR_ROWS;
+        let total = self.rendered_content.lines.len();
+        let pages = total.div_ceil(page_height).max(1);
+        let spreads = pages.div_ceil(2).max(1);
+        let vheight = (spreads * stride).saturating_sub(DUAL_SEPARATOR_ROWS);
+        let max_vtop = vheight.saturating_sub(page_height);
+        let geometry_changed = self.dual_page_height != page_height || self.dual_stride != stride;
+
+        self.dual_page_height = page_height;
+        self.dual_stride = stride;
+        self.dual_max_vtop = max_vtop;
+
+        // Sync the virtual scroll with `scroll_offset`. An external jump (search
+        // result, mark restore, mode toggle) changes `scroll_offset` directly;
+        // rebuild `dual_vtop` so that line's spread sits at the top.
+        if geometry_changed || self.dual_last_synced_scroll != self.scroll_offset {
+            let page = self.scroll_offset / page_height;
+            let spread = page / 2;
+            let offset = self.scroll_offset % page_height;
+            self.dual_vtop = spread * stride + offset;
+        }
+        self.dual_vtop = self.dual_vtop.min(max_vtop);
+        let top_line = Self::dual_body_line(self.dual_vtop, page_height, stride, total);
+        self.scroll_offset = top_line;
+        self.dual_last_synced_scroll = top_line;
+
+        // Map each screen row to the buffer line shown in each column.
+        let mut left_rows: Vec<Option<usize>> = Vec::with_capacity(page_height);
+        let mut right_rows: Vec<Option<usize>> = Vec::with_capacity(page_height);
+        let mut separator_rows: Vec<usize> = Vec::new();
+        for y in 0..page_height {
+            let vrow = self.dual_vtop + y;
+            let spread = vrow / stride;
+            let offset = vrow % stride;
+            if offset < page_height {
+                let l = 2 * spread * page_height + offset;
+                let r = (2 * spread + 1) * page_height + offset;
+                left_rows.push((l < total).then_some(l));
+                right_rows.push((r < total).then_some(r));
+            } else {
+                left_rows.push(None);
+                right_rows.push(None);
+                // Draw the dotted rule on the middle gap row only; the rows
+                // above and below stay blank so the break stands out.
+                if offset == page_height + DUAL_SEPARATOR_ROWS / 2 {
+                    separator_rows.push(y);
+                }
+            }
+        }
+
+        let left_lines: Vec<Line> = left_rows
+            .iter()
+            .map(|slot| match slot {
+                Some(line) => self.styled_line(*line, palette, selection_bg),
+                None => Line::from(""),
+            })
+            .collect();
+        let right_lines: Vec<Line> = right_rows
+            .iter()
+            .map(|slot| match slot {
+                Some(line) => self.styled_line(*line, palette, selection_bg),
+                None => Line::from(""),
+            })
+            .collect();
+
+        frame.render_widget(
+            Paragraph::new(left_lines).block(Block::default().borders(Borders::NONE)),
+            left_rect,
+        );
+        frame.render_widget(
+            Paragraph::new(right_lines).block(Block::default().borders(Borders::NONE)),
+            right_rect,
+        );
+
+        // Dotted page-break separators spanning the text measure. Stop short of
+        // the content border: `base_inner`'s last cell sits on the right border
+        // column, so the dots are trimmed to where the column text ends.
+        if !separator_rows.is_empty() {
+            let sep_width = base_inner.width.saturating_sub(2);
+            let sep = "·".repeat(sep_width as usize);
+            let sep_style = RatatuiStyle::default().fg(palette.base_03);
+            for y in separator_rows {
+                let rect = Rect {
+                    x: base_inner.x,
+                    y: base_inner.y + y as u16,
+                    width: sep_width,
+                    height: 1,
+                };
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(sep.clone(), sep_style))),
+                    rect,
+                );
+            }
+        }
+
+        self.dual_left_rows = left_rows;
+        self.dual_right_rows = right_rows;
+
+        let mut current_image_rects = HashMap::new();
+        if !self.show_raw_html && !suppress_images {
+            self.render_dual_images(
+                frame,
+                left_rect,
+                right_rect,
+                page_height,
+                &mut current_image_rects,
+            );
+        }
+        self.last_rendered_image_rects = current_image_rects;
+
+        self.draw_dual_comment_textarea(frame, left_rect, right_rect, palette);
+    }
+
+    fn find_dual_visible_comment_anchor(
+        &self,
+        left_rect: Rect,
+        right_rect: Rect,
+    ) -> Option<(Rect, usize)> {
+        if !self.comment_input.is_active() || self.rendered_content.lines.is_empty() {
+            return None;
+        }
+
+        let mut anchor_start = self
+            .comment_input
+            .target_start_line
+            .or(self.comment_input.target_line)?;
+        let mut anchor_end = self
+            .comment_input
+            .target_end_line
+            .or(self.comment_input.target_line)?;
+        if anchor_start > anchor_end {
+            std::mem::swap(&mut anchor_start, &mut anchor_end);
+        }
+        let max_line = self.rendered_content.lines.len().saturating_sub(1);
+        anchor_start = anchor_start.min(max_line);
+        anchor_end = anchor_end.min(max_line);
+
+        for row in 0..self.dual_left_rows.len().max(self.dual_right_rows.len()) {
+            if self
+                .dual_left_rows
+                .get(row)
+                .and_then(|slot| *slot)
+                .is_some_and(|line| line >= anchor_start && line <= anchor_end)
+            {
+                return Some((left_rect, row));
+            }
+            if self
+                .dual_right_rows
+                .get(row)
+                .and_then(|slot| *slot)
+                .is_some_and(|line| line >= anchor_start && line <= anchor_end)
+            {
+                return Some((right_rect, row));
+            }
+        }
+        None
+    }
+
+    fn draw_dual_comment_textarea(
+        &mut self,
+        frame: &mut Frame,
+        left_rect: Rect,
+        right_rect: Rect,
+        palette: &Base16Palette,
+    ) {
+        let Some(textarea) = self.comment_input.textarea.as_ref() else {
+            return;
+        };
+        let Some((rect, anchor_row)) = self.find_dual_visible_comment_anchor(left_rect, right_rect)
+        else {
+            return;
+        };
+        if rect.height == 0 {
+            return;
+        }
+
+        let content_lines = textarea.lines().len().max(3);
+        let desired_height = (content_lines + 2).min(rect.height as usize);
+        let page_height = rect.height as usize;
+        let draw_row = if anchor_row + 1 + desired_height <= page_height {
+            anchor_row + 1
+        } else if anchor_row > desired_height {
+            anchor_row.saturating_sub(desired_height + 1)
+        } else {
+            anchor_row.min(page_height.saturating_sub(desired_height))
+        };
+        let textarea_y = rect.y + draw_row as u16;
+        self.draw_comment_textarea_at_y(frame, textarea_y, rect, palette);
+    }
+
+    /// Draw inline images in the page grid: locate each loaded image's start
+    /// line in the virtual grid and render any visible overlap, clipped to the
+    /// top/bottom of both the viewport and its page.
+    fn render_dual_images(
+        &self,
+        frame: &mut Frame,
+        left_rect: Rect,
+        right_rect: Rect,
+        page_height: usize,
+        current_image_rects: &mut HashMap<String, Rect>,
+    ) {
+        if self.embedded_images.borrow().is_empty() || self.image_picker.is_none() {
+            return;
+        }
+        let Some(picker) = self.image_picker.as_ref() else {
+            return;
+        };
+
+        for (src, embedded_image) in self.embedded_images.borrow_mut().iter_mut() {
+            if let ImageLoadState::Loaded {
+                ref image,
+                ref mut protocol,
+            } = embedded_image.state
+            {
+                let start = embedded_image.lines_before_image;
+                let Some(start_vrow) =
+                    Self::dual_line_to_vrow_for(start, page_height, self.dual_stride)
+                else {
+                    continue;
+                };
+                let page = start / page_height;
+                let rect = if page % 2 == 0 { left_rect } else { right_rect };
+                let page_offset = start % page_height;
+                let image_cells = calculate_image_height_in_cells(image) as usize;
+                let page_remaining = page_height.saturating_sub(page_offset);
+                let image_end_vrow = start_vrow + image_cells.min(page_remaining);
+                let viewport_top = self.dual_vtop;
+                let viewport_bottom = viewport_top + page_height;
+                let visible_start = start_vrow.max(viewport_top);
+                let visible_end = image_end_vrow.min(viewport_bottom);
+                if visible_start >= visible_end {
+                    continue;
+                }
+
+                let row = visible_start - viewport_top;
+                let image_top_clipped = visible_start - start_vrow;
+                let render_height = (visible_end - visible_start) as u16;
+                if render_height == 0 {
+                    continue;
+                }
+
+                let (image_width_pixels, _) = image.dimensions();
+                let font_size = picker.font_size();
+                let image_width_cells =
+                    (image_width_pixels as f32 / font_size.0 as f32).ceil() as u16;
+                let image_display_width = image_width_cells.min(rect.width);
+                let x_offset = (rect.width.saturating_sub(image_display_width)) / 2;
+
+                let image_area = Rect {
+                    x: rect.x + x_offset,
+                    y: rect.y + row as u16,
+                    width: image_display_width,
+                    height: render_height,
+                };
+
+                let y_offset_pixels = (image_top_clipped as f32 * font_size.1 as f32) as u32;
+                let image_widget = StatefulImage::new().resize(Resize::Viewport(ViewportOptions {
+                    y_offset: y_offset_pixels,
+                    x_offset: 0,
+                }));
+                frame.render_stateful_widget(image_widget, image_area, protocol);
+                current_image_rects.insert(src.clone(), image_area);
+            }
+        }
     }
 
     /// Draw inline images that overlap one column's line range, placing them
@@ -1031,11 +1370,23 @@ impl MarkdownTextReader {
         col_rect: Rect,
         palette: &Base16Palette,
     ) {
+        let visual_position = layout.draw_start_line.saturating_sub(col_start);
+        let textarea_y = col_rect.y + visual_position as u16;
+        self.draw_comment_textarea_at_y(frame, textarea_y, col_rect, palette);
+    }
+
+    /// Draw the comment editing textarea overlay within a column at an exact
+    /// screen row.
+    fn draw_comment_textarea_at_y(
+        &mut self,
+        frame: &mut Frame,
+        textarea_y: u16,
+        col_rect: Rect,
+        palette: &Base16Palette,
+    ) {
         let Some(textarea) = self.comment_input.textarea.as_mut() else {
             return;
         };
-        let visual_position = layout.draw_start_line.saturating_sub(col_start);
-        let textarea_y = col_rect.y + visual_position as u16;
 
         if textarea_y < col_rect.y + col_rect.height {
             // Compute minimum height so borders never collapse.
@@ -1243,6 +1594,8 @@ impl MarkdownTextReader {
         inner_area.width = inner_area.width.saturating_sub(margin_pixels * 2);
 
         self.last_inner_text_area = Some(inner_area);
+        self.last_right_column = None;
+        self.last_column_height = inner_area.height as usize;
 
         // Selection background color
         let selection_bg = if is_focused {
@@ -1340,8 +1693,17 @@ impl MarkdownTextReader {
         };
         self.embedded_images.borrow_mut().clear();
         self.last_rendered_image_rects.clear();
+        self.last_right_column = None;
+        self.last_column_height = 0;
         self.last_overlay_cleanup_key = None;
         self.inline_images_suppressed = false;
+        self.dual_vtop = 0;
+        self.dual_page_height = 0;
+        self.dual_stride = 0;
+        self.dual_max_vtop = 0;
+        self.dual_left_rows.clear();
+        self.dual_right_rows.clear();
+        self.dual_last_synced_scroll = usize::MAX;
     }
 
     pub fn set_raw_html(&mut self, html: String) {
@@ -1364,6 +1726,7 @@ impl MarkdownTextReader {
     }
 
     pub fn handle_terminal_resize(&mut self) {
+        self.dual_last_synced_scroll = usize::MAX;
         self.cache_generation += 1;
     }
 
@@ -1403,11 +1766,13 @@ impl MarkdownTextReader {
 
     pub fn set_dual_columns(&mut self, enabled: bool) {
         self.dual_column_enabled = enabled;
+        self.dual_last_synced_scroll = usize::MAX;
         self.cache_generation += 1;
     }
 
     pub fn toggle_dual_columns(&mut self) -> bool {
         self.dual_column_enabled = !self.dual_column_enabled;
+        self.dual_last_synced_scroll = usize::MAX;
         self.cache_generation += 1;
         self.dual_column_enabled
     }
@@ -1417,7 +1782,7 @@ impl MarkdownTextReader {
     }
 
     /// Whether the reader is currently drawing a two-column spread (the layout
-    /// is enabled, in zen mode, and the pane is wide enough).
+    /// is enabled and the pane is wide enough).
     pub fn is_dual_active(&self) -> bool {
         self.dual_active
     }

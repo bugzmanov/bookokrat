@@ -228,6 +228,92 @@ fn generate_chapter_content(chapter_num: usize, word_count: usize) -> String {
     content
 }
 
+/// Create a single-chapter EPUB whose body is one `<pre>` block of `num_lines`
+/// contiguous, zero-padded numbered lines (`L0000`, `L0001`, ...). The lines
+/// render one-to-one with no blank separators or wrapping, which makes them
+/// useful for tests that reason about exact rendered-line positions (e.g. the
+/// dual-column page-grid layout, where the seam between pages is only visible
+/// when consecutive line numbers are easy to spot).
+pub fn create_numbered_lines_epub<P: AsRef<Path>>(
+    path: P,
+    num_lines: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Write;
+    use zip::write::FileOptions;
+
+    let file = fs::File::create(path)?;
+    let mut zip = zip::ZipWriter::new(file);
+
+    zip.start_file(
+        "mimetype",
+        FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+    )?;
+    zip.write_all(b"application/epub+zip")?;
+
+    zip.start_file("META-INF/container.xml", FileOptions::default())?;
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+    )?;
+
+    zip.start_file("OEBPS/content.opf", FileOptions::default())?;
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Numbered Lines</dc:title>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="BookId">numbered-lines</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+    </metadata>
+    <manifest>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="chapter1"/>
+    </spine>
+</package>"#,
+    )?;
+
+    zip.start_file("OEBPS/toc.ncx", FileOptions::default())?;
+    zip.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="numbered-lines"/>
+        <meta name="dtb:depth" content="1"/>
+    </head>
+    <docTitle><text>Numbered Lines</text></docTitle>
+    <navMap>
+        <navPoint id="navpoint1" playOrder="1">
+            <navLabel><text>Chapter 1</text></navLabel>
+            <content src="chapter1.xhtml"/>
+        </navPoint>
+    </navMap>
+</ncx>"#,
+    )?;
+
+    let mut body = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>Chapter 1</title></head>\
+         <body><pre>",
+    );
+    for i in 0..num_lines {
+        body.push_str(&format!("L{i:04}\n"));
+    }
+    body.push_str("</pre></body></html>");
+
+    zip.start_file("OEBPS/chapter1.xhtml", FileOptions::default())?;
+    zip.write_all(body.as_bytes())?;
+
+    zip.finish()?;
+    Ok(())
+}
+
 /// Create custom test books in a directory with specified configurations
 pub fn create_custom_test_books_in_dir<P: AsRef<Path>>(
     dir: P,

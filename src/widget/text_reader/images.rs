@@ -252,17 +252,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// Check if a screen click position has a link (for linked images)
     pub fn check_link_at_screen_position(&self, x: u16, y: u16) -> Option<LinkInfo> {
         let text_area = self.last_inner_text_area?;
-
-        if x < text_area.x
-            || x >= text_area.x + text_area.width
-            || y < text_area.y
-            || y >= text_area.y + text_area.height
-        {
-            return None;
-        }
-
-        let clicked_line = self.scroll_offset + (y - text_area.y) as usize;
-        let clicked_col = (x - text_area.x) as usize;
+        let (clicked_line, clicked_col) = self.screen_to_text_coords(x, y, text_area)?;
 
         self.get_link_at_position(clicked_line, clicked_col)
             .cloned()

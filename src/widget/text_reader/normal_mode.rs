@@ -555,7 +555,12 @@ impl MarkdownTextReader {
         line = self.find_next_valid_line(line, 1);
         self.normal_mode.cursor.line = line;
         self.normal_mode.cursor.column = self.get_first_non_whitespace_column(line);
-        self.scroll_offset = 0;
+        if self.dual_active {
+            self.dual_vtop = 0;
+            self.sync_dual_scroll();
+        } else {
+            self.scroll_offset = 0;
+        }
     }
 
     pub fn normal_mode_document_bottom(&mut self) {
@@ -567,7 +572,12 @@ impl MarkdownTextReader {
         last_line = self.find_next_valid_line(last_line, -1);
         self.normal_mode.cursor.line = last_line;
         self.normal_mode.cursor.column = self.get_first_non_whitespace_column(last_line);
-        self.scroll_offset = self.get_max_scroll_offset();
+        if self.dual_active {
+            self.dual_vtop = self.dual_max_vtop;
+            self.sync_dual_scroll();
+        } else {
+            self.scroll_offset = self.get_max_scroll_offset();
+        }
     }
 
     pub fn normal_mode_half_page_down(&mut self, screen_height: usize) {
@@ -580,7 +590,13 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = (self.scroll_offset + scroll_amount).min(self.get_max_scroll_offset());
+        if self.dual_active {
+            self.dual_scroll(scroll_amount as isize);
+            self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
+        } else {
+            self.scroll_offset =
+                (self.scroll_offset + scroll_amount).min(self.get_max_scroll_offset());
+        }
 
         self.clamp_column_to_line_length();
     }
@@ -594,7 +610,12 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+        if self.dual_active {
+            self.dual_scroll(-(scroll_amount as isize));
+            self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+        }
 
         self.clamp_column_to_line_length();
     }
@@ -609,7 +630,13 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = (self.scroll_offset + scroll_amount).min(self.get_max_scroll_offset());
+        if self.dual_active {
+            self.dual_scroll(scroll_amount as isize);
+            self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
+        } else {
+            self.scroll_offset =
+                (self.scroll_offset + scroll_amount).min(self.get_max_scroll_offset());
+        }
 
         self.clamp_column_to_line_length();
     }
@@ -623,7 +650,12 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
         self.normal_mode.cursor.line = new_line;
-        self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+        if self.dual_active {
+            self.dual_scroll(-(scroll_amount as isize));
+            self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
+        } else {
+            self.scroll_offset = self.scroll_offset.saturating_sub(scroll_amount);
+        }
 
         self.clamp_column_to_line_length();
     }
@@ -696,6 +728,10 @@ impl MarkdownTextReader {
     }
 
     pub(super) fn ensure_cursor_visible(&mut self) {
+        if self.dual_active {
+            self.ensure_dual_line_visible(self.normal_mode.cursor.line, self.normal_mode.scrolloff);
+            return;
+        }
         let scrolloff = self.normal_mode.scrolloff;
         let cursor_line = self.normal_mode.cursor.line;
         let viewport_top = self.scroll_offset;

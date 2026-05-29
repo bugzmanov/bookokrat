@@ -977,6 +977,88 @@ fn test_content_scrolling_svg() {
     );
 }
 
+/// Snapshot of the initial dual-column page grid. Pages are laid out two-up
+/// (left = even pages, right = odd pages) within the fixed reader size, so the
+/// first row shows the first line of page 0 beside the first line of page 1.
+/// The numbered-lines book makes the page split easy to read.
+///
+/// Serial because it flips the process-wide EPUB column-mode setting.
+#[test]
+#[serial]
+fn test_dual_column_page_grid_svg() {
+    ensure_test_report_initialized();
+
+    // Mirror the global resets in `create_test_app_isolated`, but enable the
+    // dual-column page grid *before* constructing the app — the reader reads the
+    // column mode at construction time.
+    set_theme_by_index(0);
+    set_margin(0);
+    bookokrat::settings::set_justify_text(false);
+    bookokrat::settings::set_nav_panel_width(None);
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Dual);
+
+    // A single chapter of contiguous, numbered, non-wrapping lines so the
+    // two-up layout and the separator are easy to read at a glance.
+    let book_dir = TempDir::new().expect("temp book dir");
+    let epub_path = book_dir.path().join("numbered.epub");
+    bookokrat::simple_fake_books::create_numbered_lines_epub(&epub_path, 200)
+        .expect("create numbered epub");
+
+    let comments_dir = TempDir::new().expect("temp comments dir");
+    let mut app = App::new_with_config(
+        Some(book_dir.path().to_str().unwrap()),
+        Some("/dev/null"),
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+    app.book_manager.supports_graphics = true;
+    app.navigation_panel
+        .book_list
+        .set_books(app.book_manager.get_books());
+
+    open_test_book(&mut app, "numbered.epub");
+    // Zen mode gives the reader the full terminal width, so the two columns
+    // definitely activate (the layout needs >= 67 columns of inner width).
+    app.set_zen_mode(true);
+
+    let mut terminal = create_test_terminal(100, 30);
+
+    // First draw: the reader latches dual-mode geometry (page height, max vtop)
+    // during render, which the line-by-line scroll below depends on.
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_dual_column_page_grid.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // Reset so the global column setting cannot leak into other tests.
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/dual_column_page_grid.svg"),
+        "test_dual_column_page_grid_svg",
+        create_test_failure_handler("test_dual_column_page_grid_svg"),
+    );
+}
+
 #[test]
 #[parallel]
 fn test_chapter_title_normal_length_svg() {
@@ -4707,6 +4789,7 @@ fn test_multi_slice_highlight_overview_shape_svg() {
     }
     app.press_key(crossterm::event::KeyCode::Char('H'));
     app.press_key(crossterm::event::KeyCode::Char('y'));
+    app.testing_set_all_comment_timestamps(Utc.with_ymd_and_hms(2024, 2, 1, 9, 0, 0).unwrap());
 
     open_comments_viewer(&mut app);
     terminal
@@ -5348,6 +5431,7 @@ fn test_epub_comment_across_two_paragraphs_via_visual_line_svg() {
     }
     // Esc saves and exits comment input mode.
     app.press_key(crossterm::event::KeyCode::Esc);
+    app.testing_set_all_comment_timestamps(Utc.with_ymd_and_hms(2024, 2, 1, 9, 0, 0).unwrap());
 
     // Data-layer asserts: ONE multi-slice Comment carrying the typed body,
     // two slices targeting distinct paragraph node indices. If the capture

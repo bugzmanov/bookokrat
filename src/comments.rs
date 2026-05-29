@@ -1250,6 +1250,14 @@ impl BookComments {
         &self.comments
     }
 
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub fn testing_set_all_updated_at(&mut self, updated_at: DateTime<Utc>) {
+        for comment in &mut self.comments {
+            comment.updated_at = updated_at;
+        }
+    }
+
     pub fn has_overlapping_annotation(&self, chapter_href: &str, target: &CommentTarget) -> bool {
         // Comments and highlights share the same visual annotation layer, so
         // new annotations are rejected when they would overlap an existing one.
