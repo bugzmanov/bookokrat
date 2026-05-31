@@ -2595,19 +2595,7 @@ impl App {
                         if let Some(action) =
                             popup.handle_mouse_click(mouse_event.column, mouse_event.row)
                         {
-                            match action {
-                                SettingsAction::Close => {
-                                    self.close_popup_to_previous();
-                                    self.settings_popup = None;
-                                }
-                                SettingsAction::TestLookupCommand => {
-                                    self.execute_lookup_command("hello");
-                                }
-                                SettingsAction::TestSynctexEditor => {
-                                    self.test_synctex_editor();
-                                }
-                                _ => {}
-                            }
+                            self.handle_settings_action(action);
                         }
                     }
                     return;
@@ -5132,6 +5120,77 @@ impl App {
         }
     }
 
+    fn handle_settings_action(&mut self, action: SettingsAction) {
+        match action {
+            SettingsAction::Close => {
+                self.close_popup_to_previous();
+                self.settings_popup = None;
+            }
+            SettingsAction::PageLayoutChanged => {
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    if let Some(ref mut zoom) = pdf_reader.zoom {
+                        zoom.global_scroll_offset = 0;
+                    }
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+                // Keep the EPUB reader's column layout in sync with the
+                // setting the user just changed in the popup.
+                let current_node = self.text_reader.get_current_node_index();
+                self.text_reader.set_dual_columns(
+                    crate::settings::get_epub_column_mode()
+                        == crate::settings::EpubColumnMode::Dual,
+                );
+                self.text_reader.restore_to_node_index(current_node);
+            }
+            SettingsAction::SettingsChanged => {
+                // Invalidate render cache for theme changes
+                self.text_reader.invalidate_render_cache();
+                self.apply_theme_to_pdf_reader();
+                self.show_info(format!("Theme: {}", current_theme_name()));
+
+                // Refresh book list in case PDF support was toggled
+                self.book_manager.refresh();
+                self.navigation_panel
+                    .book_list
+                    .set_books(self.book_manager.get_books());
+
+                #[cfg(feature = "pdf")]
+                {
+                    // Close any open PDF if PDF support was disabled
+                    if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                        if let Some(ref pdf_reader) = self.pdf_reader {
+                            Self::clear_pdf_graphics(pdf_reader.is_kitty);
+                        }
+                        self.pdf_service = None;
+                        self.pdf_reader = None;
+                        self.pdf_picker = None;
+                        self.pdf_conversion_tx = None;
+                        self.pdf_conversion_rx = None;
+                        self.pdf_pending_display = None;
+                        self.pdf_document_path = None;
+                        self.clear_synctex_state();
+                        // Clear current book path since the PDF is no longer available
+                        self.navigation_panel.current_book_path = None;
+                        // Switch back to book list
+                        self.navigation_panel.switch_to_book_mode();
+                        self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
+                        self.sync_terminal_title();
+                        self.close_popup_to_previous();
+                        self.settings_popup = None;
+                    }
+                }
+            }
+            SettingsAction::TestLookupCommand => {
+                self.execute_lookup_command("hello");
+            }
+            SettingsAction::TestSynctexEditor => {
+                self.test_synctex_editor();
+            }
+        }
+    }
+
     #[cfg(feature = "pdf")]
     fn pdf_text_input_active(&self) -> bool {
         self.pdf_reader
@@ -6041,74 +6100,7 @@ impl App {
             };
 
             if let Some(action) = action {
-                match action {
-                    SettingsAction::Close => {
-                        self.close_popup_to_previous();
-                        self.settings_popup = None;
-                    }
-                    SettingsAction::PageLayoutChanged => {
-                        #[cfg(feature = "pdf")]
-                        if let Some(ref mut pdf_reader) = self.pdf_reader {
-                            if let Some(ref mut zoom) = pdf_reader.zoom {
-                                zoom.global_scroll_offset = 0;
-                            }
-                            pdf_reader.last_sent_viewport = None;
-                            pdf_reader.force_redraw();
-                        }
-                        // Keep the EPUB reader's column layout in sync with the
-                        // setting the user just changed in the popup.
-                        let current_node = self.text_reader.get_current_node_index();
-                        self.text_reader.set_dual_columns(
-                            crate::settings::get_epub_column_mode()
-                                == crate::settings::EpubColumnMode::Dual,
-                        );
-                        self.text_reader.restore_to_node_index(current_node);
-                    }
-                    SettingsAction::SettingsChanged => {
-                        // Invalidate render cache for theme changes
-                        self.text_reader.invalidate_render_cache();
-                        self.apply_theme_to_pdf_reader();
-                        self.show_info(format!("Theme: {}", current_theme_name()));
-
-                        // Refresh book list in case PDF support was toggled
-                        self.book_manager.refresh();
-                        self.navigation_panel
-                            .book_list
-                            .set_books(self.book_manager.get_books());
-
-                        #[cfg(feature = "pdf")]
-                        {
-                            // Close any open PDF if PDF support was disabled
-                            if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
-                                if let Some(ref pdf_reader) = self.pdf_reader {
-                                    Self::clear_pdf_graphics(pdf_reader.is_kitty);
-                                }
-                                self.pdf_service = None;
-                                self.pdf_reader = None;
-                                self.pdf_picker = None;
-                                self.pdf_conversion_tx = None;
-                                self.pdf_conversion_rx = None;
-                                self.pdf_pending_display = None;
-                                self.pdf_document_path = None;
-                                self.clear_synctex_state();
-                                // Clear current book path since the PDF is no longer available
-                                self.navigation_panel.current_book_path = None;
-                                // Switch back to book list
-                                self.navigation_panel.switch_to_book_mode();
-                                self.focused_panel = FocusedPanel::Main(MainPanel::NavigationList);
-                                self.sync_terminal_title();
-                                self.close_popup_to_previous();
-                                self.settings_popup = None;
-                            }
-                        }
-                    }
-                    SettingsAction::TestLookupCommand => {
-                        self.execute_lookup_command("hello");
-                    }
-                    SettingsAction::TestSynctexEditor => {
-                        self.test_synctex_editor();
-                    }
-                }
+                self.handle_settings_action(action);
             }
             return None;
         }

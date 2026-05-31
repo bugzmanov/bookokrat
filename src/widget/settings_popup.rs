@@ -33,6 +33,7 @@ pub enum SettingsAction {
 
 const TRUECOLOR_NOTE_LINES: u16 = 4;
 const TRUECOLOR_NOTE_SPACER_LINES: u16 = 1;
+const GENERAL_TWO_COLUMN_MIN_WIDTH: u16 = 76;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -107,10 +108,89 @@ impl IntegrationsFocus {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GeneralOption {
+    PdfEnabled,
+    PdfDisabled,
+    PdfRenderPage,
+    PdfRenderScroll,
+    PdfLayoutSingle,
+    PdfLayoutDual,
+    MouseWheelNormal,
+    MouseWheelInverted,
+    EpubSingle,
+    EpubDual,
+}
+
+const GENERAL_OPTIONS: [GeneralOption; 10] = [
+    GeneralOption::PdfEnabled,
+    GeneralOption::PdfDisabled,
+    GeneralOption::PdfRenderPage,
+    GeneralOption::PdfRenderScroll,
+    GeneralOption::PdfLayoutSingle,
+    GeneralOption::PdfLayoutDual,
+    GeneralOption::MouseWheelNormal,
+    GeneralOption::MouseWheelInverted,
+    GeneralOption::EpubSingle,
+    GeneralOption::EpubDual,
+];
+
+impl GeneralOption {
+    fn index(self) -> usize {
+        match self {
+            Self::PdfEnabled => 0,
+            Self::PdfDisabled => 1,
+            Self::PdfRenderPage => 2,
+            Self::PdfRenderScroll => 3,
+            Self::PdfLayoutSingle => 4,
+            Self::PdfLayoutDual => 5,
+            Self::MouseWheelNormal => 6,
+            Self::MouseWheelInverted => 7,
+            Self::EpubSingle => 8,
+            Self::EpubDual => 9,
+        }
+    }
+
+    fn is_pdf_option(self) -> bool {
+        matches!(
+            self,
+            Self::PdfEnabled
+                | Self::PdfDisabled
+                | Self::PdfRenderPage
+                | Self::PdfRenderScroll
+                | Self::PdfLayoutSingle
+                | Self::PdfLayoutDual
+        )
+    }
+}
+
+struct SettingsOption {
+    id: GeneralOption,
+    label: &'static str,
+    hint: Option<&'static str>,
+    selected: bool,
+    enabled: bool,
+}
+
+struct SettingsSection {
+    title: &'static str,
+    title_indent: u16,
+    options_indent: u16,
+    options_top_spacing: u16,
+    enabled: bool,
+    options: Vec<SettingsOption>,
+}
+
+impl SettingsSection {
+    fn height(&self) -> u16 {
+        1 + self.options_top_spacing + self.options.len() as u16
+    }
+}
+
 pub struct SettingsPopup {
     current_tab: SettingsTab,
     // General tab state
-    general_selected_idx: usize,
+    general_selected: GeneralOption,
     // PDF section state
     supports_scroll_mode: bool,
     supports_graphics: bool,
@@ -174,7 +254,7 @@ impl SettingsPopup {
             SettingsTab::Themes
         };
 
-        let general_selected_idx = Self::initial_general_selected_idx_from_state(
+        let general_selected = Self::initial_general_selected_from_state(
             supports_graphics,
             supports_scroll_mode,
             is_pdf_enabled(),
@@ -201,7 +281,7 @@ impl SettingsPopup {
 
         SettingsPopup {
             current_tab,
-            general_selected_idx,
+            general_selected,
             supports_scroll_mode,
             supports_graphics,
             theme_selected_idx: Self::initial_theme_selected_idx_from_state(
@@ -224,30 +304,28 @@ impl SettingsPopup {
         }
     }
 
-    fn general_min_selectable_idx(&self) -> usize {
-        0
-    }
-
-    fn initial_general_selected_idx_from_state(
+    fn initial_general_selected_from_state(
         supports_graphics: bool,
         supports_scroll_mode: bool,
         pdf_enabled: bool,
         render_mode: PdfRenderMode,
         layout_mode: PdfPageLayoutMode,
-    ) -> usize {
-        // PDF section: non-default → focus it
-        if supports_graphics {
-            if !pdf_enabled {
-                return 1; // Disabled
-            }
-            if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
-                return 3; // Scroll
-            }
-            if layout_mode == PdfPageLayoutMode::Dual {
-                return 5; // Dual
-            }
+    ) -> GeneralOption {
+        if !supports_graphics {
+            return GeneralOption::MouseWheelNormal;
         }
-        0
+
+        // PDF section: non-default → focus it
+        if !pdf_enabled {
+            return GeneralOption::PdfDisabled;
+        }
+        if render_mode == PdfRenderMode::Scroll && supports_scroll_mode {
+            return GeneralOption::PdfRenderScroll;
+        }
+        if layout_mode == PdfPageLayoutMode::Dual {
+            return GeneralOption::PdfLayoutDual;
+        }
+        GeneralOption::PdfEnabled
     }
 
     fn initial_theme_selected_idx_from_state(
@@ -262,11 +340,6 @@ impl SettingsPopup {
             return 0;
         }
         current_theme_idx.min(theme_count - 1)
-    }
-
-    fn general_max_selectable_idx(&self) -> usize {
-        // EPUB column options (8,9) are always available
-        9
     }
 
     fn render_mode_available(&self) -> bool {
@@ -284,8 +357,10 @@ impl SettingsPopup {
         // Build footer hints string for bottom border
         let hints = if self.current_tab == SettingsTab::Integrations {
             " Tab switch tabs  ↑/↓ navigate  Enter select  Esc close "
+        } else if self.current_tab == SettingsTab::General {
+            " Tab switch tabs  h/l columns  j/k navigate  Enter select  Esc close "
         } else if cfg!(feature = "pdf") {
-            " Tab/h/l switch tabs  j/k navigate  Enter select  Esc close "
+            " Tab switch tabs  j/k navigate  Enter select  Esc close "
         } else {
             " j/k navigate  Enter select  Esc close "
         };
@@ -419,19 +494,30 @@ impl SettingsPopup {
         }
     }
 
+    fn general_uses_columns(width: u16) -> bool {
+        width >= GENERAL_TWO_COLUMN_MIN_WIDTH
+    }
+
+    fn general_natural_height(&self, width: u16) -> u16 {
+        let pdf_sections = self.general_pdf_sections();
+        let reader_sections = self.general_reader_sections();
+        let info_h = self
+            .get_pdf_info_lines(current_theme(), is_pdf_enabled(), get_pdf_render_mode())
+            .len() as u16;
+        let pdf_info_h = if info_h > 0 { 1 + info_h } else { 0 };
+        let pdf_h = Self::settings_sections_height(&pdf_sections) + pdf_info_h;
+        let reader_h = Self::settings_sections_height(&reader_sections);
+        if Self::general_uses_columns(width) {
+            pdf_h.max(reader_h)
+        } else {
+            pdf_h + 1 + reader_h
+        }
+    }
+
     /// Compute the natural (un-scrolled) height of content for the current tab.
-    fn compute_natural_height(&self, _width: u16) -> u16 {
+    fn compute_natural_height(&self, width: u16) -> u16 {
         match self.current_tab {
-            SettingsTab::General => {
-                // PDF section (3) + spacer (1) + Render Mode (4) + spacer (1) +
-                // Page Layout (4) + spacer (1) + Info (≤2) + spacer (1) +
-                // Scrolling section (4) + spacer (1) + EPUB Layout section (4)
-                let pdf_enabled = is_pdf_enabled();
-                let info_h = self
-                    .get_pdf_info_lines(current_theme(), pdf_enabled, get_pdf_render_mode())
-                    .len() as u16;
-                3 + 1 + 4 + 1 + 4 + 1 + info_h.max(1) + 1 + 4 + 1 + 4
-            }
+            SettingsTab::General => self.general_natural_height(width),
             SettingsTab::Themes => {
                 let truecolor_note_height = if crate::color_mode::supports_true_color() {
                     0
@@ -452,18 +538,8 @@ impl SettingsPopup {
     fn selected_row_range(&self) -> Option<(u16, u16)> {
         match self.current_tab {
             SettingsTab::General => {
-                // chunks[1] holds idx 0,1; chunks[5] holds idx 2,3; chunks[9] holds idx 4,5;
-                // chunks[15] holds idx 6,7; chunks[19] holds idx 8,9.
-                let (chunk_idx, sub) = match self.general_selected_idx {
-                    0 | 1 => (1usize, self.general_selected_idx),
-                    2 | 3 => (5, self.general_selected_idx - 2),
-                    4 | 5 => (9, self.general_selected_idx - 4),
-                    6 | 7 => (15, self.general_selected_idx - 6),
-                    8 | 9 => (19, self.general_selected_idx - 8),
-                    _ => return None,
-                };
-                let r = self.content_chunks.get(chunk_idx)?;
-                Some((r.y + sub as u16, 1))
+                let r = self.content_chunks.get(self.general_selected.index())?;
+                Some((r.y, r.height))
             }
             SettingsTab::Themes => {
                 let theme_count = self.theme_names.len();
@@ -553,347 +629,256 @@ impl SettingsPopup {
     }
 
     fn render_general_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
+        self.content_chunks = vec![Rect::ZERO; GENERAL_OPTIONS.len()];
+
+        let pdf_sections = self.general_pdf_sections();
+        let reader_sections = self.general_reader_sections();
+        let pdf_info_lines =
+            self.get_pdf_info_lines(palette, is_pdf_enabled(), get_pdf_render_mode());
+        let pdf_sections_height = Self::settings_sections_height(&pdf_sections);
+        let pdf_info_height = if pdf_info_lines.is_empty() {
+            0
+        } else {
+            1 + pdf_info_lines.len() as u16
+        };
+
+        if Self::general_uses_columns(area.width) {
+            let columns = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(50),
+                    Constraint::Length(4),
+                    Constraint::Percentage(50),
+                ])
+                .split(area);
+            self.render_settings_sections(buf, columns[0], palette, &pdf_sections);
+            Self::render_settings_info_lines(buf, columns[0], pdf_sections_height, pdf_info_lines);
+            self.render_settings_sections(buf, columns[2], palette, &reader_sections);
+        } else {
+            let pdf_group_height = pdf_sections_height + pdf_info_height;
+            let reader_group_height = Self::settings_sections_height(&reader_sections);
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(pdf_group_height),
+                    Constraint::Length(1),
+                    Constraint::Length(reader_group_height),
+                    Constraint::Min(0),
+                ])
+                .split(area);
+            self.render_settings_sections(buf, chunks[0], palette, &pdf_sections);
+            Self::render_settings_info_lines(buf, chunks[0], pdf_sections_height, pdf_info_lines);
+            self.render_settings_sections(buf, chunks[2], palette, &reader_sections);
+        }
+    }
+
+    fn general_pdf_sections(&self) -> Vec<SettingsSection> {
         let pdf_enabled = is_pdf_enabled();
         let current_mode = get_pdf_render_mode();
         let current_layout_mode = get_pdf_page_layout_mode();
         let effective_pdf_enabled = self.supports_graphics && pdf_enabled;
         let render_mode_available = self.render_mode_available();
-
-        let radio_selected = "●";
-        let radio_unselected = "○";
-        let is_general = self.current_tab == SettingsTab::General;
-
-        let info_lines_count = self
-            .get_pdf_info_lines(palette, pdf_enabled, current_mode)
-            .len() as u16;
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),                       //  0: PDF Support header
-                Constraint::Length(2),                       //  1: PDF Support options
-                Constraint::Length(1),                       //  2: spacer
-                Constraint::Length(1),                       //  3: Render Mode header
-                Constraint::Length(1),                       //  4: empty line
-                Constraint::Length(2),                       //  5: Render Mode options
-                Constraint::Length(1),                       //  6: spacer
-                Constraint::Length(1),                       //  7: Page Layout header
-                Constraint::Length(1),                       //  8: empty line
-                Constraint::Length(2),                       //  9: Page Layout options
-                Constraint::Length(1),                       // 10: spacer
-                Constraint::Length(info_lines_count.max(1)), // 11: Info message
-                Constraint::Length(1),                       // 12: spacer
-                Constraint::Length(1),                       // 13: Scrolling header
-                Constraint::Length(1),                       // 14: empty line
-                Constraint::Length(2),                       // 15: Scrolling options
-                Constraint::Length(1),                       // 16: spacer
-                Constraint::Length(1),                       // 17: EPUB Layout header
-                Constraint::Length(1),                       // 18: empty line
-                Constraint::Length(2),                       // 19: EPUB Layout options
-            ])
-            .split(area);
-
-        self.content_chunks = chunks.to_vec();
-
-        // ── PDF / DJVU section ──
-        let pdf_header_color = if self.supports_graphics {
-            palette.base_06
-        } else {
-            palette.base_03
-        };
-        self.render_section_header(buf, chunks[0], "PDF / DJVU", palette, pdf_header_color);
-
-        let pdf_options_area = Rect {
-            x: chunks[1].x + 2,
-            y: chunks[1].y,
-            width: chunks[1].width.saturating_sub(2),
-            height: chunks[1].height,
-        };
-        let pdf_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(pdf_options_area);
-
-        let enabled_radio = if effective_pdf_enabled {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let enabled_style = if self.supports_graphics {
-            Style::default().fg(palette.base_06)
-        } else {
-            Style::default().fg(palette.base_03)
-        };
-        let enabled_line = self.render_radio_option(
-            enabled_radio,
-            "Enabled",
-            None,
-            enabled_style,
-            is_general && self.general_selected_idx == 0 && self.supports_graphics,
-            palette,
-        );
-        Paragraph::new(enabled_line).render(pdf_chunks[0], buf);
-
-        let disabled_radio = if !effective_pdf_enabled {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let disabled_line = self.render_radio_option(
-            disabled_radio,
-            "Disabled",
-            None,
-            enabled_style,
-            is_general && self.general_selected_idx == 1 && self.supports_graphics,
-            palette,
-        );
-        Paragraph::new(disabled_line).render(pdf_chunks[1], buf);
-
-        // Render Mode section header
-        let render_header_color = if render_mode_available {
-            palette.base_06
-        } else {
-            palette.base_03
-        };
-        let render_header_area = Rect {
-            x: chunks[3].x + 2,
-            y: chunks[3].y,
-            width: chunks[3].width.saturating_sub(2),
-            height: chunks[3].height,
-        };
-        self.render_section_header(
-            buf,
-            render_header_area,
-            "Render Mode",
-            palette,
-            render_header_color,
-        );
-
-        // Render Mode options
-        let render_options_area = Rect {
-            x: chunks[5].x + 4,
-            y: chunks[5].y,
-            width: chunks[5].width.saturating_sub(4),
-            height: chunks[5].height,
-        };
-        let render_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(render_options_area);
-
-        let option_style = if render_mode_available {
-            Style::default().fg(palette.base_06)
-        } else {
-            Style::default().fg(palette.base_03)
-        };
-
-        let page_radio = if current_mode == PdfRenderMode::Page {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let page_line = self.render_radio_option(
-            page_radio,
-            "Page",
-            Some("one page at a time"),
-            option_style,
-            is_general && self.general_selected_idx == 2 && render_mode_available,
-            palette,
-        );
-        Paragraph::new(page_line).render(render_chunks[0], buf);
-
-        let scroll_radio = if current_mode == PdfRenderMode::Scroll {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let scroll_style = if render_mode_available && self.supports_scroll_mode {
-            Style::default().fg(palette.base_06)
-        } else {
-            Style::default().fg(palette.base_03)
-        };
         let scroll_suffix = if !self.supports_scroll_mode {
             Some("Kitty protocol")
         } else {
             Some("continuous scroll")
         };
-        let scroll_line = self.render_radio_option(
-            scroll_radio,
-            "Scroll",
-            scroll_suffix,
-            scroll_style,
-            is_general
-                && self.general_selected_idx == 3
-                && render_mode_available
-                && self.supports_scroll_mode,
-            palette,
-        );
-        Paragraph::new(scroll_line).render(render_chunks[1], buf);
 
-        // Page Layout section header
-        let layout_header_color = if render_mode_available {
-            palette.base_06
-        } else {
-            palette.base_03
-        };
-        let layout_header_area = Rect {
-            x: chunks[7].x + 2,
-            y: chunks[7].y,
-            width: chunks[7].width.saturating_sub(2),
-            height: chunks[7].height,
-        };
-        self.render_section_header(
-            buf,
-            layout_header_area,
-            "Page Layout",
-            palette,
-            layout_header_color,
-        );
+        vec![
+            SettingsSection {
+                title: "PDF / DJVU",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: self.supports_graphics,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::PdfEnabled,
+                        label: "Enabled",
+                        hint: None,
+                        selected: effective_pdf_enabled,
+                        enabled: self.supports_graphics,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::PdfDisabled,
+                        label: "Disabled",
+                        hint: None,
+                        selected: !effective_pdf_enabled,
+                        enabled: self.supports_graphics,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "Render Mode",
+                title_indent: 2,
+                options_indent: 4,
+                options_top_spacing: 1,
+                enabled: render_mode_available,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::PdfRenderPage,
+                        label: "Page",
+                        hint: Some("one page at a time"),
+                        selected: current_mode == PdfRenderMode::Page,
+                        enabled: render_mode_available,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::PdfRenderScroll,
+                        label: "Scroll",
+                        hint: scroll_suffix,
+                        selected: current_mode == PdfRenderMode::Scroll,
+                        enabled: render_mode_available && self.supports_scroll_mode,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "Page Layout",
+                title_indent: 2,
+                options_indent: 4,
+                options_top_spacing: 1,
+                enabled: render_mode_available,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::PdfLayoutSingle,
+                        label: "Single",
+                        hint: Some("one page"),
+                        selected: current_layout_mode == PdfPageLayoutMode::Single,
+                        enabled: render_mode_available,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::PdfLayoutDual,
+                        label: "Dual",
+                        hint: Some("two pages"),
+                        selected: current_layout_mode == PdfPageLayoutMode::Dual,
+                        enabled: render_mode_available,
+                    },
+                ],
+            },
+        ]
+    }
 
-        // Page Layout options
-        let layout_options_area = Rect {
-            x: chunks[9].x + 4,
-            y: chunks[9].y,
-            width: chunks[9].width.saturating_sub(4),
-            height: chunks[9].height,
-        };
-        let layout_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(layout_options_area);
-
-        let layout_option_style = if render_mode_available {
-            Style::default().fg(palette.base_06)
-        } else {
-            Style::default().fg(palette.base_03)
-        };
-
-        let single_radio = if current_layout_mode == PdfPageLayoutMode::Single {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let single_line = self.render_radio_option(
-            single_radio,
-            "Single",
-            Some("one page"),
-            layout_option_style,
-            is_general && self.general_selected_idx == 4 && render_mode_available,
-            palette,
-        );
-        Paragraph::new(single_line).render(layout_chunks[0], buf);
-
-        let dual_radio = if current_layout_mode == PdfPageLayoutMode::Dual {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let dual_line = self.render_radio_option(
-            dual_radio,
-            "Dual",
-            Some("two pages"),
-            layout_option_style,
-            is_general && self.general_selected_idx == 5 && render_mode_available,
-            palette,
-        );
-        Paragraph::new(dual_line).render(layout_chunks[1], buf);
-
-        // Info message
-        let info_lines = self.get_pdf_info_lines(palette, pdf_enabled, current_mode);
-        Paragraph::new(info_lines).render(chunks[11], buf);
-
-        // Scrolling section
-        self.render_section_header(buf, chunks[13], "Scrolling", palette, palette.base_06);
-
-        let scrolling_options_area = Rect {
-            x: chunks[15].x + 2,
-            y: chunks[15].y,
-            width: chunks[15].width.saturating_sub(2),
-            height: chunks[15].height,
-        };
-        let scrolling_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(scrolling_options_area);
-
+    fn general_reader_sections(&self) -> Vec<SettingsSection> {
         let invert_scroll = is_invert_scroll_direction();
-        let scroll_option_style = Style::default().fg(palette.base_06);
-
-        let normal_radio = if !invert_scroll {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let normal_line = self.render_radio_option(
-            normal_radio,
-            "Normal",
-            None,
-            scroll_option_style,
-            is_general && self.general_selected_idx == 6,
-            palette,
-        );
-        Paragraph::new(normal_line).render(scrolling_chunks[0], buf);
-
-        let inverted_radio = if invert_scroll {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let inverted_line = self.render_radio_option(
-            inverted_radio,
-            "Inverted",
-            None,
-            scroll_option_style,
-            is_general && self.general_selected_idx == 7,
-            palette,
-        );
-        Paragraph::new(inverted_line).render(scrolling_chunks[1], buf);
-
-        // ── EPUB Layout section ──
         let current_column_mode = get_epub_column_mode();
-        self.render_section_header(buf, chunks[17], "EPUB Layout", palette, palette.base_06);
 
-        let column_options_area = Rect {
-            x: chunks[19].x + 2,
-            y: chunks[19].y,
-            width: chunks[19].width.saturating_sub(2),
-            height: chunks[19].height,
+        vec![
+            SettingsSection {
+                title: "Mouse Wheel",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: true,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::MouseWheelNormal,
+                        label: "Normal",
+                        hint: Some("wheel down moves down"),
+                        selected: !invert_scroll,
+                        enabled: true,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::MouseWheelInverted,
+                        label: "Inverted",
+                        hint: Some("wheel down moves up"),
+                        selected: invert_scroll,
+                        enabled: true,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "EPUB Layout",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: true,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::EpubSingle,
+                        label: "Single",
+                        hint: Some("one column"),
+                        selected: current_column_mode == EpubColumnMode::Single,
+                        enabled: true,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::EpubDual,
+                        label: "Dual",
+                        hint: Some("two columns when wide"),
+                        selected: current_column_mode == EpubColumnMode::Dual,
+                        enabled: true,
+                    },
+                ],
+            },
+        ]
+    }
+
+    fn settings_sections_height(sections: &[SettingsSection]) -> u16 {
+        sections.iter().map(SettingsSection::height).sum::<u16>()
+            + sections.len().saturating_sub(1) as u16
+    }
+
+    fn render_settings_sections(
+        &mut self,
+        buf: &mut Buffer,
+        area: Rect,
+        palette: &Base16Palette,
+        sections: &[SettingsSection],
+    ) {
+        let mut y = area.y;
+        for (section_idx, section) in sections.iter().enumerate() {
+            let header_area = Self::indented_area(
+                Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: 1,
+                },
+                section.title_indent,
+            );
+            let header_color = if section.enabled {
+                palette.base_06
+            } else {
+                palette.base_03
+            };
+            self.render_section_header(buf, header_area, section.title, palette, header_color);
+
+            y += 1 + section.options_top_spacing;
+            for option in &section.options {
+                let option_area = Self::indented_area(
+                    Rect {
+                        x: area.x,
+                        y,
+                        width: area.width,
+                        height: 1,
+                    },
+                    section.options_indent,
+                );
+                self.render_general_radio_option(buf, option_area, option, palette);
+                y += 1;
+            }
+
+            if section_idx + 1 < sections.len() {
+                y += 1;
+            }
+        }
+    }
+
+    fn render_settings_info_lines(
+        buf: &mut Buffer,
+        area: Rect,
+        sections_height: u16,
+        lines: Vec<Line<'static>>,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
+
+        let info_area = Rect {
+            x: area.x,
+            y: area.y + sections_height + 1,
+            width: area.width,
+            height: lines.len() as u16,
         };
-        let column_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1)])
-            .split(column_options_area);
-
-        let column_option_style = Style::default().fg(palette.base_06);
-
-        let single_column_radio = if current_column_mode == EpubColumnMode::Single {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let single_column_line = self.render_radio_option(
-            single_column_radio,
-            "Single",
-            Some("one column"),
-            column_option_style,
-            is_general && self.general_selected_idx == 8,
-            palette,
-        );
-        Paragraph::new(single_column_line).render(column_chunks[0], buf);
-
-        let dual_column_radio = if current_column_mode == EpubColumnMode::Dual {
-            radio_selected
-        } else {
-            radio_unselected
-        };
-        let dual_column_line = self.render_radio_option(
-            dual_column_radio,
-            "Dual",
-            Some("two columns when wide"),
-            column_option_style,
-            is_general && self.general_selected_idx == 9,
-            palette,
-        );
-        Paragraph::new(dual_column_line).render(column_chunks[1], buf);
+        Paragraph::new(lines).render(info_area, buf);
     }
 
     fn render_themes_tab(&mut self, buf: &mut Buffer, area: Rect, palette: &Base16Palette) {
@@ -1067,6 +1052,15 @@ impl SettingsPopup {
         Paragraph::new(line).render(area, buf);
     }
 
+    fn indented_area(area: Rect, indent: u16) -> Rect {
+        Rect {
+            x: area.x + indent.min(area.width),
+            y: area.y,
+            width: area.width.saturating_sub(indent),
+            height: area.height,
+        }
+    }
+
     fn get_pdf_info_lines(
         &self,
         palette: &Base16Palette,
@@ -1154,49 +1148,105 @@ impl SettingsPopup {
         Line::from(spans)
     }
 
+    fn render_general_radio_option(
+        &mut self,
+        buf: &mut Buffer,
+        area: Rect,
+        option: &SettingsOption,
+        palette: &Base16Palette,
+    ) {
+        if let Some(chunk) = self.content_chunks.get_mut(option.id.index()) {
+            *chunk = area;
+        }
+
+        let radio = if option.selected { "●" } else { "○" };
+        let style = if option.enabled {
+            Style::default().fg(palette.base_06)
+        } else {
+            Style::default().fg(palette.base_03)
+        };
+        let line = self.render_radio_option(
+            radio,
+            option.label,
+            option.hint,
+            style,
+            self.current_tab == SettingsTab::General
+                && self.general_selected == option.id
+                && option.enabled,
+            palette,
+        );
+        Paragraph::new(line).render(area, buf);
+    }
+
     fn general_next(&mut self) {
-        let min_idx = self.general_min_selectable_idx();
-        let max_idx = self.general_max_selectable_idx();
-        let mut next_idx = self.general_selected_idx;
-        for _ in 0..=max_idx {
-            next_idx = if next_idx >= max_idx {
-                min_idx
-            } else {
-                next_idx + 1
-            };
-            if self.is_general_idx_selectable(next_idx) {
-                self.general_selected_idx = next_idx;
+        let current_pos = GENERAL_OPTIONS
+            .iter()
+            .position(|option| *option == self.general_selected)
+            .unwrap_or(0);
+        for offset in 1..=GENERAL_OPTIONS.len() {
+            let option = GENERAL_OPTIONS[(current_pos + offset) % GENERAL_OPTIONS.len()];
+            if self.is_general_option_selectable(option) {
+                self.general_selected = option;
                 break;
             }
         }
     }
 
     fn general_previous(&mut self) {
-        let min_idx = self.general_min_selectable_idx();
-        let max_idx = self.general_max_selectable_idx();
-        let mut prev_idx = self.general_selected_idx;
-        for _ in 0..=max_idx {
-            prev_idx = if prev_idx <= min_idx {
-                max_idx
-            } else {
-                prev_idx - 1
-            };
-            if self.is_general_idx_selectable(prev_idx) {
-                self.general_selected_idx = prev_idx;
+        let current_pos = GENERAL_OPTIONS
+            .iter()
+            .position(|option| *option == self.general_selected)
+            .unwrap_or(0);
+        for offset in 1..=GENERAL_OPTIONS.len() {
+            let option = GENERAL_OPTIONS
+                [(current_pos + GENERAL_OPTIONS.len() - offset) % GENERAL_OPTIONS.len()];
+            if self.is_general_option_selectable(option) {
+                self.general_selected = option;
                 break;
             }
         }
     }
 
-    fn is_general_idx_selectable(&self, idx: usize) -> bool {
-        match idx {
-            0 | 1 => true,                     // Zen mode shortcut options
-            2 | 3 => self.supports_graphics,   // PDF enabled/disabled
-            4 => self.render_mode_available(), // Page mode
-            5 => self.render_mode_available() && self.supports_scroll_mode, // Scroll mode
-            6 | 7 => true,                     // Scroll direction (always available)
-            8 | 9 => true,                     // EPUB column layout (always available)
-            _ => false,
+    fn general_move_horizontal(&mut self, to_pdf_options: bool) {
+        if self.general_selected.is_pdf_option() == to_pdf_options {
+            return;
+        }
+
+        let current_y = self
+            .content_chunks
+            .get(self.general_selected.index())
+            .map(|area| area.y)
+            .unwrap_or(0);
+        if let Some(option) = GENERAL_OPTIONS
+            .iter()
+            .copied()
+            .filter(|option| option.is_pdf_option() == to_pdf_options)
+            .filter(|option| self.is_general_option_selectable(*option))
+            .min_by_key(|option| {
+                self.content_chunks
+                    .get(option.index())
+                    .map(|area| area.y.abs_diff(current_y))
+                    .unwrap_or(u16::MAX)
+            })
+        {
+            self.general_selected = option;
+        }
+    }
+
+    fn is_general_option_selectable(&self, option: GeneralOption) -> bool {
+        match option {
+            GeneralOption::PdfEnabled | GeneralOption::PdfDisabled => self.supports_graphics,
+            GeneralOption::PdfRenderPage => self.render_mode_available(),
+            GeneralOption::PdfRenderScroll => {
+                self.render_mode_available() && self.supports_scroll_mode
+            }
+            GeneralOption::PdfLayoutSingle | GeneralOption::PdfLayoutDual => {
+                self.render_mode_available()
+            }
+            GeneralOption::MouseWheelNormal
+            | GeneralOption::MouseWheelInverted
+            | GeneralOption::EpubSingle
+            | GeneralOption::EpubDual => true,
         }
     }
 
@@ -1222,76 +1272,73 @@ impl SettingsPopup {
     }
 
     fn apply_general_selected(&mut self) -> Option<SettingsAction> {
-        match self.general_selected_idx {
-            // PDF enabled/disabled
-            0 if self.supports_graphics => {
+        match self.general_selected {
+            GeneralOption::PdfEnabled if self.supports_graphics => {
                 if !is_pdf_enabled() {
                     set_pdf_enabled(true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            1 if self.supports_graphics => {
+            GeneralOption::PdfDisabled if self.supports_graphics => {
                 if is_pdf_enabled() {
                     set_pdf_enabled(false);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            // Render mode
-            2 if self.render_mode_available() => {
+            GeneralOption::PdfRenderPage if self.render_mode_available() => {
                 if get_pdf_render_mode() != PdfRenderMode::Page {
                     set_pdf_render_mode(PdfRenderMode::Page);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            3 if self.render_mode_available() && self.supports_scroll_mode => {
+            GeneralOption::PdfRenderScroll
+                if self.render_mode_available() && self.supports_scroll_mode =>
+            {
                 if get_pdf_render_mode() != PdfRenderMode::Scroll {
                     set_pdf_render_mode(PdfRenderMode::Scroll);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            // Page layout
-            4 if self.render_mode_available() => {
+            GeneralOption::PdfLayoutSingle if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Single {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Single);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
-            5 if self.render_mode_available() => {
+            GeneralOption::PdfLayoutDual if self.render_mode_available() => {
                 if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
                     set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
-            // Scroll direction
-            6 => {
+            GeneralOption::MouseWheelNormal => {
                 if is_invert_scroll_direction() {
                     set_invert_scroll_direction(false);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            7 => {
+            GeneralOption::MouseWheelInverted => {
                 if !is_invert_scroll_direction() {
                     set_invert_scroll_direction(true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
-            // EPUB column layout
-            8 => {
+            GeneralOption::EpubSingle => {
                 if get_epub_column_mode() != EpubColumnMode::Single {
                     set_epub_column_mode(EpubColumnMode::Single);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
-            9 => {
+            GeneralOption::EpubDual => {
                 if get_epub_column_mode() != EpubColumnMode::Dual {
                     set_epub_column_mode(EpubColumnMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
@@ -1611,64 +1658,20 @@ impl SettingsPopup {
 
         match self.current_tab {
             SettingsTab::General => {
-                // chunks[1]: PDF Enabled/Disabled (idx 0,1)
-                if let Some(r) = chunks.get(1) {
+                for option in GENERAL_OPTIONS {
+                    let Some(r) = chunks.get(option.index()) else {
+                        continue;
+                    };
                     if col >= r.x
                         && col < r.x + r.width
                         && virtual_row >= r.y
                         && virtual_row < r.y + r.height
                     {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.general_selected_idx = sub;
-                        return self.apply_general_selected();
-                    }
-                }
-                // chunks[5]: Render Mode options (idx 2,3)
-                if let Some(r) = chunks.get(5) {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.general_selected_idx = 2 + sub;
-                        return self.apply_general_selected();
-                    }
-                }
-                // chunks[9]: Page Layout options (idx 4,5)
-                if let Some(r) = chunks.get(9) {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.general_selected_idx = 4 + sub;
-                        return self.apply_general_selected();
-                    }
-                }
-                // chunks[15]: Scrolling options (idx 6,7)
-                if let Some(r) = chunks.get(15) {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.general_selected_idx = 6 + sub;
-                        return self.apply_general_selected();
-                    }
-                }
-                // chunks[19]: EPUB Layout options (idx 8,9)
-                if let Some(r) = chunks.get(19) {
-                    if col >= r.x
-                        && col < r.x + r.width
-                        && virtual_row >= r.y
-                        && virtual_row < r.y + r.height
-                    {
-                        let sub = (virtual_row - r.y) as usize;
-                        self.general_selected_idx = 8 + sub;
-                        return self.apply_general_selected();
+                        if self.is_general_option_selectable(option) {
+                            self.general_selected = option;
+                            return self.apply_general_selected();
+                        }
+                        return None;
                     }
                 }
             }
@@ -1845,17 +1848,11 @@ impl SettingsPopup {
                             None
                         }
                         Action::MoveLeft => {
-                            if self.current_tab == SettingsTab::Integrations {
-                                self.save_integrations();
-                            }
-                            self.set_tab(self.current_tab.prev());
+                            self.handle_h();
                             None
                         }
                         Action::MoveRight => {
-                            if self.current_tab == SettingsTab::Integrations {
-                                self.save_integrations();
-                            }
-                            self.set_tab(self.current_tab.next());
+                            self.handle_l();
                             None
                         }
                         Action::MoveDown => {
@@ -1948,7 +1945,9 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 impl VimNavMotions for SettingsPopup {
     fn handle_h(&mut self) {
-        self.set_tab(self.current_tab.prev());
+        if self.current_tab == SettingsTab::General {
+            self.general_move_horizontal(true);
+        }
     }
 
     fn handle_j(&mut self) {
@@ -1972,7 +1971,9 @@ impl VimNavMotions for SettingsPopup {
     }
 
     fn handle_l(&mut self) {
-        self.set_tab(self.current_tab.next());
+        if self.current_tab == SettingsTab::General {
+            self.general_move_horizontal(false);
+        }
     }
 
     fn handle_ctrl_d(&mut self) {
@@ -2009,9 +2010,7 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_gg(&mut self) {
         match self.current_tab {
-            SettingsTab::General => {
-                self.general_selected_idx = self.general_min_selectable_idx();
-            }
+            SettingsTab::General => {}
             SettingsTab::Themes => {
                 self.theme_selected_idx = 0;
             }
@@ -2023,9 +2022,7 @@ impl VimNavMotions for SettingsPopup {
 
     fn handle_upper_g(&mut self) {
         match self.current_tab {
-            SettingsTab::General => {
-                self.general_selected_idx = self.general_max_selectable_idx();
-            }
+            SettingsTab::General => {}
             SettingsTab::Themes => {
                 self.theme_selected_idx = self.theme_max_idx();
             }
@@ -2043,38 +2040,38 @@ mod tests {
     #[test]
     fn initial_general_focus_prefers_disabled_when_pdf_is_off() {
         assert_eq!(
-            SettingsPopup::initial_general_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_from_state(
                 true,
                 true,
                 false,
                 PdfRenderMode::Page,
                 PdfPageLayoutMode::Single,
             ),
-            1 // PDF Disabled
+            GeneralOption::PdfDisabled
         );
     }
 
     #[test]
     fn initial_general_focus_prefers_non_default_selected_options() {
         assert_eq!(
-            SettingsPopup::initial_general_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_from_state(
                 true,
                 true,
                 true,
                 PdfRenderMode::Scroll,
                 PdfPageLayoutMode::Dual,
             ),
-            3 // Scroll mode
+            GeneralOption::PdfRenderScroll
         );
         assert_eq!(
-            SettingsPopup::initial_general_selected_idx_from_state(
+            SettingsPopup::initial_general_selected_from_state(
                 true,
                 false,
                 true,
                 PdfRenderMode::Page,
                 PdfPageLayoutMode::Dual,
             ),
-            5 // Dual layout
+            GeneralOption::PdfLayoutDual
         );
     }
 
