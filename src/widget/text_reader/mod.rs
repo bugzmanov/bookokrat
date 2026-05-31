@@ -30,7 +30,7 @@ use ratatui::{
     style::{Modifier, Style as RatatuiStyle},
     symbols::line,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -50,6 +50,74 @@ enum CommentTextareaPlacement {
     Below,
     Above,
     Overlay,
+}
+
+/// Two-column "book spread" layout state. Takes effect in both zen and normal
+/// mode when the pane is wide enough; otherwise the reader falls back to a
+/// single column.
+struct DualState {
+    /// Whether two-column layout is enabled.
+    enabled: bool,
+
+    /// Whether the last render actually drew two columns (enabled + wide
+    /// enough). When true the reader uses the paginated page-grid layout.
+    active: bool,
+
+    /// Page-grid scroll state. The chapter is paginated into screen-tall pages
+    /// laid out two-up (left = even pages, right = odd), spreads stacked
+    /// vertically with a separator row between them. `vtop` is the top virtual
+    /// row of that stacked layout; the grid scrolls line-by-line through it.
+    vtop: usize,
+    /// Page body height (lines per page) used by the last dual render.
+    page_height: usize,
+    /// Virtual rows per spread (page height + separator).
+    stride: usize,
+    /// Maximum `vtop` for the current content.
+    max_vtop: usize,
+    /// Per-screen-row buffer line shown in each column at the last dual render
+    /// (`None` = separator/blank). Used to map clicks back to text.
+    left_rows: Vec<Option<usize>>,
+    right_rows: Vec<Option<usize>>,
+    /// The right column's text area at the last render. `None` when rendering a
+    /// single column; the left column reuses `last_inner_text_area`.
+    right_column: Option<Rect>,
+    /// The `scroll_offset` value last derived from `vtop`; lets the next render
+    /// detect an external scroll (search jump, mark restore) and rebuild `vtop`
+    /// from it.
+    last_synced_scroll: usize,
+}
+
+impl Default for DualState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: false,
+            vtop: 0,
+            page_height: 0,
+            stride: 0,
+            max_vtop: 0,
+            left_rows: Vec::new(),
+            right_rows: Vec::new(),
+            right_column: None,
+            last_synced_scroll: usize::MAX,
+        }
+    }
+}
+
+impl DualState {
+    /// Reset the per-render scroll, geometry, and click-mapping scratch state
+    /// for a new chapter or content reload. Preserves the user's `enabled`
+    /// setting; `active` is recomputed on the next render.
+    fn clear(&mut self) {
+        self.vtop = 0;
+        self.page_height = 0;
+        self.stride = 0;
+        self.max_vtop = 0;
+        self.left_rows.clear();
+        self.right_rows.clear();
+        self.right_column = None;
+        self.last_synced_scroll = usize::MAX;
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,13 +156,6 @@ pub struct MarkdownTextReader {
     last_content_area: Option<Rect>,
 
     last_inner_text_area: Option<Rect>, // Track the actual text rendering area
-    /// In dual-column (book spread) mode, the right column's text area. None
-    /// when rendering a single column. The left column reuses
-    /// `last_inner_text_area`.
-    last_right_column: Option<Rect>,
-    /// Lines drawn per column at the last render (used to map a click in the
-    /// right column to the correct line range).
-    last_column_height: usize,
     auto_scroll_active: bool,
     auto_scroll_speed: f32,
     mouse_down_screen_y: Option<u16>,
@@ -167,35 +228,8 @@ pub struct MarkdownTextReader {
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
 
-    /// Whether two-column (book spread) layout is enabled. Takes effect in both
-    /// zen and normal mode when the pane is wide enough; otherwise falls back to
-    /// a single column.
-    dual_column_enabled: bool,
-
-    /// Whether the last render actually drew two columns (enabled + wide
-    /// enough). When true the reader uses the paginated page-grid layout below.
-    dual_active: bool,
-
-    /// Page-grid scroll state (dual mode). The chapter is paginated into
-    /// screen-tall pages laid out two-up (left = even pages, right = odd),
-    /// spreads stacked vertically with a separator row between them. `dual_vtop`
-    /// is the top virtual row of that stacked layout; the grid scrolls
-    /// line-by-line through it.
-    dual_vtop: usize,
-    /// Page body height (lines per page) used by the last dual render.
-    dual_page_height: usize,
-    /// Virtual rows per spread (page height + separator).
-    dual_stride: usize,
-    /// Maximum `dual_vtop` for the current content.
-    dual_max_vtop: usize,
-    /// Per-screen-row buffer line shown in each column at the last dual render
-    /// (`None` = separator/blank). Used to map clicks back to text.
-    dual_left_rows: Vec<Option<usize>>,
-    dual_right_rows: Vec<Option<usize>>,
-    /// The `scroll_offset` value last derived from `dual_vtop`; lets the next
-    /// render detect an external scroll (search jump, mark restore) and rebuild
-    /// `dual_vtop` from it.
-    dual_last_synced_scroll: usize,
+    /// Two-column (book spread) layout state.
+    dual: DualState,
 
     /// Vim normal mode state
     normal_mode: NormalModeState,
@@ -300,8 +334,6 @@ impl MarkdownTextReader {
             last_copied_text: None,
             last_content_area: None,
             last_inner_text_area: None,
-            last_right_column: None,
-            last_column_height: 0,
             auto_scroll_active: false,
             auto_scroll_speed: 1.0,
             mouse_down_screen_y: None,
@@ -332,15 +364,7 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             justify_text: false,
-            dual_column_enabled: false,
-            dual_active: false,
-            dual_vtop: 0,
-            dual_page_height: 0,
-            dual_stride: 0,
-            dual_max_vtop: 0,
-            dual_left_rows: Vec::new(),
-            dual_right_rows: Vec::new(),
-            dual_last_synced_scroll: usize::MAX,
+            dual: DualState::default(),
             normal_mode: NormalModeState::new(),
             hud_message: None,
         }
@@ -537,20 +561,24 @@ impl MarkdownTextReader {
         // mode alike); falls back to a single column when too narrow.
         const COLUMN_GUTTER: u16 = 3;
         const MIN_COLUMN_WIDTH: u16 = 32;
-        let dual =
-            self.dual_column_enabled && base_inner.width >= 2 * MIN_COLUMN_WIDTH + COLUMN_GUTTER;
-        self.dual_active = dual;
+        let dual_active =
+            self.dual.enabled && base_inner.width >= 2 * MIN_COLUMN_WIDTH + COLUMN_GUTTER;
+        self.dual.active = dual_active;
 
         // The reader's scroll math treats `visible_height` as the number of
         // buffer lines shown at once. In dual mode that is both columns
         // combined, which makes all paging/scrolling math span the spread
         // without any per-mode special-casing elsewhere.
         let column_lines = base_inner.height as usize;
-        self.visible_height = if dual { 2 * column_lines } else { column_lines };
+        self.visible_height = if dual_active {
+            2 * column_lines
+        } else {
+            column_lines
+        };
 
         // Per-column text-wrap width and the on-screen column rects. In dual
         // mode the content area is split into two columns with a gutter.
-        let (width, left_rect, right_rect): (usize, Rect, Option<Rect>) = if dual {
+        let (width, left_rect, right_rect): (usize, Rect, Option<Rect>) = if dual_active {
             let col_w = (base_inner.width - COLUMN_GUTTER) / 2;
             let left = Rect {
                 x: base_inner.x,
@@ -720,8 +748,7 @@ impl MarkdownTextReader {
 
         // Remember the column text areas for mouse hover/selection logic.
         self.last_inner_text_area = Some(left_rect);
-        self.last_right_column = right_rect;
-        self.last_column_height = left_rect.height as usize;
+        self.dual.right_column = right_rect;
 
         let image_clear_style = RatatuiStyle::default().bg(theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
@@ -763,7 +790,7 @@ impl MarkdownTextReader {
         // Reserve empty lines where the comment textarea will be drawn.
         let spread_end =
             (self.scroll_offset + self.visible_height).min(self.rendered_content.lines.len());
-        let textarea_layout = if dual {
+        let textarea_layout = if dual_active {
             None
         } else {
             self.compute_comment_textarea_layout(self.scroll_offset, spread_end)
@@ -995,32 +1022,32 @@ impl MarkdownTextReader {
         let spreads = pages.div_ceil(2).max(1);
         let vheight = (spreads * stride).saturating_sub(DUAL_SEPARATOR_ROWS);
         let max_vtop = vheight.saturating_sub(page_height);
-        let geometry_changed = self.dual_page_height != page_height || self.dual_stride != stride;
+        let geometry_changed = self.dual.page_height != page_height || self.dual.stride != stride;
 
-        self.dual_page_height = page_height;
-        self.dual_stride = stride;
-        self.dual_max_vtop = max_vtop;
+        self.dual.page_height = page_height;
+        self.dual.stride = stride;
+        self.dual.max_vtop = max_vtop;
 
         // Sync the virtual scroll with `scroll_offset`. An external jump (search
         // result, mark restore, mode toggle) changes `scroll_offset` directly;
         // rebuild `dual_vtop` so that line's spread sits at the top.
-        if geometry_changed || self.dual_last_synced_scroll != self.scroll_offset {
+        if geometry_changed || self.dual.last_synced_scroll != self.scroll_offset {
             let page = self.scroll_offset / page_height;
             let spread = page / 2;
             let offset = self.scroll_offset % page_height;
-            self.dual_vtop = spread * stride + offset;
+            self.dual.vtop = spread * stride + offset;
         }
-        self.dual_vtop = self.dual_vtop.min(max_vtop);
-        let top_line = Self::dual_body_line(self.dual_vtop, page_height, stride, total);
+        self.dual.vtop = self.dual.vtop.min(max_vtop);
+        let top_line = Self::dual_body_line(self.dual.vtop, page_height, stride, total);
         self.scroll_offset = top_line;
-        self.dual_last_synced_scroll = top_line;
+        self.dual.last_synced_scroll = top_line;
 
         // Map each screen row to the buffer line shown in each column.
         let mut left_rows: Vec<Option<usize>> = Vec::with_capacity(page_height);
         let mut right_rows: Vec<Option<usize>> = Vec::with_capacity(page_height);
         let mut separator_rows: Vec<usize> = Vec::new();
         for y in 0..page_height {
-            let vrow = self.dual_vtop + y;
+            let vrow = self.dual.vtop + y;
             let spread = vrow / stride;
             let offset = vrow % stride;
             if offset < page_height {
@@ -1084,8 +1111,8 @@ impl MarkdownTextReader {
             }
         }
 
-        self.dual_left_rows = left_rows;
-        self.dual_right_rows = right_rows;
+        self.dual.left_rows = left_rows;
+        self.dual.right_rows = right_rows;
 
         let mut current_image_rects = HashMap::new();
         if !self.show_raw_html && !suppress_images {
@@ -1126,9 +1153,10 @@ impl MarkdownTextReader {
         anchor_start = anchor_start.min(max_line);
         anchor_end = anchor_end.min(max_line);
 
-        for row in 0..self.dual_left_rows.len().max(self.dual_right_rows.len()) {
+        for row in 0..self.dual.left_rows.len().max(self.dual.right_rows.len()) {
             if self
-                .dual_left_rows
+                .dual
+                .left_rows
                 .get(row)
                 .and_then(|slot| *slot)
                 .is_some_and(|line| line >= anchor_start && line <= anchor_end)
@@ -1136,7 +1164,8 @@ impl MarkdownTextReader {
                 return Some((left_rect, row));
             }
             if self
-                .dual_right_rows
+                .dual
+                .right_rows
                 .get(row)
                 .and_then(|slot| *slot)
                 .is_some_and(|line| line >= anchor_start && line <= anchor_end)
@@ -1205,7 +1234,7 @@ impl MarkdownTextReader {
             {
                 let start = embedded_image.lines_before_image;
                 let Some(start_vrow) =
-                    Self::dual_line_to_vrow_for(start, page_height, self.dual_stride)
+                    Self::dual_line_to_vrow_for(start, page_height, self.dual.stride)
                 else {
                     continue;
                 };
@@ -1215,7 +1244,7 @@ impl MarkdownTextReader {
                 let image_cells = calculate_image_height_in_cells(image) as usize;
                 let page_remaining = page_height.saturating_sub(page_offset);
                 let image_end_vrow = start_vrow + image_cells.min(page_remaining);
-                let viewport_top = self.dual_vtop;
+                let viewport_top = self.dual.vtop;
                 let viewport_bottom = viewport_top + page_height;
                 let visible_start = start_vrow.max(viewport_top);
                 let visible_end = image_end_vrow.min(viewport_bottom);
@@ -1419,6 +1448,13 @@ impl MarkdownTextReader {
                 height: textarea_height,
             };
 
+            // Wipe the box interior before drawing: a styled Block only recolors
+            // glyphs, so in dual mode (where no blank lines are reserved) the
+            // spread text would otherwise bleed through the rows tui-textarea
+            // leaves unpainted. Clear only `padded_rect` so the surrounding
+            // border/content in the wider `textarea_rect` margins is untouched.
+            frame.render_widget(Clear, padded_rect);
+
             textarea.set_style(
                 RatatuiStyle::default()
                     .fg(palette.base_05)
@@ -1594,8 +1630,7 @@ impl MarkdownTextReader {
         inner_area.width = inner_area.width.saturating_sub(margin_pixels * 2);
 
         self.last_inner_text_area = Some(inner_area);
-        self.last_right_column = None;
-        self.last_column_height = inner_area.height as usize;
+        self.dual.right_column = None;
 
         // Selection background color
         let selection_bg = if is_focused {
@@ -1693,17 +1728,9 @@ impl MarkdownTextReader {
         };
         self.embedded_images.borrow_mut().clear();
         self.last_rendered_image_rects.clear();
-        self.last_right_column = None;
-        self.last_column_height = 0;
         self.last_overlay_cleanup_key = None;
         self.inline_images_suppressed = false;
-        self.dual_vtop = 0;
-        self.dual_page_height = 0;
-        self.dual_stride = 0;
-        self.dual_max_vtop = 0;
-        self.dual_left_rows.clear();
-        self.dual_right_rows.clear();
-        self.dual_last_synced_scroll = usize::MAX;
+        self.dual.clear();
     }
 
     pub fn set_raw_html(&mut self, html: String) {
@@ -1726,7 +1753,7 @@ impl MarkdownTextReader {
     }
 
     pub fn handle_terminal_resize(&mut self) {
-        self.dual_last_synced_scroll = usize::MAX;
+        self.dual.last_synced_scroll = usize::MAX;
         self.cache_generation += 1;
     }
 
@@ -1765,26 +1792,15 @@ impl MarkdownTextReader {
     }
 
     pub fn set_dual_columns(&mut self, enabled: bool) {
-        self.dual_column_enabled = enabled;
-        self.dual_last_synced_scroll = usize::MAX;
+        self.dual.enabled = enabled;
+        self.dual.last_synced_scroll = usize::MAX;
         self.cache_generation += 1;
-    }
-
-    pub fn toggle_dual_columns(&mut self) -> bool {
-        self.dual_column_enabled = !self.dual_column_enabled;
-        self.dual_last_synced_scroll = usize::MAX;
-        self.cache_generation += 1;
-        self.dual_column_enabled
-    }
-
-    pub fn is_dual_columns(&self) -> bool {
-        self.dual_column_enabled
     }
 
     /// Whether the reader is currently drawing a two-column spread (the layout
     /// is enabled and the pane is wide enough).
     pub fn is_dual_active(&self) -> bool {
-        self.dual_active
+        self.dual.active
     }
 
     pub fn invalidate_render_cache(&mut self) {

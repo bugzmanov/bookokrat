@@ -19,47 +19,47 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn dual_line_to_vrow(&self, line: usize) -> Option<usize> {
-        Self::dual_line_to_vrow_for(line, self.dual_page_height, self.dual_stride)
+        Self::dual_line_to_vrow_for(line, self.dual.page_height, self.dual.stride)
     }
 
     pub(super) fn dual_scroll_to_line(&mut self, line: usize) {
         if let Some(vrow) = self.dual_line_to_vrow(line) {
-            self.dual_vtop = vrow.min(self.dual_max_vtop);
+            self.dual.vtop = vrow.min(self.dual.max_vtop);
             self.sync_dual_scroll();
         } else {
             self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
-            self.dual_last_synced_scroll = usize::MAX;
+            self.dual.last_synced_scroll = usize::MAX;
         }
     }
 
     pub(super) fn dual_center_line(&mut self, line: usize) {
         if let Some(vrow) = self.dual_line_to_vrow(line) {
-            let half_page = self.dual_page_height / 2;
-            self.dual_vtop = vrow.saturating_sub(half_page).min(self.dual_max_vtop);
+            let half_page = self.dual.page_height / 2;
+            self.dual.vtop = vrow.saturating_sub(half_page).min(self.dual.max_vtop);
             self.sync_dual_scroll();
         } else {
             self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
-            self.dual_last_synced_scroll = usize::MAX;
+            self.dual.last_synced_scroll = usize::MAX;
         }
     }
 
     pub(super) fn ensure_dual_line_visible(&mut self, line: usize, scrolloff: usize) {
         let Some(vrow) = self.dual_line_to_vrow(line) else {
             self.scroll_offset = line.min(self.rendered_content.lines.len().saturating_sub(1));
-            self.dual_last_synced_scroll = usize::MAX;
+            self.dual.last_synced_scroll = usize::MAX;
             return;
         };
-        let page_height = self.dual_page_height.max(1);
-        let top = self.dual_vtop;
+        let page_height = self.dual.page_height.max(1);
+        let top = self.dual.vtop;
         let bottom = top + page_height;
         let scrolloff = scrolloff.min(page_height.saturating_sub(1));
 
         if vrow < top + scrolloff {
-            self.dual_vtop = vrow.saturating_sub(scrolloff).min(self.dual_max_vtop);
+            self.dual.vtop = vrow.saturating_sub(scrolloff).min(self.dual.max_vtop);
             self.sync_dual_scroll();
         } else if vrow >= bottom.saturating_sub(scrolloff) {
             let target = vrow + scrolloff + 1;
-            self.dual_vtop = target.saturating_sub(page_height).min(self.dual_max_vtop);
+            self.dual.vtop = target.saturating_sub(page_height).min(self.dual.max_vtop);
             self.sync_dual_scroll();
         }
     }
@@ -68,8 +68,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// then keep `scroll_offset` in sync with the new top row.
     pub(super) fn dual_scroll(&mut self, delta: isize) {
         let new_vtop =
-            (self.dual_vtop as isize + delta).clamp(0, self.dual_max_vtop as isize) as usize;
-        self.dual_vtop = new_vtop;
+            (self.dual.vtop as isize + delta).clamp(0, self.dual.max_vtop as isize) as usize;
+        self.dual.vtop = new_vtop;
         self.sync_dual_scroll();
         self.last_scroll_time = Instant::now();
         if self.search_state.active && self.search_state.mode == SearchMode::NavigationMode {
@@ -83,22 +83,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     pub(super) fn sync_dual_scroll(&mut self) {
         let total = self.rendered_content.lines.len();
         let top = Self::dual_body_line(
-            self.dual_vtop,
-            self.dual_page_height,
-            self.dual_stride,
+            self.dual.vtop,
+            self.dual.page_height,
+            self.dual.stride,
             total,
         );
         self.scroll_offset = top;
-        self.dual_last_synced_scroll = top;
+        self.dual.last_synced_scroll = top;
     }
 
     /// Step size for half-screen motions in the page grid.
     fn dual_half_step(&self) -> isize {
-        (self.dual_page_height / 2).max(1) as isize
+        (self.dual.page_height / 2).max(1) as isize
     }
 
     pub fn scroll_up(&mut self) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(-(self.scroll_speed as isize));
             return;
         }
@@ -112,7 +112,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_down(&mut self) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(self.scroll_speed as isize);
             return;
         }
@@ -127,7 +127,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_paragraph_up(&mut self) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(-self.dual_half_step());
             return;
         }
@@ -136,7 +136,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_paragraph_down(&mut self) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(self.dual_half_step());
             return;
         }
@@ -145,7 +145,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_half_screen_up(&mut self, screen_height: usize) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(-self.dual_half_step());
             return;
         }
@@ -165,7 +165,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_half_screen_down(&mut self, screen_height: usize) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(self.dual_half_step());
             return;
         }
@@ -181,8 +181,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_up(&mut self, screen_height: usize) {
-        if self.dual_active {
-            self.dual_scroll(-(self.dual_page_height as isize));
+        if self.dual.active {
+            self.dual_scroll(-(self.dual.page_height as isize));
             return;
         }
         let scroll_amount = screen_height.saturating_sub(1);
@@ -201,8 +201,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn scroll_full_screen_down(&mut self, screen_height: usize) {
-        if self.dual_active {
-            self.dual_scroll(self.dual_page_height as isize);
+        if self.dual.active {
+            self.dual_scroll(self.dual.page_height as isize);
             return;
         }
         let scroll_amount = screen_height.saturating_sub(1);
@@ -234,14 +234,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn get_max_scroll_offset(&self) -> usize {
-        if self.dual_active {
+        if self.dual.active {
             return self.rendered_content.lines.len().saturating_sub(1);
         }
         self.total_wrapped_lines.saturating_sub(self.visible_height)
     }
 
     pub fn scroll_to_line(&mut self, target_line: usize) {
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll_to_line(target_line);
             return;
         }
@@ -257,7 +257,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn jump_to_line(&mut self, line_idx: usize) {
         if line_idx < self.rendered_content.lines.len() {
-            if self.dual_active {
+            if self.dual.active {
                 self.dual_center_line(line_idx);
                 return;
             }
@@ -537,7 +537,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// pending state; safe to call from the render-time pending processor.
     pub fn perform_node_position_restore(&mut self, node_index: usize, char_offset: usize) {
         if let Some(line_idx) = self.find_line_for_node_offset(node_index, char_offset) {
-            if self.dual_active {
+            if self.dual.active {
                 self.dual_scroll_to_line(line_idx);
                 return;
             }
@@ -577,7 +577,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         for (line_idx, line) in self.rendered_content.lines.iter().enumerate() {
             if let Some(node_idx) = line.node_index {
                 if node_idx >= node_index {
-                    if self.dual_active {
+                    if self.dual.active {
                         self.dual_scroll_to_line(line_idx);
                         return;
                     }
@@ -719,8 +719,8 @@ impl VimNavMotions for crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn handle_gg(&mut self) {
-        if self.dual_active {
-            self.dual_vtop = 0;
+        if self.dual.active {
+            self.dual.vtop = 0;
             self.sync_dual_scroll();
             return;
         }
@@ -728,8 +728,8 @@ impl VimNavMotions for crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn handle_upper_g(&mut self) {
-        if self.dual_active {
-            self.dual_vtop = self.dual_max_vtop;
+        if self.dual.active {
+            self.dual.vtop = self.dual.max_vtop;
             self.sync_dual_scroll();
             return;
         }

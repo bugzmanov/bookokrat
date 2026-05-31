@@ -4328,6 +4328,71 @@ fn test_epub_dual_column_zen_svg() {
     );
 }
 
+/// Regression: in EPUB two-column (dual) mode, opening the comment input
+/// textarea must fully paint over the cells it covers. Previously the overlay
+/// left the underlying spread text showing through behind the input area.
+#[test]
+#[serial]
+fn test_epub_dual_column_comment_input_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 40);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    app.set_zen_mode(true);
+
+    // Toggle the two-column spread via <Space>D.
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key_with_modifiers(
+        crossterm::event::KeyCode::Char('D'),
+        crossterm::event::KeyModifiers::SHIFT,
+    );
+
+    // Draw once so the dual layout is realized before we select text.
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Enter normal mode, jump to the top, visually select a word, then open
+    // the comment input textarea over the spread.
+    app.press_key(crossterm::event::KeyCode::Char('n'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('g'));
+    app.press_key(crossterm::event::KeyCode::Char('0'));
+    app.press_key(crossterm::event::KeyCode::Char('v'));
+    app.press_key(crossterm::event::KeyCode::Char('e'));
+    app.press_key(crossterm::event::KeyCode::Char('a'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_dual_column_comment_input.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // Reset so the global column setting cannot leak into other tests.
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_dual_column_comment_input.svg"),
+        "test_epub_dual_column_comment_input_svg",
+        create_test_failure_handler("test_epub_dual_column_comment_input_svg"),
+    );
+}
+
 #[test]
 #[parallel]
 fn test_margin_change_no_position_jump_svg() {

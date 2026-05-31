@@ -301,12 +301,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     fn dual_screen_to_text_coords(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
         let left = self.last_inner_text_area?;
-        let (rect, rows) = match self.last_right_column {
+        let (rect, rows) = match self.dual.right_column {
             Some(right) if screen_x >= right.x && screen_x < right.x + right.width => {
-                (right, &self.dual_right_rows)
+                (right, &self.dual.right_rows)
             }
             _ if screen_x >= left.x && screen_x < left.x + left.width => {
-                (left, &self.dual_left_rows)
+                (left, &self.dual.left_rows)
             }
             _ => return None,
         };

@@ -555,8 +555,8 @@ impl MarkdownTextReader {
         line = self.find_next_valid_line(line, 1);
         self.normal_mode.cursor.line = line;
         self.normal_mode.cursor.column = self.get_first_non_whitespace_column(line);
-        if self.dual_active {
-            self.dual_vtop = 0;
+        if self.dual.active {
+            self.dual.vtop = 0;
             self.sync_dual_scroll();
         } else {
             self.scroll_offset = 0;
@@ -572,8 +572,8 @@ impl MarkdownTextReader {
         last_line = self.find_next_valid_line(last_line, -1);
         self.normal_mode.cursor.line = last_line;
         self.normal_mode.cursor.column = self.get_first_non_whitespace_column(last_line);
-        if self.dual_active {
-            self.dual_vtop = self.dual_max_vtop;
+        if self.dual.active {
+            self.dual.vtop = self.dual.max_vtop;
             self.sync_dual_scroll();
         } else {
             self.scroll_offset = self.get_max_scroll_offset();
@@ -590,7 +590,7 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
         self.normal_mode.cursor.line = new_line;
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(scroll_amount as isize);
             self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
         } else {
@@ -610,7 +610,7 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
         self.normal_mode.cursor.line = new_line;
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(-(scroll_amount as isize));
             self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
         } else {
@@ -630,7 +630,7 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, 1);
         self.normal_mode.cursor.line = new_line;
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(scroll_amount as isize);
             self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
         } else {
@@ -650,7 +650,7 @@ impl MarkdownTextReader {
         // Skip image lines
         new_line = self.find_next_valid_line(new_line, -1);
         self.normal_mode.cursor.line = new_line;
-        if self.dual_active {
+        if self.dual.active {
             self.dual_scroll(-(scroll_amount as isize));
             self.ensure_dual_line_visible(new_line, self.normal_mode.scrolloff);
         } else {
@@ -728,7 +728,7 @@ impl MarkdownTextReader {
     }
 
     pub(super) fn ensure_cursor_visible(&mut self) {
-        if self.dual_active {
+        if self.dual.active {
             self.ensure_dual_line_visible(self.normal_mode.cursor.line, self.normal_mode.scrolloff);
             return;
         }
