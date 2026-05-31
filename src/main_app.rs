@@ -1290,9 +1290,9 @@ impl App {
             }
         }
 
-        let current_book = EpubBook::new(path.to_string(), doc);
+        let mut current_book = EpubBook::new(path.to_string(), doc);
         current_book.start_node_counting(saved_total_nodes);
-        self.switch_to_toc_mode(&current_book);
+        self.switch_to_toc_mode(&mut current_book);
 
         self.current_book = Some(current_book);
         self.update_content();
@@ -1891,8 +1891,8 @@ impl App {
         None
     }
 
-    fn switch_to_toc_mode(&mut self, book: &EpubBook) {
-        let toc_items = TocParser::parse_toc_structure(&book.epub);
+    fn switch_to_toc_mode(&mut self, book: &mut EpubBook) {
+        let toc_items = TocParser::parse_toc_structure(&mut book.epub);
         let current_chapter_href = Self::get_chapter_href(&book.epub, book.current_chapter());
         let available_anchors =
             TableOfContents::anchors_for_items(&toc_items, current_chapter_href.as_deref());

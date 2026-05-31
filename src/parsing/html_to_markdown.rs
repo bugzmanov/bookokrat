@@ -21,7 +21,7 @@ static SELF_CLOSING_NON_VOID_RE: LazyLock<Regex> = LazyLock::new(|| {
 // Some EPUB sources line-wrap mid-tag, producing `</\nmrow>` etc.
 static BROKEN_END_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"</\s+(\w)").unwrap());
 
-fn fix_html_for_parser(html: &str) -> String {
+pub(crate) fn fix_html_for_parser(html: &str) -> String {
     let fixed = SELF_CLOSING_NON_VOID_RE.replace_all(html, |caps: &regex::Captures| {
         let tag = &caps[1];
         let attrs = caps.get(2).map(|m| m.as_str()).unwrap_or("");

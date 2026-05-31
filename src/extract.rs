@@ -103,7 +103,7 @@ pub fn cmd_extract(file: &str, output: &str) -> Result<()> {
     }
 
     // Resolve ToC entries -> spine chapter index and flatten with levels.
-    let toc_items = TocParser::parse_toc_structure(&doc);
+    let toc_items = TocParser::parse_toc_structure(&mut doc);
     let mut toc_out: Vec<TocEntryOut> = Vec::new();
     // chapter index (0-based) -> first ToC title seen for that chapter
     let mut chapter_titles_from_toc: HashMap<usize, String> = HashMap::new();

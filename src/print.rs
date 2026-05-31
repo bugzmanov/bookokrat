@@ -50,8 +50,8 @@ fn cmd_print_toc(file: &str, format: &Option<bookokrat::book_manager::BookFormat
 }
 
 fn cmd_print_toc_epub(file: &str) -> Result<()> {
-    let doc = EpubDoc::new(file).map_err(|e| anyhow::anyhow!("Failed to open EPUB: {e}"))?;
-    let toc = TocParser::parse_toc_structure(&doc);
+    let mut doc = EpubDoc::new(file).map_err(|e| anyhow::anyhow!("Failed to open EPUB: {e}"))?;
+    let toc = TocParser::parse_toc_structure(&mut doc);
     if toc.is_empty() {
         println!("No table of contents found.");
         return Ok(());
