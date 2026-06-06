@@ -27,7 +27,7 @@ use normal_mode::{CursorPosition, NormalModeState};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style as RatatuiStyle},
+    style::{Color as RatatuiColor, Modifier, Style as RatatuiStyle},
     symbols::line,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -228,6 +228,12 @@ pub struct MarkdownTextReader {
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
 
+    /// Whether the terminal understands the colored-underline SGR. When false
+    /// (Apple Terminal), annotation underlines drop the color and render as a
+    /// plain underline to avoid corrupting the display. Defaults to `true` so
+    /// tests render identically regardless of the host terminal.
+    underline_color_enabled: bool,
+
     /// Two-column (book spread) layout state.
     dual: DualState,
 
@@ -364,6 +370,7 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             justify_text: false,
+            underline_color_enabled: true,
             dual: DualState::default(),
             normal_mode: NormalModeState::new(),
             hud_message: None,
@@ -1781,6 +1788,25 @@ impl MarkdownTextReader {
         self.cache_generation += 1;
     }
 
+    /// Disable on terminals that misrender the colored-underline SGR (Apple
+    /// Terminal). Annotation underlines then render without a color.
+    pub fn set_underline_color_enabled(&mut self, enabled: bool) {
+        if self.underline_color_enabled != enabled {
+            self.underline_color_enabled = enabled;
+            self.cache_generation += 1;
+        }
+    }
+
+    /// The annotation underline color, or `Color::Reset` when the terminal
+    /// can't handle the colored-underline SGR (keeps a plain underline).
+    fn annotation_underline_color(&self, palette: &Base16Palette) -> RatatuiColor {
+        if self.underline_color_enabled {
+            palette.base_0e
+        } else {
+            RatatuiColor::Reset
+        }
+    }
+
     pub fn toggle_justify_text(&mut self) -> bool {
         self.justify_text = !self.justify_text;
         self.cache_generation += 1;
@@ -1815,4 +1841,28 @@ impl MarkdownTextReader {
 fn calculate_image_height_in_cells(image: &DynamicImage) -> u16 {
     let (width, height) = image.dimensions();
     EmbeddedImage::height_in_cells(width, height)
+}
+
+#[cfg(test)]
+mod underline_gate_tests {
+    use super::*;
+    use crate::theme::current_theme;
+
+    #[test]
+    fn annotation_underline_color_gated_by_flag() {
+        let palette = current_theme();
+        let mut reader = MarkdownTextReader::new_without_image_support();
+
+        // Default: colored underline enabled (so snapshots/non-Apple terminals
+        // keep the purple underline).
+        assert_eq!(reader.annotation_underline_color(palette), palette.base_0e);
+
+        // Disabled (Apple Terminal): falls back to Reset, which crossterm
+        // encodes as the harmless `\x1b[59m` instead of the misparsed `58;...`.
+        reader.set_underline_color_enabled(false);
+        assert_eq!(
+            reader.annotation_underline_color(palette),
+            RatatuiColor::Reset
+        );
+    }
 }

@@ -689,6 +689,11 @@ impl App {
         text_reader.set_justify_text(settings::is_justify_text());
         text_reader
             .set_dual_columns(settings::get_epub_column_mode() == settings::EpubColumnMode::Dual);
+        // Apple Terminal misrenders the colored-underline SGR; gate it off there
+        // so annotation underlines fall back to a plain underline. Tests keep
+        // the default (enabled) so snapshots don't depend on the host terminal.
+        #[cfg(not(any(test, feature = "test-utils")))]
+        text_reader.set_underline_color_enabled(startup_caps.supports_underline_color);
         let home_context = LibraryContext::new(
             Bookmarks::load_or_ephemeral(bookmark_file),
             comments_dir.map(|p| p.to_path_buf()),

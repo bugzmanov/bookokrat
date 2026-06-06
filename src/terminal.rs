@@ -90,6 +90,12 @@ pub struct TerminalCapabilities {
     pub protocol: Option<GraphicsProtocol>,
     pub supports_graphics: bool,
     pub supports_true_color: bool,
+    /// Whether the terminal understands the colored-underline SGR (`58`/`59`).
+    /// Apple Terminal does not: it ignores the `58` introducer but applies the
+    /// following sub-parameters as real SGR codes (`2` → dim, `5` → blink) and
+    /// never resets them, corrupting everything drawn afterwards. Everything
+    /// else is assumed to support it (denylist).
+    pub supports_underline_color: bool,
     pub pdf: PdfCapabilities,
 }
 
@@ -150,12 +156,14 @@ pub fn detect_terminal_from_env(env: TerminalEnv) -> TerminalCapabilities {
     let supports_true_color = supports_true_color_env(&env);
     let protocol = guess_protocol_from_env(&env, &kind);
     let supports_graphics = supports_graphics_from_env(&env);
+    let supports_underline_color = !matches!(kind, TerminalKind::AppleTerminal);
     let mut caps = TerminalCapabilities {
         env,
         kind,
         protocol,
         supports_graphics,
         supports_true_color,
+        supports_underline_color,
         pdf: PdfCapabilities {
             supported: false,
             blocked_reason: None,
@@ -660,5 +668,45 @@ pub fn protocol_override_from_env() -> Option<ProtocolType> {
         "kitty" => Some(ProtocolType::Kitty),
         "iterm" | "iterm2" => Some(ProtocolType::Iterm2),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod underline_color_tests {
+    use super::*;
+
+    fn env_with_term_program(term_program: &str) -> TerminalEnv {
+        TerminalEnv {
+            term_program: term_program.to_string(),
+            term_program_version: String::new(),
+            term: "xterm-256color".to_string(),
+            colorterm: "truecolor".to_string(),
+            iterm_session: false,
+            wezterm_executable: false,
+            kitty_window: false,
+            kitty_pid: false,
+            tmux: false,
+        }
+    }
+
+    #[test]
+    fn apple_terminal_disables_underline_color() {
+        let caps = detect_terminal_from_env(env_with_term_program("apple_terminal"));
+        assert_eq!(caps.kind, TerminalKind::AppleTerminal);
+        assert!(
+            !caps.supports_underline_color,
+            "Apple Terminal misrenders SGR 58/59 and must not get colored underlines"
+        );
+    }
+
+    #[test]
+    fn other_terminals_keep_underline_color() {
+        for tp in ["kitty", "ghostty", "wezterm", "iterm.app", ""] {
+            let caps = detect_terminal_from_env(env_with_term_program(tp));
+            assert!(
+                caps.supports_underline_color,
+                "terminal {tp:?} should keep colored underlines (denylist default-on)"
+            );
+        }
     }
 }

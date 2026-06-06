@@ -1108,7 +1108,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Collect annotation ranges for this node (for underline styling)
         let annotation_ranges = self.get_annotation_ranges(block_address);
         let highlight_ranges = self.get_highlight_ranges(block_address);
-        let underline_color = palette.base_0e; // Purple
+        let underline_color = self.annotation_underline_color(palette); // Purple (gated)
 
         let mut current_rich_spans = Vec::new();
         let mut current_chunk_items: Vec<&TextOrInline> = Vec::new();
@@ -2104,7 +2104,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
                 if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
                     style = style
-                        .underline_color(palette.base_0e)
+                        .underline_color(self.annotation_underline_color(palette))
                         .add_modifier(Modifier::UNDERLINED);
                 }
                 if highlight_counts.get(line_idx).copied().unwrap_or(0) > 0 {
@@ -2333,7 +2333,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         } else {
             Vec::new()
         };
-        let underline_color = palette.base_0e; // Purple
+        let underline_color = self.annotation_underline_color(palette); // Purple (gated)
 
         for (idx, item) in items.iter().enumerate() {
             let mut item_path = list_path.to_vec();
@@ -3463,7 +3463,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Collect annotation ranges for this quote (for underline styling)
         let annotation_ranges = self.get_annotation_ranges(block_address);
         let highlight_ranges = self.get_highlight_ranges(block_address);
-        let underline_color = palette.base_0e; // Purple
+        let underline_color = self.annotation_underline_color(palette); // Purple (gated)
 
         // Track cumulative character position for annotation ranges
         let mut cumulative_char_pos = 0;
@@ -3733,7 +3733,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         block_address: Option<&BlockAddress>,
     ) {
         let node_index = block_address.map(|b| b.node_index);
-        let underline_color = palette.base_0e; // Purple
+        let underline_color = self.annotation_underline_color(palette); // Purple (gated)
 
         // Track cumulative character position for annotation ranges
         let mut cumulative_char_pos = 0;
@@ -4088,7 +4088,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut para_canonical_offset: usize = canonical_offset.unwrap_or(0);
         let annotation_ranges = self.get_annotation_ranges(block_address);
         let highlight_ranges = self.get_highlight_ranges(block_address);
-        let underline_color = palette.base_0e;
+        let underline_color = self.annotation_underline_color(palette);
 
         for item in content.iter() {
             match item {

@@ -289,12 +289,14 @@ fn main() -> Result<()> {
         let caps = terminal::detect_terminal_with_probe();
         info!(
             "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
+             underline_color={}, \
              protocol={:?}, pdf_supported={}, pdf_scroll_mode={}, pdf_comments={}, \
              TERM_PROGRAM={:?}, TERM={:?}, kitty_window={}, kitty_pid={}, wezterm_executable={}",
             caps.kind,
             caps.env.tmux,
             caps.supports_true_color,
             caps.supports_graphics,
+            caps.supports_underline_color,
             caps.protocol,
             caps.pdf.supported,
             caps.pdf.supports_scroll_mode,
