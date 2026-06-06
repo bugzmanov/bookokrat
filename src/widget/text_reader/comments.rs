@@ -1,6 +1,6 @@
 use super::types::*;
 use crate::annotations::HighlightColor;
-use crate::comments::{BookComments, Comment, CommentTarget};
+use crate::comments::{BlockAddress, BookComments, Comment, CommentTarget};
 use crate::markdown_text_reader::text_selection::SelectionPoint;
 use crate::theme::Base16Palette;
 use crate::vendored::tui_textarea::{Input, Key, TextArea};
@@ -142,9 +142,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         // contribute nothing here — exactly what we want.
                         let mut seen: HashSet<usize> = HashSet::new();
                         for slice in comment.target.slices() {
-                            if seen.insert(slice.node_index) {
+                            if seen.insert(slice.block.node_index) {
                                 self.current_chapter_comments
-                                    .entry(slice.node_index)
+                                    .entry(slice.block.node_index)
                                     .or_default()
                                     .push(comment.clone());
                             }
@@ -392,13 +392,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         let mut has_code = false;
         let mut min_code = usize::MAX;
         let mut max_code = 0;
-        let mut code_node_idx = None;
+        let mut code_block = None;
         for idx in start.line..=end.line {
             if let Some(line) = self.rendered_content.lines.get(idx) {
                 if let Some(meta) = &line.code_line {
-                    if code_node_idx.is_none_or(|found_node_idx| meta.node_index == found_node_idx)
+                    if code_block
+                        .as_ref()
+                        .is_none_or(|found_block| *found_block == meta.block)
                     {
-                        code_node_idx = Some(meta.node_index);
+                        code_block = Some(meta.block.clone());
                         has_code = true;
                         min_code = min_code.min(meta.line_index);
                         max_code = max_code.max(meta.line_index);
@@ -409,7 +411,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
         if has_code {
-            return code_node_idx.map(|n| CommentTarget::code_block(n, (min_code, max_code)));
+            return code_block
+                .map(|block| CommentTarget::code_block_at(block, (min_code, max_code)));
         }
 
         // Walk the selection top-down, grouping consecutive lines that
@@ -467,7 +470,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             let seg_ref = seg.clone();
             let word_range =
-                self.compute_canonical_word_range(seg.node_index, &seg_start, &seg_end, |line| {
+                self.compute_canonical_word_range(&seg.block, &seg_start, &seg_end, |line| {
                     line.annotatable_segment.as_ref() == Some(&seg_ref)
                 });
 
@@ -498,7 +501,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     word_range,
                 },
             };
-            slices.push(crate::comments::TextSlice::new(seg.node_index, subtarget));
+            slices.push(crate::comments::TextSlice::new_at(seg.block, subtarget));
         }
 
         Some(CommentTarget::from_slices(slices))
@@ -700,9 +703,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             let Some(line) = self.rendered_content.lines.get(line_idx) else {
                 continue;
             };
-            let Some(node_index) = line.node_index else {
+            let Some(segment) = line.annotatable_segment.as_ref() else {
                 continue;
             };
+            let block = &segment.block;
             let Some(canon_start) = line.canonical_content_start else {
                 continue;
             };
@@ -739,7 +743,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 continue;
             }
 
-            for comment in self.get_node_comments(Some(node_index)) {
+            for comment in self.get_node_comments(Some(block.node_index)) {
                 if !comment.is_highlight() {
                     continue;
                 }
@@ -754,7 +758,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     .target
                     .slices()
                     .iter()
-                    .find(|s| s.node_index == node_index)
+                    .find(|s| s.block == *block)
                     .and_then(|s| s.subtarget.word_range())
                 else {
                     continue;
@@ -1076,6 +1080,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .unwrap_or_default()
     }
 
+    pub fn has_rendered_comment_for_block(&self, block_address: Option<&BlockAddress>) -> bool {
+        let Some(target_block) = block_address else {
+            return false;
+        };
+        self.get_node_comments(Some(target_block.node_index))
+            .into_iter()
+            .any(|comment| {
+                comment.is_comment()
+                    && comment
+                        .target
+                        .slices()
+                        .last()
+                        .is_some_and(|slice| slice.block == *target_block)
+            })
+    }
+
     /// Walk every comment indexed under `node_index`, then walk each of its
     /// slices that targets this exact node, pass the (comment, slice) pair
     /// through the extractor. This is how a multi-slice highlight renders
@@ -1084,20 +1104,20 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// node currently being drawn.
     fn collect_in_scope<R, F>(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         scope: CommentScope<'_>,
         extractor: F,
     ) -> Vec<R>
     where
         F: Fn(&Comment, &crate::comments::TextSlice) -> Option<R>,
     {
-        let Some(target_node) = node_index else {
+        let Some(target_block) = block_address else {
             return Vec::new();
         };
         let mut out = Vec::new();
-        for comment in self.get_node_comments(Some(target_node)).iter() {
+        for comment in self.get_node_comments(Some(target_block.node_index)).iter() {
             for slice in comment.target.slices() {
-                if slice.node_index != target_node {
+                if slice.block != *target_block {
                     continue;
                 }
                 if !slice_matches_scope(slice, scope) {
@@ -1112,35 +1132,49 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     /// Get annotation (word) ranges from comments for a node - used for underline styling.
-    pub fn get_annotation_ranges(&self, node_index: Option<usize>) -> Vec<(usize, usize)> {
-        self.collect_in_scope(node_index, CommentScope::Node, slice_annotation_range)
+    pub fn get_annotation_ranges(
+        &self,
+        block_address: Option<&BlockAddress>,
+    ) -> Vec<(usize, usize)> {
+        self.collect_in_scope(block_address, CommentScope::Node, slice_annotation_range)
     }
 
-    pub fn get_highlight_ranges(&self, node_index: Option<usize>) -> Vec<HighlightRange> {
-        self.collect_in_scope(node_index, CommentScope::Node, slice_highlight_range)
+    pub fn get_highlight_ranges(
+        &self,
+        block_address: Option<&BlockAddress>,
+    ) -> Vec<HighlightRange> {
+        self.collect_in_scope(block_address, CommentScope::Node, slice_highlight_range)
     }
 
     pub fn get_annotation_ranges_for_legacy_list(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(node_index, CommentScope::LegacyList, slice_annotation_range)
+        self.collect_in_scope(
+            block_address,
+            CommentScope::LegacyList,
+            slice_annotation_range,
+        )
     }
 
     pub fn get_highlight_ranges_for_legacy_list(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) -> Vec<HighlightRange> {
-        self.collect_in_scope(node_index, CommentScope::LegacyList, slice_highlight_range)
+        self.collect_in_scope(
+            block_address,
+            CommentScope::LegacyList,
+            slice_highlight_range,
+        )
     }
 
     pub fn get_annotation_ranges_for_list_item(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         item_index: usize,
     ) -> Vec<(usize, usize)> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::ListItem { item_index },
             slice_annotation_range,
         )
@@ -1148,11 +1182,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_highlight_ranges_for_list_item(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         item_index: usize,
     ) -> Vec<HighlightRange> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::ListItem { item_index },
             slice_highlight_range,
         )
@@ -1160,11 +1194,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_annotation_ranges_for_list_item_path(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         list_path: &[usize],
     ) -> Vec<(usize, usize)> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::ListItemPath(list_path),
             slice_annotation_range,
         )
@@ -1172,11 +1206,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_highlight_ranges_for_list_item_path(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         list_path: &[usize],
     ) -> Vec<HighlightRange> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::ListItemPath(list_path),
             slice_highlight_range,
         )
@@ -1184,12 +1218,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_annotation_ranges_for_definition_item(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         item_index: usize,
         is_term: bool,
     ) -> Vec<(usize, usize)> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::DefinitionItem {
                 item_index,
                 is_term,
@@ -1200,12 +1234,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_highlight_ranges_for_definition_item(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         item_index: usize,
         is_term: bool,
     ) -> Vec<HighlightRange> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::DefinitionItem {
                 item_index,
                 is_term,
@@ -1216,11 +1250,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_annotation_ranges_for_quote_paragraph(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         paragraph_index: usize,
     ) -> Vec<(usize, usize)> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::QuoteParagraph { paragraph_index },
             slice_annotation_range,
         )
@@ -1228,11 +1262,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     pub fn get_highlight_ranges_for_quote_paragraph(
         &self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         paragraph_index: usize,
     ) -> Vec<HighlightRange> {
         self.collect_in_scope(
-            node_index,
+            block_address,
             CommentScope::QuoteParagraph { paragraph_index },
             slice_highlight_range,
         )
@@ -1243,7 +1277,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     #[allow(clippy::too_many_arguments)]
     pub fn render_node_comments(
         &mut self,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         lines: &mut Vec<RenderedLine>,
         total_height: &mut usize,
         width: usize,
@@ -1251,15 +1285,18 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
     ) {
-        let comments = self.get_node_comments(node_index);
+        let Some(target_block) = block_address else {
+            return;
+        };
+        let comments = self.get_node_comments(Some(target_block.node_index));
         for comment in comments.into_iter().filter(|comment| comment.is_comment()) {
             // Multi-slice comments are indexed under every node they touch
             // (so inline highlight/underline ranges render in each block).
             // The `Note // …` block, however, should appear exactly once —
             // attach it to the LAST slice's node so it sits after the
             // entire annotated range.
-            let render_at = comment.target.slices().last().map(|s| s.node_index);
-            if render_at != node_index {
+            let render_at = comment.target.slices().last().map(|s| &s.block);
+            if render_at != Some(target_block) {
                 continue;
             }
             self.render_comment_as_quote(
@@ -1420,7 +1457,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
     fn compute_canonical_word_range(
         &self,
-        node_idx: usize,
+        block: &BlockAddress,
         start: &SelectionPoint,
         end: &SelectionPoint,
         line_filter: impl Fn(&RenderedLine) -> bool,
@@ -1430,7 +1467,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .lines
             .iter()
             .enumerate()
-            .filter(|(_, line)| line.node_index == Some(node_idx) && line_filter(line))
+            .filter(|(_, line)| {
+                line.annotatable_segment
+                    .as_ref()
+                    .is_some_and(|segment| segment.block == *block)
+                    && line_filter(line)
+            })
             .filter_map(|(idx, line)| {
                 line.canonical_content_start
                     .map(|cs| (idx, cs, line.content_column_start))

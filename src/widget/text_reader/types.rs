@@ -1,4 +1,4 @@
-use crate::comments::CommentTarget;
+use crate::comments::{BlockAddress, CommentTarget};
 use crate::ratatui_image::protocol::StatefulProtocol;
 use crate::vendored::tui_textarea::TextArea;
 use image::DynamicImage;
@@ -43,7 +43,7 @@ pub enum AnnotatableTarget {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnnotatableSegment {
-    pub node_index: usize,
+    pub block: BlockAddress,
     pub target: AnnotatableTarget,
 }
 
@@ -131,7 +131,7 @@ impl RenderedLine {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CodeLineMetadata {
-    pub node_index: usize,
+    pub block: BlockAddress,
     pub line_index: usize,
     pub total_lines: usize,
 }

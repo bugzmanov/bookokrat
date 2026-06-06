@@ -443,10 +443,13 @@ impl CommentsViewer {
                     comment.target.slices(),
                 )
             } else {
+                let Some(slice) = comment.target.first_slice() else {
+                    continue;
+                };
                 Self::extract_quoted_text_from_cache(
                     &doc_cache,
                     &comment.chapter_href,
-                    node_index,
+                    &slice.block,
                     comment.target.word_range(),
                     comment.target.list_item_index(),
                     comment.target.definition_item_index(),
@@ -914,7 +917,7 @@ impl CommentsViewer {
         Self::extract_quoted_text_from_cache(
             doc_cache,
             chapter_href,
-            slice.node_index,
+            &slice.block,
             word_range,
             list_item_index,
             definition_item_index,
@@ -925,7 +928,7 @@ impl CommentsViewer {
     fn extract_quoted_text_from_cache(
         doc_cache: &HashMap<String, crate::markdown::Document>,
         chapter_href: &str,
-        paragraph_index: usize,
+        block: &crate::comments::BlockAddress,
         word_range: Option<(usize, usize)>,
         list_item_index: Option<usize>,
         definition_item_index: Option<usize>,
@@ -937,7 +940,7 @@ impl CommentsViewer {
             return "[Unable to retrieve text]".to_string();
         };
 
-        let Some(node) = doc.blocks.get(paragraph_index) else {
+        let Some(node) = Self::resolve_block_address(doc, block) else {
             return "[Unable to retrieve text]".to_string();
         };
 
@@ -976,6 +979,24 @@ impl CommentsViewer {
             }
             _ => Self::extract_text_from_node(node),
         }
+    }
+
+    fn resolve_block_address<'a>(
+        doc: &'a crate::markdown::Document,
+        block: &crate::comments::BlockAddress,
+    ) -> Option<&'a crate::markdown::Node> {
+        use crate::markdown::Block;
+
+        let mut node = doc.blocks.get(block.node_index)?;
+        for child_index in &block.child_path {
+            match &node.block {
+                Block::EpubBlock { content, .. } => {
+                    node = content.get(*child_index)?;
+                }
+                _ => return None,
+            }
+        }
+        Some(node)
     }
 
     fn apply_word_range(text: String, word_range: Option<(usize, usize)>) -> String {

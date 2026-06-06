@@ -2836,17 +2836,23 @@ impl HtmlToMarkdownConverter {
             .find(|attr| attr.name.local.as_ref() == "epub:type")
             .map(|attr| attr.value.to_string())?;
 
-        match epub_type.as_str() {
+        let has_rendered_type = epub_type.split_whitespace().any(|token| match token {
             "footnote" | "endnote" | "note" | "sidebar" | "pullquote" | "tip" | "warning"
             | "caution" | "important" | "example" | "definition" | "glossary" | "bibliography"
             | "appendix" | "preface" | "foreword" | "introduction" | "conclusion" | "epigraph"
-            | "dedication" => Some(epub_type),
+            | "dedication" => true,
 
             "chapter" | "part" | "section" | "subsection" | "division" | "titlepage" | "toc"
             | "bodymatter" | "frontmatter" | "backmatter" | "cover" | "acknowledgments"
-            | "copyright-page" => None,
+            | "copyright-page" => false,
 
-            _ => Some(epub_type),
+            _ => true,
+        });
+
+        if has_rendered_type {
+            Some(epub_type)
+        } else {
+            None
         }
     }
 

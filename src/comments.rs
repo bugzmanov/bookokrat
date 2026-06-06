@@ -134,22 +134,50 @@ impl BlockSubtarget {
     }
 }
 
+/// Address of an annotatable block in the parsed chapter AST.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct BlockAddress {
+    pub node_index: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub child_path: Vec<usize>,
+}
+
+impl BlockAddress {
+    pub fn root(node_index: usize) -> Self {
+        Self {
+            node_index,
+            child_path: Vec::new(),
+        }
+    }
+
+    pub fn child(&self, child_index: usize) -> Self {
+        let mut child_path = self.child_path.clone();
+        child_path.push(child_index);
+        Self {
+            node_index: self.node_index,
+            child_path,
+        }
+    }
+}
+
 /// One contiguous slice of EPUB text inside a single block.
 /// A multi-paragraph highlight is a `CommentTarget::Text` whose `slices`
 /// contains one of these per touched block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextSlice {
-    pub node_index: usize,
+    #[serde(flatten)]
+    pub block: BlockAddress,
     #[serde(flatten)]
     pub subtarget: BlockSubtarget,
 }
 
 impl TextSlice {
     pub fn new(node_index: usize, subtarget: BlockSubtarget) -> Self {
-        Self {
-            node_index,
-            subtarget,
-        }
+        Self::new_at(BlockAddress::root(node_index), subtarget)
+    }
+
+    pub fn new_at(block: BlockAddress, subtarget: BlockSubtarget) -> Self {
+        Self { block, subtarget }
     }
 }
 
@@ -181,11 +209,12 @@ impl CommentTarget {
     }
 
     fn from_single(node_index: usize, subtarget: BlockSubtarget) -> Self {
+        Self::from_single_at(BlockAddress::root(node_index), subtarget)
+    }
+
+    fn from_single_at(block: BlockAddress, subtarget: BlockSubtarget) -> Self {
         Self::Text {
-            slices: vec![TextSlice {
-                node_index,
-                subtarget,
-            }],
+            slices: vec![TextSlice { block, subtarget }],
         }
     }
 
@@ -264,6 +293,11 @@ impl CommentTarget {
         Self::from_single(node_index, BlockSubtarget::CodeLines { line_range })
     }
 
+    /// Create a Text target for EPUB code block at a nested block address
+    pub fn code_block_at(block: BlockAddress, line_range: (usize, usize)) -> Self {
+        Self::from_single_at(block, BlockSubtarget::CodeLines { line_range })
+    }
+
     /// Create a Pdf target for PDF selection
     pub fn pdf(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
         Self::Pdf { page, rects }
@@ -292,7 +326,7 @@ impl CommentTarget {
     /// for Pdf targets. Callers that need to walk every block this comment
     /// touches must use `slices()` instead.
     pub fn node_index(&self) -> Option<usize> {
-        self.first_slice().map(|s| s.node_index)
+        self.first_slice().map(|s| s.block.node_index)
     }
 
     /// Returns the page for Pdf targets, or None for Text targets
@@ -424,7 +458,8 @@ pub struct Comment {
 /// Serde representation for Text CommentTarget (EPUB format with node_index + subtarget)
 #[derive(Serialize, Deserialize)]
 struct CommentTextTargetSerde {
-    node_index: usize,
+    #[serde(flatten)]
+    block: BlockAddress,
     #[serde(flatten)]
     subtarget: BlockSubtarget,
 }
@@ -615,7 +650,7 @@ impl From<CommentModernLegacySerde> for Comment {
         Comment {
             id: modern.id.unwrap_or_else(generate_comment_id),
             chapter_href: modern.chapter_href,
-            target: CommentTarget::from_single(modern.target.node_index, modern.target.subtarget),
+            target: CommentTarget::from_single_at(modern.target.block, modern.target.subtarget),
             content: modern.content,
             body: AnnotationBody::Comment,
             updated_at: modern.updated_at,
@@ -629,7 +664,7 @@ impl From<CommentTextSerde> for Comment {
         Comment {
             id: text.id.unwrap_or_else(generate_comment_id),
             chapter_href: text.chapter_href,
-            target: CommentTarget::from_single(text.target.node_index, text.target.subtarget),
+            target: CommentTarget::from_single_at(text.target.block, text.target.subtarget),
             content: text.content,
             body: body_from_serde(&text.annotation_type, text.color),
             updated_at: text.updated_at,
@@ -691,7 +726,7 @@ impl Serialize for Comment {
                         color: self.body.highlight_color(),
                         target_type: "text".to_string(),
                         target: CommentTextTargetSerde {
-                            node_index: first.node_index,
+                            block: first.block.clone(),
                             subtarget: first.subtarget.clone(),
                         },
                         content: self.content.clone(),
@@ -895,7 +930,7 @@ impl CommentTarget {
 }
 
 fn slices_overlap(a: &TextSlice, b: &TextSlice) -> bool {
-    if a.node_index != b.node_index || !same_subtarget_scope(&a.subtarget, &b.subtarget) {
+    if a.block != b.block || !same_subtarget_scope(&a.subtarget, &b.subtarget) {
         return false;
     }
     match (a.subtarget.line_range(), b.subtarget.line_range()) {
@@ -1444,7 +1479,7 @@ impl BookComments {
     fn index_keys_for(comment: &Comment) -> Vec<usize> {
         match &comment.target {
             CommentTarget::Text { slices } => {
-                let mut keys: Vec<usize> = slices.iter().map(|s| s.node_index).collect();
+                let mut keys: Vec<usize> = slices.iter().map(|s| s.block.node_index).collect();
                 keys.sort_unstable();
                 keys.dedup();
                 keys
@@ -1645,8 +1680,8 @@ mod tests {
         let parsed: Vec<Comment> = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].target.slices().len(), 2);
-        assert_eq!(parsed[0].target.slices()[0].node_index, 2);
-        assert_eq!(parsed[0].target.slices()[1].node_index, 4);
+        assert_eq!(parsed[0].target.slices()[0].block.node_index, 2);
+        assert_eq!(parsed[0].target.slices()[1].block.node_index, 4);
         assert_eq!(parsed[0].highlight_color(), Some(HighlightColor::Green));
     }
 
@@ -1972,7 +2007,7 @@ mod tests {
             .find(|c| c.id == "g1-a")
             .expect("group head kept");
         let slices = merged.target.slices();
-        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.block.node_index).collect();
         nodes.sort_unstable();
         assert_eq!(
             nodes,

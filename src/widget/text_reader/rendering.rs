@@ -1,6 +1,6 @@
 use super::comments::HighlightRange;
 use super::types::*;
-use crate::comments::Comment;
+use crate::comments::{BlockAddress, Comment};
 use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
@@ -154,7 +154,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 palette,
                 is_focused,
                 0,
-                Some(node_idx),
+                Some(BlockAddress::root(node_idx)),
                 RenderContext::TopLevel,
             );
         }
@@ -223,10 +223,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<BlockAddress>,
         context: RenderContext,
     ) {
         use MarkdownBlock::*;
+        let node_index = block_address.as_ref().map(|address| address.node_index);
 
         // Store the current node's anchor to add to the first line rendered for this node
         let mut current_node_anchor = node.id.clone();
@@ -252,7 +253,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
 
@@ -265,7 +266,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
-                    node_index,
+                    block_address.as_ref(),
                     context,
                 );
             }
@@ -281,7 +282,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     is_focused,
                     indent,
                     Self::last_line_has_content(lines),
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
 
@@ -296,7 +297,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
-                    node_index,
+                    block_address.as_ref(),
                     &[],
                     &mut list_char_pos,
                 );
@@ -316,7 +317,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
 
@@ -329,7 +330,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     palette,
                     is_focused,
                     indent,
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
 
@@ -345,7 +346,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
 
@@ -363,7 +364,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     width,
                     palette,
                     is_focused,
-                    node_index,
+                    block_address.as_ref(),
                 );
             }
         }
@@ -905,8 +906,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         let heading_text = Self::text_to_string(content);
 
         let display_text = if level == HeadingLevel::H1 {
@@ -926,8 +928,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         };
 
         // Check if this heading has annotations
-        let annotation_ranges = self.get_annotation_ranges(node_index);
-        let highlight_ranges = self.get_highlight_ranges(node_index);
+        let annotation_ranges = self.get_annotation_ranges(block_address);
+        let highlight_ranges = self.get_highlight_ranges(block_address);
 
         let base_modifiers = match level {
             HeadingLevel::H3 => Modifier::BOLD | Modifier::UNDERLINED,
@@ -990,8 +992,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 canonical_content_start: Some(canonical_start),
                 content_column_start: indent_width,
                 justify_map: None,
-                annotatable_segment: node_index.map(|idx| AnnotatableSegment {
-                    node_index: idx,
+                annotatable_segment: block_address.cloned().map(|block| AnnotatableSegment {
+                    block,
                     target: AnnotatableTarget::Paragraph,
                 }),
             });
@@ -1035,15 +1037,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Render comments for this heading if any
-        let heading_comments = self.get_node_comments(node_index);
-        if heading_comments.iter().any(|comment| comment.is_comment()) {
+        if self.has_rendered_comment_for_block(block_address) {
             // Add empty line before comments
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
 
             self.render_node_comments(
-                node_index,
+                block_address,
                 lines,
                 total_height,
                 width,
@@ -1084,9 +1085,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         context: RenderContext,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         let paragraph_lines_start = lines.len();
         if context == RenderContext::InsideContainer {
             let has_visible_content = content.iter().any(|item| match item {
@@ -1104,8 +1106,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Collect annotation ranges for this node (for underline styling)
-        let annotation_ranges = self.get_annotation_ranges(node_index);
-        let highlight_ranges = self.get_highlight_ranges(node_index);
+        let annotation_ranges = self.get_annotation_ranges(block_address);
+        let highlight_ranges = self.get_highlight_ranges(block_address);
         let underline_color = palette.base_0e; // Purple
 
         let mut current_rich_spans = Vec::new();
@@ -1293,9 +1295,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         let paragraph_lines_end = lines.len();
 
-        if let Some(idx) = node_index {
+        if let Some(block) = block_address {
             let segment = AnnotatableSegment {
-                node_index: idx,
+                block: block.clone(),
                 target: AnnotatableTarget::Paragraph,
             };
             Self::assign_annotatable_segment(
@@ -1305,8 +1307,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Render any comments for this paragraph
+        if context == RenderContext::InsideContainer
+            && self.has_rendered_comment_for_block(block_address)
+            && !matches!(
+                lines.last(),
+                Some(RenderedLine {
+                    line_type: LineType::Empty,
+                    ..
+                })
+            )
+        {
+            lines.push(RenderedLine::empty());
+            self.raw_text_lines.push(String::new());
+            *total_height += 1;
+        }
         self.render_node_comments(
-            node_index,
+            block_address,
             lines,
             total_height,
             width,
@@ -1951,8 +1967,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
         add_spacing_before: bool,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         // TODO: Implement syntax highlighting if language is provided
         if add_spacing_before {
             lines.push(RenderedLine::empty());
@@ -1974,10 +1991,19 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             vec![None; total_code_lines];
         let mut inline_comments: Vec<Vec<Comment>> = vec![Vec::new(); total_code_lines];
 
-        if let Some(node_idx) = node_index {
+        if let Some(block) = block_address {
+            let node_idx = block.node_index;
             if let Some(node_comments) = self.current_chapter_comments.get(&node_idx) {
                 for comment in node_comments {
-                    if let Some(line_range) = comment.target.line_range() {
+                    let Some(slice) = comment
+                        .target
+                        .slices()
+                        .iter()
+                        .find(|slice| slice.block == *block)
+                    else {
+                        continue;
+                    };
+                    if let Some(line_range) = slice.subtarget.line_range() {
                         if total_code_lines == 0 {
                             continue;
                         }
@@ -2167,7 +2193,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     node_anchor: None,
                     node_index,
                     code_line: node_index.map(|idx| CodeLineMetadata {
-                        node_index: idx,
+                        block: block_address
+                            .cloned()
+                            .unwrap_or_else(|| BlockAddress::root(idx)),
                         line_index: line_idx,
                         total_lines: total_code_lines,
                     }),
@@ -2287,20 +2315,21 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         list_path: &[usize],
         global_char_pos: &mut usize,
     ) {
         use crate::markdown::ListKind;
+        let node_index = block_address.map(|b| b.node_index);
 
         // Collect comments and annotation ranges for this list node
         let annotation_ranges = if list_path.is_empty() {
-            self.get_annotation_ranges_for_legacy_list(node_index)
+            self.get_annotation_ranges_for_legacy_list(block_address)
         } else {
             Vec::new()
         };
         let highlight_ranges = if list_path.is_empty() {
-            self.get_highlight_ranges_for_legacy_list(node_index)
+            self.get_highlight_ranges_for_legacy_list(block_address)
         } else {
             Vec::new()
         };
@@ -2315,9 +2344,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_path.clone()
             };
             let item_annotation_ranges =
-                self.get_annotation_ranges_for_list_item_path(node_index, &item_path);
+                self.get_annotation_ranges_for_list_item_path(block_address, &item_path);
             let item_highlight_ranges =
-                self.get_highlight_ranges_for_list_item_path(node_index, &item_path);
+                self.get_highlight_ranges_for_list_item_path(block_address, &item_path);
             let mut item_char_pos = 0;
 
             // Determine bullet/number for this item
@@ -2334,8 +2363,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 .with_insertion_col(indent_width_chars)
                 .with_first_line(Self::plain_prefix(prefix.clone()))
                 .with_continuation(Self::plain_prefix(" ".repeat(prefix_width)));
-            let item_segment = node_index.map(|node_idx| AnnotatableSegment {
-                node_index: node_idx,
+            let item_segment = block_address.cloned().map(|block| AnnotatableSegment {
+                block,
                 target: AnnotatableTarget::ListItem {
                     item_index: idx,
                     list_path: item_line_path.clone(),
@@ -2370,7 +2399,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 is_focused,
                                 None,
                                 indent,
-                                node_index,
+                                block_address,
                                 canon_offset,
                             );
                             first_block_line_count = lines.len() - lines_before;
@@ -2500,7 +2529,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 palette,
                                 is_focused,
                                 indent + 1,
-                                node_index,
+                                block_address,
                                 &item_path,
                                 global_char_pos,
                             );
@@ -2526,7 +2555,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 width,
                                 palette,
                                 is_focused,
-                                node_index,
+                                block_address,
                             );
                             first_block_line_count = lines.len() - lines_before;
                         }
@@ -2614,7 +2643,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 is_focused,
                                 None,
                                 indent + 1,
-                                node_index,
+                                block_address,
                                 canon_offset,
                             );
                             for line in lines[lines_before..].iter_mut() {
@@ -2726,7 +2755,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 palette,
                                 is_focused,
                                 indent + 1,
-                                node_index,
+                                block_address,
                                 &item_path,
                                 global_char_pos,
                             );
@@ -2745,7 +2774,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                                 width,
                                 palette,
                                 is_focused,
-                                node_index,
+                                block_address,
                             );
                         }
                         _ => {
@@ -2816,18 +2845,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Render comments for the list at the end (only at the outermost list level)
-        let list_comments = if list_path.is_empty() {
-            self.get_node_comments(node_index)
-        } else {
-            Vec::new()
-        };
-        if list_comments.iter().any(|comment| comment.is_comment()) {
+        if list_path.is_empty() && self.has_rendered_comment_for_block(block_address) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
 
             self.render_node_comments(
-                node_index,
+                block_address,
                 lines,
                 total_height,
                 width,
@@ -2855,8 +2879,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         // Build a proper grid that accounts for colspan and rowspan
         let (table_headers, table_rows, grid_columns) = Self::build_table_grid(header, rows);
 
@@ -3013,14 +3038,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         });
 
         // Render comments for this table if any
-        let table_comments = self.get_node_comments(node_index);
-        if table_comments.iter().any(|comment| comment.is_comment()) {
+        if self.has_rendered_comment_for_block(block_address) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
 
             self.render_node_comments(
-                node_index,
+                block_address,
                 lines,
                 total_height,
                 width,
@@ -3316,7 +3340,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     fn segment_from_line_type(
-        node_index: usize,
+        block: &BlockAddress,
         line_type: &LineType,
     ) -> Option<AnnotatableSegment> {
         let target = match line_type {
@@ -3342,7 +3366,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             _ => return None,
         };
 
-        Some(AnnotatableSegment { node_index, target })
+        Some(AnnotatableSegment {
+            block: block.clone(),
+            target,
+        })
     }
 
     fn offset_canonical_positions(lines: &mut [RenderedLine], canonical_offset: usize) {
@@ -3425,16 +3452,17 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         palette: &Base16Palette,
         is_focused: bool,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         // Left border takes 2 chars ("│ ")
         let border_width = 2;
         let inner_width = width.saturating_sub(border_width);
         let indent_width = "  ".repeat(indent).chars().count();
 
         // Collect annotation ranges for this quote (for underline styling)
-        let annotation_ranges = self.get_annotation_ranges(node_index);
-        let highlight_ranges = self.get_highlight_ranges(node_index);
+        let annotation_ranges = self.get_annotation_ranges(block_address);
+        let highlight_ranges = self.get_highlight_ranges(block_address);
         let underline_color = palette.base_0e; // Purple
 
         // Track cumulative character position for annotation ranges
@@ -3474,12 +3502,12 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         is_focused,
                         None,
                         indent,
-                        node_index,
+                        block_address,
                         Some(cumulative_char_pos),
                     );
 
-                    let segment = node_index.map(|idx| AnnotatableSegment {
-                        node_index: idx,
+                    let segment = block_address.cloned().map(|block| AnnotatableSegment {
+                        block,
                         target: AnnotatableTarget::QuoteParagraph {
                             paragraph_index: current_para_idx,
                         },
@@ -3558,8 +3586,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         Some(cumulative_char_pos),
                     );
 
-                    let segment = node_index.map(|idx| AnnotatableSegment {
-                        node_index: idx,
+                    let segment = block_address.cloned().map(|block| AnnotatableSegment {
+                        block,
                         target: AnnotatableTarget::QuoteParagraph {
                             paragraph_index: current_para_idx,
                         },
@@ -3595,13 +3623,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         cumulative_char_pos,
                     );
 
-                    if let Some(idx) = node_index {
+                    if let Some(block) = block_address {
                         for line in lines[lines_before_block..].iter_mut() {
                             if line.annotatable_segment.is_none()
                                 && line.canonical_content_start.is_some()
                             {
                                 line.annotatable_segment =
-                                    Self::segment_from_line_type(idx, &line.line_type);
+                                    Self::segment_from_line_type(block, &line.line_type);
                             }
                         }
                     }
@@ -3629,14 +3657,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Render comments for this quote if any
-        let quote_comments = self.get_node_comments(node_index);
-        if quote_comments.iter().any(|comment| comment.is_comment()) {
+        if self.has_rendered_comment_for_block(block_address) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
 
             self.render_node_comments(
-                node_index,
+                block_address,
                 lines,
                 total_height,
                 width,
@@ -3703,8 +3730,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         let underline_color = palette.base_0e; // Purple
 
         // Track cumulative character position for annotation ranges
@@ -3727,9 +3755,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 term_rich_spans.extend(self.render_text_or_inline(term_item, palette, is_focused));
             }
             let term_annotation_ranges =
-                self.get_annotation_ranges_for_definition_item(node_index, idx, true);
+                self.get_annotation_ranges_for_definition_item(block_address, idx, true);
             let term_highlight_ranges =
-                self.get_highlight_ranges_for_definition_item(node_index, idx, true);
+                self.get_highlight_ranges_for_definition_item(block_address, idx, true);
 
             // Apply bold styling to all term rich spans
             let styled_term_rich_spans: Vec<RichSpan> = term_rich_spans
@@ -3780,8 +3808,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 Some(cumulative_char_pos),
             );
 
-            let segment = node_index.map(|node_idx| AnnotatableSegment {
-                node_index: node_idx,
+            let segment = block_address.cloned().map(|block| AnnotatableSegment {
+                block,
                 target: AnnotatableTarget::DefinitionItem {
                     item_index: idx,
                     is_term: true,
@@ -3802,9 +3830,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 for block_node in definition_blocks {
                     let lines_before_def = lines.len();
                     let definition_annotation_ranges =
-                        self.get_annotation_ranges_for_definition_item(node_index, idx, false);
+                        self.get_annotation_ranges_for_definition_item(block_address, idx, false);
                     let definition_highlight_ranges =
-                        self.get_highlight_ranges_for_definition_item(node_index, idx, false);
+                        self.get_highlight_ranges_for_definition_item(block_address, idx, false);
 
                     self.render_node(
                         block_node,
@@ -3830,8 +3858,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         &mut lines[lines_before_def..],
                         cumulative_char_pos,
                     );
-                    let segment = node_index.map(|node_idx| AnnotatableSegment {
-                        node_index: node_idx,
+                    let segment = block_address.cloned().map(|block| AnnotatableSegment {
+                        block,
                         target: AnnotatableTarget::DefinitionItem {
                             item_index: idx,
                             is_term: false,
@@ -3871,14 +3899,13 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
 
         // Render comments for this definition list if any
-        let def_comments = self.get_node_comments(node_index);
-        if def_comments.iter().any(|comment| comment.is_comment()) {
+        if self.has_rendered_comment_for_block(block_address) {
             lines.push(RenderedLine::empty());
             self.raw_text_lines.push(String::new());
             *total_height += 1;
 
             self.render_node_comments(
-                node_index,
+                block_address,
                 lines,
                 total_height,
                 width,
@@ -3906,7 +3933,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         width: usize,
         palette: &Base16Palette,
         is_focused: bool,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
     ) {
         // Add line separator before the block
         let separator_line = ".".repeat(width);
@@ -3940,6 +3967,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
         // Render the content blocks with controlled spacing
         for (idx, content_node) in content.iter().enumerate() {
+            let child_address = block_address.map(|block| block.child(idx));
             // Render the content node normally
             match &content_node.block {
                 MarkdownBlock::Heading { content, .. } => {
@@ -3952,7 +3980,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         0,
-                        node_index,
+                        child_address.as_ref(),
                     );
                 }
                 _ => {
@@ -3964,7 +3992,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         palette,
                         is_focused,
                         0,
-                        node_index,
+                        child_address,
                         RenderContext::InsideContainer,
                     );
                 }
@@ -3995,6 +4023,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 *total_height += 1;
             }
         }
+
+        self.render_node_comments(
+            block_address,
+            lines,
+            total_height,
+            width,
+            palette,
+            is_focused,
+            0,
+        );
 
         // Add line separator after the block
         lines.push(RenderedLine {
@@ -4040,15 +4078,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         first_prefix: Option<&str>,
         indent: usize,
-        node_index: Option<usize>,
+        block_address: Option<&BlockAddress>,
         canonical_offset: Option<usize>,
     ) {
+        let node_index = block_address.map(|b| b.node_index);
         let mut current_rich_spans: Vec<RichSpan> = Vec::new();
         let mut current_chunk_items: Vec<&TextOrInline> = Vec::new();
         let mut is_first_chunk = true;
         let mut para_canonical_offset: usize = canonical_offset.unwrap_or(0);
-        let annotation_ranges = self.get_annotation_ranges(node_index);
-        let highlight_ranges = self.get_highlight_ranges(node_index);
+        let annotation_ranges = self.get_annotation_ranges(block_address);
+        let highlight_ranges = self.get_highlight_ranges(block_address);
         let underline_color = palette.base_0e;
 
         for item in content.iter() {

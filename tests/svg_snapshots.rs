@@ -430,6 +430,94 @@ fn test_inline_comment_rendering_svg() {
 
 #[test]
 #[parallel]
+fn test_section_nested_paragraph_comment_svg() {
+    use bookokrat::comments::{BlockAddress, BlockSubtarget, TextSlice};
+
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(80, 24);
+
+    // A `<section>` with a rendered epub:type becomes an EpubBlock that wraps
+    // its child paragraphs, so each paragraph is addressed by a nested
+    // BlockAddress (node_index of the section + child_path into its content).
+    let html_content = r##"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Section Comment Test</title></head>
+<body>
+    <section epub:type="example">
+        <p>First paragraph of the section that simply introduces the topic before the annotated one.</p>
+        <p>Second paragraph that is deliberately long so it wraps across more than one line in the terminal, letting us anchor a comment to just the first visual line of this middle paragraph.</p>
+        <p>Third and final paragraph that closes out the section after the annotated paragraph.</p>
+    </section>
+</body>
+</html>"##;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("section_comment_test.html");
+    std::fs::write(&temp_html_path, html_content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+
+    let base_time = Utc.with_ymd_and_hms(2024, 1, 15, 10, 30, 0).unwrap();
+    let chapter_href = app
+        .testing_current_chapter_file()
+        .unwrap_or_else(|| "section_comment_test.html".to_string());
+
+    // Comment on the second paragraph (child index 1) of the section at
+    // block 0, underlining the first ~40 chars (its first wrapped line).
+    app.testing_add_comment(Comment {
+        id: "section-nested-comment".to_string(),
+        chapter_href: chapter_href.clone(),
+        target: CommentTarget::from_slices(vec![TextSlice::new_at(
+            BlockAddress {
+                node_index: 0,
+                child_path: vec![1],
+            },
+            BlockSubtarget::Paragraph {
+                word_range: Some((0, 40)),
+            },
+        )]),
+        content: "Note on the middle paragraph".to_string(),
+        body: AnnotationBody::Comment,
+        updated_at: base_time,
+        quoted_text: None,
+    });
+
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_section_nested_paragraph_comment.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/section_nested_paragraph_comment.svg"),
+        "test_section_nested_paragraph_comment_svg",
+        create_test_failure_handler("test_section_nested_paragraph_comment_svg"),
+    );
+}
+
+#[test]
+#[parallel]
 fn test_list_comment_rendering_svg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(80, 30);
@@ -5028,7 +5116,7 @@ fn test_multi_slice_across_list_item_and_paragraph_svg() {
             "expected exactly one ListItem + one Paragraph slice, got {kinds:?}"
         );
 
-        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.block.node_index).collect();
         nodes.sort_unstable();
         nodes.dedup();
         assert_eq!(
@@ -5179,7 +5267,7 @@ fn test_multi_slice_overlap_in_visual_mode_replaces_existing_highlight_svg() {
             .target
             .slices()
             .iter()
-            .map(|s| s.node_index)
+            .map(|s| s.block.node_index)
             .collect();
         nodes.sort_unstable();
         nodes.dedup();
@@ -5381,7 +5469,7 @@ fn test_epub_highlight_across_two_paragraphs_via_visual_line_svg() {
             "expected two slices for a two-paragraph selection, got {}",
             slices.len()
         );
-        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.block.node_index).collect();
         nodes.sort_unstable();
         nodes.dedup();
         assert_eq!(
@@ -5525,7 +5613,7 @@ fn test_epub_comment_across_two_paragraphs_via_visual_line_svg() {
             "expected two slices for a two-paragraph comment, got {}",
             slices.len()
         );
-        let mut nodes: Vec<_> = slices.iter().map(|s| s.node_index).collect();
+        let mut nodes: Vec<_> = slices.iter().map(|s| s.block.node_index).collect();
         nodes.sort_unstable();
         nodes.dedup();
         assert_eq!(
