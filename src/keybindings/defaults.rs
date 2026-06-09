@@ -247,7 +247,6 @@ fn pdf_normal_specifics(keymap: &mut Keymap) {
     let ctx = keymap.context_mut(KeyContext::PdfNormal);
     bind!(ctx, "a" => Action::AddComment);
     bind!(ctx, "c" => Action::CopySelection);
-    bind!(ctx, "d" => Action::AddComment);
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "gd" => Action::SynctexInverse); // #2: restore gd
     // Note: 'i' for pending_inner (text objects) is handled in handle_normal_mode_key,
