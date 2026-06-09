@@ -128,6 +128,12 @@ impl RenderedInfo {
         self.image_requested_scale = None;
     }
 
+    pub fn layout_cell_size(&self) -> Option<CellSize> {
+        self.full_cell_size
+            .or_else(|| self.img.as_ref().map(|img| img.cell_dimensions()))
+            .filter(|size| size.width > 0 && size.height > 0)
+    }
+
     pub fn image_scale(&self) -> Option<f32> {
         self.image_requested_scale
             .filter(|scale| scale.is_finite() && *scale > 0.0)

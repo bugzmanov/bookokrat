@@ -245,6 +245,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
 
 fn pdf_normal_specifics(keymap: &mut Keymap) {
     let ctx = keymap.context_mut(KeyContext::PdfNormal);
+    bind!(ctx, "a" => Action::AddComment);
     bind!(ctx, "c" => Action::CopySelection);
     bind!(ctx, "d" => Action::AddComment);
     bind!(ctx, "N" => Action::PrevSearchMatch);

@@ -323,6 +323,25 @@ struct PdfEventResult {
     action: Option<AppAction>,
 }
 
+#[cfg(feature = "pdf")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PdfScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+#[cfg(feature = "pdf")]
+#[derive(Clone, Copy, Debug)]
+struct PdfScrollAxisLock {
+    axis: PdfScrollAxis,
+    last_event: Instant,
+}
+
+#[cfg(feature = "pdf")]
+const PDF_SCROLL_AXIS_LOCK_TIMEOUT_MS: u64 = 140;
+#[cfg(feature = "pdf")]
+const PDF_SCROLL_AXIS_SWITCH_MARGIN: usize = 3;
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
@@ -400,6 +419,8 @@ pub struct App {
     pdf_supports_graphics: bool,
     #[cfg(feature = "pdf")]
     pdf_supports_scroll_mode: bool,
+    #[cfg(feature = "pdf")]
+    pdf_scroll_axis_lock: Option<PdfScrollAxisLock>,
     // SyncTeX support (for LaTeX ↔ PDF synchronization)
     #[cfg(feature = "pdf")]
     synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
@@ -801,6 +822,8 @@ impl App {
             pdf_supports_graphics: startup_caps.supports_graphics,
             #[cfg(feature = "pdf")]
             pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
+            #[cfg(feature = "pdf")]
+            pdf_scroll_axis_lock: None,
             #[cfg(feature = "pdf")]
             synctex_scanner: None,
             #[cfg(feature = "pdf")]
@@ -2387,6 +2410,163 @@ impl App {
         let net_scroll = scroll_down_count - scroll_up_count;
 
         self.apply_scroll(net_scroll, initial_column);
+    }
+
+    #[cfg(feature = "pdf")]
+    fn pdf_scroll_axis_for_kind(kind: MouseEventKind) -> Option<PdfScrollAxis> {
+        match kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => Some(PdfScrollAxis::Vertical),
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                Some(PdfScrollAxis::Horizontal)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn choose_pdf_scroll_axis(&mut self, scroll_events: &[MouseEvent]) -> PdfScrollAxis {
+        let vertical_count = scroll_events
+            .iter()
+            .filter(|event| {
+                Self::pdf_scroll_axis_for_kind(event.kind) == Some(PdfScrollAxis::Vertical)
+            })
+            .count();
+        let horizontal_count = scroll_events
+            .iter()
+            .filter(|event| {
+                Self::pdf_scroll_axis_for_kind(event.kind) == Some(PdfScrollAxis::Horizontal)
+            })
+            .count();
+
+        let candidate = if horizontal_count > vertical_count {
+            PdfScrollAxis::Horizontal
+        } else {
+            PdfScrollAxis::Vertical
+        };
+
+        let now = Instant::now();
+        let active_lock = self.pdf_scroll_axis_lock.filter(|lock| {
+            now.duration_since(lock.last_event)
+                <= Duration::from_millis(PDF_SCROLL_AXIS_LOCK_TIMEOUT_MS)
+        });
+
+        let axis = if let Some(lock) = active_lock {
+            if lock.axis == candidate {
+                candidate
+            } else {
+                let candidate_count = match candidate {
+                    PdfScrollAxis::Vertical => vertical_count,
+                    PdfScrollAxis::Horizontal => horizontal_count,
+                };
+                let locked_count = match lock.axis {
+                    PdfScrollAxis::Vertical => vertical_count,
+                    PdfScrollAxis::Horizontal => horizontal_count,
+                };
+
+                if candidate_count < locked_count.saturating_add(PDF_SCROLL_AXIS_SWITCH_MARGIN) {
+                    lock.axis
+                } else {
+                    candidate
+                }
+            }
+        } else {
+            candidate
+        };
+
+        let selected_count = match axis {
+            PdfScrollAxis::Vertical => vertical_count,
+            PdfScrollAxis::Horizontal => horizontal_count,
+        };
+
+        if selected_count > 0 {
+            self.pdf_scroll_axis_lock = Some(PdfScrollAxisLock {
+                axis,
+                last_event: now,
+            });
+        }
+
+        axis
+    }
+
+    #[cfg(feature = "pdf")]
+    fn handle_and_drain_pdf_mouse_scroll_events(
+        &mut self,
+        initial_mouse_event: MouseEvent,
+        event_source: &mut dyn crate::event_source::EventSource,
+    ) -> PdfEventResult {
+        let Some(_) = Self::pdf_scroll_axis_for_kind(initial_mouse_event.kind) else {
+            return self.handle_pdf_event(&Event::Mouse(initial_mouse_event));
+        };
+
+        let mut scroll_events = vec![initial_mouse_event];
+        let mut deferred_event = None;
+        let drain_timeout = Duration::from_millis(0);
+        let max_drain_iterations = 50;
+        let mut drain_count = 0;
+        let batch_start_time = Instant::now();
+
+        while drain_count < max_drain_iterations
+            && event_source.poll(drain_timeout).unwrap_or(false)
+        {
+            drain_count += 1;
+
+            if batch_start_time.elapsed() > Duration::from_millis(100) {
+                break;
+            }
+
+            if drain_count > 20 {
+                warn!(
+                    "Warning: draining many PDF mouse events ({drain_count}), may indicate event accumulation issue"
+                );
+            }
+
+            match event_source.read() {
+                Ok(Event::Mouse(mouse_event))
+                    if Self::pdf_scroll_axis_for_kind(mouse_event.kind).is_some() =>
+                {
+                    scroll_events.push(mouse_event);
+                }
+                Ok(event) => {
+                    deferred_event = Some(event);
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading PDF mouse event during batching: {e:?}");
+                    break;
+                }
+            }
+        }
+
+        let axis = self.choose_pdf_scroll_axis(&scroll_events);
+        let mut result = PdfEventResult {
+            handled: true,
+            action: None,
+        };
+
+        for mouse_event in scroll_events
+            .into_iter()
+            .filter(|event| Self::pdf_scroll_axis_for_kind(event.kind) == Some(axis))
+        {
+            let event = Event::Mouse(mouse_event);
+            let event_result = self.handle_pdf_event(&event);
+            result.handled |= event_result.handled;
+            if event_result.action == Some(AppAction::Quit) {
+                result.action = Some(AppAction::Quit);
+                break;
+            }
+        }
+
+        if result.action != Some(AppAction::Quit)
+            && let Some(event) = deferred_event
+        {
+            let event_result = self.handle_pdf_event(&event);
+            result.handled |= event_result.handled;
+            if event_result.action == Some(AppAction::Quit) {
+                result.action = Some(AppAction::Quit);
+            }
+        }
+
+        result
     }
 
     #[cfg(feature = "pdf")]
@@ -8171,7 +8351,17 @@ where
                                 }
                             }
                         } else {
-                            let result = app.handle_pdf_event(&event);
+                            let result = match mouse_event.kind {
+                                MouseEventKind::ScrollLeft
+                                | MouseEventKind::ScrollRight
+                                | MouseEventKind::ScrollDown
+                                | MouseEventKind::ScrollUp => app
+                                    .handle_and_drain_pdf_mouse_scroll_events(
+                                        *mouse_event,
+                                        event_source,
+                                    ),
+                                _ => app.handle_pdf_event(&event),
+                            };
                             if result.action == Some(AppAction::Quit) {
                                 should_quit = true;
                             }

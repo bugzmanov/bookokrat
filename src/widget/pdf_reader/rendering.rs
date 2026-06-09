@@ -224,6 +224,7 @@ pub(crate) fn apply_render_responses(
     let mut converted_frame_page = None;
     let mut reloaded = false;
     let use_kitty = pdf_reader.is_kitty;
+    let scroll_anchor = pdf_reader.capture_kitty_scroll_anchor();
 
     for response in responses {
         match response {
@@ -471,6 +472,13 @@ pub(crate) fn apply_render_responses(
                 let _ = tx.send(ConversionCommand::DisplayFailed(cleared_pages));
             }
         }
+    }
+
+    if use_kitty
+        && updated
+        && let Some(anchor) = scroll_anchor
+    {
+        pdf_reader.restore_kitty_scroll_anchor(anchor);
     }
 
     RenderUpdateResult {
@@ -1958,18 +1966,11 @@ impl PdfReaderState {
             crate::pdf::Zoom::display_zoom_for(effective_zoom_factor, Some(page.layout_scale()))
         };
 
-        let reference_height: Option<u16> = rendered.iter().find_map(|page| {
-            page.img
-                .as_ref()
-                .map(|img| img.cell_dimensions().height)
-                .or(page.full_cell_size.map(|size| size.height))
-        });
+        let reference_height: Option<u16> = rendered
+            .iter()
+            .find_map(|page| page.layout_cell_size().map(|size| size.height));
         let reference_base_height: Option<f32> = rendered.iter().find_map(|page| {
-            let height = page
-                .img
-                .as_ref()
-                .map(|img| img.cell_dimensions().height)
-                .or(page.full_cell_size.map(|size| size.height))?;
+            let height = page.layout_cell_size().map(|size| size.height)?;
             let scale = page.layout_scale();
             Some(f32::from(height) / scale)
         });
@@ -2003,18 +2004,10 @@ impl PdfReaderState {
                     .get(right_idx)
                     .map(&page_zoom_factor)
                     .unwrap_or(left_page_zoom);
-                let left_img_size = rendered[left_idx]
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions());
-                let right_img_size = rendered
-                    .get(right_idx)
-                    .and_then(|page| page.img.as_ref())
-                    .map(|img| img.cell_dimensions());
-                let left_layout_size = left_img_size.or(rendered[left_idx].full_cell_size);
+                let left_layout_size = rendered[left_idx].layout_cell_size();
                 let right_layout_size = rendered
                     .get(right_idx)
-                    .and_then(|page| right_img_size.or(page.full_cell_size));
+                    .and_then(RenderedInfo::layout_cell_size);
 
                 let scaled_height = |size: Option<CellSize>, page_zoom: f32| -> u16 {
                     size.filter(|size| size.height > 0)
@@ -2098,7 +2091,7 @@ impl PdfReaderState {
                             });
                         };
 
-                    if let Some(left_size) = left_img_size {
+                    if let Some(left_size) = left_layout_size {
                         let left_dest_w =
                             ((f32::from(left_size.width) * left_page_zoom).ceil() as u16).max(1);
                         let left_dest_h =
@@ -2120,7 +2113,7 @@ impl PdfReaderState {
                         );
                     }
                     if right_idx < rendered.len()
-                        && let Some(right_size) = right_img_size
+                        && let Some(right_size) = right_layout_size
                     {
                         let right_dest_w =
                             ((f32::from(right_size.width) * right_page_zoom).ceil() as u16).max(1);
@@ -2151,16 +2144,12 @@ impl PdfReaderState {
             }
         } else {
             for (idx, rendered_page) in rendered.iter().enumerate() {
-                let cell_size = rendered_page
-                    .img
-                    .as_ref()
-                    .map_or(CellSize::new(0, 0), |img| img.cell_dimensions());
                 let page_zoom = page_zoom_factor(rendered_page);
-                if cell_size.height == 0 {
+                let Some(cell_size) = rendered_page.layout_cell_size() else {
                     let dest_h = reference_display_height.max(1);
                     cumulative_y += dest_h + u32::from(separator_height);
                     continue;
-                }
+                };
 
                 let dest_w = ((f32::from(cell_size.width) * page_zoom).ceil() as u16).max(1);
                 let dest_h = ((f32::from(cell_size.height) * page_zoom).ceil() as u16).max(1);

@@ -304,6 +304,12 @@ pub struct PendingEnhance {
     pub old_right_cell_w: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KittyScrollAnchor {
+    pub page: usize,
+    pub source_y_ratio: f64,
+}
+
 /// Main PDF reader widget state
 pub struct PdfReaderState {
     /// Document name
