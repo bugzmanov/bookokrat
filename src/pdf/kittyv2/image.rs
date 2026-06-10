@@ -8,7 +8,7 @@ use std::num::NonZeroU32;
 
 use image::DynamicImage;
 
-use super::kgfx::{MemoryRegion, ShmLease};
+use super::kgfx::{Format, MemoryRegion, ShmLease};
 
 /// Image dimensions in pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +41,8 @@ pub struct Image<'a> {
     pub id: ImageId,
     /// Image dimensions.
     pub dimensions: Dimensions,
+    /// Pixel format of the transmitted data (RGB or RGBA).
+    pub format: Format,
     /// Transmission type.
     pub transmission: Transmission<'a>,
 }
@@ -58,6 +60,7 @@ impl Image<'_> {
         Image {
             id,
             dimensions,
+            format: Format::Rgb,
             transmission: Transmission::Direct {
                 chunk_size: None,
                 data: Cow::Owned(data),
@@ -70,6 +73,20 @@ impl Image<'_> {
         Image {
             id,
             dimensions: Dimensions { width, height },
+            format: Format::Rgb,
+            transmission: Transmission::Direct {
+                chunk_size: None,
+                data: Cow::Owned(data),
+            },
+        }
+    }
+
+    /// Create an image for direct (inline) transmission from raw RGBA bytes.
+    pub fn from_rgba_bytes(data: Vec<u8>, width: u32, height: u32, id: ImageId) -> Image<'static> {
+        Image {
+            id,
+            dimensions: Dimensions { width, height },
+            format: Format::Rgba,
             transmission: Transmission::Direct {
                 chunk_size: None,
                 data: Cow::Owned(data),
@@ -100,16 +117,38 @@ impl Image<'_> {
         shm_name: &str,
         id: ImageId,
     ) -> Result<(Image<'static>, usize), std::io::Error> {
+        Self::create_shm_with_format(data, width, height, shm_name, id, Format::Rgb)
+    }
+
+    /// Create an image for shared memory transmission (`t=s`) from raw RGBA bytes.
+    pub fn create_shm_from_rgba(
+        data: &[u8],
+        width: u32,
+        height: u32,
+        shm_name: &str,
+        id: ImageId,
+    ) -> Result<(Image<'static>, usize), std::io::Error> {
+        Self::create_shm_with_format(data, width, height, shm_name, id, Format::Rgba)
+    }
+
+    fn create_shm_with_format(
+        data: &[u8],
+        width: u32,
+        height: u32,
+        shm_name: &str,
+        id: ImageId,
+        format: Format,
+    ) -> Result<(Image<'static>, usize), std::io::Error> {
         let expected = width
             .checked_mul(height)
-            .and_then(|v| v.checked_mul(3))
+            .and_then(|v| v.checked_mul(format.bytes_per_pixel() as u32))
             .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "RGB size overflow")
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "pixel size overflow")
             })? as usize;
         if data.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "RGB buffer size mismatch",
+                "pixel buffer size mismatch",
             ));
         }
         let size = data.len();
@@ -126,6 +165,7 @@ impl Image<'_> {
             Image {
                 id,
                 dimensions: Dimensions { width, height },
+                format,
                 transmission: Transmission::SharedMemory {
                     shm: Some(ShmLease::new(path, size)),
                 },

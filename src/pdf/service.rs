@@ -697,6 +697,7 @@ mod tests {
                 height_px: 1,
                 width_cell: 1,
                 height_cell: 1,
+                channels: 3,
             },
             page_num: page,
             scale_factor: 1.0,

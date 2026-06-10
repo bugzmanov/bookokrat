@@ -50,7 +50,7 @@ pub struct LinkRect {
 /// protocol encoding (Kitty/Sixel/iTerm2).
 #[derive(Clone)]
 pub struct ImageData {
-    /// Raw RGB pixel data (3 bytes per pixel: R, G, B)
+    /// Raw pixel data. Bytes per pixel is given by `channels` (3 = RGB, 4 = RGBA).
     pub pixels: Vec<u8>,
     /// Image width in pixels
     pub width_px: u32,
@@ -60,6 +60,8 @@ pub struct ImageData {
     pub width_cell: u16,
     /// Image height in terminal cells
     pub height_cell: u16,
+    /// Number of channels per pixel: 3 (RGB) or 4 (RGBA, transparent mode).
+    pub channels: u8,
 }
 
 /// Complete rendered page data

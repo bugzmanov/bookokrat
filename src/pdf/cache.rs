@@ -29,6 +29,8 @@ pub struct CacheKey {
     pub black: i32,
     /// Background tint color
     pub white: i32,
+    /// Whether the page was rendered with an alpha channel (transparent mode)
+    pub transparent: bool,
 }
 
 impl CacheKey {
@@ -45,6 +47,7 @@ impl CacheKey {
             invert_images: params.invert_images,
             black: params.black,
             white: params.white,
+            transparent: params.transparent,
         }
     }
 }
@@ -137,6 +140,7 @@ mod tests {
             cell_size: CellSize::new(10, 20),
             black: 0,
             white: 0xFFFFFF,
+            transparent: false,
         }
     }
 
@@ -148,6 +152,7 @@ mod tests {
                 height_px: 10,
                 width_cell: 10,
                 height_cell: 5,
+                channels: 3,
             },
             page_num: page,
             scale_factor: 1.0,

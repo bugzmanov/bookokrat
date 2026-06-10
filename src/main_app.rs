@@ -1569,6 +1569,10 @@ impl App {
                 });
             }
         }
+        // Transparent (alpha) rendering is only possible on the Kitty graphics protocol.
+        if use_kitty && crate::settings::is_transparent_background() {
+            service.apply_command(crate::pdf::Command::SetTransparent(true));
+        }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
             pdf_reader.kitty_delete_range_supported = supported;
         }

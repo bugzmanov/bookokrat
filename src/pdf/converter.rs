@@ -15,7 +15,7 @@ use std::sync::{
 
 use fast_image_resize as fir;
 use flume::{Receiver, SendError, Sender};
-use image::{DynamicImage, RgbImage};
+use image::{DynamicImage, RgbImage, RgbaImage};
 use ratatui::layout::Rect;
 use rayon::prelude::*;
 
@@ -1663,19 +1663,32 @@ fn expand_cursor_rect(cursor: &CursorRect, picker: &Picker) -> CursorRect {
     }
 }
 
-fn decode_rgb(pixels: &[u8], width: u32, height: u32) -> Result<RgbImage, PipelineError> {
+fn decode_pixels(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    channels: u8,
+) -> Result<DynamicImage, PipelineError> {
+    let bpp = if channels == 4 { 4u32 } else { 3u32 };
     let expected = width
         .checked_mul(height)
-        .and_then(|v| v.checked_mul(3))
-        .ok_or_else(|| pipeline_error("RGB size overflow"))? as usize;
+        .and_then(|v| v.checked_mul(bpp))
+        .ok_or_else(|| pipeline_error("pixel size overflow"))? as usize;
     if pixels.len() != expected {
         return Err(pipeline_error(format!(
-            "RGB buffer size mismatch: expected {expected}, got {}",
+            "pixel buffer size mismatch: expected {expected}, got {}",
             pixels.len()
         )));
     }
-    RgbImage::from_raw(width, height, pixels.to_vec())
-        .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
+    if bpp == 4 {
+        RgbaImage::from_raw(width, height, pixels.to_vec())
+            .map(DynamicImage::ImageRgba8)
+            .ok_or_else(|| pipeline_error("Can't build RGBA image from raw pixels"))
+    } else {
+        RgbImage::from_raw(width, height, pixels.to_vec())
+            .map(DynamicImage::ImageRgb8)
+            .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
+    }
 }
 
 #[inline]
@@ -1688,12 +1701,13 @@ fn cached_cell_size(cached: &CachedPage) -> CellSize {
 
 fn take_decoded(cached: &mut CachedPage) -> Result<DynamicImage, PipelineError> {
     if cached.decoded.is_none() {
-        let rgb = decode_rgb(
+        let img = decode_pixels(
             &cached.data.img_data.pixels,
             cached.data.img_data.width_px,
             cached.data.img_data.height_px,
+            cached.data.img_data.channels,
         )?;
-        cached.decoded = Some(DynamicImage::ImageRgb8(rgb));
+        cached.decoded = Some(img);
     }
     Ok(cached.decoded.take().expect("decoded should be present"))
 }
@@ -1716,14 +1730,25 @@ fn crop_to_viewport(
         let crop_height = viewport_px.min(max_height).max(1);
         img = img.crop_imm(0, y_px, img.width(), crop_height);
         if crop_height < viewport_px {
-            let rgb = img.to_rgb8();
-            let bg = rgb.get_pixel(0, 0);
-            let mut padded = image::ImageBuffer::from_pixel(rgb.width(), viewport_px, *bg);
-            let src = rgb.as_raw();
-            let dst = padded.as_mut();
-            let len = src.len().min(dst.len());
-            dst[..len].copy_from_slice(&src[..len]);
-            img = DynamicImage::ImageRgb8(padded);
+            if let DynamicImage::ImageRgba8(rgba) = &img {
+                // Transparent pages pad below the content with transparent pixels.
+                let mut padded =
+                    image::ImageBuffer::from_pixel(rgba.width(), viewport_px, image::Rgba([0; 4]));
+                let src = rgba.as_raw();
+                let dst = padded.as_mut();
+                let len = src.len().min(dst.len());
+                dst[..len].copy_from_slice(&src[..len]);
+                img = DynamicImage::ImageRgba8(padded);
+            } else {
+                let rgb = img.to_rgb8();
+                let bg = rgb.get_pixel(0, 0);
+                let mut padded = image::ImageBuffer::from_pixel(rgb.width(), viewport_px, *bg);
+                let src = rgb.as_raw();
+                let dst = padded.as_mut();
+                let len = src.len().min(dst.len());
+                dst[..len].copy_from_slice(&src[..len]);
+                img = DynamicImage::ImageRgb8(padded);
+            }
         }
     }
 
@@ -1887,13 +1912,13 @@ fn render_page_with_viewport(
     pid: u32,
     kitty_shm_support: bool,
 ) -> Result<ConvertedImage, PipelineError> {
-    let mut img = decode_rgb(
+    let mut dyn_img = decode_pixels(
         &cached.data.img_data.pixels,
         cached.data.img_data.width_px,
         cached.data.img_data.height_px,
+        cached.data.img_data.channels,
     )?;
-    apply_overlays(&mut img, overlays);
-    let mut dyn_img = DynamicImage::ImageRgb8(img);
+    apply_overlays_dynamic(&mut dyn_img, overlays);
 
     let mut area_cell_size = cached_cell_size(cached);
     if let Some(viewport) = viewport {
@@ -2123,37 +2148,45 @@ fn encode_protocol(
 ) -> Result<ConvertedImage, PipelineError> {
     match picker.protocol_type() {
         ProtocolType::Kitty => {
-            let rgb = img.to_rgb8();
-            let width = rgb.width();
-            let height = rgb.height();
-            let data = rgb.into_raw();
+            let is_rgba = matches!(img, DynamicImage::ImageRgba8(_));
+            let (data, width, height) = if is_rgba {
+                // Already straight alpha: the worker unpremultiplies right after
+                // rasterization, which is what Kitty f=32 expects.
+                let rgba = img.into_rgba8();
+                let width = rgba.width();
+                let height = rgba.height();
+                (rgba.into_raw(), width, height)
+            } else {
+                let rgb = img.to_rgb8();
+                let width = rgb.width();
+                let height = rgb.height();
+                (rgb.into_raw(), width, height)
+            };
+            let id = page_image_id(page_num);
             let img = if kitty_shm_support {
                 let shm_name = next_shm_name(pid, page_num);
-                match super::kittyv2::Image::create_shm_from_rgb(
-                    &data,
-                    width,
-                    height,
-                    &shm_name,
-                    page_image_id(page_num),
-                ) {
-                    Ok((shm_img, shm_size)) => {
-                        let _ = shm_size;
-                        shm_img
-                    }
+                let shm_result = if is_rgba {
+                    super::kittyv2::Image::create_shm_from_rgba(&data, width, height, &shm_name, id)
+                } else {
+                    super::kittyv2::Image::create_shm_from_rgb(&data, width, height, &shm_name, id)
+                };
+                match shm_result {
+                    Ok((shm_img, _shm_size)) => shm_img,
                     Err(e) => {
                         log::warn!(
                             "SHM transfer failed for page {page_num}, falling back to direct: {e:?}"
                         );
-                        super::kittyv2::Image::from_rgb_bytes(
-                            data,
-                            width,
-                            height,
-                            page_image_id(page_num),
-                        )
+                        if is_rgba {
+                            super::kittyv2::Image::from_rgba_bytes(data, width, height, id)
+                        } else {
+                            super::kittyv2::Image::from_rgb_bytes(data, width, height, id)
+                        }
                     }
                 }
+            } else if is_rgba {
+                super::kittyv2::Image::from_rgba_bytes(data, width, height, id)
             } else {
-                super::kittyv2::Image::from_rgb_bytes(data, width, height, page_image_id(page_num))
+                super::kittyv2::Image::from_rgb_bytes(data, width, height, id)
             };
 
             Ok(ConvertedImage::Kitty {
@@ -2247,10 +2280,109 @@ fn apply_overlays_dynamic(img: &mut DynamicImage, overlays: &OverlaySet) {
         apply_overlays(rgb, overlays);
         return;
     }
+    if let DynamicImage::ImageRgba8(rgba) = img {
+        apply_overlays_rgba(rgba, overlays);
+        return;
+    }
 
     let mut rgb = img.to_rgb8();
     apply_overlays(&mut rgb, overlays);
     *img = DynamicImage::ImageRgb8(rgb);
+}
+
+/// Underline rect for a comment (purple line drawn just below the text).
+fn comment_underline_rect(rect: PixelRect) -> PixelRect {
+    const UNDERLINE_THICKNESS: u32 = 3;
+    const UNDERLINE_OFFSET: u32 = 2;
+    let y0 = rect.y1.saturating_add(UNDERLINE_OFFSET);
+    PixelRect {
+        x0: rect.x0,
+        y0,
+        x1: rect.x1,
+        y1: y0.saturating_add(UNDERLINE_THICKNESS),
+    }
+}
+
+/// Paint a rect over an RGBA buffer, applying `f` to the RGB channels and
+/// forcing alpha to opaque so overlays stay visible over transparent page areas.
+fn paint_rgba_rect(
+    buf: &mut [u8],
+    width: usize,
+    height: usize,
+    rect: PixelRect,
+    mut f: impl FnMut(&mut u8, &mut u8, &mut u8),
+) {
+    let Some(c) = rect.clamp_to(width as u32, height as u32) else {
+        return;
+    };
+    if c.y1 <= c.y0 || c.x1 <= c.x0 {
+        return;
+    }
+    let stride = width * 4;
+    for y in c.y0..c.y1 {
+        let row = y as usize * stride;
+        for x in c.x0..c.x1 {
+            let p = row + x as usize * 4;
+            if p + 3 >= buf.len() {
+                continue;
+            }
+            let (mut r, mut g, mut b) = (buf[p], buf[p + 1], buf[p + 2]);
+            f(&mut r, &mut g, &mut b);
+            buf[p] = r;
+            buf[p + 1] = g;
+            buf[p + 2] = b;
+            buf[p + 3] = 255;
+        }
+    }
+}
+
+/// Scalar overlay application for RGBA (transparent) pages. Mirrors
+/// `apply_overlays` but writes to 4-channel pixels and keeps overlays opaque.
+fn apply_overlays_rgba(img: &mut RgbaImage, overlays: &OverlaySet) {
+    const UNDERLINE: (u8, u8, u8) = (0xC5, 0x94, 0xC5);
+    let width = img.width() as usize;
+    let height = img.height() as usize;
+    let buf = img.as_mut();
+
+    for highlight in &overlays.highlights {
+        let alpha = u16::from(highlight.alpha);
+        let inv_alpha = 255u16.saturating_sub(alpha);
+        let rgb = highlight.rgb;
+        paint_rgba_rect(buf, width, height, highlight.rect, |r, g, b| {
+            *r = blend_channel(*r, rgb.r, alpha, inv_alpha);
+            *g = blend_channel(*g, rgb.g, alpha, inv_alpha);
+            *b = blend_channel(*b, rgb.b, alpha, inv_alpha);
+        });
+    }
+
+    for rect in &overlays.comments {
+        let underline = if overlays.comments_are_underlines {
+            *rect
+        } else {
+            comment_underline_rect(*rect)
+        };
+        paint_rgba_rect(buf, width, height, underline, |r, g, b| {
+            *r = UNDERLINE.0;
+            *g = UNDERLINE.1;
+            *b = UNDERLINE.2;
+        });
+    }
+
+    for rect in overlays.selection.iter().chain(overlays.visual.iter()) {
+        paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
+            *r = r.saturating_add(40);
+            *g = g.saturating_sub(20);
+            *b = b.saturating_sub(60);
+        });
+    }
+
+    if let Some(cursor) = overlays.cursor {
+        paint_rgba_rect(buf, width, height, cursor, |r, g, b| {
+            *r = 255 - *r;
+            *g = 255 - *g;
+            *b = 255 - *b;
+        });
+    }
 }
 
 fn comment_rects_for_page(
@@ -2551,6 +2683,24 @@ pub fn run_conversion_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_pixels_builds_rgba_when_channels_is_four() {
+        let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80]; // 2 RGBA pixels
+        let img = decode_pixels(&pixels, 2, 1, 4).expect("rgba decode");
+        assert!(matches!(img, DynamicImage::ImageRgba8(_)));
+        assert_eq!(img.width(), 2);
+
+        let rgb = vec![1, 2, 3, 4, 5, 6]; // 2 RGB pixels
+        let img = decode_pixels(&rgb, 2, 1, 3).expect("rgb decode");
+        assert!(matches!(img, DynamicImage::ImageRgb8(_)));
+    }
+
+    #[test]
+    fn decode_pixels_rejects_size_mismatch() {
+        // 4-channel decode needs width*height*4 bytes; give it RGB-sized data.
+        assert!(decode_pixels(&[0; 6], 2, 1, 4).is_err());
+    }
 
     fn apply_row_scalar(row: &mut [u8], op: OverlayOp) {
         for px in row.chunks_exact_mut(3) {

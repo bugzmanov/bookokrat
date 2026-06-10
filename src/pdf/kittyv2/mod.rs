@@ -213,6 +213,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
     match request.image {
         ImageState::Queued(image) => {
             let dims = image.dimensions();
+            let format = image.format;
             let image_id = image.id.id.get();
             let new_id = ImageId::new(image.id.id);
 
@@ -222,7 +223,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                         .as_ref()
                         .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
                     let mut cmd = TransmitCommand::new(dims.width, dims.height)
-                        .format(Format::Rgb)
+                        .format(format)
                         .image_id(image_id)
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
@@ -246,7 +247,7 @@ fn display_image(request: ImageRequest, stdout: &mut io::Stdout) -> io::Result<(
                 }
                 Transmission::Direct { data, .. } => {
                     let mut cmd = DirectTransmit::new(dims.width, dims.height)
-                        .format(Format::Rgb)
+                        .format(format)
                         .image_id(image_id)
                         .placement_id(image_id)
                         .quiet(Quiet::ErrorsOnly)
@@ -304,6 +305,7 @@ fn display_image_relative_to_tmux_anchor(
     let image_id = match request.image {
         ImageState::Queued(image) => {
             let dims = image.dimensions();
+            let format = image.format;
             let image_id = image.id.id.get();
             let new_id = ImageId::new(image.id.id);
             let anchor_placement_id = tmux_anchor_placement_id(image_id);
@@ -314,7 +316,7 @@ fn display_image_relative_to_tmux_anchor(
                         .take()
                         .ok_or_else(|| io::Error::other("missing SHM lease for queued image"))?;
                     let cmd = TransmitCommand::new(dims.width, dims.height)
-                        .format(Format::Rgb)
+                        .format(format)
                         .image_id(image_id)
                         .placement_id(anchor_placement_id)
                         .quiet(Quiet::ErrorsOnly)

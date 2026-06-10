@@ -34,6 +34,9 @@ pub struct RenderState {
     /// Theme colors
     pub black: i32,
     pub white: i32,
+
+    /// Render with an alpha channel (transparent mode, Kitty only)
+    pub transparent: bool,
 }
 
 impl RenderState {
@@ -50,6 +53,7 @@ impl RenderState {
             cell_size,
             black,
             white,
+            transparent: false,
         }
     }
 
@@ -132,6 +136,19 @@ impl RenderState {
                     vec![]
                 }
             }
+
+            Command::SetTransparent(transparent) => {
+                if self.transparent != transparent {
+                    self.transparent = transparent;
+                    vec![
+                        Effect::InvalidateCache,
+                        Effect::RenderCurrentPage,
+                        Effect::UpdatePrefetch,
+                    ]
+                } else {
+                    vec![]
+                }
+            }
         }
     }
 
@@ -145,6 +162,7 @@ impl RenderState {
             cell_size: self.cell_size,
             black: self.black,
             white: self.white,
+            transparent: self.transparent,
         }
     }
 }
@@ -168,6 +186,8 @@ pub enum Command {
     PageNeedsRerender(usize),
     /// Update theme colors
     SetColors { black: i32, white: i32 },
+    /// Toggle transparent (alpha) rendering
+    SetTransparent(bool),
 }
 
 /// Effects produced by state changes

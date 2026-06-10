@@ -6834,8 +6834,12 @@ pub(crate) fn apply_theme_to_pdf_reader(
         (-1, -1)
     };
 
+    // Transparent (alpha) rendering is only possible on the Kitty graphics protocol.
+    let transparent = pdf_reader.is_kitty && crate::settings::is_transparent_background();
+
     if let Some(service) = service {
         service.apply_command(crate::pdf::Command::SetColors { black, white });
+        service.apply_command(crate::pdf::Command::SetTransparent(transparent));
         service.request_page(pdf_reader.page);
     }
     if let Some(tx) = conversion_tx {
