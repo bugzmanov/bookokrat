@@ -434,7 +434,7 @@ static NORD_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x2E3440), // Polar Night darkest
     base_01: smart_color(0x3B4252),
     base_02: smart_color(0x434C5E),
-    base_03: smart_color(0x4C566A), // Polar Night lightest
+    base_03: smart_color(0x686F7A), // Polar Night lightest
     base_04: smart_color(0xD8DEE9), // Snow Storm
     base_05: smart_color(0xE5E9F0),
     base_06: smart_color(0xECEFF4), // Snow Storm brightest
