@@ -5121,6 +5121,23 @@ impl App {
                 self.toggle_zen_mode();
                 true
             }
+            Action::ToggleZenBorder => {
+                let hide = !settings::is_zen_hide_border();
+                settings::set_zen_hide_border(hide);
+                // PDF re-renders in place (the next draw detects the content-area
+                // change and re-tiles); EPUB re-wraps automatically on width change.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+                if hide {
+                    self.notifications.info("Zen border: hidden");
+                } else {
+                    self.notifications.info("Zen border: shown");
+                }
+                true
+            }
             Action::Suspend => {
                 #[cfg(unix)]
                 {
@@ -5234,9 +5251,7 @@ impl App {
                         };
                         set_pdf_render_mode(new_mode);
                         if let Some(ref mut pdf_reader) = self.pdf_reader {
-                            if let Some(ref mut zoom) = pdf_reader.zoom {
-                                zoom.global_scroll_offset = 0;
-                            }
+                            pdf_reader.align_scroll_for_render_mode(new_mode);
                             pdf_reader.last_sent_viewport = None;
                             pdf_reader.force_redraw();
                             pdf_reader.set_hud_message(
@@ -5338,6 +5353,27 @@ impl App {
                         == crate::settings::EpubColumnMode::Dual,
                 );
                 self.text_reader.restore_to_node_index(current_node);
+            }
+            SettingsAction::ZenBorderChanged => {
+                // The border toggle only changes the content area, not the
+                // reading position. Re-render in place — the next PDF draw
+                // detects the area change and re-tiles; scroll offset is left
+                // untouched so the reader stays where it was.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+            }
+            SettingsAction::RenderModeChanged => {
+                // Page and scroll mode store the reading position differently, so
+                // convert it instead of jumping to the first page.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
             }
             SettingsAction::SettingsChanged => {
                 // Invalidate render cache for theme changes

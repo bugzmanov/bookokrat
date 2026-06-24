@@ -4,8 +4,9 @@ use crate::settings::{
     EpubColumnMode, LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_epub_column_mode,
     get_lookup_command, get_lookup_display, get_pdf_page_layout_mode, get_pdf_render_mode,
     get_synctex_editor, is_invert_scroll_direction, is_pdf_enabled, is_transparent_background,
-    set_epub_column_mode, set_integrations, set_invert_scroll_direction, set_lookup_display,
-    set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
+    is_zen_hide_border, set_epub_column_mode, set_integrations, set_invert_scroll_direction,
+    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
+    set_transparent_background, set_zen_hide_border,
 };
 use crate::terminal;
 use crate::theme::{
@@ -27,6 +28,8 @@ pub enum SettingsAction {
     Close,
     SettingsChanged,
     PageLayoutChanged,
+    ZenBorderChanged,
+    RenderModeChanged,
     TestLookupCommand,
     TestSynctexEditor,
 }
@@ -120,9 +123,11 @@ enum GeneralOption {
     MouseWheelInverted,
     EpubSingle,
     EpubDual,
+    ZenBorderShown,
+    ZenBorderHidden,
 }
 
-const GENERAL_OPTIONS: [GeneralOption; 10] = [
+const GENERAL_OPTIONS: [GeneralOption; 12] = [
     GeneralOption::PdfEnabled,
     GeneralOption::PdfDisabled,
     GeneralOption::PdfRenderPage,
@@ -133,6 +138,8 @@ const GENERAL_OPTIONS: [GeneralOption; 10] = [
     GeneralOption::MouseWheelInverted,
     GeneralOption::EpubSingle,
     GeneralOption::EpubDual,
+    GeneralOption::ZenBorderShown,
+    GeneralOption::ZenBorderHidden,
 ];
 
 impl GeneralOption {
@@ -148,6 +155,8 @@ impl GeneralOption {
             Self::MouseWheelInverted => 7,
             Self::EpubSingle => 8,
             Self::EpubDual => 9,
+            Self::ZenBorderShown => 10,
+            Self::ZenBorderHidden => 11,
         }
     }
 
@@ -760,6 +769,7 @@ impl SettingsPopup {
     fn general_reader_sections(&self) -> Vec<SettingsSection> {
         let invert_scroll = is_invert_scroll_direction();
         let current_column_mode = get_epub_column_mode();
+        let zen_hide_border = is_zen_hide_border();
 
         vec![
             SettingsSection {
@@ -804,6 +814,29 @@ impl SettingsPopup {
                         label: "Dual",
                         hint: Some("two columns when wide"),
                         selected: current_column_mode == EpubColumnMode::Dual,
+                        enabled: true,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "Zen Mode Border",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: true,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::ZenBorderShown,
+                        label: "Shown",
+                        hint: Some("frame around content"),
+                        selected: !zen_hide_border,
+                        enabled: true,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::ZenBorderHidden,
+                        label: "Hidden",
+                        hint: Some("content only"),
+                        selected: zen_hide_border,
                         enabled: true,
                     },
                 ],
@@ -1246,7 +1279,9 @@ impl SettingsPopup {
             GeneralOption::MouseWheelNormal
             | GeneralOption::MouseWheelInverted
             | GeneralOption::EpubSingle
-            | GeneralOption::EpubDual => true,
+            | GeneralOption::EpubDual
+            | GeneralOption::ZenBorderShown
+            | GeneralOption::ZenBorderHidden => true,
         }
     }
 
@@ -1290,7 +1325,7 @@ impl SettingsPopup {
             GeneralOption::PdfRenderPage if self.render_mode_available() => {
                 if get_pdf_render_mode() != PdfRenderMode::Page {
                     set_pdf_render_mode(PdfRenderMode::Page);
-                    return Some(SettingsAction::SettingsChanged);
+                    return Some(SettingsAction::RenderModeChanged);
                 }
                 None
             }
@@ -1299,7 +1334,7 @@ impl SettingsPopup {
             {
                 if get_pdf_render_mode() != PdfRenderMode::Scroll {
                     set_pdf_render_mode(PdfRenderMode::Scroll);
-                    return Some(SettingsAction::SettingsChanged);
+                    return Some(SettingsAction::RenderModeChanged);
                 }
                 None
             }
@@ -1342,6 +1377,20 @@ impl SettingsPopup {
                 if get_epub_column_mode() != EpubColumnMode::Dual {
                     set_epub_column_mode(EpubColumnMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
+                }
+                None
+            }
+            GeneralOption::ZenBorderShown => {
+                if is_zen_hide_border() {
+                    set_zen_hide_border(false);
+                    return Some(SettingsAction::ZenBorderChanged);
+                }
+                None
+            }
+            GeneralOption::ZenBorderHidden => {
+                if !is_zen_hide_border() {
+                    set_zen_hide_border(true);
+                    return Some(SettingsAction::ZenBorderChanged);
                 }
                 None
             }

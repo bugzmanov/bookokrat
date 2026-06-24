@@ -169,6 +169,9 @@ pub struct Settings {
     pub invert_scroll_direction: bool,
 
     #[serde(default)]
+    pub zen_hide_border: bool,
+
+    #[serde(default)]
     pub book_sort_order: BookSortOrder,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,6 +223,7 @@ impl Default for Settings {
             custom_themes: Vec::new(),
             justify_text: false,
             invert_scroll_direction: false,
+            zen_hide_border: false,
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
@@ -565,6 +569,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
             format!("{}", settings.invert_scroll_direction),
         ),
         (
+            "zen_hide_border".into(),
+            format!("{}", settings.zen_hide_border),
+        ),
+        (
             "book_sort_order".into(),
             match settings.book_sort_order {
                 BookSortOrder::ByName => "by_name".into(),
@@ -649,6 +657,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "invert_scroll_direction: {}\n",
         settings.invert_scroll_direction
     ));
+    content.push_str(&format!("zen_hide_border: {}\n", settings.zen_hide_border));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     if let Some(w) = settings.nav_panel_width {
         content.push_str(&format!("nav_panel_width: {}\n", w));
@@ -940,6 +949,17 @@ pub fn is_invert_scroll_direction() -> bool {
 pub fn set_invert_scroll_direction(invert: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.invert_scroll_direction = invert;
+    }
+    save_settings();
+}
+
+pub fn is_zen_hide_border() -> bool {
+    SETTINGS.read().map(|s| s.zen_hide_border).unwrap_or(false)
+}
+
+pub fn set_zen_hide_border(hide: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.zen_hide_border = hide;
     }
     save_settings();
 }

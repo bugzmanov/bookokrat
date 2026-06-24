@@ -101,6 +101,7 @@ pub enum Action {
     ToggleProfiling,
     ToggleRawHtml,
     ToggleJustifyText,
+    ToggleZenBorder,
     IncreaseMargin,
     DecreaseMargin,
 
@@ -234,6 +235,7 @@ impl Action {
         Action::ToggleProfiling,
         Action::ToggleRawHtml,
         Action::ToggleJustifyText,
+        Action::ToggleZenBorder,
         Action::IncreaseMargin,
         Action::DecreaseMargin,
         Action::ZoomIn,
@@ -376,6 +378,7 @@ impl Action {
             ToggleProfiling => "Toggle the performance profiler overlay",
             ToggleRawHtml => "Toggle raw HTML view (EPUB)",
             ToggleJustifyText => "Toggle justified text rendering (EPUB)",
+            ToggleZenBorder => "Toggle the border/frame in zen mode",
             IncreaseMargin => "Increase content margin",
             DecreaseMargin => "Decrease content margin",
 
@@ -497,8 +500,8 @@ mod tests {
                 WordForward | WordBackward | WordEnd | LineStart | LineEnd | FirstNonBlank => a,
                 JumpForward | JumpBackward => a,
                 SetMark | GotoMark | ToggleMarksList => a,
-                ToggleProfiling | ToggleRawHtml | ToggleJustifyText | IncreaseMargin
-                | DecreaseMargin => a,
+                ToggleProfiling | ToggleRawHtml | ToggleJustifyText | ToggleZenBorder
+                | IncreaseMargin | DecreaseMargin => a,
                 ZoomIn | ZoomOut | ZoomReset | ZoomFitWidth | ZoomEnhance | PanLeft | PanRight => a,
                 GoToPage | ToggleInvertImages | TogglePdfTheming | TogglePdfWatching => a,
                 TogglePdfPageLayout | TogglePdfRenderMode | TogglePdfLinkHighlight => a,

@@ -69,6 +69,7 @@ at the bottom of this document for the syntax.
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  q             Quit application                                             │
 │  Space+z       Toggle zen mode (configurable, see Settings)                 │
+│  Space+b       Toggle zen-mode border/frame                                 │
 │  Tab           Switch focus between library and reader                      │
 │  Esc           Clear selection, exit search, dismiss popups                 │
 │  ?             Toggle this help screen                                      │

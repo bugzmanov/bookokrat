@@ -127,6 +127,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>a" => Action::ToggleCommentsViewer);
     bind!(ctx, "<Space>s" => Action::OpenSettings);
     bind!(ctx, "<Space>z" => Action::ToggleZenMode);
+    bind!(ctx, "<Space>b" => Action::ToggleZenBorder);
     bind!(ctx, "<Space>t" => Action::OpenThemeSelector);
     bind!(ctx, "<Space>w" => Action::TogglePdfWatching);
     bind!(ctx, "<Space>D" => Action::TogglePdfPageLayout);
@@ -562,6 +563,15 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
+        );
+    }
+
+    #[test]
+    fn zen_border_toggle_bound() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::Global, "<Space>b"),
+            LookupResult::Found(Action::ToggleZenBorder)
         );
     }
 

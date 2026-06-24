@@ -1630,6 +1630,38 @@ impl PdfReaderState {
         }]
     }
 
+    /// Reposition after a render-mode switch so the current page stays put.
+    /// Page mode reads `global_scroll_offset` as a within-page offset; scroll
+    /// mode reads it as a whole-document offset, so the two must be converted
+    /// rather than zeroed (which would jump to the first page).
+    pub(crate) fn align_scroll_for_render_mode(&mut self, new_mode: PdfRenderMode) {
+        if !self.is_kitty {
+            return;
+        }
+        let Some(factor) = self.zoom.as_ref().map(Zoom::factor) else {
+            return;
+        };
+        match new_mode {
+            PdfRenderMode::Scroll => {
+                // Place the current page at the top of the continuous scroll.
+                let heights = self.page_heights_scaled(factor);
+                let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = page_offset;
+                }
+                self.clamp_kitty_scroll_offset();
+            }
+            PdfRenderMode::Page => {
+                // `self.page` already tracks the top visible page in scroll mode,
+                // so a within-page offset of 0 keeps us on that page.
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = 0;
+                }
+            }
+        }
+        self.last_render.rect = Rect::default();
+    }
+
     fn reset_zoom_to_fit(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
