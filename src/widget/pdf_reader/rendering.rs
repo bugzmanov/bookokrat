@@ -1454,6 +1454,20 @@ pub(crate) fn update_non_kitty_viewport(
     let Some(tx) = conversion_tx else {
         return;
     };
+    // Deadlock recovery: if we have no displayable image for the page we're about
+    // to request, the converter may believe it already sent one (sent_for_viewport)
+    // and refuse to re-tile an unchanged viewport — leaving us stuck on "loading"
+    // until a manual scroll. Clear the converter's sent state for the page (the
+    // same mechanism used for failed Kitty transmissions) so the viewport command
+    // below forces a fresh render. Self-correcting: once the frame lands, img is
+    // Some and this no longer fires.
+    if pdf_reader
+        .rendered
+        .get(viewport.page)
+        .is_none_or(|info| info.img.is_none())
+    {
+        let _ = tx.send(ConversionCommand::DisplayFailed(vec![viewport.page]));
+    }
     if let Some(cmd) = pdf_reader.viewport_command(viewport) {
         if PdfReaderState::debug_non_kitty_dual_enabled() {
             match &cmd {
