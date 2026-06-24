@@ -224,6 +224,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "i" => Action::ToggleInvertImages);
     bind!(ctx, "I" => Action::TogglePdfTheming);
+    bind!(ctx, "f" => Action::TogglePdfLinkHighlight);
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "x" => Action::DumpDebugState);
     bind!(ctx, "a" => Action::AddComment);
@@ -484,6 +485,15 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::EpubNormal, "E"),
             LookupResult::Found(Action::WordEnd)
+        );
+    }
+
+    #[test]
+    fn pdf_link_highlight_binding() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfStandard, "f"),
+            LookupResult::Found(Action::TogglePdfLinkHighlight)
         );
     }
 

@@ -1,6 +1,7 @@
 pub mod event_source;
 pub mod key_seq;
 pub mod mouse_tracker;
+pub mod pixel_mouse;
 pub mod text_area_utils;
 
 #[cfg(feature = "pdf")]

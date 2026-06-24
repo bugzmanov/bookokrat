@@ -1195,6 +1195,7 @@ impl PdfReaderState {
             Action::Quit => Some(InputAction::QuitApp),
             Action::ToggleInvertImages => Some(InputAction::ToggleInvertImages),
             Action::TogglePdfTheming => Some(InputAction::TogglePdfTheming),
+            Action::TogglePdfLinkHighlight => Some(InputAction::TogglePdfLinkHighlight),
             Action::ToggleProfiling => Some(InputAction::ToggleProfiling),
             Action::DumpDebugState => Some(InputAction::DumpDebugState),
             Action::AddComment => self.start_comment_input(),
@@ -3666,7 +3667,14 @@ impl PdfReaderState {
                 )?
             };
 
-            let source_y_cells = page_local_y as f32 / page_zoom;
+            // Sub-cell precision: when SGR-pixel mouse mode is active, the click
+            // lands somewhere inside the cell, not at its top-left corner.
+            // Adding the in-cell fraction (in source space, hence /page_zoom)
+            // lets small link clickboxes hit-test accurately. No-op (0,0) when
+            // pixel mode is off, preserving prior cell-quantized behavior.
+            let (frac_x, frac_y) = crate::inputs::pixel_mouse::subcell_fraction(term_col, term_row);
+            let source_x_cells = source_x_cells + frac_x / page_zoom;
+            let source_y_cells = (page_local_y as f32 + frac_y) / page_zoom;
 
             let pdf_x = source_x_cells * px_per_cell_x;
             let pdf_y = source_y_cells * px_per_cell_y;
@@ -3779,13 +3787,25 @@ impl PdfReaderState {
         let rendered = self.rendered.get(point.page)?;
         let x = point.pdf_x;
         let y = point.pdf_y;
+        // Without SGR-pixel mouse mode (e.g. under tmux, which only reports
+        // cells), the click resolves to the top-left of a whole cell. A text
+        // line is ~one cell tall, so the sampled point can sit up to half a line
+        // off the glyph the user aimed at — landing just outside the box. Allow
+        // a half-line vertical slack in that case so the click hits the line it
+        // visually falls on. With pixel mode active the point is exact, so the
+        // test stays tight (WYSIWYG).
+        let cell_quantized = !crate::inputs::pixel_mouse::is_enabled();
         for link in &rendered.link_rects {
-            if x >= link.x0 as f32
-                && x < link.x1 as f32
-                && y >= link.y0 as f32
-                && y < link.y1 as f32
-            {
-                return Some(link.target.clone());
+            for (bx0, by0, bx1, by1) in crate::pdf::link_visual_boxes(link, &rendered.line_bounds) {
+                let (bx0, by0, bx1, by1) = (bx0 as f32, by0 as f32, bx1 as f32, by1 as f32);
+                let tol_y = if cell_quantized {
+                    (by1 - by0) * 0.5
+                } else {
+                    0.0
+                };
+                if x >= bx0 && x <= bx1 && y + tol_y >= by0 && y - tol_y <= by1 {
+                    return Some(link.target.clone());
+                }
             }
         }
         None
@@ -6333,6 +6353,25 @@ impl PdfReaderState {
                 ));
                 self.last_sent_viewport = None;
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
+            }
+            InputAction::TogglePdfLinkHighlight => {
+                self.show_link_underlines = !self.show_link_underlines;
+                crate::settings::set_pdf_show_link_underlines(self.show_link_underlines);
+                send_conversion(crate::pdf::ConversionCommand::SetShowLinkUnderlines(
+                    self.show_link_underlines,
+                ));
+                self.set_hud_message(
+                    if self.show_link_underlines {
+                        "Link highlighting: on".to_string()
+                    } else {
+                        "Link highlighting: off".to_string()
+                    },
+                    crate::widget::hud_message::HudMode::Normal,
+                    std::time::Duration::from_secs(2),
+                );
+                if !self.is_kitty {
+                    self.force_redraw();
+                }
             }
             InputAction::SelectionChanged(rects) => {
                 self.pending_highlight = None;

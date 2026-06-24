@@ -40,6 +40,7 @@ pub use selection::{
 };
 pub use service::{DocumentInfo, RenderService};
 pub use state::{Command, Effect, RenderState};
+pub(crate) use types::link_visual_boxes;
 pub use types::{
     CharInfo, ImageData, LineBounds, LinkRect, LinkTarget, PageData, VecExt, ViewportUpdate,
 };

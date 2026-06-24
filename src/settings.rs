@@ -143,6 +143,9 @@ pub struct Settings {
     #[serde(default)]
     pub pdf_render_mode: PdfRenderMode,
 
+    #[serde(default)]
+    pub pdf_show_link_underlines: bool,
+
     #[serde(default = "default_true")]
     pub pdf_enabled: bool,
 
@@ -209,6 +212,7 @@ impl Default for Settings {
             pdf_scale: default_pdf_scale(),
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
+            pdf_show_link_underlines: false,
             pdf_enabled: true,
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
             epub_column_mode: EpubColumnMode::default(),
@@ -546,6 +550,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 EpubColumnMode::Dual => "dual".into(),
             },
         ),
+        (
+            "pdf_show_link_underlines".into(),
+            format!("{}", settings.pdf_show_link_underlines),
+        ),
         ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
         (
             "pdf_settings_configured".into(),
@@ -613,6 +621,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         PdfRenderMode::Scroll => "scroll",
     };
     content.push_str(&format!("pdf_render_mode: {}\n", mode_str));
+    content.push_str(&format!(
+        "pdf_show_link_underlines: {}\n",
+        settings.pdf_show_link_underlines
+    ));
     let layout_mode_str = match settings.pdf_page_layout_mode {
         PdfPageLayoutMode::Single => "single",
         PdfPageLayoutMode::Dual => "dual",
@@ -836,6 +848,20 @@ pub fn get_pdf_render_mode() -> PdfRenderMode {
 pub fn set_pdf_render_mode(mode: PdfRenderMode) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.pdf_render_mode = mode;
+    }
+    save_settings();
+}
+
+pub fn is_pdf_show_link_underlines() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_show_link_underlines)
+        .unwrap_or(false)
+}
+
+pub fn set_pdf_show_link_underlines(show: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_show_link_underlines = show;
     }
     save_settings();
 }

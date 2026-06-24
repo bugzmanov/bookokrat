@@ -1206,6 +1206,8 @@ impl App {
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         #[cfg(feature = "pdf")]
         {
+            // SGR-pixel mouse is a PDF-only mode; turn it off when leaving PDF.
+            crate::inputs::pixel_mouse::disable();
             // Clear any PDF graphics from terminal before switching to EPUB
             if let Some(ref pdf_reader) = self.pdf_reader {
                 Self::clear_pdf_graphics(pdf_reader.is_kitty);
@@ -1638,6 +1640,10 @@ impl App {
         self.pdf_reader = Some(pdf_reader);
         self.pdf_document_path = Some(doc_path.clone());
         self.pdf_font_size = cell_size;
+        // Enable SGR-pixel mouse for this PDF session (no-op if unsupported),
+        // using the renderer's authoritative cell size so sub-cell link
+        // hit-testing aligns with what's drawn.
+        crate::inputs::pixel_mouse::enable_for_pdf(cell_size.width, cell_size.height);
         self.pdf_picker = pdf_picker;
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
@@ -5349,6 +5355,7 @@ impl App {
                 {
                     // Close any open PDF if PDF support was disabled
                     if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                        crate::inputs::pixel_mouse::disable();
                         if let Some(ref pdf_reader) = self.pdf_reader {
                             Self::clear_pdf_graphics(pdf_reader.is_kitty);
                         }
@@ -6800,6 +6807,16 @@ impl App {
     }
 
     pub fn handle_resize(&mut self) {
+        // Cell pixel size can change on font-size changes; keep pixel-mouse
+        // conversion accurate using the renderer's authoritative cell size
+        // (window_size() can round/include padding). No-op when disabled.
+        #[cfg(feature = "pdf")]
+        if crate::inputs::pixel_mouse::is_enabled() {
+            crate::inputs::pixel_mouse::set_cell_size(
+                self.pdf_font_size.width,
+                self.pdf_font_size.height,
+            );
+        }
         // text reader needs to update image picker and line wraps
         self.text_reader.handle_terminal_resize();
     }
@@ -8255,6 +8272,17 @@ where
             let event = event_source.read()?;
             events_processed += 1;
 
+            // When SGR-pixel mouse mode is active (Kitty/Ghostty), mouse events
+            // carry pixel coordinates; rewrite them to cells for the cell-based
+            // UI while stashing the pixel position for sub-cell link hit-testing.
+            let event = {
+                let mut event = event;
+                if let Event::Mouse(ref mut me) = event {
+                    crate::inputs::pixel_mouse::normalize_mouse_event(me);
+                }
+                event
+            };
+
             // On Windows, crossterm emits both Press and Release key events.
             // Ignore Release (and Repeat) to prevent double-processing.
             if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Press) {
@@ -8448,6 +8476,14 @@ where
             #[cfg(feature = "pdf")]
             let _ = crate::pdf::kittyv2::delete_all_images();
             crossterm::terminal::disable_raw_mode()?;
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::DISABLE_SEQ
+                );
+            }
             execute!(
                 std::io::stdout(),
                 crossterm::terminal::LeaveAlternateScreen,
@@ -8464,6 +8500,17 @@ where
                 crossterm::event::EnableMouseCapture,
                 crossterm::cursor::Hide
             )?;
+            // Re-arm SGR-pixel mouse after resume (EnableMouseCapture reset it).
+            // Keep the cached cell size — it came from the renderer, not stdio.
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::ENABLE_SEQ
+                );
+                let _ = std::io::stdout().flush();
+            }
             crossterm::terminal::enable_raw_mode()?;
             terminal.clear()?;
             #[cfg(feature = "pdf")]
