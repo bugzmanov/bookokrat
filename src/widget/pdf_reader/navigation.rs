@@ -4149,6 +4149,7 @@ impl PdfReaderState {
         }
     }
 
+    #[cfg(test)]
     fn line_index_at_or_nearest_y(line_bounds: &[crate::pdf::LineBounds], y: f32) -> Option<usize> {
         let mut best_line = None;
         let mut best_dist = f32::MAX;
@@ -4172,6 +4173,46 @@ impl PdfReaderState {
         best_line
     }
 
+    /// Find the line nearest to a point, using X to disambiguate. In multi-column
+    /// layouts, several lines share the same Y range, so a Y-only lookup snaps to
+    /// the wrong column. Scoring lexicographically by (vertical distance, horizontal
+    /// distance) — each being zero when the point is inside the line's range —
+    /// picks the column the point actually falls in while preserving nearest-Y
+    /// behavior for single-column pages.
+    fn line_index_at_or_nearest(
+        line_bounds: &[crate::pdf::LineBounds],
+        x: f32,
+        y: f32,
+    ) -> Option<usize> {
+        let mut best_line = None;
+        let mut best_score = (f32::MAX, f32::MAX);
+
+        for (idx, line) in line_bounds.iter().enumerate() {
+            let v_dist = if y < line.y0 {
+                line.y0 - y
+            } else if y > line.y1 {
+                y - line.y1
+            } else {
+                0.0
+            };
+            let h_dist = if x < line.x0 {
+                line.x0 - x
+            } else if x > line.x1 {
+                x - line.x1
+            } else {
+                0.0
+            };
+
+            let score = (v_dist, h_dist);
+            if score < best_score {
+                best_score = score;
+                best_line = Some(idx);
+            }
+        }
+
+        best_line
+    }
+
     fn selection_point_to_cursor(
         &self,
         point: crate::pdf::SelectionPoint,
@@ -4184,7 +4225,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let line_idx = Self::line_index_at_or_nearest_y(line_bounds, point.pdf_y)?;
+        let line_idx = Self::line_index_at_or_nearest(line_bounds, point.pdf_x, point.pdf_y)?;
         let line = line_bounds.get(line_idx)?;
         if line.chars.is_empty() {
             return None;
