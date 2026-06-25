@@ -175,6 +175,9 @@ pdf_binding_tests! {
     pdf_i_upper: KeyContext::PdfStandard, "I",
         setup = |state| {},
         check = |_state, action| matches!(action, Some(InputAction::TogglePdfTheming));
+    pdf_f: KeyContext::PdfStandard, "f",
+        setup = |state| {},
+        check = |_state, action| matches!(action, Some(InputAction::TogglePdfLinkHighlight));
     pdf_p: KeyContext::PdfStandard, "p",
         setup = |state| {},
         check = |_state, action| matches!(action, Some(InputAction::ToggleProfiling));
@@ -414,6 +417,10 @@ pdf_binding_tests! {
         check = |_state, action| action.is_none();
     // d = AddComment; without visual mode or selection, returns None
     pdf_normal_d: KeyContext::PdfNormal, "d",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| action.is_none();
+    // a = AddComment; without visual mode or selection, returns None
+    pdf_normal_a: KeyContext::PdfNormal, "a",
         setup = |state| { state.normal_mode.active = true; },
         check = |_state, action| action.is_none();
     // S-Tab → EnterCommentNav; deactivates normal mode, start_comment_nav without comments = None

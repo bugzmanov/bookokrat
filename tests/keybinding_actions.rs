@@ -188,6 +188,12 @@ binding_tests! {
     global_space_z: KeyContext::Global, "<Space>z",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
+    global_space_b: KeyContext::Global, "<Space>b",
+        setup = |app, _dir| {
+            open_book(&mut app);
+            bookokrat::settings::set_zen_hide_border(false);
+        },
+        check = |_app| bookokrat::settings::is_zen_hide_border();
     global_ctrl_z: KeyContext::Global, "<C-z>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
