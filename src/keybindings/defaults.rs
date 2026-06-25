@@ -127,6 +127,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>a" => Action::ToggleCommentsViewer);
     bind!(ctx, "<Space>s" => Action::OpenSettings);
     bind!(ctx, "<Space>z" => Action::ToggleZenMode);
+    bind!(ctx, "<Space>b" => Action::ToggleZenBorder);
     bind!(ctx, "<Space>t" => Action::OpenThemeSelector);
     bind!(ctx, "<Space>w" => Action::TogglePdfWatching);
     bind!(ctx, "<Space>D" => Action::TogglePdfPageLayout);
@@ -224,6 +225,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "i" => Action::ToggleInvertImages);
     bind!(ctx, "I" => Action::TogglePdfTheming);
+    bind!(ctx, "f" => Action::TogglePdfLinkHighlight);
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "x" => Action::DumpDebugState);
     bind!(ctx, "a" => Action::AddComment);
@@ -487,6 +489,15 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pdf_link_highlight_binding() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfStandard, "f"),
+            LookupResult::Found(Action::TogglePdfLinkHighlight)
+        );
+    }
+
     // #2: gd in PDF normal
     #[test]
     fn pdf_normal_gd() {
@@ -552,6 +563,15 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
+        );
+    }
+
+    #[test]
+    fn zen_border_toggle_bound() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::Global, "<Space>b"),
+            LookupResult::Found(Action::ToggleZenBorder)
         );
     }
 

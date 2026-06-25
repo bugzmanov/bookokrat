@@ -224,6 +224,7 @@ pub enum InputAction {
     QuitApp,
     ToggleInvertImages,
     TogglePdfTheming,
+    TogglePdfLinkHighlight,
     RenderScale {
         factor: f32,
         viewport: Option<ViewportUpdate>,
@@ -371,6 +372,8 @@ pub struct PdfReaderState {
     pub invert_images: bool,
     /// Whether PDF pages are rendered with app theme tinting
     pub themed_rendering: bool,
+    /// Whether link clickboxes are underlined on the page
+    pub show_link_underlines: bool,
     /// Whether reader is currently in zen mode
     pub zen_mode: bool,
     /// Whether terminal supports PDF comments (Kitty/iTerm2 protocols)
@@ -497,6 +500,7 @@ impl PdfReaderState {
             comments_enabled,
             invert_images: true,
             themed_rendering: true,
+            show_link_underlines: crate::settings::is_pdf_show_link_underlines(),
             zen_mode: false,
             supports_comments,
             book_comments,

@@ -1195,6 +1195,7 @@ impl PdfReaderState {
             Action::Quit => Some(InputAction::QuitApp),
             Action::ToggleInvertImages => Some(InputAction::ToggleInvertImages),
             Action::TogglePdfTheming => Some(InputAction::TogglePdfTheming),
+            Action::TogglePdfLinkHighlight => Some(InputAction::TogglePdfLinkHighlight),
             Action::ToggleProfiling => Some(InputAction::ToggleProfiling),
             Action::DumpDebugState => Some(InputAction::DumpDebugState),
             Action::AddComment => self.start_comment_input(),
@@ -1627,6 +1628,38 @@ impl PdfReaderState {
             bottomright_x: line.x1.round() as u32,
             bottomright_y: line.y1.round() as u32,
         }]
+    }
+
+    /// Reposition after a render-mode switch so the current page stays put.
+    /// Page mode reads `global_scroll_offset` as a within-page offset; scroll
+    /// mode reads it as a whole-document offset, so the two must be converted
+    /// rather than zeroed (which would jump to the first page).
+    pub(crate) fn align_scroll_for_render_mode(&mut self, new_mode: PdfRenderMode) {
+        if !self.is_kitty {
+            return;
+        }
+        let Some(factor) = self.zoom.as_ref().map(Zoom::factor) else {
+            return;
+        };
+        match new_mode {
+            PdfRenderMode::Scroll => {
+                // Place the current page at the top of the continuous scroll.
+                let heights = self.page_heights_scaled(factor);
+                let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = page_offset;
+                }
+                self.clamp_kitty_scroll_offset();
+            }
+            PdfRenderMode::Page => {
+                // `self.page` already tracks the top visible page in scroll mode,
+                // so a within-page offset of 0 keeps us on that page.
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = 0;
+                }
+            }
+        }
+        self.last_render.rect = Rect::default();
     }
 
     fn reset_zoom_to_fit(&mut self) -> Option<InputAction> {
@@ -3666,7 +3699,14 @@ impl PdfReaderState {
                 )?
             };
 
-            let source_y_cells = page_local_y as f32 / page_zoom;
+            // Sub-cell precision: when SGR-pixel mouse mode is active, the click
+            // lands somewhere inside the cell, not at its top-left corner.
+            // Adding the in-cell fraction (in source space, hence /page_zoom)
+            // lets small link clickboxes hit-test accurately. No-op (0,0) when
+            // pixel mode is off, preserving prior cell-quantized behavior.
+            let (frac_x, frac_y) = crate::inputs::pixel_mouse::subcell_fraction(term_col, term_row);
+            let source_x_cells = source_x_cells + frac_x / page_zoom;
+            let source_y_cells = (page_local_y as f32 + frac_y) / page_zoom;
 
             let pdf_x = source_x_cells * px_per_cell_x;
             let pdf_y = source_y_cells * px_per_cell_y;
@@ -3779,13 +3819,25 @@ impl PdfReaderState {
         let rendered = self.rendered.get(point.page)?;
         let x = point.pdf_x;
         let y = point.pdf_y;
+        // Without SGR-pixel mouse mode (e.g. under tmux, which only reports
+        // cells), the click resolves to the top-left of a whole cell. A text
+        // line is ~one cell tall, so the sampled point can sit up to half a line
+        // off the glyph the user aimed at — landing just outside the box. Allow
+        // a half-line vertical slack in that case so the click hits the line it
+        // visually falls on. With pixel mode active the point is exact, so the
+        // test stays tight (WYSIWYG).
+        let cell_quantized = !crate::inputs::pixel_mouse::is_enabled();
         for link in &rendered.link_rects {
-            if x >= link.x0 as f32
-                && x < link.x1 as f32
-                && y >= link.y0 as f32
-                && y < link.y1 as f32
-            {
-                return Some(link.target.clone());
+            for (bx0, by0, bx1, by1) in crate::pdf::link_visual_boxes(link, &rendered.line_bounds) {
+                let (bx0, by0, bx1, by1) = (bx0 as f32, by0 as f32, bx1 as f32, by1 as f32);
+                let tol_y = if cell_quantized {
+                    (by1 - by0) * 0.5
+                } else {
+                    0.0
+                };
+                if x >= bx0 && x <= bx1 && y + tol_y >= by0 && y - tol_y <= by1 {
+                    return Some(link.target.clone());
+                }
             }
         }
         None
@@ -4129,6 +4181,7 @@ impl PdfReaderState {
         }
     }
 
+    #[cfg(test)]
     fn line_index_at_or_nearest_y(line_bounds: &[crate::pdf::LineBounds], y: f32) -> Option<usize> {
         let mut best_line = None;
         let mut best_dist = f32::MAX;
@@ -4152,6 +4205,46 @@ impl PdfReaderState {
         best_line
     }
 
+    /// Find the line nearest to a point, using X to disambiguate. In multi-column
+    /// layouts, several lines share the same Y range, so a Y-only lookup snaps to
+    /// the wrong column. Scoring lexicographically by (vertical distance, horizontal
+    /// distance) — each being zero when the point is inside the line's range —
+    /// picks the column the point actually falls in while preserving nearest-Y
+    /// behavior for single-column pages.
+    fn line_index_at_or_nearest(
+        line_bounds: &[crate::pdf::LineBounds],
+        x: f32,
+        y: f32,
+    ) -> Option<usize> {
+        let mut best_line = None;
+        let mut best_score = (f32::MAX, f32::MAX);
+
+        for (idx, line) in line_bounds.iter().enumerate() {
+            let v_dist = if y < line.y0 {
+                line.y0 - y
+            } else if y > line.y1 {
+                y - line.y1
+            } else {
+                0.0
+            };
+            let h_dist = if x < line.x0 {
+                line.x0 - x
+            } else if x > line.x1 {
+                x - line.x1
+            } else {
+                0.0
+            };
+
+            let score = (v_dist, h_dist);
+            if score < best_score {
+                best_score = score;
+                best_line = Some(idx);
+            }
+        }
+
+        best_line
+    }
+
     fn selection_point_to_cursor(
         &self,
         point: crate::pdf::SelectionPoint,
@@ -4164,7 +4257,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let line_idx = Self::line_index_at_or_nearest_y(line_bounds, point.pdf_y)?;
+        let line_idx = Self::line_index_at_or_nearest(line_bounds, point.pdf_x, point.pdf_y)?;
         let line = line_bounds.get(line_idx)?;
         if line.chars.is_empty() {
             return None;
@@ -6333,6 +6426,25 @@ impl PdfReaderState {
                 ));
                 self.last_sent_viewport = None;
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
+            }
+            InputAction::TogglePdfLinkHighlight => {
+                self.show_link_underlines = !self.show_link_underlines;
+                crate::settings::set_pdf_show_link_underlines(self.show_link_underlines);
+                send_conversion(crate::pdf::ConversionCommand::SetShowLinkUnderlines(
+                    self.show_link_underlines,
+                ));
+                self.set_hud_message(
+                    if self.show_link_underlines {
+                        "Link highlighting: on".to_string()
+                    } else {
+                        "Link highlighting: off".to_string()
+                    },
+                    crate::widget::hud_message::HudMode::Normal,
+                    std::time::Duration::from_secs(2),
+                );
+                if !self.is_kitty {
+                    self.force_redraw();
+                }
             }
             InputAction::SelectionChanged(rects) => {
                 self.pending_highlight = None;

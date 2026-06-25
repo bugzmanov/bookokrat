@@ -559,9 +559,13 @@ impl MarkdownTextReader {
             return;
         }
 
+        // In zen mode the user can opt to drop the surrounding frame and render
+        // content edge-to-edge.
+        let borderless = zen_mode && crate::settings::is_zen_hide_border();
+
         // Base content rectangle inside the border. This is the single-column
         // text area; in dual mode it is split into two side-by-side columns.
-        let base_inner = self.content_inner_rect(area);
+        let base_inner = self.content_inner_rect(area, borderless);
 
         // Two-column "book spread": active whenever the pane is wide enough to
         // give each column a comfortable measure (available in zen and normal
@@ -716,19 +720,24 @@ impl MarkdownTextReader {
             self.hud_message = None;
         }
 
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .title(title_text)
-            .title_bottom(progress_title)
-            .border_style(RatatuiStyle::default().fg(border_color));
-        if let Some(mode_title) = mode_title {
-            block = block.title_bottom(mode_title);
-        }
-        if let Some(hud) = self.hud_message.as_ref() {
-            block = block.title_bottom(hud.styled_line(palette));
-        }
+        let mut block = if borderless {
+            Block::default().borders(Borders::NONE)
+        } else {
+            let mut b = Block::default()
+                .borders(Borders::ALL)
+                .title(title_text)
+                .title_bottom(progress_title)
+                .border_style(RatatuiStyle::default().fg(border_color));
+            if let Some(mode_title) = mode_title {
+                b = b.title_bottom(mode_title);
+            }
+            if let Some(hud) = self.hud_message.as_ref() {
+                b = b.title_bottom(hud.styled_line(palette));
+            }
+            b
+        };
 
-        if zen_mode && self.search_state.active {
+        if !borderless && zen_mode && self.search_state.active {
             let search_hint = match self.search_state.mode {
                 SearchMode::InputMode => {
                     let query = &self.search_state.query;
@@ -890,8 +899,12 @@ impl MarkdownTextReader {
 
     /// The content rectangle inside the reader's border (single-column text
     /// area). In dual mode this rect is split into two columns.
-    fn content_inner_rect(&self, area: Rect) -> Rect {
-        let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    fn content_inner_rect(&self, area: Rect, borderless: bool) -> Rect {
+        let mut inner = if borderless {
+            area
+        } else {
+            Block::default().borders(Borders::ALL).inner(area)
+        };
         inner.y = inner.y.saturating_add(1);
         inner.height = inner.height.saturating_sub(1);
         inner.x = inner.x.saturating_add(1);

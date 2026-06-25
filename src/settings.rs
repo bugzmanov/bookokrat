@@ -143,6 +143,9 @@ pub struct Settings {
     #[serde(default)]
     pub pdf_render_mode: PdfRenderMode,
 
+    #[serde(default)]
+    pub pdf_show_link_underlines: bool,
+
     #[serde(default = "default_true")]
     pub pdf_enabled: bool,
 
@@ -164,6 +167,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub invert_scroll_direction: bool,
+
+    #[serde(default)]
+    pub zen_hide_border: bool,
 
     #[serde(default)]
     pub book_sort_order: BookSortOrder,
@@ -209,6 +215,7 @@ impl Default for Settings {
             pdf_scale: default_pdf_scale(),
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
+            pdf_show_link_underlines: false,
             pdf_enabled: true,
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
             epub_column_mode: EpubColumnMode::default(),
@@ -216,6 +223,7 @@ impl Default for Settings {
             custom_themes: Vec::new(),
             justify_text: false,
             invert_scroll_direction: false,
+            zen_hide_border: false,
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
@@ -546,6 +554,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 EpubColumnMode::Dual => "dual".into(),
             },
         ),
+        (
+            "pdf_show_link_underlines".into(),
+            format!("{}", settings.pdf_show_link_underlines),
+        ),
         ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
         (
             "pdf_settings_configured".into(),
@@ -555,6 +567,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
         (
             "invert_scroll_direction".into(),
             format!("{}", settings.invert_scroll_direction),
+        ),
+        (
+            "zen_hide_border".into(),
+            format!("{}", settings.zen_hide_border),
         ),
         (
             "book_sort_order".into(),
@@ -613,6 +629,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         PdfRenderMode::Scroll => "scroll",
     };
     content.push_str(&format!("pdf_render_mode: {}\n", mode_str));
+    content.push_str(&format!(
+        "pdf_show_link_underlines: {}\n",
+        settings.pdf_show_link_underlines
+    ));
     let layout_mode_str = match settings.pdf_page_layout_mode {
         PdfPageLayoutMode::Single => "single",
         PdfPageLayoutMode::Dual => "dual",
@@ -637,6 +657,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "invert_scroll_direction: {}\n",
         settings.invert_scroll_direction
     ));
+    content.push_str(&format!("zen_hide_border: {}\n", settings.zen_hide_border));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     if let Some(w) = settings.nav_panel_width {
         content.push_str(&format!("nav_panel_width: {}\n", w));
@@ -840,6 +861,20 @@ pub fn set_pdf_render_mode(mode: PdfRenderMode) {
     save_settings();
 }
 
+pub fn is_pdf_show_link_underlines() -> bool {
+    SETTINGS
+        .read()
+        .map(|s| s.pdf_show_link_underlines)
+        .unwrap_or(false)
+}
+
+pub fn set_pdf_show_link_underlines(show: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.pdf_show_link_underlines = show;
+    }
+    save_settings();
+}
+
 pub fn get_pdf_page_layout_mode() -> PdfPageLayoutMode {
     SETTINGS
         .read()
@@ -914,6 +949,17 @@ pub fn is_invert_scroll_direction() -> bool {
 pub fn set_invert_scroll_direction(invert: bool) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.invert_scroll_direction = invert;
+    }
+    save_settings();
+}
+
+pub fn is_zen_hide_border() -> bool {
+    SETTINGS.read().map(|s| s.zen_hide_border).unwrap_or(false)
+}
+
+pub fn set_zen_hide_border(hide: bool) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.zen_hide_border = hide;
     }
     save_settings();
 }

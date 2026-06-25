@@ -899,18 +899,28 @@ impl PdfReaderState {
         }
         let hud_message = self.hud_message.as_ref();
 
-        let mut content_block = Block::default()
-            .borders(Borders::ALL)
-            .title(title_text)
-            .title_bottom(progress_title)
-            .border_style(Style::default().fg(border_color))
-            .style(Style::default().fg(text_color).bg(bg_color));
-        if let Some(mode_title) = mode_title {
-            content_block = content_block.title_bottom(mode_title);
-        }
-        if let Some(hud) = hud_message {
-            content_block = content_block.title_bottom(hud.styled_line(palette));
-        }
+        // In zen mode the user can opt to drop the surrounding frame so the page
+        // renders edge-to-edge.
+        let borderless = self.zen_mode && crate::settings::is_zen_hide_border();
+        let content_block = if borderless {
+            Block::default()
+                .borders(Borders::NONE)
+                .style(Style::default().fg(text_color).bg(bg_color))
+        } else {
+            let mut b = Block::default()
+                .borders(Borders::ALL)
+                .title(title_text)
+                .title_bottom(progress_title)
+                .border_style(Style::default().fg(border_color))
+                .style(Style::default().fg(text_color).bg(bg_color));
+            if let Some(mode_title) = mode_title {
+                b = b.title_bottom(mode_title);
+            }
+            if let Some(hud) = hud_message {
+                b = b.title_bottom(hud.styled_line(palette));
+            }
+            b
+        };
         let inner_area = content_block.inner(area);
         f.render_widget(content_block, area);
 
@@ -933,6 +943,13 @@ impl PdfReaderState {
                 if let Some(tx) = conversion_tx {
                     let _ = tx.send(ConversionCommand::InvalidatePageCache);
                 }
+                // Changing the content area evicts the on-screen Kitty images
+                // (they were transmitted at the old size), so nothing is actually
+                // placed anymore. Drop the placement bookkeeping to match — the
+                // NoChange fast-path keys on the terminal size (unchanged here),
+                // so without this the page stays stranded on [ LOADING ] until a
+                // page switch forces a re-placement.
+                self.kitty_visible_pages.clear();
             }
         }
 
@@ -1454,6 +1471,20 @@ pub(crate) fn update_non_kitty_viewport(
     let Some(tx) = conversion_tx else {
         return;
     };
+    // Deadlock recovery: if we have no displayable image for the page we're about
+    // to request, the converter may believe it already sent one (sent_for_viewport)
+    // and refuse to re-tile an unchanged viewport — leaving us stuck on "loading"
+    // until a manual scroll. Clear the converter's sent state for the page (the
+    // same mechanism used for failed Kitty transmissions) so the viewport command
+    // below forces a fresh render. Self-correcting: once the frame lands, img is
+    // Some and this no longer fires.
+    if pdf_reader
+        .rendered
+        .get(viewport.page)
+        .is_none_or(|info| info.img.is_none())
+    {
+        let _ = tx.send(ConversionCommand::DisplayFailed(vec![viewport.page]));
+    }
     if let Some(cmd) = pdf_reader.viewport_command(viewport) {
         if PdfReaderState::debug_non_kitty_dual_enabled() {
             match &cmd {
@@ -2661,6 +2692,13 @@ impl PdfReaderState {
             page_has_queued_image(self.page)
         };
 
+        // NoChange is only safe when the current page is actually placed on
+        // screen. After a content-area change (e.g. zen-mode border toggle) the
+        // images are evicted and `kitty_visible_pages` is cleared, so we keep
+        // re-rendering until the page is genuinely re-placed rather than skipping
+        // on the unchanged terminal size.
+        let current_page_placed = self.kitty_visible_pages.contains(&self.page);
+
         if size == self.last_render.rect
             && is_kitty_with_zoom
             && !tmux_requires_anchor_refresh
@@ -2668,6 +2706,7 @@ impl PdfReaderState {
             && !comment_modal
             && !highlight_palette_modal
             && !current_page_needs_display
+            && current_page_placed
         {
             frame.render_widget(ImageRegion, img_area);
             return DisplayBatch::NoChange;

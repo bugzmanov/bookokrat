@@ -1206,6 +1206,8 @@ impl App {
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         #[cfg(feature = "pdf")]
         {
+            // SGR-pixel mouse is a PDF-only mode; turn it off when leaving PDF.
+            crate::inputs::pixel_mouse::disable();
             // Clear any PDF graphics from terminal before switching to EPUB
             if let Some(ref pdf_reader) = self.pdf_reader {
                 Self::clear_pdf_graphics(pdf_reader.is_kitty);
@@ -1638,6 +1640,10 @@ impl App {
         self.pdf_reader = Some(pdf_reader);
         self.pdf_document_path = Some(doc_path.clone());
         self.pdf_font_size = cell_size;
+        // Enable SGR-pixel mouse for this PDF session (no-op if unsupported),
+        // using the renderer's authoritative cell size so sub-cell link
+        // hit-testing aligns with what's drawn.
+        crate::inputs::pixel_mouse::enable_for_pdf(cell_size.width, cell_size.height);
         self.pdf_picker = pdf_picker;
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
@@ -5115,6 +5121,23 @@ impl App {
                 self.toggle_zen_mode();
                 true
             }
+            Action::ToggleZenBorder => {
+                let hide = !settings::is_zen_hide_border();
+                settings::set_zen_hide_border(hide);
+                // PDF re-renders in place (the next draw detects the content-area
+                // change and re-tiles); EPUB re-wraps automatically on width change.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+                if hide {
+                    self.notifications.info("Zen border: hidden");
+                } else {
+                    self.notifications.info("Zen border: shown");
+                }
+                true
+            }
             Action::Suspend => {
                 #[cfg(unix)]
                 {
@@ -5168,9 +5191,8 @@ impl App {
                     };
                     set_pdf_page_layout_mode(new_mode);
                     if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        if let Some(ref mut zoom) = pdf_reader.zoom {
-                            zoom.global_scroll_offset = 0;
-                        }
+                        pdf_reader
+                            .align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                         pdf_reader.last_sent_viewport = None;
                         pdf_reader.force_redraw();
                         pdf_reader.set_hud_message(
@@ -5228,9 +5250,7 @@ impl App {
                         };
                         set_pdf_render_mode(new_mode);
                         if let Some(ref mut pdf_reader) = self.pdf_reader {
-                            if let Some(ref mut zoom) = pdf_reader.zoom {
-                                zoom.global_scroll_offset = 0;
-                            }
+                            pdf_reader.align_scroll_for_render_mode(new_mode);
                             pdf_reader.last_sent_viewport = None;
                             pdf_reader.force_redraw();
                             pdf_reader.set_hud_message(
@@ -5316,11 +5336,14 @@ impl App {
                 self.settings_popup = None;
             }
             SettingsAction::PageLayoutChanged => {
+                // Keep the current page in view across the layout change. Resetting
+                // the scroll offset to 0 would jump to the first page and, in scroll
+                // mode, strand the loop on [ LOADING ] (self.page snaps to 0 while the
+                // converter is still rendering around the old page, so the frame that
+                // clears the waiting flag never arrives).
                 #[cfg(feature = "pdf")]
                 if let Some(ref mut pdf_reader) = self.pdf_reader {
-                    if let Some(ref mut zoom) = pdf_reader.zoom {
-                        zoom.global_scroll_offset = 0;
-                    }
+                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                     pdf_reader.last_sent_viewport = None;
                     pdf_reader.force_redraw();
                 }
@@ -5332,6 +5355,27 @@ impl App {
                         == crate::settings::EpubColumnMode::Dual,
                 );
                 self.text_reader.restore_to_node_index(current_node);
+            }
+            SettingsAction::ZenBorderChanged => {
+                // The border toggle only changes the content area, not the
+                // reading position. Re-render in place — the next PDF draw
+                // detects the area change and re-tiles; scroll offset is left
+                // untouched so the reader stays where it was.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+            }
+            SettingsAction::RenderModeChanged => {
+                // Page and scroll mode store the reading position differently, so
+                // convert it instead of jumping to the first page.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
             }
             SettingsAction::SettingsChanged => {
                 // Invalidate render cache for theme changes
@@ -5349,6 +5393,7 @@ impl App {
                 {
                     // Close any open PDF if PDF support was disabled
                     if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                        crate::inputs::pixel_mouse::disable();
                         if let Some(ref pdf_reader) = self.pdf_reader {
                             Self::clear_pdf_graphics(pdf_reader.is_kitty);
                         }
@@ -6800,6 +6845,16 @@ impl App {
     }
 
     pub fn handle_resize(&mut self) {
+        // Cell pixel size can change on font-size changes; keep pixel-mouse
+        // conversion accurate using the renderer's authoritative cell size
+        // (window_size() can round/include padding). No-op when disabled.
+        #[cfg(feature = "pdf")]
+        if crate::inputs::pixel_mouse::is_enabled() {
+            crate::inputs::pixel_mouse::set_cell_size(
+                self.pdf_font_size.width,
+                self.pdf_font_size.height,
+            );
+        }
         // text reader needs to update image picker and line wraps
         self.text_reader.handle_terminal_resize();
     }
@@ -8255,6 +8310,17 @@ where
             let event = event_source.read()?;
             events_processed += 1;
 
+            // When SGR-pixel mouse mode is active (Kitty/Ghostty), mouse events
+            // carry pixel coordinates; rewrite them to cells for the cell-based
+            // UI while stashing the pixel position for sub-cell link hit-testing.
+            let event = {
+                let mut event = event;
+                if let Event::Mouse(ref mut me) = event {
+                    crate::inputs::pixel_mouse::normalize_mouse_event(me);
+                }
+                event
+            };
+
             // On Windows, crossterm emits both Press and Release key events.
             // Ignore Release (and Repeat) to prevent double-processing.
             if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Press) {
@@ -8448,6 +8514,14 @@ where
             #[cfg(feature = "pdf")]
             let _ = crate::pdf::kittyv2::delete_all_images();
             crossterm::terminal::disable_raw_mode()?;
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::DISABLE_SEQ
+                );
+            }
             execute!(
                 std::io::stdout(),
                 crossterm::terminal::LeaveAlternateScreen,
@@ -8464,6 +8538,17 @@ where
                 crossterm::event::EnableMouseCapture,
                 crossterm::cursor::Hide
             )?;
+            // Re-arm SGR-pixel mouse after resume (EnableMouseCapture reset it).
+            // Keep the cached cell size — it came from the renderer, not stdio.
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::ENABLE_SEQ
+                );
+                let _ = std::io::stdout().flush();
+            }
             crossterm::terminal::enable_raw_mode()?;
             terminal.clear()?;
             #[cfg(feature = "pdf")]
