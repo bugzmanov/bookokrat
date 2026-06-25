@@ -5191,9 +5191,8 @@ impl App {
                     };
                     set_pdf_page_layout_mode(new_mode);
                     if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        if let Some(ref mut zoom) = pdf_reader.zoom {
-                            zoom.global_scroll_offset = 0;
-                        }
+                        pdf_reader
+                            .align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                         pdf_reader.last_sent_viewport = None;
                         pdf_reader.force_redraw();
                         pdf_reader.set_hud_message(
@@ -5337,11 +5336,14 @@ impl App {
                 self.settings_popup = None;
             }
             SettingsAction::PageLayoutChanged => {
+                // Keep the current page in view across the layout change. Resetting
+                // the scroll offset to 0 would jump to the first page and, in scroll
+                // mode, strand the loop on [ LOADING ] (self.page snaps to 0 while the
+                // converter is still rendering around the old page, so the frame that
+                // clears the waiting flag never arrives).
                 #[cfg(feature = "pdf")]
                 if let Some(ref mut pdf_reader) = self.pdf_reader {
-                    if let Some(ref mut zoom) = pdf_reader.zoom {
-                        zoom.global_scroll_offset = 0;
-                    }
+                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                     pdf_reader.last_sent_viewport = None;
                     pdf_reader.force_redraw();
                 }
