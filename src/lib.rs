@@ -1,3 +1,46 @@
+//! # bookokrat
+//!
+//! A terminal-based EPUB, PDF, and DJVU book reader built with Rust.
+//!
+//! `bookokrat` provides a rich terminal UI for reading digital books, with
+//! support for EPUB, PDF, and DJVU formats. It renders formatted text,
+//! images, tables, and MathML directly in the terminal.
+//!
+//! ## Features
+//!
+//! - **EPUB** rendering with HTML-to-Markdown conversion and image display
+//! - **PDF** rendering via the `pdf` feature flag (uses `pdfium`)
+//! - **DJVU** support via external conversion
+//! - Configurable keybindings, themes, and color modes
+//! - Bookmarks, annotations, highlights, and reading history
+//! - Full-text search across book content
+//! - Table of contents navigation and jump list
+//! - Image popups with kitty/sixel protocol support
+//!
+//! ## Feature Flags
+//!
+//! | Feature      | Description                                    |
+//! |-------------|-----------------------------------------------|
+//! | `pdf`       | Enables PDF rendering support (requires pdfium)| |
+//! | `test-utils`| Exposes [`test_utils`] for integration tests   |
+//!
+//! ## Architecture
+//!
+//! The crate is organized into several top-level modules:
+//!
+//! - [`main_app`] — application state machine and event loop
+//! - [`parsing`] — HTML/EPUB/Markdown parsing and rendering
+//! - [`inputs`] — terminal input handling (keyboard, mouse, key sequences)
+//! - [`keybindings`] — configurable key-action mapping
+//! - [`book_manager`] — book loading, caching, and chapter management
+//! - [`library`] — book library management
+//! - [`theme`] — color themes and styling
+//! - [`search`] / [`search_engine`] — full-text search
+//! - [`annotations`], [`bookmarks`], [`marks`], [`comments`] — reading annotations
+//! - [`widget`] — TUI widgets (table of contents, book list, search, etc.)
+//! - [`images`] — image loading, storage, and display
+//! - [`terminal`] / [`terminal_overlay`] — terminal setup and overlay management
+//!
 // Export modules for use in tests
 pub mod annotations;
 pub mod book_manager;
