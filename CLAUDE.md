@@ -1443,12 +1443,33 @@ key q
 | Command | Arguments | Description |
 |---------|-----------|-------------|
 | `pdf` | `<path>` | PDF file to test (relative to project root) |
+| `about` | `<text>` | One-line description of the whole tape (shown in the report header) |
+| `desc` | `<text>` | Short caption for the NEXT screenshot: what is done + what to expect (shown under it in the report) |
 | `screenshot` | `<name>` | Capture screenshot with given name |
 | `key` | `<char>` | Send single key press |
 | `ctrl` | `<char>` | Send Ctrl+key combination |
 | `escape` | - | Send Escape key |
 | `return` | - | Send Return/Enter key |
+| `click` | `<col> <row> [button]` | Mouse click at a 1-based cell (button: left/right/middle, default left) |
+| `rclick` / `mclick` | `<col> <row>` | Right / middle click at a cell |
+| `doubleclick` / `tripleclick` | `<col> <row> [button]` | Double/triple click (word/paragraph selection) |
+| `drag` | `<c1> <r1> <c2> <r2> [button]` | Press, drag, release between two cells (text selection) |
+| `scroll` | `up\|down <col> <row> [count]` | Mouse-wheel scroll at a cell |
+| `mousemove` | `<col> <row>` | Move pointer (no button) to a cell |
+| `clickpx` / `rclickpx` / `mclickpx` | `<x> <y> [button]` | Click at device **pixel** (sub-cell precision) |
+| `doubleclickpx` / `tripleclickpx` | `<x> <y> [button]` | Double/triple click at a pixel |
+| `dragpx` | `<x1> <y1> <x2> <y2> [button]` | Drag between two pixels (precise PDF text selection) |
+| `scrollpx` | `up\|down <x> <y> [count]` | Wheel scroll at a pixel |
+| `mousemovepx` | `<x> <y>` | Move pointer to a pixel |
 | `wait` | `<ms>` | Wait specified milliseconds (default: 500) |
+
+**Documenting tapes:** Every tape should start with one `about` line, and every `screenshot` should be preceded by a `desc` line. Keep descriptions SHORT — state what the step does and what to expect (e.g. `desc Zoom out twice. Expect: page smaller, underline still aligned`). These render in the HTML report (`about` in the header, `desc` under each snapshot) so goldens are self-explanatory when reviewing. `desc` applies only to the next screenshot and is cleared after.
+
+**Mouse support (Kitty only):** Mouse commands inject the exact SGR mouse escape sequence the terminal would emit straight into the app's pty via `kitty @ send-text` — no OS cursor movement, no Accessibility permission, fully deterministic. Two coordinate forms:
+- **Cell** (default commands): coordinates are **1-based terminal cells** (read off the screenshot grid). For PDF on Kitty/Ghostty the harness auto-detects SGR-pixel mouse mode (`?1016`) and converts the cell to the pixel center of the cell using a one-time per-session calibration (capture pixel size ÷ grid).
+- **Pixel** (`*px` commands): coordinates are **device pixels** in the same space as the screencapture PNG and the `?1016` wire format. Use these for sub-cell precision — e.g. precise PDF text selection or link/word hit-testing where the exact pixel within a cell matters. No calibration needed.
+
+Mouse commands are implemented only for the Kitty harness; other terminals log an error.
 
 **IMPORTANT: Wait Times** - Kitty terminal is very fast. Never use wait times longer than 500ms in tape files. Most operations complete in 200-300ms. Only use 500ms for initial app load or page navigation that requires rendering.
 
@@ -1463,12 +1484,13 @@ For PDF documents:
 
 ### Test Reports
 
-When tests fail, an HTML report is generated showing:
-- Side-by-side comparison of expected vs actual screenshots
-- Pass/fail status for each screenshot
-- Missing golden snapshots
+A single aggregate HTML report is generated per run, covering **all** tapes for that terminal. It shows:
+- An overall pass/fail/missing summary and a jump-list index of every tape
+- One collapsible section per tape (the scenario), with its `about` line; tapes with failures are auto-expanded
+- Per screenshot: its `desc` caption, side-by-side Expected/Actual (+ a red diff column on failure), and an "Accept This"/"Accept ALL" button
+- Images are referenced by **relative file path** (not base64), so the report stays small (tens of KB) and loads fast
 
-Reports are saved to: `vhs_tests/output/reports/<terminal>_<tape>_report.html`
+Report path: `vhs_tests/output/reports/<terminal>_report.html` (e.g. `kitty_report.html`).
 
 ### Adding New VHS Tests
 

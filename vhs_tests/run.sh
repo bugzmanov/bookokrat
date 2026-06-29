@@ -83,7 +83,9 @@ NC='\033[0m'
 
 # Arguments
 UPDATE_MODE=false
+ACCEPT_MODE=false          # accept already-captured screenshots as golden (no re-run)
 SPECIFIC_TAPE=""
+SPECIFIC_SCREENSHOT=""     # limit update/accept/compare to a single screenshot
 LIST_TAPES=false
 OPEN_REPORT=false
 VERBOSE=false
@@ -150,6 +152,14 @@ while [[ $# -gt 0 ]]; do
         --update)
             UPDATE_MODE=true
             shift
+            ;;
+        --accept)
+            ACCEPT_MODE=true
+            shift
+            ;;
+        --screenshot)
+            SPECIFIC_SCREENSHOT="$2"
+            shift 2
             ;;
         --list)
             LIST_TAPES=true
@@ -250,40 +260,44 @@ echo -e "${CYAN}║     🎬 VHS Terminal Screenshot Test Harness               
 echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Check prerequisites
-echo "Checking prerequisites (terminal: $TERMINAL_TYPE)..."
-case "$TERMINAL_TYPE" in
-    kitty)
-        if ! check_kitty; then
-            exit 1
-        fi
-        ;;
-    wezterm)
-        if ! check_wezterm; then
-            exit 1
-        fi
-        ;;
-    iterm)
-        if ! check_iterm; then
-            exit 1
-        fi
-        ;;
-    ghostty|*)
-        if ! check_ghostty; then
-            exit 1
-        fi
-        ;;
-esac
+# Accept mode does not launch a terminal or build — it only copies already
+# captured screenshots into golden. Skip all terminal prerequisites for it.
+if ! $ACCEPT_MODE; then
+    # Check prerequisites
+    echo "Checking prerequisites (terminal: $TERMINAL_TYPE)..."
+    case "$TERMINAL_TYPE" in
+        kitty)
+            if ! check_kitty; then
+                exit 1
+            fi
+            ;;
+        wezterm)
+            if ! check_wezterm; then
+                exit 1
+            fi
+            ;;
+        iterm)
+            if ! check_iterm; then
+                exit 1
+            fi
+            ;;
+        ghostty|*)
+            if ! check_ghostty; then
+                exit 1
+            fi
+            ;;
+    esac
 
-if [ ! -f "$TEST_PDF" ]; then
-    echo -e "${RED}ERROR: Test PDF not found: $TEST_PDF${NC}"
-    exit 1
-fi
+    if [ ! -f "$TEST_PDF" ]; then
+        echo -e "${RED}ERROR: Test PDF not found: $TEST_PDF${NC}"
+        exit 1
+    fi
 
-# Build if needed
-if [ ! -f "$BINARY" ]; then
-    echo "Building release binary with PDF support..."
-    (cd "$PROJECT_ROOT" && cargo build --release --features pdf)
+    # Build if needed
+    if [ ! -f "$BINARY" ]; then
+        echo "Building release binary with PDF support..."
+        (cd "$PROJECT_ROOT" && cargo build --release --features pdf)
+    fi
 fi
 
 # Create output directories
@@ -318,6 +332,29 @@ if [ ${#tapes_to_run[@]} -eq 0 ]; then
     exit 0
 fi
 
+# Accept mode: copy already-captured screenshots into golden, WITHOUT re-running
+# tapes. Accepts all screenshots of the selected tape(s), or just one with
+# --screenshot. This is what the report's per-snapshot "Accept" buttons call.
+if $ACCEPT_MODE; then
+    accepted_total=0
+    for tape_file in "${tapes_to_run[@]}"; do
+        tape_name=$(basename "$tape_file" .tape)
+        src_dir="$SCREENSHOTS_DIR/$TERMINAL_TYPE/$tape_name"
+        dst_dir="$GOLDEN_DIR/$TERMINAL_TYPE/$tape_name"
+        if [ -n "$SPECIFIC_SCREENSHOT" ]; then
+            shots=("$SPECIFIC_SCREENSHOT")
+        else
+            shots=($(grep '^screenshot' "$tape_file" | awk '{print $2}'))
+        fi
+        [ ${#shots[@]} -eq 0 ] && continue
+        echo -e "${YELLOW}Accepting golden(s) for $tape_name ($TERMINAL_TYPE)...${NC}"
+        update_golden_snapshots "$src_dir" "$dst_dir" "${shots[@]}"
+        accepted_total=$((accepted_total + ${#shots[@]}))
+    done
+    echo -e "${GREEN}✓ Accepted $accepted_total snapshot(s) into golden${NC}"
+    exit 0
+fi
+
 echo "Found ${#tapes_to_run[@]} tape(s) to run"
 echo "Memory leak limit: ${MEMORY_LEAK_LIMIT_MB} MB"
 
@@ -328,15 +365,25 @@ MEMORY_BEFORE=$(get_anonymous_pages)
 total_passed=0
 total_failed=0
 reports_generated=()
+ran_tapes=()   # tape names that produced screenshots (for the aggregate report)
 
 for tape_file in "${tapes_to_run[@]}"; do
     tape_name=$(basename "$tape_file" .tape)
     tape_screenshots_dir="$SCREENSHOTS_DIR/$TERMINAL_TYPE/$tape_name"
     tape_golden_dir="$GOLDEN_DIR/$TERMINAL_TYPE/$tape_name"
-    tape_report="$REPORTS_DIR/${TERMINAL_TYPE}_${tape_name}_report.html"
 
     mkdir -p "$tape_screenshots_dir"
     mkdir -p "$tape_golden_dir"
+
+    # Kitty: give each tape its OWN fresh instance. In a shared instance the
+    # previous tape's window can linger/occlude, so the next tape's window opens
+    # not-frontmost and macOS pauses its GPU graphics -> blank PDF capture. A
+    # fresh instance per tape matches the reliable single-tape path.
+    if [ "$TERMINAL_TYPE" = "kitty" ]; then
+        cleanup_kitty 2>/dev/null || true
+        sleep 0.5
+        check_kitty || { echo -e "${RED}Kitty relaunch failed for $tape_name${NC}"; continue; }
+    fi
 
     # Run the tape (|| true prevents set -e from exiting on tape errors)
     run_tape "$tape_file" "$BINARY" "$TEST_PDF" "$tape_screenshots_dir" || true
@@ -355,17 +402,23 @@ for tape_file in "${tapes_to_run[@]}"; do
         update_golden_snapshots "$tape_screenshots_dir" "$tape_golden_dir" "${screenshots[@]}"
         echo -e "${GREEN}✓ Golden snapshots updated for $tape_name${NC}"
     else
-        # Generate report and compare
-        echo ""
-        echo "Generating report..."
-        if generate_report "$tape_name" "$tape_golden_dir" "$tape_screenshots_dir" "$tape_report" "${screenshots[@]}"; then
-            total_passed=$((total_passed + 1))
-        else
-            total_failed=$((total_failed + 1))
-        fi
-        reports_generated+=("$tape_report")
+        ran_tapes+=("$tape_name")
     fi
 done
+
+# One aggregate report for all tapes (grouped by scenario, images by path).
+if ! $UPDATE_MODE && [ ${#ran_tapes[@]} -gt 0 ]; then
+    echo ""
+    echo "Generating aggregate report..."
+    aggregate_report="$REPORTS_DIR/${TERMINAL_TYPE}_report.html"
+    if generate_aggregate_report "$TERMINAL_TYPE" "$aggregate_report" \
+        "$GOLDEN_DIR" "$SCREENSHOTS_DIR" "$TAPES_DIR" "${ran_tapes[@]}"; then
+        total_passed=${#ran_tapes[@]}
+    else
+        total_failed=1
+    fi
+    reports_generated+=("$aggregate_report")
+fi
 
 # Measure memory after tests
 MEMORY_AFTER=$(get_anonymous_pages)

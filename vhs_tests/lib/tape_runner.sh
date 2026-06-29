@@ -63,9 +63,13 @@ term_capture() {
 
     case "$TERMINAL_TYPE" in
         kitty)
-            # Kitty: use macOS screencapture with cached window ID
+            # Kitty: use macOS screencapture with the platform_window_id.
+            # Prefer kitty's own `ls` (reliable; the cached global is lost across
+            # term_launch's subshell), then fall back to swift enumeration.
             local macos_id="$KITTY_MACOS_WINDOW_ID"
-            # Refresh if not set
+            if [ -z "$macos_id" ]; then
+                resolve_kitty_macos_window_id && macos_id="$KITTY_MACOS_WINDOW_ID"
+            fi
             if [ -z "$macos_id" ]; then
                 macos_id=$(get_kitty_macos_window_id "$WINDOW_TITLE")
             fi
@@ -74,6 +78,17 @@ term_capture() {
             fi
             if [ -n "$macos_id" ]; then
                 screencapture -l"$macos_id" -x -o "$output_path" 2>/dev/null
+                # macOS won't capture a never-foregrounded / occluded window: the
+                # background launch keeps focus off the test window, but if
+                # another app is frontmost the capture comes back empty. When
+                # that happens, momentarily bring the test OS window forward and
+                # retry. No focus steal in the common case (first capture works).
+                if [ ! -s "$output_path" ]; then
+                    "$KITTY_CMD" @ --to "$KITTY_SOCKET" focus-os-window \
+                        --match "id:$KITTY_WINDOW_ID" 2>/dev/null
+                    sleep 0.25
+                    screencapture -l"$macos_id" -x -o "$output_path" 2>/dev/null
+                fi
             else
                 log_error "Could not find Kitty window for screenshot"
             fi
@@ -200,6 +215,39 @@ term_send_shift_tab() {
     esac
 }
 
+# Mouse dispatch. Only Kitty is implemented (the background test terminal);
+# other terminals log a clear error so tapes fail loudly instead of silently.
+term_mouse_click() {        # COL ROW [button]
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_mouse_click "$@" ;;
+        *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+term_mouse_multiclick() {   # COUNT COL ROW [button]
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_mouse_multiclick "$@" ;;
+        *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+term_mouse_drag() {         # C1 R1 C2 R2 [button]
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_mouse_drag "$@" ;;
+        *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+term_mouse_scroll() {       # up|down COL ROW [count]
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_mouse_scroll "$@" ;;
+        *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+term_mouse_move() {         # COL ROW
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_mouse_move "$@" ;;
+        *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+
 term_close() {
     case "$TERMINAL_TYPE" in
         kitty)
@@ -219,6 +267,7 @@ TAPE_FILE=""
 TAPE_PDF_FILE=""
 TAPE_NOFILE=false         # If true, launch without a file argument
 TAPE_WINDOW_PERCENT=""    # Window size as percent of screen (empty = maximize)
+TAPE_PENDING_DESC=""      # Caption for the NEXT screenshot (set by `desc`)
 
 # Parse and execute a single tape command
 # Returns 0 on success, 1 on error
@@ -311,6 +360,20 @@ execute_command() {
                 ghostty|*) send_ctrl_key_repeated "$rkey" "$rcount" "$rdelay" ;;
             esac
             ;;
+        about)
+            # Tape-level description, shown in the report header.
+            if [ -n "$arg" ]; then
+                printf '%s\n' "$arg" > "$OUTPUT_DIR/_about.txt"
+                log_verbose "about: $arg"
+            fi
+            ;;
+
+        desc)
+            # Caption for the NEXT screenshot: what is done + what to expect.
+            TAPE_PENDING_DESC="$arg"
+            log_verbose "desc: $arg"
+            ;;
+
         screenshot)
             if [ -z "$arg" ]; then
                 log_error "screenshot requires a name"
@@ -321,6 +384,12 @@ execute_command() {
             term_capture "$output_path"
             if [ $? -eq 0 ] && [ -f "$output_path" ]; then
                 TAPE_SCREENSHOTS+=("$arg")
+                # Persist the pending caption as a sidecar so the report (a
+                # separate process) can show it next to the snapshot.
+                if [ -n "$TAPE_PENDING_DESC" ]; then
+                    printf '%s\n' "$TAPE_PENDING_DESC" > "$OUTPUT_DIR/$arg.desc.txt"
+                fi
+                TAPE_PENDING_DESC=""
                 log_verbose "Saved to $output_path"
             else
                 log_error "Failed to capture screenshot: $arg"
@@ -373,6 +442,87 @@ execute_command() {
         shift_tab)
             log_verbose "shift+tab"
             term_send_shift_tab
+            ;;
+
+        click|rclick|mclick|clickpx|rclickpx|mclickpx)
+            # CELL: click COL ROW [button]   PIXEL: clickpx X Y [button]
+            # Coords are 1-based cells by default; the *px variants take device
+            # pixels (sub-cell precision via ?1016 on Kitty/Ghostty PDF).
+            local base="${cmd%px}"
+            [[ "$cmd" == *px ]] && KITTY_MOUSE_RAW_PX=true
+            local mcol=$(echo "$arg" | awk '{print $1}')
+            local mrow=$(echo "$arg" | awk '{print $2}')
+            local mbtn=$(echo "$arg" | awk '{print $3}')
+            [ "$base" = "rclick" ] && mbtn="right"
+            [ "$base" = "mclick" ] && mbtn="middle"
+            mbtn="${mbtn:-left}"
+            if [ -z "$mcol" ] || [ -z "$mrow" ]; then
+                KITTY_MOUSE_RAW_PX=false; log_error "$cmd requires: X Y [button]"; return 1
+            fi
+            log_verbose "$cmd: ($mcol,$mrow) $mbtn"
+            term_mouse_click "$mcol" "$mrow" "$mbtn"
+            KITTY_MOUSE_RAW_PX=false
+            ;;
+
+        doubleclick|tripleclick|doubleclickpx|tripleclickpx)
+            [[ "$cmd" == *px ]] && KITTY_MOUSE_RAW_PX=true
+            local base="${cmd%px}"
+            local mcol=$(echo "$arg" | awk '{print $1}')
+            local mrow=$(echo "$arg" | awk '{print $2}')
+            local mbtn=$(echo "$arg" | awk '{print $3}')
+            mbtn="${mbtn:-left}"
+            if [ -z "$mcol" ] || [ -z "$mrow" ]; then
+                KITTY_MOUSE_RAW_PX=false; log_error "$cmd requires: X Y [button]"; return 1
+            fi
+            local mcount=2; [ "$base" = "tripleclick" ] && mcount=3
+            log_verbose "$cmd: ($mcol,$mrow) $mbtn"
+            term_mouse_multiclick "$mcount" "$mcol" "$mrow" "$mbtn"
+            KITTY_MOUSE_RAW_PX=false
+            ;;
+
+        drag|dragpx)
+            # CELL: drag C1 R1 C2 R2 [button]   PIXEL: dragpx X1 Y1 X2 Y2 [button]
+            [[ "$cmd" == *px ]] && KITTY_MOUSE_RAW_PX=true
+            local d1=$(echo "$arg" | awk '{print $1}')
+            local d2=$(echo "$arg" | awk '{print $2}')
+            local d3=$(echo "$arg" | awk '{print $3}')
+            local d4=$(echo "$arg" | awk '{print $4}')
+            local dbtn=$(echo "$arg" | awk '{print $5}')
+            dbtn="${dbtn:-left}"
+            if [ -z "$d1" ] || [ -z "$d2" ] || [ -z "$d3" ] || [ -z "$d4" ]; then
+                KITTY_MOUSE_RAW_PX=false; log_error "$cmd requires: X1 Y1 X2 Y2 [button]"; return 1
+            fi
+            log_verbose "$cmd: ($d1,$d2) -> ($d3,$d4) $dbtn"
+            term_mouse_drag "$d1" "$d2" "$d3" "$d4" "$dbtn"
+            KITTY_MOUSE_RAW_PX=false
+            ;;
+
+        scroll|scrollpx)
+            # scroll up|down COL ROW [count]  (px: scrollpx up|down X Y [count])
+            [[ "$cmd" == *px ]] && KITTY_MOUSE_RAW_PX=true
+            local sdir=$(echo "$arg" | awk '{print $1}')
+            local scol=$(echo "$arg" | awk '{print $2}')
+            local srow=$(echo "$arg" | awk '{print $3}')
+            local scnt=$(echo "$arg" | awk '{print $4}')
+            scnt="${scnt:-1}"
+            if [ -z "$sdir" ] || [ -z "$scol" ] || [ -z "$srow" ]; then
+                KITTY_MOUSE_RAW_PX=false; log_error "$cmd requires: up|down X Y [count]"; return 1
+            fi
+            log_verbose "$cmd: $sdir at ($scol,$srow) x$scnt"
+            term_mouse_scroll "$sdir" "$scol" "$srow" "$scnt"
+            KITTY_MOUSE_RAW_PX=false
+            ;;
+
+        mousemove|mousemovepx)
+            [[ "$cmd" == *px ]] && KITTY_MOUSE_RAW_PX=true
+            local mcol=$(echo "$arg" | awk '{print $1}')
+            local mrow=$(echo "$arg" | awk '{print $2}')
+            if [ -z "$mcol" ] || [ -z "$mrow" ]; then
+                KITTY_MOUSE_RAW_PX=false; log_error "$cmd requires: X Y"; return 1
+            fi
+            log_verbose "$cmd: ($mcol,$mrow)"
+            term_mouse_move "$mcol" "$mrow"
+            KITTY_MOUSE_RAW_PX=false
             ;;
 
         wait)
@@ -435,6 +585,7 @@ run_tape() {
     TAPE_PDF_FILE=""
     TAPE_NOFILE=false
     TAPE_WINDOW_PERCENT=""
+    TAPE_PENDING_DESC=""
     CURRENT_TAPE=$(basename "$tape_file" .tape)
 
     local tape_name=$(basename "$tape_file")
@@ -532,6 +683,15 @@ run_tape() {
     case "$TERMINAL_TYPE" in
         kitty)
             KITTY_WINDOW_ID="$window_id"
+            # PDF on Kitty enables SGR-pixel mouse (?1016), so mouse commands
+            # must send pixel coords. EPUB/book-list use cell coords. Reset the
+            # cached cell size so each launch recalibrates.
+            KITTY_CELL_W=""; KITTY_CELL_H=""
+            if [[ "$test_file" == *.pdf || "$test_file" == *.PDF ]]; then
+                KITTY_PIXEL_MOUSE=true
+            else
+                KITTY_PIXEL_MOUSE=false
+            fi
             ;;
         wezterm)
             WEZTERM_PANE_ID="$window_id"
