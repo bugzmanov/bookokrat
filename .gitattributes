@@ -1,0 +1,1 @@
+vhs_tests/golden/**/*.png filter=lfs diff=lfs merge=lfs -text
