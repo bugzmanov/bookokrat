@@ -47,7 +47,10 @@ fn create_test_app_isolated() -> (App, TempDir) {
         None,
     );
     // Force graphics support so PDFs show up regardless of sandbox env vars.
-    app.book_manager.supports_graphics = true;
+    #[cfg(feature = "pdf")]
+    {
+        app.book_manager.supports_graphics = true;
+    }
     app.navigation_panel
         .book_list
         .set_books(app.book_manager.get_books());
@@ -1100,7 +1103,10 @@ fn test_dual_column_page_grid_svg() {
         Some(comments_dir.path()),
         None,
     );
-    app.book_manager.supports_graphics = true;
+    #[cfg(feature = "pdf")]
+    {
+        app.book_manager.supports_graphics = true;
+    }
     app.navigation_panel
         .book_list
         .set_books(app.book_manager.get_books());
@@ -2977,7 +2983,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            #[cfg(feature = "pdf")]
             pdf_invert_images: None,
+            #[cfg(feature = "pdf")]
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,
@@ -3002,7 +3010,9 @@ fn test_book_reading_history_with_many_entries_svg() {
             pdf_page: None,
             pdf_zoom: None,
             pdf_pan: None,
+            #[cfg(feature = "pdf")]
             pdf_invert_images: None,
+            #[cfg(feature = "pdf")]
             pdf_themed_rendering: None,
             book_progress: None,
             total_nodes: None,

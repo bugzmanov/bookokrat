@@ -8,16 +8,16 @@
 pub mod image;
 pub mod kgfx;
 pub mod terminal_canvas;
+mod terminal_io;
 
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use ratatui::layout::Position;
-use std::os::unix::io::AsRawFd;
 
 static IS_TMUX: OnceLock<bool> = OnceLock::new();
 static USE_KITTY_TMUX_PLACEHOLDER_ANCHORS: AtomicBool = AtomicBool::new(false);
@@ -532,42 +532,5 @@ fn display_and_check(stdout: &mut io::Stdout, id: u32, timeout: Duration) -> boo
 }
 
 fn read_response_with_timeout(timeout: Duration) -> io::Result<Option<kgfx::Response>> {
-    let mut stdin = io::stdin();
-    let fd = stdin.as_raw_fd();
-    let start = Instant::now();
-    let mut buffer = Vec::new();
-
-    loop {
-        let elapsed = start.elapsed();
-        if elapsed >= timeout {
-            return Ok(None);
-        }
-        let remaining = timeout - elapsed;
-        let timeout_ms = remaining.as_millis().min(i32::MAX as u128) as i32;
-
-        let mut poll_fd = libc::pollfd {
-            fd,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-
-        let ready = unsafe { libc::poll(&mut poll_fd, 1, timeout_ms) };
-        if ready < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if ready == 0 {
-            return Ok(None);
-        }
-
-        let mut chunk = [0u8; 1024];
-        let read = stdin.read(&mut chunk)?;
-        if read == 0 {
-            return Ok(None);
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-
-        if let Some(response) = kgfx::parse_response(&buffer) {
-            return Ok(Some(response));
-        }
-    }
+    terminal_io::read_response_with_timeout(timeout, kgfx::parse_response)
 }

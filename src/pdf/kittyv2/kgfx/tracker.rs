@@ -1,11 +1,14 @@
 use std::collections::VecDeque;
-use std::ffi::CString;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use log::{debug, info, warn};
+#[cfg(unix)]
+use log::warn;
+use log::{debug, info};
 
-use super::{record_shm_unlink_error, record_shm_unlink_success};
+#[cfg(unix)]
+use super::record_shm_unlink_error;
+use super::record_shm_unlink_success;
 
 /// Soft limit for queue size - cleanup starts when exceeded.
 const SOFT_LIMIT: usize = 20;
@@ -256,7 +259,14 @@ impl Default for LifecycleTracker {
 
 /// Unlinks a shared memory path.
 fn unlink_path(path: &str) {
-    match CString::new(path) {
+    #[cfg(windows)]
+    {
+        let _ = path;
+        record_shm_unlink_success();
+    }
+
+    #[cfg(unix)]
+    match std::ffi::CString::new(path) {
         Ok(c_path) => {
             let result = unsafe { libc::shm_unlink(c_path.as_ptr()) };
             if result < 0 {

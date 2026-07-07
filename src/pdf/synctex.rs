@@ -553,6 +553,7 @@ impl SyncTexListener {
     /// Start listening on the given socket path.
     ///
     /// Commands are sent to `tx`. The listener thread runs until dropped.
+    #[cfg(unix)]
     pub fn start(socket_path: PathBuf, tx: flume::Sender<SyncTexCommand>) -> Result<Self> {
         // Remove stale socket if it exists
         if socket_path.exists() {
@@ -641,6 +642,12 @@ impl SyncTexListener {
         }
     }
 
+    #[cfg(windows)]
+    pub fn start(socket_path: PathBuf, _tx: flume::Sender<SyncTexCommand>) -> Result<Self> {
+        let _ = socket_path;
+        anyhow::bail!("SyncTeX socket listener is not supported on Windows yet")
+    }
+
     /// Get the socket path this listener is bound to.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
@@ -649,18 +656,28 @@ impl SyncTexListener {
 
 impl Drop for SyncTexListener {
     fn drop(&mut self) {
-        self.shutdown
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        // Connect briefly to unblock the accept() call
-        let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
-        if let Some(handle) = self.join_handle.take() {
-            let _ = handle.join();
+        #[cfg(windows)]
+        {
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
         }
-        let _ = std::fs::remove_file(&self.socket_path);
-        log::info!(
-            "SyncTeX listener stopped, removed {}",
-            self.socket_path.display()
-        );
+
+        #[cfg(unix)]
+        {
+            self.shutdown
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            // Connect briefly to unblock the accept() call
+            let _ = std::os::unix::net::UnixStream::connect(&self.socket_path);
+            if let Some(handle) = self.join_handle.take() {
+                let _ = handle.join();
+            }
+            let _ = std::fs::remove_file(&self.socket_path);
+            log::info!(
+                "SyncTeX listener stopped, removed {}",
+                self.socket_path.display()
+            );
+        }
     }
 }
 
@@ -668,27 +685,37 @@ impl Drop for SyncTexListener {
 ///
 /// Used by `--synctex-forward` CLI mode.
 pub fn send_forward_command(socket_path: &Path, file: &str, line: u32, column: u32) -> Result<()> {
-    use std::io::Write;
+    #[cfg(windows)]
+    {
+        let _ = (socket_path, file, line, column);
+        anyhow::bail!("SyncTeX socket listener is not supported on Windows yet")
+    }
 
-    let mut stream = std::os::unix::net::UnixStream::connect(socket_path).with_context(|| {
-        format!(
-            "Failed to connect to synctex socket: {}",
-            socket_path.display()
-        )
-    })?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
 
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        let mut stream =
+            std::os::unix::net::UnixStream::connect(socket_path).with_context(|| {
+                format!(
+                    "Failed to connect to synctex socket: {}",
+                    socket_path.display()
+                )
+            })?;
 
-    writeln!(stream, "forward {line} {column} {file}")?;
-    stream.flush()?;
+        stream.set_write_timeout(Some(std::time::Duration::from_secs(5)))?;
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
 
-    let mut response = String::new();
-    std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut response)?;
-    match response.trim() {
-        "ok" => Ok(()),
-        "" => anyhow::bail!("SyncTeX listener closed without acknowledging the command"),
-        other => anyhow::bail!("SyncTeX listener error: {other}"),
+        writeln!(stream, "forward {line} {column} {file}")?;
+        stream.flush()?;
+
+        let mut response = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(&stream), &mut response)?;
+        match response.trim() {
+            "ok" => Ok(()),
+            "" => anyhow::bail!("SyncTeX listener closed without acknowledging the command"),
+            other => anyhow::bail!("SyncTeX listener error: {other}"),
+        }
     }
 }
 
@@ -973,6 +1000,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_socket_listener_roundtrip() {
         let tmp = tempfile::TempDir::new().unwrap();

@@ -693,12 +693,13 @@ impl App {
             None => BookManager::new(),
         };
 
+        #[cfg(any(feature = "pdf", not(any(test, feature = "test-utils"))))]
+        let startup_caps = crate::terminal::detect_terminal_with_probe();
         #[cfg(feature = "pdf")]
-        let (book_manager, startup_caps) = {
-            let startup_caps = crate::terminal::detect_terminal_with_probe();
+        let book_manager = {
             let mut book_manager = book_manager;
             book_manager.supports_graphics = startup_caps.supports_graphics;
-            (book_manager, startup_caps)
+            book_manager
         };
 
         let navigation_panel = NavigationPanel::new(&book_manager);

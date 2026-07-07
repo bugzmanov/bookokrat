@@ -1,8 +1,6 @@
-use std::ffi::CString;
-
-use super::{
-    LifecycleTracker, record_shm_create, record_shm_unlink_error, record_shm_unlink_success,
-};
+#[cfg(unix)]
+use super::record_shm_unlink_error;
+use super::{LifecycleTracker, record_shm_create, record_shm_unlink_success};
 
 /// Owned lifecycle for a shared-memory payload until handed off to tracker.
 #[derive(Clone, Debug)]
@@ -47,7 +45,8 @@ impl Drop for ShmLease {
             return;
         }
 
-        if let Ok(c_path) = CString::new(self.path.as_str()) {
+        #[cfg(unix)]
+        if let Ok(c_path) = std::ffi::CString::new(self.path.as_str()) {
             let result = unsafe { libc::shm_unlink(c_path.as_ptr()) };
             if result < 0 {
                 let err = std::io::Error::last_os_error();
@@ -62,5 +61,8 @@ impl Drop for ShmLease {
         } else {
             record_shm_unlink_error();
         }
+
+        #[cfg(windows)]
+        record_shm_unlink_success();
     }
 }

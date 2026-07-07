@@ -111,7 +111,7 @@ windows = { version = "0.58.0", default-features = false, features = [
 ] }
 
 [dev-dependencies]
-bookokrat = { path = ".", features = ["test-utils"] }
+bookokrat = { path = ".", default-features = false, features = ["test-utils"] }
 snapbox = { version = "0.6", features = ["term-svg"] }
 anstyle = "1.0"
 anstyle-svg = "0.1.5"

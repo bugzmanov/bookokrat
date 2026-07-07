@@ -28,9 +28,6 @@ impl From<rustix::io::Errno> for Errors {
 #[cfg(windows)]
 impl From<windows::core::Error> for Errors {
     fn from(err: windows::core::Error) -> Self {
-        Errors::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            err.to_string(),
-        ))
+        Errors::Io(std::io::Error::other(err.to_string()))
     }
 }
