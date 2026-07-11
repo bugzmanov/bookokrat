@@ -1092,6 +1092,7 @@ impl App {
             BookFormat::Epub | BookFormat::Html => {
                 self.load_epub(&path_owned, skip_bookmarks)?;
             }
+            _ => {}
         }
 
         self.navigation_panel.current_book_path = Some(path_owned);
@@ -3928,6 +3929,13 @@ impl App {
             }
             NavigationPanelAction::SwitchToBookList => {
                 self.switch_to_book_list_mode();
+                false
+            }
+            NavigationPanelAction::NavigateToDir { dir_path } => {
+                self.book_manager.navigate_to(dir_path.as_str());
+                self.navigation_panel
+                    .book_list
+                    .set_books(self.book_manager.get_books());
                 false
             }
             NavigationPanelAction::NavigateToChapter { href, anchor } => {

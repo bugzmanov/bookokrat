@@ -59,7 +59,7 @@ fn create_test_book_manager() -> BookManager {
             format: BookFormat::Epub,
         })
     }
-    book_manager.books = books;
+    book_manager.set_books(books);
     book_manager
 }
 

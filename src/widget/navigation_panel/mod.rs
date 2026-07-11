@@ -4,7 +4,7 @@ pub mod table_of_contents;
 pub use book_list::BookList;
 pub use table_of_contents::{SelectedTocItem, TableOfContents, TocItem};
 
-use crate::book_manager::BookManager;
+use crate::book_manager::{BookFormat, BookManager};
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
@@ -36,6 +36,9 @@ pub enum NavigationPanelAction {
     ToggleSection,
     TocExpansionChanged,
     SwitchToBookList,
+    NavigateToDir {
+        dir_path: String,
+    },
     ToggleSortOrder,
     Bypass, // when the component assumes the upper layer should handle the action
 }
@@ -185,8 +188,13 @@ impl NavigationPanel {
             NavigationMode::BookSelection => {
                 self.book_list
                     .get_selected_book()
-                    .map(|book| NavigationPanelAction::SelectBook {
-                        book_path: book.path.clone(),
+                    .map(|book| match book.format {
+                        BookFormat::Dir => NavigationPanelAction::NavigateToDir {
+                            dir_path: book.path.clone(),
+                        },
+                        _ => NavigationPanelAction::SelectBook {
+                            book_path: book.path.clone(),
+                        },
                     })
             }
             NavigationMode::TableOfContents => match self.table_of_contents.get_selected_item() {
