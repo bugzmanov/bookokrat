@@ -1,5 +1,5 @@
 # pdf_mouse_gestures.tape
-about Mouse gestures on a two-column PDF (fit-width): drag selection + column/page routing (guards a7ac8dd), double-click word, triple-click line, normal-mode click-to-move-cursor, and scroll-wheel.
+about Mouse gestures + normal-mode motions on a two-column PDF (fit-width): drag selection + column/page routing (guards a7ac8dd), double-click word, triple-click line, normal-mode click-to-move-cursor, scroll-wheel, and a vim motion chain (w/e/f/;/$/0, cross-line wrap, v+iw, yank, V-line, Space+c page extract). Guards the pending-motion-vs-keymap dispatch order (f target char must not dispatch as a motion).
 
 pdf tests/testdata/vhs_twocol.pdf
 
@@ -112,5 +112,116 @@ scrollpx up 1400 900 5
 wait 500
 desc Scroll wheel UP 5 notches. Expect: back near the top of page 1.
 screenshot scroll_up
+
+# --- Normal-mode motion chain ------------------------------------------------
+# Every shot is the endpoint of a motion subchain; a wrong intermediate motion
+# lands the cursor on a visibly wrong labeled word/line.
+key n
+wait 300
+key g
+key g
+key j
+wait 300
+key w
+key w
+key e
+wait 300
+desc Normal mode, gg then j (skip title line) to L01 start, then w w e. Expect: block cursor on the LAST char of "left" ("P1 L01 left ...").
+screenshot nm_words
+
+key 0
+key f
+key l
+key ;
+key ;
+wait 300
+desc 0, then f l ; ; (find 'l', repeat twice). Expect: cursor on the 'l' of "line" (3rd lowercase 'l' of L01).
+screenshot nm_find
+
+key $
+key l
+wait 300
+desc $ (line end) then l. Expect: cursor WRAPPED to the first char of the next line (L02).
+screenshot nm_wrap
+
+# NOTE: {/} paragraph motions are intentionally unimplemented in PDF normal
+# mode (navigation.rs dispatch no-op) — not covered here.
+
+# Text object: visual + inner word
+key v
+key i
+key w
+wait 300
+desc v then i w (inner word). Expect: exactly the word under the cursor highlighted.
+screenshot nm_visual_iw
+
+key e
+key e
+wait 300
+desc Extend visual with e e. Expect: selection grown to the end of the second word to the right.
+screenshot nm_visual_extend
+
+key y
+wait 400
+desc y yanks the visual selection. Expect: highlight cleared, cursor at selection start, still in normal mode. (Copy toast is NOT visible over the kitty image - known issue.)
+screenshot nm_yank
+
+key V
+key j
+wait 300
+desc V then j (visual line). Expect: two ENTIRE lines highlighted edge to edge.
+screenshot nm_visual_line
+
+# Leave visual, leave normal mode, extract page text via Space+c.
+escape
+wait 200
+escape
+wait 200
+key space
+key c
+wait 400
+desc Space+c extracts the page text. Expect: normal mode exited (no NORMAL badge, no block cursor); copy happens silently (toast not visible over kitty image - known issue).
+screenshot page_text_copied
+
+# --- Quick jump + go-to-page prompt, in DUAL mode ----------------------------
+key space
+key D
+wait 600
+# Let the 2s "Page layout: Dual" HUD expire so it isn't baked into the golden.
+wait 500
+wait 500
+wait 500
+key 3
+key g
+key g
+wait 500
+desc Dual mode, typed 3 g g (quick page jump). Expect: spread showing PAGE 3 (left) + PAGE 4 (right), indicator [3/6], no HUD.
+screenshot dual_quickjump_p3
+
+key space
+key g
+wait 300
+desc Space+g opens the go-to-page prompt over the dual spread. Expect: page-input prompt, empty input.
+screenshot dual_goto_prompt
+
+# Out of range: document has 6 pages (prompt opens in Content mode).
+key 9
+key 9
+return
+wait 400
+desc Entered 99 (doc has 6 pages). Expect: red error "Cannot map content page 99 ..." in the prompt; prompt stays open.
+screenshot dual_goto_error
+
+# Esc cancels (no snapshot), reopen and jump to a valid page.
+escape
+wait 200
+key space
+key g
+wait 200
+key 5
+return
+wait 500
+desc Reopen Space+g, type 5 + Enter. Expect: prompt closed, dual spread showing PAGE 5 + PAGE 6.
+screenshot dual_goto_valid
 
 key q

@@ -163,7 +163,67 @@ def many_pages_pdf(path, pages=80):
     print("wrote", path)
 
 
+def view_modes_pdf(path, pages=2):
+    """Classic WHITE-background pages with an embedded bitmap image, for the
+    display-mode toggle tests (themed vs original rendering, image inversion).
+
+    vhs_test.pdf is authored with a dark background, so on it "theming off"
+    looks almost identical to themed rendering. These pages paint an explicit
+    white background rect: themed ON -> dark paper, themed OFF -> classic white
+    paper, unambiguous in a screenshot. The gradient bitmap gives the inversion
+    toggle a raster region to act on.
+    """
+    from io import BytesIO
+
+    from PIL import Image
+    from reportlab.lib.utils import ImageReader
+
+    w, h = 256, 128
+    img = Image.new("RGB", (w, h))
+    px = img.load()
+    for x in range(w):
+        for y in range(h):
+            px[x, y] = (int(255 * x / (w - 1)), int(255 * y / (h - 1)), 160)
+    buf = BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    gradient = ImageReader(buf)
+
+    c = canvas.Canvas(path, pagesize=letter)
+    for p in range(1, pages + 1):
+        # Explicit white background: the page must be genuinely white-authored,
+        # not just "unpainted" (unpainted areas go transparent in the app's
+        # transparent mode).
+        c.setFillColorRGB(1, 1, 1)
+        c.rect(0, 0, PAGE_W, PAGE_H, stroke=0, fill=1)
+
+        c.setFillColorRGB(0.1, 0.3, 0.8)
+        c.setFont("Helvetica-Bold", 22)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 1.0 * inch, f"VIEW MODES  -  PAGE {p}")
+
+        c.setFillColorRGB(0, 0, 0)
+        c.setFont("Helvetica", 13)
+        for i in range(1, 7):
+            c.drawString(
+                0.9 * inch,
+                PAGE_H - (1.6 + 0.35 * i) * inch,
+                f"P{p} body line {i:02d}: black text on a white page",
+            )
+
+        iw, ih = 4.5 * inch, 2.25 * inch
+        ix, iy = (PAGE_W - iw) / 2, PAGE_H - 7.2 * inch
+        c.drawImage(gradient, ix, iy, width=iw, height=ih)
+        c.setFont("Helvetica", 10)
+        c.drawCentredString(PAGE_W / 2, iy - 0.25 * inch, "Pattern: gradient (bitmap)")
+
+        c.drawCentredString(PAGE_W / 2, 0.5 * inch, f"- {p} -")
+        c.showPage()
+    c.save()
+    print("wrote", path)
+
+
 if __name__ == "__main__":
     two_column_pdf(os.path.join(OUT_DIR, "vhs_twocol.pdf"))
     links_pdf(os.path.join(OUT_DIR, "vhs_links.pdf"))
     many_pages_pdf(os.path.join(OUT_DIR, "vhs_many.pdf"))
+    view_modes_pdf(os.path.join(OUT_DIR, "vhs_viewmodes.pdf"))

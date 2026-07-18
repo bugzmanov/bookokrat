@@ -734,6 +734,16 @@ impl PdfReaderState {
             self.clear_highlight_palette();
         }
 
+        // Pending vim states (f/F/t/T target char, i-text-object) consume the
+        // next character and must bypass the keymap: otherwise a target char
+        // that is itself a bound key (l, w, e, ...) dispatches as a motion and
+        // the pending state is silently dropped.
+        if let KeyCode::Char(c) = key.code {
+            if self.normal_mode.has_pending_char_motion() || self.normal_mode.pending_inner {
+                return InputResponse::handled(self.handle_normal_mode_key(c));
+            }
+        }
+
         let input = key_event_to_input(&key);
         let km = crate::keybindings::keymap();
 

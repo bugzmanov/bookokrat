@@ -1,24 +1,14 @@
 # pdf_view_modes.tape
-about PDF display-mode toggles on a bitmap-image page (Kitty): image inversion (i), themed vs original rendering (I), dual layout (Space+D), and zen border (Space+b), plus their combinations. Verifies each toggle and that it survives a re-render (zoom).
+about PDF display-mode toggles on a WHITE-background bitmap-image page (Kitty): image inversion (i), themed vs original rendering (I), dual layout (Space+D), and zen border (Space+b), plus their combinations. Verifies each toggle and that it survives a re-render (zoom). White-authored fixture makes themed-vs-original unambiguous (vhs_test.pdf is dark-authored and cannot show the difference).
 
-pdf tests/testdata/vhs_test.pdf
+pdf tests/testdata/vhs_viewmodes.pdf
 
-# Jump via TOC to the Bitmap Images chapter, then zen for a clean canvas.
+# Zen for a clean canvas; page 1 has the gradient bitmap.
 wait 1000
-tab
-wait 100
-key j
-key j
-key j
-key j
-key j
-wait 100
-return
-wait 600
 key space
 key z
 wait 400
-desc Bitmap-image page in zen. Baseline: themed rendering ON + image inversion ON (defaults).
+desc White-authored bitmap page in zen. Baseline: themed rendering ON + image inversion ON (defaults) - dark paper, original-color gradient image.
 screenshot vm_baseline
 
 # --- M1: invert / theme walk -------------------------------------------------
@@ -29,13 +19,13 @@ screenshot vm_invert_off
 
 key I
 wait 400
-desc Toggled themed rendering OFF (I). Expect: original (non-themed) rendering - no themed paper background, page on the dark terminal bg, accent colors change (HUD: "rendering: original").
+desc Toggled themed rendering OFF (I). Expect: original rendering - classic WHITE page background, black text, blue title (HUD: "rendering: original").
 screenshot vm_theme_off
 
 key =
 key =
 wait 500
-desc Zoomed in x2 while theming is OFF. Expect: still original colors after re-render (toggle survives zoom).
+desc Zoomed in x2 while theming is OFF. Expect: still the white original page after re-render (toggle survives zoom).
 screenshot vm_original_zoom
 
 key z
@@ -61,7 +51,7 @@ screenshot vm_dual_invert
 
 key I
 wait 400
-desc Dual + theme OFF. Expect: both pages in original colors.
+desc Dual + theme OFF. Expect: both pages white with original colors.
 screenshot vm_dual_theme_off
 
 key I
