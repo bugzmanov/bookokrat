@@ -273,6 +273,7 @@ pub(crate) fn apply_render_responses(
                 info.full_cell_size = Some(new_cell_size);
                 info.scale_factor = Some(data.scale_factor);
                 info.requested_scale = Some(data.requested_scale);
+                info.achieved_scale = Some(data.achieved_scale);
                 info.render_area_width_cells = Some(data.render_area_width_cells);
                 info.render_area_height_cells = Some(data.render_area_height_cells);
                 info.line_bounds = data.line_bounds.clone();
@@ -305,6 +306,7 @@ pub(crate) fn apply_render_responses(
                         if let Some(converted) = convert_page_image(&data.img_data, picker) {
                             info.img = Some(converted);
                             info.image_requested_scale = Some(data.requested_scale);
+                            info.image_achieved_scale = Some(data.achieved_scale);
                         }
                     }
                 }
@@ -393,6 +395,7 @@ pub(crate) fn apply_render_responses(
                             if let Some(ref mut existing) = info.img {
                                 if existing.merge_tile_update(frame.image) {
                                     info.image_requested_scale = Some(frame.requested_scale);
+                                    info.image_achieved_scale = Some(frame.achieved_scale);
                                     log::trace!("Merged tile update for page {}", frame_index);
                                 } else {
                                     log::warn!(
@@ -404,6 +407,7 @@ pub(crate) fn apply_render_responses(
                         } else {
                             info.img = Some(frame.image);
                             info.image_requested_scale = Some(frame.requested_scale);
+                            info.image_achieved_scale = Some(frame.achieved_scale);
                             log::trace!("Set img for page {}", frame_index);
                         }
                     }

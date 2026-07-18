@@ -77,16 +77,29 @@ term_capture() {
                 macos_id=$(get_any_kitty_macos_window_id)
             fi
             if [ -n "$macos_id" ]; then
+                # CRITICAL: delete any prior capture first. screencapture of an
+                # occluded / off-active-Space window silently writes nothing; if a
+                # stale file from an earlier run remained, the harness would treat
+                # it as a fresh success and compare stale pixels. Removing it makes
+                # a failed capture leave no file -> honest "Failed to capture".
+                rm -f "$output_path"
                 screencapture -l"$macos_id" -x -o "$output_path" 2>/dev/null
-                # macOS won't capture a never-foregrounded / occluded window: the
-                # background launch keeps focus off the test window, but if
-                # another app is frontmost the capture comes back empty. When
-                # that happens, momentarily bring the test OS window forward and
-                # retry. No focus steal in the common case (first capture works).
+                # macOS won't capture a never-foregrounded / occluded window. If
+                # the first (no-focus) capture produced nothing, bring the test OS
+                # window to the front (activate kitty + focus the os-window) and
+                # retry. Steals focus only when needed.
                 if [ ! -s "$output_path" ]; then
+                    # Foreground the SPECIFIC test kitty process (by pid) onto the
+                    # active Space — `activate "kitty"` is ambiguous with the
+                    # user's own kitty instances and can raise the wrong window /
+                    # wrong Space. System Events targeting the test pid is exact.
+                    if [ -n "$KITTY_PID" ]; then
+                        osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $KITTY_PID) to true" 2>/dev/null
+                    fi
                     "$KITTY_CMD" @ --to "$KITTY_SOCKET" focus-os-window \
                         --match "id:$KITTY_WINDOW_ID" 2>/dev/null
-                    sleep 0.25
+                    sleep 0.5
+                    rm -f "$output_path"
                     screencapture -l"$macos_id" -x -o "$output_path" 2>/dev/null
                 fi
             else

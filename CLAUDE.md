@@ -8,7 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **Testing**: ALWAYS use the existing SVG-based snapshot testing in `tests/svg_snapshots.rs`. NEVER introduce new testing frameworks or approaches.
 1a. **Sandbox-Safe Tests**: All tests must run in sandboxed environments (e.g., Nix builds). This means tests MUST NOT: rely on a writable home directory or system directories (`dirs::data_dir()`, `dirs::cache_dir()`, etc.); make network requests; depend on system fonts, a real TTY, or specific environment variables (`TERM`, `COLORTERM`, `TERM_PROGRAM`); assume standard tools exist in `PATH` beyond what's declared as dependencies. Use `tempfile::TempDir` for any filesystem operations, and inject/mock any external dependencies rather than relying on the host environment.
-2. **Golden Snapshots**: NEVER update golden snapshot files with `SNAPSHOTS=overwrite` unless explicitly requested by the user. This is critical for test integrity.
+2. **Golden Snapshots**: NEVER save, update, or overwrite golden snapshot files unless explicitly requested by the user IN THAT MESSAGE. This applies to BOTH:
+    - **EPUB SVG snapshots** (`tests/snapshots/`): never run `SNAPSHOTS=overwrite`.
+    - **PDF VHS tape goldens** (`vhs_tests/golden/`): never run `--update` or `--accept` (via `run.sh`, `make vhs-update`, `make vhs-accept`, or by copying files into `vhs_tests/golden/` by any other means).
+    This is critical for test integrity. A request to change a tape/test does NOT imply permission to re-bless its goldens — capture the new output, show it to the user, and let THEM accept it. When in doubt, do not write goldens.
 3. **Test Updates**: NEVER update any test files or test expectations unless explicitly requested by the user. This includes unit tests, integration tests, and snapshot tests.
 4. **File Creation**: Prefer editing existing files over creating new ones. Only create new files when absolutely necessary.
 5. **Code Formatting**: NEVER manually reformat code or change indentation/line breaks. ONLY use `cargo fmt` for all formatting. When editing code, preserve the existing formatting exactly and let `cargo fmt` handle any formatting changes.

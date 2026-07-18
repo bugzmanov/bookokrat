@@ -17,11 +17,19 @@ flamegraph.svg
 *.pdf
 !tests/testdata/di_book_toc_test.pdf
 !tests/testdata/vhs_test.pdf
+!tests/testdata/vhs_many.pdf
+!tests/testdata/vhs_links.pdf
+!tests/testdata/vhs_twocol.pdf
 .claude/
 .agentastic/
 result/
 *.djvu
 tldr-cache/
+
+# change-report artifacts
+/report/
+/report-*/
+/report-out/
 
 # LaTeX build artifacts
 *.aux

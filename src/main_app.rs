@@ -5203,6 +5203,14 @@ impl App {
                     };
                     set_pdf_page_layout_mode(new_mode);
                     if let Some(ref mut pdf_reader) = self.pdf_reader {
+                        // Dual pairs are even-aligned (0,1),(2,3),... so toggling
+                        // dual while anchored on an odd page must snap to the pair
+                        // start; otherwise the odd page renders solo with an empty
+                        // right slot instead of a proper spread.
+                        if new_mode == PdfPageLayoutMode::Dual {
+                            let aligned = pdf_reader.page & !1;
+                            pdf_reader.set_page(aligned);
+                        }
                         pdf_reader
                             .align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                         pdf_reader.last_sent_viewport = None;

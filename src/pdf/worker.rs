@@ -62,6 +62,9 @@ struct RasterSpec {
     output_height: f32,
     transform: Matrix,
     mag: f32,
+    /// User-scale actually rendered after the `KITTY_MAX_DIMENSION` clamp.
+    /// Equals the requested scale when no clamping was needed.
+    achieved_scale: f32,
 }
 
 impl RasterSpec {
@@ -80,6 +83,7 @@ impl RasterSpec {
         };
 
         let mut mag = base_mag * user_scale;
+        let mut achieved_scale = user_scale;
         let out_width = page_width * mag;
         let out_height = page_height * mag;
 
@@ -87,6 +91,7 @@ impl RasterSpec {
         if max_dim > KITTY_MAX_DIMENSION {
             let reduction = KITTY_MAX_DIMENSION / max_dim;
             mag *= reduction;
+            achieved_scale *= reduction;
         }
 
         let (mag, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
@@ -96,6 +101,7 @@ impl RasterSpec {
             output_height,
             transform: Matrix::new_scale(mag, mag),
             mag,
+            achieved_scale,
         }
     }
 }
@@ -485,13 +491,14 @@ pub fn render_page(
     let spec = RasterSpec::compute(page_bounds, viewport_px, params.scale, cell_dims);
 
     log::info!(
-        "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
+        "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} achieved={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
         page_num,
         page_bounds.0,
         page_bounds.1,
         viewport_px.0,
         viewport_px.1,
         params.scale,
+        spec.achieved_scale,
         params.cell_size.width,
         params.cell_size.height,
         spec.mag,
@@ -557,6 +564,7 @@ pub fn render_page(
         page_num,
         scale_factor: spec.mag,
         requested_scale: params.scale,
+        achieved_scale: spec.achieved_scale,
         render_area_width_cells: params.area.width,
         render_area_height_cells: params.area.height,
         line_bounds,
@@ -1407,6 +1415,7 @@ fn render_djvu_page(
         page_num,
         scale_factor: actual_scale,
         requested_scale: params.scale,
+        achieved_scale: spec.achieved_scale,
         render_area_width_cells: params.area.width,
         render_area_height_cells: params.area.height,
         line_bounds: extract_djvu_line_bounds_with_scales(
@@ -1718,6 +1727,7 @@ fn extract_djvu_line_bounds_with_scales(
 struct DjvuRasterSpec {
     output_width: f32,
     output_height: f32,
+    achieved_scale: f32,
 }
 
 impl DjvuRasterSpec {
@@ -1727,29 +1737,11 @@ impl DjvuRasterSpec {
         user_scale: f32,
         cell_dims: (f32, f32),
     ) -> Self {
-        let (page_width, page_height) = page_bounds;
-        let (view_width, view_height) = viewport_px;
-        let base_mag = if page_width / page_height > view_width / view_height {
-            view_height / page_height
-        } else {
-            view_width / page_width
-        };
-
-        let mut mag = base_mag * user_scale;
-        let out_width = page_width * mag;
-        let out_height = page_height * mag;
-
-        let max_dim = out_width.max(out_height);
-        if max_dim > KITTY_MAX_DIMENSION {
-            let reduction = KITTY_MAX_DIMENSION / max_dim;
-            mag *= reduction;
-        }
-
-        let (_, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
-
+        let spec = RasterSpec::compute(page_bounds, viewport_px, user_scale, cell_dims);
         Self {
-            output_width,
-            output_height,
+            output_width: spec.output_width,
+            output_height: spec.output_height,
+            achieved_scale: spec.achieved_scale,
         }
     }
 }

@@ -2608,6 +2608,22 @@ impl PdfReaderState {
         Zoom::display_zoom_for(effective_zoom, Some(self.rendered_scale_for_page(page)))
     }
 
+    /// Highest user zoom the worker can actually rasterize for this page
+    /// before the `KITTY_MAX_DIMENSION` clamp kicks in, estimated from the
+    /// last rendered frame's scale and pixel dimensions.
+    fn max_render_scale_for_page(&self, page: usize) -> Option<f32> {
+        let info = self.rendered.get(page)?;
+        let scale = info
+            .achieved_scale
+            .or(info.requested_scale)
+            .filter(|s| s.is_finite() && *s > 0.0)?;
+        let max_px = info.pixel_w?.max(info.pixel_h?) as f32;
+        if max_px <= 0.0 {
+            return None;
+        }
+        Some(scale * crate::pdf::KITTY_MAX_DIMENSION / max_px)
+    }
+
     fn scroll_start_for_page_at_display_zoom(&self, page: usize, display_factor: f32) -> u32 {
         if get_pdf_render_mode() == PdfRenderMode::Page {
             0
@@ -2846,8 +2862,25 @@ impl PdfReaderState {
         let rendered_scale = self.rendered_scale_for_page(self.page);
         let effective_zoom = self.kitty_effective_zoom_factor;
 
-        if (rendered_scale - effective_zoom).abs() < Zoom::ZOOM_USER_EPS {
-            self.set_error_hud("Already enhanced at this zoom level".into());
+        // The worker clamps rasters to KITTY_MAX_DIMENSION, so above the cap a
+        // re-render cannot get any crisper. Mirror that clamp here so `e` at
+        // the ceiling is a no-op instead of an endless identical re-render.
+        let render_cap = self.max_render_scale_for_page(self.page);
+        let at_cap = render_cap.is_some_and(|cap| cap < effective_zoom);
+        let target_scale = render_cap.map_or(effective_zoom, |cap| effective_zoom.min(cap));
+        // The cap estimate is derived from cell-aligned pixel dims, so allow a
+        // relative tolerance there; exact comparison otherwise.
+        let tolerance = if at_cap {
+            target_scale * 0.01
+        } else {
+            Zoom::ZOOM_USER_EPS
+        };
+        if (rendered_scale - target_scale).abs() < tolerance {
+            self.set_error_hud(if at_cap {
+                "Already at max render resolution".into()
+            } else {
+                "Already enhanced at this zoom level".into()
+            });
             return Some(InputAction::Redraw);
         }
 
@@ -2881,7 +2914,7 @@ impl PdfReaderState {
     }
 
     /// Adjust viewport after an enhanced Kitty image arrives so content does not jump.
-    pub(crate) fn apply_enhance_adjustment(&mut self, page: usize) {
+    pub fn apply_enhance_adjustment(&mut self, page: usize) {
         let Some(pending) = self.pending_enhance.as_ref() else {
             return;
         };
@@ -2889,13 +2922,18 @@ impl PdfReaderState {
             return;
         }
 
-        let Some((s_new, new_cell_size, new_pixel_h)) = self.rendered.get(page).map(|new_info| {
-            (
-                new_info.image_scale().unwrap_or(pending.old_rendered_scale),
-                new_info.full_cell_size,
-                new_info.pixel_h,
-            )
-        }) else {
+        let Some((s_match, s_new, new_cell_size, new_pixel_h)) =
+            self.rendered.get(page).map(|new_info| {
+                (
+                    new_info.image_scale().unwrap_or(pending.old_rendered_scale),
+                    new_info
+                        .image_geometry_scale()
+                        .unwrap_or(pending.old_rendered_scale),
+                    new_info.full_cell_size,
+                    new_info.pixel_h,
+                )
+            })
+        else {
             return;
         };
         let s_old = pending.old_rendered_scale;
@@ -2904,11 +2942,14 @@ impl PdfReaderState {
             return;
         }
 
-        if (s_new - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
+        // Frame identity is matched on the requested scale (echoed verbatim by
+        // the worker); the achieved scale in `s_new` may be lower if the raster
+        // hit the max-dimension clamp.
+        if (s_match - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
             log::debug!(
                 "Waiting for enhanced frame page={} requested_scale={} target_scale={}",
                 page,
-                s_new,
+                s_match,
                 pending.effective_zoom
             );
             return;
@@ -3028,7 +3069,14 @@ impl PdfReaderState {
         crate::settings::set_pdf_pan_shift(new_pan);
         self.last_render.rect = Rect::default();
         self.clamp_kitty_scroll_offset();
-        self.set_zoom_hud(enhance.effective_zoom);
+        if s_new < enhance.effective_zoom * 0.98 {
+            let achieved_percent = (s_new * 100.0).round() as u32;
+            self.set_error_hud(format!(
+                "Enhanced to max render resolution ({achieved_percent}%)"
+            ));
+        } else {
+            self.set_zoom_hud(enhance.effective_zoom);
+        }
     }
 
     pub(crate) fn set_page(&mut self, page: usize) {

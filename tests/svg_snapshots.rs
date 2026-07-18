@@ -7195,3 +7195,133 @@ fn test_mark_jump_via_popup_svg() {
         create_test_failure_handler("test_mark_jump_via_popup_svg"),
     );
 }
+
+/// Enhance (`e`) above the worker's KITTY_MAX_DIMENSION clamp: the frame comes
+/// back rendered at a lower achieved scale than requested, and the user must
+/// see HUD feedback that the enhancement was capped, with the actual
+/// resolution percentage.
+#[cfg(feature = "pdf")]
+#[test]
+#[parallel]
+fn test_pdf_enhance_capped_hud_svg() {
+    use bookokrat::pdf::CellSize;
+    use bookokrat::table_of_contents::TableOfContents;
+    use bookokrat::widget::pdf_reader::state::PendingEnhance;
+    use bookokrat::widget::pdf_reader::{PdfReaderState, RenderedInfo};
+
+    ensure_test_report_initialized();
+    set_theme_by_index(0);
+    let mut terminal = create_test_terminal(100, 30);
+
+    let palette = bookokrat::theme::current_theme().clone();
+    let mut state = PdfReaderState::new(
+        "clamped.pdf".to_string(),
+        true,  // is_kitty
+        false, // is_iterm
+        0,
+        6.785, // effective zoom well above the render cap
+        0,
+        0,
+        palette.clone(),
+        0,
+        false,
+        false,
+        None,
+        "test-doc".to_string(),
+    );
+
+    // Enhanced frame as the worker returns it for a 612x792pt page in a
+    // ~3000x1650px viewport: requested 6.785 but clamped to achieved 2.579
+    // (raster capped at KITTY_MAX_DIMENSION = 10000px on the long edge).
+    state.rendered.push(RenderedInfo {
+        image_requested_scale: Some(6.785),
+        image_achieved_scale: Some(2.579),
+        requested_scale: Some(6.785),
+        achieved_scale: Some(2.579),
+        scale_factor: Some(12.6046),
+        full_cell_size: Some(CellSize::new(551, 399)),
+        pixel_w: Some(7714),
+        pixel_h: Some(9975),
+        page_px_height: Some(9975.0),
+        ..Default::default()
+    });
+
+    // State captured by enhance_zoom() before the re-render: the old frame was
+    // at fit scale 1.0, display-upscaled to 678%.
+    state.pending_enhance = Some(PendingEnhance {
+        target_page: 0,
+        effective_zoom: 6.785,
+        old_display_factor: 6.785,
+        old_rendered_scale: 1.0,
+        old_scroll_offset: 0,
+        old_viewport_start: 0,
+        old_pan_from_left: 0,
+        old_cell_size: Some(CellSize::new(213, 155)),
+        old_pixel_w: Some(2982),
+        old_pixel_h: Some(3875),
+        old_right_cell_w: None,
+    });
+
+    state.apply_enhance_adjustment(0);
+
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let mut pending_display = None;
+            let mut bookmarks = bookokrat::bookmarks::Bookmarks::load_or_ephemeral(None);
+            let mut last_save = std::time::Instant::now();
+            let mut toc = TableOfContents::new();
+            state.render_in_area(
+                f,
+                area,
+                true,
+                (14, 25),
+                palette.base_05,
+                palette.base_03,
+                palette.base_00,
+                None,
+                None,
+                &mut pending_display,
+                &mut bookmarks,
+                &mut last_save,
+                &mut toc,
+                0,
+            );
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_pdf_enhance_capped_hud.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // The SVG wraps every character in its own tspan, so strip tags before
+    // checking the visible text.
+    let plain_text: String = {
+        let mut text = String::new();
+        let mut in_tag = false;
+        for ch in svg_output.chars() {
+            match ch {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => text.push(c),
+                _ => {}
+            }
+        }
+        text
+    };
+    assert!(
+        plain_text.contains("Enhanced to max render resolution (258%)"),
+        "capped-enhance HUD message must be visible in the rendered output"
+    );
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/pdf_enhance_capped_hud.svg"),
+        "test_pdf_enhance_capped_hud_svg",
+        create_test_failure_handler("test_pdf_enhance_capped_hud_svg"),
+    );
+}
