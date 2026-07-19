@@ -22,6 +22,10 @@ flamegraph.svg
 !tests/testdata/vhs_twocol.pdf
 !tests/testdata/vhs_viewmodes.pdf
 !tests/testdata/vhs_offset.pdf
+!tests/testdata/vhs_reload.pdf
+!tests/testdata/vhs_reload_a.pdf
+!tests/testdata/vhs_reload_b.pdf
+!tests/testdata/vhs_reload_c.pdf
 .claude/
 .agentastic/
 result/

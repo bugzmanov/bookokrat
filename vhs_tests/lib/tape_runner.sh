@@ -354,6 +354,15 @@ execute_command() {
             fi
             log_verbose "repeat_key: $rkey x$rcount (delay: ${rdelay}s)"
             case "$TERMINAL_TYPE" in
+                kitty)
+                    # kitty has no osascript batch sender - loop the socket send.
+                    local ri=0
+                    while [ "$ri" -lt "$rcount" ]; do
+                        term_send_key "$rkey"
+                        sleep "$rdelay"
+                        ri=$((ri + 1))
+                    done
+                    ;;
                 ghostty|*) send_key_repeated "$rkey" "$rcount" "$rdelay" ;;
             esac
             ;;
@@ -370,6 +379,14 @@ execute_command() {
             fi
             log_verbose "repeat_ctrl: $rkey x$rcount (delay: ${rdelay}s)"
             case "$TERMINAL_TYPE" in
+                kitty)
+                    local ci=0
+                    while [ "$ci" -lt "$rcount" ]; do
+                        term_send_ctrl_key "$rkey"
+                        sleep "$rdelay"
+                        ci=$((ci + 1))
+                    done
+                    ;;
                 ghostty|*) send_ctrl_key_repeated "$rkey" "$rcount" "$rdelay" ;;
             esac
             ;;
@@ -417,6 +434,21 @@ execute_command() {
             fi
             log_verbose "key: $arg"
             term_send_key "$arg"
+            ;;
+
+        shell)
+            # Run a host shell command from the project root, mid-tape. Used by
+            # tapes that need to mutate state outside the app: overwrite the
+            # opened PDF (file-watch reload test), poke the synctex editor
+            # socket, etc. The command runs synchronously; the tape continues
+            # even if it fails (the failure is logged and the screenshots will
+            # show the missing effect).
+            if [ -z "$arg" ]; then
+                log_error "shell requires a command"
+                return 1
+            fi
+            log_verbose "shell: $arg"
+            (cd "$PROJECT_ROOT" && bash -c "$arg") || log_error "shell command failed: $arg"
             ;;
 
         ctrl)

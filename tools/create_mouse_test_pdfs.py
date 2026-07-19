@@ -281,9 +281,66 @@ def offset_pdf(path, front=4, body=12):
     print("wrote", path)
 
 
+def reload_pdf(path, version, pages):
+    """Reload-test fixture: versions of "the same" document for the file-watch
+    auto-reload tests. VERSION A has 3 pages, VERSION B has 2 (thick border) -
+    overwriting A with B while watching must swap the visible content AND
+    re-clamp the current page (page 3 of A -> page 2 of B). VERSION C has 3
+    pages like A - overwriting A with C must preserve page/zoom/scroll/pan.
+    Corner markers (TL/TR/BL/BR + version + page) make a zoomed/panned crop
+    self-identifying so position preservation is provable from pixels.
+    vhs_reload.pdf is the scratch copy the tape opens and overwrites; the tape
+    restores it from vhs_reload_a.pdf when done.
+    """
+    c = canvas.Canvas(path, pagesize=letter)
+    for p in range(1, pages + 1):
+        c.setFont("Helvetica-Bold", 16)
+        c.drawString(0.45 * inch, PAGE_H - 0.6 * inch, f"TL {version}{p}")
+        c.drawRightString(PAGE_W - 0.45 * inch, PAGE_H - 0.6 * inch, f"TR {version}{p}")
+        c.drawString(0.45 * inch, 0.45 * inch, f"BL {version}{p}")
+        c.drawRightString(PAGE_W - 0.45 * inch, 0.45 * inch, f"BR {version}{p}")
+        # Mid-edge markers help identify a zoomed crop that misses the corners.
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 0.6 * inch, f"TOP {version}{p}")
+        c.drawCentredString(PAGE_W / 2, 0.45 * inch, f"BOT {version}{p}")
+        c.drawString(0.45 * inch, PAGE_H / 2, f"L {version}{p}")
+        c.drawRightString(PAGE_W - 0.45 * inch, PAGE_H / 2, f"R {version}{p}")
+        c.setFont("Helvetica-Bold", 44)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 2.0 * inch, "RELOAD TEST")
+        c.setFont("Helvetica-Bold", 72)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 4.2 * inch, f"VERSION {version}")
+        c.setFont("Helvetica-Bold", 30)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 5.8 * inch, f"PAGE {p} / {pages}")
+        # Dense label grid below the title block: any zoomed/panned crop of the
+        # page contains version+page+row+column identifiers.
+        c.setFont("Helvetica-Bold", 12)
+        row = 1
+        y = PAGE_H - 6.5 * inch
+        while y > 0.8 * inch:
+            for col, x in ((1, 1.2 * inch), (2, PAGE_W / 2), (3, PAGE_W - 1.2 * inch)):
+                c.drawCentredString(x, y, f"{version}{p} r{row:02d} c{col}")
+            y -= 0.5 * inch
+            row += 1
+        if version == "B":
+            c.setLineWidth(6)
+            c.rect(0.35 * inch, 0.35 * inch, PAGE_W - 0.7 * inch, PAGE_H - 0.7 * inch)
+        c.showPage()
+    c.save()
+    print("wrote", path)
+
+
 if __name__ == "__main__":
     two_column_pdf(os.path.join(OUT_DIR, "vhs_twocol.pdf"))
     links_pdf(os.path.join(OUT_DIR, "vhs_links.pdf"))
     many_pages_pdf(os.path.join(OUT_DIR, "vhs_many.pdf"))
     view_modes_pdf(os.path.join(OUT_DIR, "vhs_viewmodes.pdf"))
     offset_pdf(os.path.join(OUT_DIR, "vhs_offset.pdf"))
+    reload_pdf(os.path.join(OUT_DIR, "vhs_reload_a.pdf"), "A", 3)
+    reload_pdf(os.path.join(OUT_DIR, "vhs_reload_b.pdf"), "B", 2)
+    reload_pdf(os.path.join(OUT_DIR, "vhs_reload_c.pdf"), "C", 3)
+    import shutil
+
+    shutil.copyfile(
+        os.path.join(OUT_DIR, "vhs_reload_a.pdf"),
+        os.path.join(OUT_DIR, "vhs_reload.pdf"),
+    )
+    print("wrote", os.path.join(OUT_DIR, "vhs_reload.pdf"))

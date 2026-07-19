@@ -884,6 +884,7 @@ impl PdfReaderState {
                 InputResponse::handled(None)
             }
             Action::Cancel => InputResponse::handled(self.handle_escape_key()),
+            Action::DeleteComment => InputResponse::handled(self.delete_annotation_at_cursor()),
             Action::EnterCommentNav => {
                 self.normal_mode.exit_visual();
                 self.normal_mode.deactivate();
@@ -4752,6 +4753,77 @@ impl PdfReaderState {
         Some(CommentTarget::pdf(page, pdf_rects))
     }
 
+    /// Delete the annotation (comment or highlight) under the normal-mode
+    /// cursor. Stored annotation rects are in unscaled (scale-1.0) pixel
+    /// coordinates, so the cursor position is unscaled before hit-testing.
+    fn delete_annotation_at_cursor(&mut self) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Annotations are unavailable".to_string());
+            return Some(InputAction::Redraw);
+        }
+        let cursor = self.normal_mode.cursor;
+        let Some((ux, uy)) = self.cursor_unscaled_point() else {
+            return None;
+        };
+        let annotation_id = self.book_comments.as_ref().and_then(|comments| {
+            let locked = comments.lock().ok()?;
+            locked
+                .get_doc_comments(&self.comments_doc_id)
+                .into_iter()
+                .find(|comment| {
+                    let CommentTarget::Pdf { rects, .. } = &comment.target else {
+                        return false;
+                    };
+                    rects.iter().any(|r| {
+                        r.page == cursor.page
+                            && (r.topleft_x..=r.bottomright_x).contains(&ux)
+                            && (r.topleft_y..=r.bottomright_y).contains(&uy)
+                    })
+                })
+                .map(|comment| comment.id.clone())
+        });
+        let Some(id) = annotation_id else {
+            self.set_error_hud("No annotation under the cursor".to_string());
+            return Some(InputAction::Redraw);
+        };
+        let delete_result = self.book_comments.as_ref().cloned().and_then(|comments| {
+            comments
+                .lock()
+                .map(|mut l| l.delete_comment_by_id(&id))
+                .ok()
+        });
+        if let Some(Err(e)) = delete_result {
+            log::error!("Failed to delete annotation {id}: {e}");
+            self.set_error_hud("Failed to delete annotation".to_string());
+            return Some(InputAction::Redraw);
+        }
+        self.refresh_comment_rects();
+        self.refresh_highlight_overlays();
+        Some(InputAction::CommentDeleted {
+            rects: self.comment_rects.clone(),
+            selection_rects: Vec::new(),
+        })
+    }
+
+    /// The normal-mode cursor position in unscaled (scale-1.0) pixel
+    /// coordinates — the space annotation target rects are stored in.
+    fn cursor_unscaled_point(&self) -> Option<(u32, u32)> {
+        let cursor = self.normal_mode.cursor;
+        let rendered = self.rendered.get(cursor.page)?;
+        let line = rendered.line_bounds.get(cursor.line_idx)?;
+        let x = line
+            .chars
+            .get(cursor.char_idx)
+            .or_else(|| line.chars.last())
+            .map(|c| c.x)?;
+        let scale = rendered.scale_factor.unwrap_or(1.0);
+        let y = f64::from(line.y0 + line.y1) / 2.0;
+        Some((
+            (f64::from(x) / f64::from(scale)).round() as u32,
+            (y / f64::from(scale)).round() as u32,
+        ))
+    }
+
     fn start_comment_nav(&mut self) -> Option<InputAction> {
         if !self.comments_enabled {
             return None;
@@ -6603,6 +6675,9 @@ impl PdfReaderState {
                 selection_rects,
             } => {
                 send_conversion(crate::pdf::ConversionCommand::UpdateComments(rects));
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(
+                    self.highlight_overlays.clone(),
+                ));
                 send_conversion(crate::pdf::ConversionCommand::UpdateSelection(
                     selection_rects.clone(),
                 ));
