@@ -222,8 +222,68 @@ def view_modes_pdf(path, pages=2):
     print("wrote", path)
 
 
+_ROMAN = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii"]
+
+
+def offset_pdf(path, front=4, body=12):
+    """Printed-page-offset fixture: printed numbers are DECOUPLED from physical
+    page indices, for testing printed->PDF page mapping (page_numbers.rs) and
+    the go-to-page [Content] vs [PDF] modes.
+
+    Physical pages 1..front are front matter with roman-numeral footers
+    (i, ii, ...) - romans deliberately do NOT parse as page numbers, so they
+    contribute no samples. Physical pages front+1.. are body pages with printed
+    arabic footers starting at 1, giving a constant offset (printed 1 =
+    physical front+1). Every page displays its PHYSICAL index in giant text
+    ("PHYS NN" - contains letters, so it can't be mistaken for a printed page
+    number by the edge-line detector), and body pages also show "PRINTED NN",
+    so a screenshot proves which interpretation of "page N" was applied.
+
+    A flat outline (Cover / Preface / Chapter 1..3) covers TOC navigation on
+    the same fixture.
+    """
+    total = front + body
+    c = canvas.Canvas(path, pagesize=letter)
+    outline = {0: "Cover", 2: "Preface", front: "Chapter 1"}
+    outline[front + body // 3] = "Chapter 2"
+    outline[front + 2 * (body // 3)] = "Chapter 3"
+
+    for idx in range(total):  # 0-based physical index
+        phys = idx + 1
+        if idx in outline:
+            key = f"out{idx}"
+            c.bookmarkPage(key)
+            c.addOutlineEntry(outline[idx], key, level=0)
+
+        is_front = idx < front
+        c.setFont("Helvetica-Bold", 34)
+        c.drawCentredString(PAGE_W / 2, PAGE_H - 1.5 * inch, f"PHYS {phys:02d}")
+        c.setFont("Helvetica-Bold", 20)
+        if is_front:
+            c.drawCentredString(
+                PAGE_W / 2, PAGE_H - 2.3 * inch, f"FRONT MATTER ({_ROMAN[idx]})"
+            )
+        else:
+            printed = idx - front + 1
+            c.drawCentredString(PAGE_W / 2, PAGE_H - 2.3 * inch, f"PRINTED {printed:02d}")
+            chapter = [t for i, t in sorted(outline.items()) if i <= idx][-1]
+            c.setFont("Helvetica", 13)
+            c.drawCentredString(PAGE_W / 2, PAGE_H - 3.0 * inch, f"({chapter})")
+
+        # Footer: the printed page number the detector should (or should not) see.
+        c.setFont("Helvetica", 11)
+        if is_front:
+            c.drawCentredString(PAGE_W / 2, 0.5 * inch, f"- {_ROMAN[idx]} -")
+        else:
+            c.drawCentredString(PAGE_W / 2, 0.5 * inch, f"- {idx - front + 1} -")
+        c.showPage()
+    c.save()
+    print("wrote", path)
+
+
 if __name__ == "__main__":
     two_column_pdf(os.path.join(OUT_DIR, "vhs_twocol.pdf"))
     links_pdf(os.path.join(OUT_DIR, "vhs_links.pdf"))
     many_pages_pdf(os.path.join(OUT_DIR, "vhs_many.pdf"))
     view_modes_pdf(os.path.join(OUT_DIR, "vhs_viewmodes.pdf"))
+    offset_pdf(os.path.join(OUT_DIR, "vhs_offset.pdf"))
