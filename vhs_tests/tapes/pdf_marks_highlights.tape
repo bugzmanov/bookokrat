@@ -74,17 +74,18 @@ screenshot hl_zoom_survives
 key z
 wait 400
 # Render-mode switch survival; let the "Render mode" HUD expire before the shot.
-key space
-key S
-wait 500
-wait 500
-wait 500
-wait 500
-desc Switched to continuous-scroll render mode (Space+S). Expect: yellow highlight still visible in the scroll layout; no HUD.
-screenshot hl_scroll_mode
-key space
-key S
-wait 600
+# KITTY ONLY: scroll mode requires the Kitty graphics protocol.
+@kitty key space
+@kitty key S
+@kitty wait 500
+@kitty wait 500
+@kitty wait 500
+@kitty wait 500
+@kitty desc Switched to continuous-scroll render mode (Space+S). Expect: yellow highlight still visible in the scroll layout; no HUD.
+@kitty screenshot hl_scroll_mode
+@kitty key space
+@kitty key S
+@kitty wait 600
 
 # --- Second highlight in another color ---------------------------------------
 key n

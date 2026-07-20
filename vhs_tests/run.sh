@@ -98,6 +98,15 @@ EXCLUDED_DEFAULT_TAPES=(
     "docsite_pdf"
 )
 
+# List screenshot names a tape produces for the current terminal: plain
+# `screenshot X` lines plus `@<terminal> screenshot X` conditional lines.
+tape_screenshot_names() {
+    local tape_file="$1"
+    awk -v cond="@${TERMINAL_TYPE}" \
+        '$1 == "screenshot" { print $2 }
+         $1 == cond && $2 == "screenshot" { print $3 }' "$tape_file" 2>/dev/null
+}
+
 is_default_excluded_tape() {
     local tape_name="$1"
     for excluded in "${EXCLUDED_DEFAULT_TAPES[@]}"; do
@@ -305,6 +314,17 @@ mkdir -p "$SCREENSHOTS_DIR"
 mkdir -p "$REPORTS_DIR"
 mkdir -p "$GOLDEN_DIR"
 
+# A tape may declare `terminal <type>` to restrict itself to one terminal
+# (e.g. pdf_dual_wezterm only makes sense on wezterm, pdf_halfblocks_blocked
+# relies on the kitty launcher's appenv support). Returns 0 if the tape is
+# allowed on the current terminal.
+tape_matches_terminal() {
+    local tape_file="$1"
+    local wanted
+    wanted=$(grep -E '^terminal[[:space:]]' "$tape_file" | head -1 | awk '{print $2}')
+    [ -z "$wanted" ] || [ "$wanted" = "$TERMINAL_TYPE" ]
+}
+
 # Collect tapes to run
 tapes_to_run=()
 if [ -n "$SPECIFIC_TAPE" ]; then
@@ -314,12 +334,16 @@ if [ -n "$SPECIFIC_TAPE" ]; then
         echo "Use --list to see available tapes"
         exit 1
     fi
+    if ! tape_matches_terminal "$tape_file"; then
+        echo -e "${RED}ERROR: Tape $SPECIFIC_TAPE is restricted to terminal '$(grep -E '^terminal[[:space:]]' "$tape_file" | head -1 | awk '{print $2}')' (current: $TERMINAL_TYPE)${NC}"
+        exit 1
+    fi
     tapes_to_run+=("$tape_file")
 else
     for tape in "$TAPES_DIR"/*.tape; do
         if [ -f "$tape" ]; then
             tape_name=$(basename "$tape" .tape)
-            if ! is_default_excluded_tape "$tape_name"; then
+            if ! is_default_excluded_tape "$tape_name" && tape_matches_terminal "$tape"; then
                 tapes_to_run+=("$tape")
             fi
         fi
@@ -344,7 +368,7 @@ if $ACCEPT_MODE; then
         if [ -n "$SPECIFIC_SCREENSHOT" ]; then
             shots=("$SPECIFIC_SCREENSHOT")
         else
-            shots=($(grep '^screenshot' "$tape_file" | awk '{print $2}'))
+            shots=($(tape_screenshot_names "$tape_file"))
         fi
         [ ${#shots[@]} -eq 0 ] && continue
         echo -e "${YELLOW}Accepting golden(s) for $tape_name ($TERMINAL_TYPE)...${NC}"
@@ -389,7 +413,7 @@ for tape_file in "${tapes_to_run[@]}"; do
     run_tape "$tape_file" "$BINARY" "$TEST_PDF" "$tape_screenshots_dir" || true
 
     # Get screenshots that were taken (parse from tape file)
-    screenshots=($(grep '^screenshot' "$tape_file" | awk '{print $2}'))
+    screenshots=($(tape_screenshot_names "$tape_file"))
 
     if [ ${#screenshots[@]} -eq 0 ]; then
         echo -e "${YELLOW}No screenshots in tape: $tape_name${NC}"

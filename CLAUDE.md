@@ -1466,13 +1466,15 @@ key q
 | `mousemovepx` | `<x> <y>` | Move pointer to a pixel |
 | `wait` | `<ms>` | Wait specified milliseconds (default: 500) |
 
+**Per-terminal conditional lines:** Prefix any tape line with `@kitty ` or `@wezterm ` to run it only under that terminal (e.g. `@kitty clickpx 770 725` / `@wezterm clickpx 786 836`). Use this for terminal-specific coordinates — window geometry differs between terminals, so pixel/cell coordinates measured on one terminal do not map to the same content on another.
+
 **Documenting tapes:** Every tape should start with one `about` line, and every `screenshot` should be preceded by a `desc` line. Keep descriptions SHORT — state what the step does and what to expect (e.g. `desc Zoom out twice. Expect: page smaller, underline still aligned`). These render in the HTML report (`about` in the header, `desc` under each snapshot) so goldens are self-explanatory when reviewing. `desc` applies only to the next screenshot and is cleared after.
 
-**Mouse support (Kitty only):** Mouse commands inject the exact SGR mouse escape sequence the terminal would emit straight into the app's pty via `kitty @ send-text` — no OS cursor movement, no Accessibility permission, fully deterministic. Two coordinate forms:
-- **Cell** (default commands): coordinates are **1-based terminal cells** (read off the screenshot grid). For PDF on Kitty/Ghostty the harness auto-detects SGR-pixel mouse mode (`?1016`) and converts the cell to the pixel center of the cell using a one-time per-session calibration (capture pixel size ÷ grid).
-- **Pixel** (`*px` commands): coordinates are **device pixels** in the same space as the screencapture PNG and the `?1016` wire format. Use these for sub-cell precision — e.g. precise PDF text selection or link/word hit-testing where the exact pixel within a cell matters. No calibration needed.
+**Mouse support (Kitty and WezTerm):** Mouse commands inject the exact SGR mouse escape sequence the terminal would emit straight into the app's pty — via `kitty @ send-text` on Kitty, via `wezterm cli send-text --no-paste` on WezTerm — no OS cursor movement, no Accessibility permission, fully deterministic. Two coordinate forms:
+- **Cell** (default commands): coordinates are **1-based terminal cells** (read off the screenshot grid). For PDF on Kitty/Ghostty the harness auto-detects SGR-pixel mouse mode (`?1016`) and converts the cell to the pixel center of the cell using a one-time per-session calibration (capture pixel size ÷ grid). On WezTerm the app always uses cell coordinates, so cells are sent as-is.
+- **Pixel** (`*px` commands): coordinates are **device pixels** in the same space as the screencapture PNG and the `?1016` wire format. On Kitty this gives sub-cell precision — e.g. precise PDF text selection or link/word hit-testing where the exact pixel within a cell matters; no calibration needed. On WezTerm (no `?1016`) the pixel is converted to its containing cell via calibration, so sub-cell precision is lost — and pixel coordinates tuned on Kitty goldens do NOT map to the same content in a WezTerm window (different geometry).
 
-Mouse commands are implemented only for the Kitty harness; other terminals log an error.
+Mouse commands are implemented for the Kitty and WezTerm harnesses; other terminals log an error.
 
 **IMPORTANT: Wait Times** - Kitty terminal is very fast. Never use wait times longer than 500ms in tape files. Most operations complete in 200-300ms. Only use 500ms for initial app load or page navigation that requires rendering.
 

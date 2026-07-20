@@ -255,7 +255,11 @@ pub(crate) fn apply_render_responses(
                 let new_cell_size =
                     CellSize::new(data.img_data.width_cell, data.img_data.height_cell);
                 if let Some(ref existing_img) = info.img {
-                    if existing_img.cell_dimensions() != new_cell_size {
+                    let full_page_image = !matches!(
+                        existing_img,
+                        ConvertedImage::Tiled { .. } | ConvertedImage::TileUpdate { .. }
+                    );
+                    if full_page_image && existing_img.cell_dimensions() != new_cell_size {
                         log::trace!(
                             "Dropping stale image for page {page}: \
                              old={}x{} new={}x{}",
@@ -967,7 +971,7 @@ impl PdfReaderState {
         if is_kitty {
             *pending_display = Some(build_display_plan(display_batch));
         } else {
-            *pending_display = None;
+            *pending_display = Some(PdfDisplayPlan::NoChange);
             let _ = display_batch;
         }
 
@@ -1141,6 +1145,13 @@ pub(crate) fn execute_display_plan(
             log::error!("Failed to clear kitty graphics for popup: {e}");
         }
         pdf_reader.last_render.rect = Rect::default();
+        return;
+    }
+
+    // Non-kitty: pages were already drawn through the ratatui buffer; only the
+    // modal backing overlay needs a post-draw emission.
+    if !pdf_reader.is_kitty {
+        emit_modal_overlay(pdf_reader);
         return;
     }
 
@@ -1346,6 +1357,7 @@ const MODAL_OVERLAY_IMAGE_ID: u32 = u32::MAX - 1;
 
 fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     if !pdf_reader.is_kitty {
+        emit_modal_overlay_iterm2(pdf_reader);
         return;
     }
 
@@ -1446,6 +1458,83 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     }
 
     let _ = std::io::Write::flush(&mut stdout);
+}
+
+/// iTerm2-protocol equivalent of the Kitty modal backing overlay, close-side.
+///
+/// The backing itself is embedded into the ratatui buffer at render time (see
+/// `render_iterm2_modal_backing`) so it lands between the page image and the
+/// modal glyphs in emission order. iTerm2 has no image-delete command, so when
+/// the modal CLOSES the stale backing is removed by requesting a full screen
+/// repaint (terminal.clear() re-emits the page image over it).
+fn emit_modal_overlay_iterm2(pdf_reader: &mut PdfReaderState) {
+    if !pdf_reader.uses_iterm2_protocol {
+        return;
+    }
+
+    let wanted = pdf_reader
+        .modal_overlay_rect
+        .filter(|&(_, _, w, h)| w > 0 && h > 0);
+
+    match wanted {
+        Some(rect) => pdf_reader.modal_overlay_sent = Some(rect),
+        None => {
+            if pdf_reader.modal_overlay_sent.take().is_some() {
+                pdf_reader.pending_screen_refresh = true;
+            }
+        }
+    }
+}
+
+/// Build the iTerm2 inline-image escape for a solid `base_01` panel of
+/// `width`x`height` cells and write it into the buffer cell at (x, y).
+///
+/// Terminals composite iTerm2 inline images in cell-emission order: the page
+/// image's escape lives near the top of the img area, so an escape placed on
+/// the backing's top row is emitted AFTER it (covering the page) while the
+/// modal's glyph cells on later rows still paint on top. Without this the
+/// modal is a "ghost": only glyph strokes over the page image.
+fn render_iterm2_modal_backing(
+    frame: &mut Frame<'_>,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    panel_bg: Color,
+) {
+    let (r, g, b) = crate::color_mode::color_to_rgb(panel_bg).unwrap_or((0x34, 0x3D, 0x46));
+
+    let mut png_bytes: Vec<u8> = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let Ok(mut writer) = encoder.write_header() else {
+            return;
+        };
+        if writer.write_image_data(&[r, g, b]).is_err() {
+            return;
+        }
+    }
+    let data = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&png_bytes)
+    };
+
+    let escape = format!(
+        "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:{}\x07",
+        png_bytes.len(),
+        width,
+        height,
+        data,
+    );
+
+    let buf = frame.buffer_mut();
+    let area = *buf.area();
+    if x >= area.right() || y >= area.bottom() {
+        return;
+    }
+    buf[(x, y)].set_symbol(&escape);
 }
 
 pub(crate) fn update_non_kitty_viewport(
@@ -2852,6 +2941,7 @@ impl PdfReaderState {
                         popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
+                        self.uses_iterm2_protocol,
                     );
                 } else if !sidebar_comments.is_empty() {
                     // Use the full pdf_area as bounds for page mode
@@ -3084,6 +3174,7 @@ impl PdfReaderState {
                         popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
+                        self.uses_iterm2_protocol,
                     );
                 } else if let Some(page_idx) = sidebar_page_idx
                     && let Some(info) = visible_pages.iter().find(|info| info.page_idx == page_idx)
@@ -3194,9 +3285,10 @@ impl PdfReaderState {
         let zoom_changed =
             (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
         let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
+        let page_changed = self.last_nonkitty_cleanup_page != Some(self.page);
         let warp_content_changed =
             crate::terminal::is_warp_terminal() && self.last_render.rect != size;
-        let needs_clear = zoom_changed || area_changed || warp_content_changed;
+        let needs_clear = zoom_changed || area_changed || page_changed || warp_content_changed;
         frame.render_widget(
             Block::default().style(Style::default().bg(bg_color)),
             img_area,
@@ -3224,7 +3316,18 @@ impl PdfReaderState {
         if page_layout_mode == PdfPageLayoutMode::Dual {
             let right_page = self.page.saturating_add(1);
             let right_exists = right_page < self.rendered.len();
-            if page_sizes.len() < 2 && right_exists {
+            // Non-kitty: only hold the frame for the pair when the CURRENT
+            // layout actually has a right slice in the window. At high zoom /
+            // pan the right page is legitimately off-screen and demanding it
+            // would show [LOADING] forever (the right page never converts at
+            // this scale because its viewport slice is empty).
+            let expect_right = right_exists
+                && (self.is_kitty
+                    || self
+                        .build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset)
+                        .and_then(|l| l.right_slice)
+                        .is_some());
+            if page_sizes.len() < 2 && expect_right {
                 if PdfReaderState::debug_non_kitty_dual_enabled() {
                     log::debug!(
                         "dual-render waiting for pair page={} right_page={} sizes_ready={}",
@@ -3294,6 +3397,7 @@ impl PdfReaderState {
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
+                    self.uses_iterm2_protocol,
                 );
             }
             if highlight_palette_modal {
@@ -3313,11 +3417,42 @@ impl PdfReaderState {
             if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
                 terminal_overlay::emit_kitty_delete_all();
             }
-            if terminal_overlay::overlay_force_clear_enabled() {
-                terminal_overlay::clear_rect_direct(img_area);
+            if needs_clear || terminal_overlay::overlay_force_clear_enabled() {
+                // Inline images (iTerm2 protocol) survive in cells the ratatui
+                // diff considers unchanged: when the new image is smaller than
+                // the previous one, the vacated cells keep showing the OLD
+                // image's fragments (the "right-edge strip" leak). Direct-write
+                // spaces over both the previous and the current image area so
+                // stale fragments cannot outlive a zoom/area/page change. The
+                // theme bg keeps the flash invisible.
+                // Pad by a couple of cells: WezTerm rounds the scaled image up
+                // to whole cells, so fragments can sit one column/row past the
+                // declared area.
+                let pad_rect = |r: Rect| Rect {
+                    width: r
+                        .width
+                        .saturating_add(2)
+                        .min(size.width.saturating_sub(r.x)),
+                    height: r
+                        .height
+                        .saturating_add(1)
+                        .min(size.height.saturating_sub(r.y)),
+                    ..r
+                };
+                let mut rects = vec![pad_rect(img_area)];
+                if let Some(prev) = self.last_nonkitty_cleanup_area {
+                    if prev != img_area {
+                        rects.push(pad_rect(prev));
+                    }
+                }
+                terminal_overlay::clear_rects_direct_bg(
+                    rects,
+                    crate::color_mode::color_to_rgb(bg_color),
+                );
             }
             self.last_nonkitty_cleanup_area = Some(img_area);
             self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
+            self.last_nonkitty_cleanup_page = Some(self.page);
 
             let dual_layout = page_layout_mode == PdfPageLayoutMode::Dual;
             let dual_layout_info = if dual_layout {
@@ -3576,6 +3711,7 @@ impl PdfReaderState {
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
+                    self.uses_iterm2_protocol,
                 );
             }
             if highlight_palette_modal {
@@ -3833,6 +3969,7 @@ impl PdfReaderState {
         accent_color: Color,
         panel_bg: Color,
         header_bg: Color,
+        iterm2_backing: bool,
     ) -> Option<(u16, u16, u16, u16)> {
         let textarea = comment_input.textarea.as_mut()?;
 
@@ -3865,6 +4002,12 @@ impl PdfReaderState {
         let backing_y = modal_area.y.saturating_sub(pad);
         let backing_w = (modal_area.width + pad * 2).min(area.x + area.width - backing_x);
         let backing_h = (modal_area.height + pad * 2).min(area.y + area.height - backing_y);
+
+        if iterm2_backing {
+            render_iterm2_modal_backing(
+                frame, backing_x, backing_y, backing_w, backing_h, panel_bg,
+            );
+        }
 
         frame.render_widget(Clear, modal_area);
 

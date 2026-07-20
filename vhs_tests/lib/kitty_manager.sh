@@ -112,9 +112,11 @@ launch_kitty() {
     # critical: going through the shell auto-attaches tmux, which makes bookokrat
     # use tmux graphics passthrough and the PDF fails to render. `env -u TMUX`
     # strips any inherited tmux env for good measure.
+    # TAPE_APP_ENV carries `appenv NAME=VALUE` directives from the tape
+    # (e.g. BOOKOKRAT_PROTOCOL=halfblocks to force the non-kitty render path).
     "$KITTY_CMD" @ --to "$KITTY_SOCKET" launch --type=os-window --title "$title" \
         --cwd "${PROJECT_ROOT:-$PWD}" \
-        env -u TMUX -u TMUX_PANE "$command" $args >/dev/null 2>&1
+        env -u TMUX -u TMUX_PANE $TAPE_APP_ENV "$command" $args >/dev/null 2>&1
 
     # Find the bookokrat window: its kitty id (for send-key) and its os-window's
     # platform_window_id (the macOS CGWindowNumber for screencapture). Match by

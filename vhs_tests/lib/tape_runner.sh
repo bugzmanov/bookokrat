@@ -107,13 +107,28 @@ term_capture() {
             fi
             ;;
         wezterm)
-            # WezTerm: use macOS screencapture with window ID
+            # WezTerm: use macOS screencapture with window ID. Same rules as the
+            # kitty branch: delete stale output first (an occluded window's
+            # capture silently writes nothing and a stale file would fake a
+            # success), and if the no-focus capture is empty, foreground the
+            # test WezTerm and retry — screencapture cannot image a window
+            # that is on another Space / never foregrounded.
             local macos_id="$WEZTERM_MACOS_WINDOW_ID"
             if [ -z "$macos_id" ]; then
                 macos_id=$(get_any_wezterm_macos_window_id)
             fi
             if [ -n "$macos_id" ]; then
+                rm -f "$output_path"
                 screencapture -l"$macos_id" -x -o "$output_path" 2>/dev/null
+                if [ ! -s "$output_path" ]; then
+                    osascript -e 'tell application "WezTerm" to activate' 2>/dev/null
+                    sleep 0.5
+                    # The id may have been stale (window re-created); re-resolve.
+                    macos_id=$(get_any_wezterm_macos_window_id)
+                    [ -z "$macos_id" ] && macos_id="$WEZTERM_MACOS_WINDOW_ID"
+                    rm -f "$output_path"
+                    screencapture -l"$macos_id" -x -o "$output_path"
+                fi
             else
                 log_error "Could not find WezTerm window for screenshot"
             fi
@@ -233,30 +248,35 @@ term_send_shift_tab() {
 term_mouse_click() {        # COL ROW [button]
     case "$TERMINAL_TYPE" in
         kitty) send_kitty_mouse_click "$@" ;;
+        wezterm) send_wezterm_mouse_click "$@" ;;
         *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
     esac
 }
 term_mouse_multiclick() {   # COUNT COL ROW [button]
     case "$TERMINAL_TYPE" in
         kitty) send_kitty_mouse_multiclick "$@" ;;
+        wezterm) send_wezterm_mouse_multiclick "$@" ;;
         *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
     esac
 }
 term_mouse_drag() {         # C1 R1 C2 R2 [button]
     case "$TERMINAL_TYPE" in
         kitty) send_kitty_mouse_drag "$@" ;;
+        wezterm) send_wezterm_mouse_drag "$@" ;;
         *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
     esac
 }
 term_mouse_scroll() {       # up|down COL ROW [count]
     case "$TERMINAL_TYPE" in
         kitty) send_kitty_mouse_scroll "$@" ;;
+        wezterm) send_wezterm_mouse_scroll "$@" ;;
         *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
     esac
 }
 term_mouse_move() {         # COL ROW
     case "$TERMINAL_TYPE" in
         kitty) send_kitty_mouse_move "$@" ;;
+        wezterm) send_wezterm_mouse_move "$@" ;;
         *) log_error "mouse not supported for $TERMINAL_TYPE" ;;
     esac
 }
@@ -319,6 +339,14 @@ execute_command() {
             # Window size directive (handled before launch, skip during execution)
             return 0
             ;;
+        appenv)
+            # App env directive (handled before launch, skip during execution)
+            return 0
+            ;;
+        terminal)
+            # Terminal restriction directive (handled by run.sh tape selection)
+            return 0
+            ;;
         type)
             # Type a string with visible per-character delay (single osascript call)
             if [ -z "$arg" ]; then
@@ -354,8 +382,9 @@ execute_command() {
             fi
             log_verbose "repeat_key: $rkey x$rcount (delay: ${rdelay}s)"
             case "$TERMINAL_TYPE" in
-                kitty)
-                    # kitty has no osascript batch sender - loop the socket send.
+                kitty|wezterm)
+                    # kitty/wezterm have no osascript batch sender - loop the
+                    # socket/pty send.
                     local ri=0
                     while [ "$ri" -lt "$rcount" ]; do
                         term_send_key "$rkey"
@@ -379,7 +408,7 @@ execute_command() {
             fi
             log_verbose "repeat_ctrl: $rkey x$rcount (delay: ${rdelay}s)"
             case "$TERMINAL_TYPE" in
-                kitty)
+                kitty|wezterm)
                     local ci=0
                     while [ "$ci" -lt "$rcount" ]; do
                         term_send_ctrl_key "$rkey"
@@ -607,6 +636,19 @@ parse_tape() {
             continue
         fi
 
+        # Per-terminal conditional lines: "@kitty <command>" runs the command
+        # only when TERMINAL_TYPE matches (used for terminal-specific
+        # coordinates, e.g. clickpx on kitty vs wezterm geometry).
+        if [[ "$line" == @* ]]; then
+            local cond_term="${line%% *}"
+            cond_term="${cond_term#@}"
+            if [ "$cond_term" != "$TERMINAL_TYPE" ]; then
+                continue
+            fi
+            line=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//')
+            [ -z "$line" ] && continue
+        fi
+
         # Extract command and argument
         local cmd=$(echo "$line" | awk '{print $1}')
         local arg=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^[[:space:]]*//')
@@ -678,6 +720,17 @@ run_tape() {
     if [ -n "$window_line" ]; then
         TAPE_WINDOW_PERCENT=$(echo "$window_line" | cut -d'|' -f2 | tr -d ' ')
         log_info "Window size: ${TAPE_WINDOW_PERCENT}%"
+    fi
+
+    # Extract appenv directives (NAME=VALUE pairs passed to the app's env)
+    TAPE_APP_ENV=""
+    local appenv_line
+    while IFS= read -r appenv_line; do
+        [ -z "$appenv_line" ] && continue
+        TAPE_APP_ENV="$TAPE_APP_ENV $(echo "$appenv_line" | cut -d'|' -f2)"
+    done < <(echo "$commands" | grep "^appenv|")
+    if [ -n "$TAPE_APP_ENV" ]; then
+        log_info "App env:$TAPE_APP_ENV"
     fi
 
     # Use tape's file override, else PDF, else default

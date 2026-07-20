@@ -1708,7 +1708,7 @@ impl PdfReaderState {
         }
     }
 
-    fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
+    pub(crate) fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
         if self.is_kitty {

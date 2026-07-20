@@ -1,5 +1,5 @@
 # pdf_links.tape
-about Link-click on a PDF (fit-width): clicking an internal link jumps to its target page; a small inline citation link tests sub-cell hit precision. External (URI) links are not exercised (they would launch a real browser).
+about Link-click on a PDF (fit-width): clicking an internal link jumps to its target page; a small inline citation link tests sub-cell hit precision (cell precision on WezTerm). External (URI) links are not exercised (they would launch a real browser). Runs on kitty and wezterm; click coordinates are per-terminal (@kitty/@wezterm) because window geometry differs.
 
 pdf tests/testdata/vhs_links.pdf
 
@@ -17,7 +17,8 @@ desc Links test page 1, fit-width. Internal link (-> p3), external link, and inl
 screenshot initial
 
 # --- Internal link -> page 3 -------------------------------------------------
-clickpx 770 725
+@kitty clickpx 770 725
+@wezterm clickpx 786 836
 wait 500
 desc Clicked "Jump to page 3 (internal link)". Expect: now on "LINKS TEST - PAGE 3".
 screenshot internal_jumped
@@ -31,7 +32,8 @@ desc Ctrl+o (jump back). Expect: back on "LINKS TEST - PAGE 1" (the link-click w
 screenshot jump_back
 
 # --- Small inline citation link "[1]" -> page 4 (sub-cell precision) ---------
-clickpx 1236 1289
+@kitty clickpx 1236 1289
+@wezterm clickpx 1239 1395
 wait 500
 desc Clicked the small "[1]" citation link (~1 cell wide). Expect: now on "LINKS TEST - PAGE 4".
 screenshot citation_jumped

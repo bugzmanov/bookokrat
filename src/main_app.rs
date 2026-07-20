@@ -382,6 +382,12 @@ pub struct App {
     resizing_nav_panel: bool,
     current_context_override: Option<LibraryContext>,
     pub pending_force_redraw: bool,
+    /// One-shot terminal.clear() without touching images. Used on the
+    /// non-kitty PDF path when a freshly converted page image arrives while a
+    /// modal is open: the re-emitted image escape paints over the modal's
+    /// (diff-unchanged) cells, so the whole screen must be re-emitted to put
+    /// the modal back on top.
+    pub pending_screen_refresh: bool,
     #[cfg(unix)]
     pub pending_suspend: bool,
     // PDF support (feature-gated)
@@ -801,6 +807,7 @@ impl App {
             resizing_nav_panel: false,
             current_context_override: None,
             pending_force_redraw: false,
+            pending_screen_refresh: false,
             #[cfg(unix)]
             pending_suspend: false,
             #[cfg(feature = "pdf")]
@@ -1547,6 +1554,7 @@ impl App {
             crate::settings::get_pdf_page_layout_mode(),
             crate::settings::get_pdf_render_mode()
         );
+        let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1562,6 +1570,7 @@ impl App {
             book_comments,
             path.to_string(),
         );
+        pdf_reader.uses_iterm2_protocol = uses_iterm2_protocol;
         if use_kitty
             && initial_page > 0
             && crate::settings::get_pdf_render_mode() == crate::settings::PdfRenderMode::Scroll
@@ -5202,7 +5211,8 @@ impl App {
                         PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
                     };
                     set_pdf_page_layout_mode(new_mode);
-                    if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    let toc_height = self.get_navigation_panel_area().height as usize;
+                    if let Some(mut pdf_reader) = self.pdf_reader.take() {
                         // Dual pairs are even-aligned (0,1),(2,3),... so toggling
                         // dual while anchored on an odd page must snap to the pair
                         // start; otherwise the odd page renders solo with an empty
@@ -5215,11 +5225,35 @@ impl App {
                             .align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
                         pdf_reader.last_sent_viewport = None;
                         pdf_reader.force_redraw();
+                        // Non-kitty renders pages at a fixed scale, so the pair
+                        // must be re-fit to the viewport; without this the two
+                        // full-width pages can never share the window and the
+                        // dual view deadlocks on [LOADING]. (Kitty scales at
+                        // display time and needs no re-render.)
+                        if !pdf_reader.is_kitty {
+                            if let Some(action) = pdf_reader.reset_zoom_to_fit_width() {
+                                let _ = pdf_reader.apply_input_action(
+                                    action,
+                                    self.pdf_service.as_mut(),
+                                    self.pdf_conversion_tx.as_ref(),
+                                    &mut self.notifications,
+                                    self.current_context_override
+                                        .as_mut()
+                                        .map(LibraryContext::bookmarks_mut)
+                                        .unwrap_or_else(|| self.home_context.bookmarks_mut()),
+                                    &mut self.last_bookmark_save,
+                                    &mut self.navigation_panel.table_of_contents,
+                                    toc_height,
+                                    &self.profiler,
+                                );
+                            }
+                        }
                         pdf_reader.set_hud_message(
                             format!("Page layout: {}", new_mode.as_str()),
                             crate::widget::hud_message::HudMode::Normal,
                             std::time::Duration::from_secs(2),
                         );
+                        self.pdf_reader = Some(pdf_reader);
                     }
                     true
                 } else {
@@ -8527,6 +8561,19 @@ where
                 let _ = crate::pdf::kittyv2::delete_all_images();
                 app.re_enqueue_pdf_images();
             }
+            terminal.clear()?;
+            needs_redraw = true;
+        }
+
+        #[cfg(feature = "pdf")]
+        if let Some(reader) = app.pdf_reader.as_mut() {
+            if std::mem::take(&mut reader.pending_screen_refresh) {
+                app.pending_screen_refresh = true;
+            }
+        }
+
+        if app.pending_screen_refresh {
+            app.pending_screen_refresh = false;
             terminal.clear()?;
             needs_redraw = true;
         }

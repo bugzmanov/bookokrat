@@ -1,5 +1,5 @@
 # pdf_mouse_gestures.tape
-about Mouse gestures + normal-mode motions on a two-column PDF (fit-width): drag selection + column/page routing (guards a7ac8dd), double-click word, triple-click line, normal-mode click-to-move-cursor, scroll-wheel, and a vim motion chain (w/e/f/;/$/0, cross-line wrap, v+iw, yank, V-line, Space+c page extract). Guards the pending-motion-vs-keymap dispatch order (f target char must not dispatch as a motion).
+about Mouse gestures + normal-mode motions on a two-column PDF (fit-width), kitty+wezterm (pixel coords are per-terminal via @kitty/@wezterm): drag selection + column/page routing (guards a7ac8dd), double-click word, triple-click line, normal-mode click-to-move-cursor, scroll-wheel, and a vim motion chain (w/e/f/;/$/0, cross-line wrap, v+iw, yank, V-line, Space+c page extract). Guards the pending-motion-vs-keymap dispatch order (f target char must not dispatch as a motion).
 
 pdf tests/testdata/vhs_twocol.pdf
 
@@ -18,26 +18,30 @@ screenshot initial
 
 # --- Drag selection + column routing -----------------------------------------
 # Left column rows 03-06 (x 344-1060)
-dragpx 400 720 1020 1190
+@kitty dragpx 400 720 1020 1190
+@wezterm dragpx 400 844 1020 1284
 wait 400
 desc Drag inside the LEFT column. Expect: only P1 L03..L06 highlighted, no right-column lines.
 screenshot drag_left_col
 
 # Right column rows 03-06 (x 1648-2412) — a7ac8dd guard
-dragpx 1700 720 2380 1190
+@kitty dragpx 1700 720 2380 1190
+@wezterm dragpx 1700 844 2380 1284
 wait 400
 desc Drag inside the RIGHT column. Expect: only P1 R03..R06 highlighted, NOT the left column.
 screenshot drag_right_col
 
 # --- Double / triple click ---------------------------------------------------
 # Double-click the word "column" in line "P1 L04 left column line 04" (x 753, y 884)
-doubleclickpx 753 884
+@kitty doubleclickpx 753 884
+@wezterm doubleclickpx 761 990
 wait 400
 desc Double-click the word "column" on line L04. Expect: just the word "column" selected.
 screenshot double_click_word
 
 # Triple-click the same line -> whole line
-tripleclickpx 753 884
+@kitty tripleclickpx 753 884
+@wezterm tripleclickpx 761 990
 wait 400
 desc Triple-click line L04. Expect: the entire line "P1 L04 left column line 04" selected.
 screenshot triple_click_line
@@ -51,7 +55,8 @@ desc Entered normal mode. Expect: a block cursor visible at its default position
 screenshot normal_initial
 
 # Click on the word "line" in row L06 (x 925, y 1181)
-clickpx 925 1181
+@kitty clickpx 925 1181
+@wezterm clickpx 930 1284
 wait 300
 desc Clicked at "line" on row L06 while in normal mode. Expect: the block cursor moved to that click position.
 screenshot normal_click_moved_cursor
@@ -71,19 +76,22 @@ desc Dual-page, fit-width: page 1 (left) + page 2 (right), all four columns visi
 screenshot dual_initial
 
 # Page 1 right column (x 828-1212, rows y 383-605)
-dragpx 870 365 1200 615
+@kitty dragpx 870 365 1200 615
+@wezterm dragpx 870 501 1200 721
 wait 400
 desc Dual: drag in RIGHT column of LEFT page. Expect: only P1 R03..R06 highlighted.
 screenshot dual_p1_right
 
 # Page 2 left column (x 1688-2048)
-dragpx 1720 365 2040 615
+@kitty dragpx 1720 365 2040 615
+@wezterm dragpx 1720 501 2040 721
 wait 400
 desc Dual: drag in LEFT column of RIGHT page. Expect: only P2 L03..L06 highlighted (routed to page 2).
 screenshot dual_p2_left
 
 # Page 2 right column (x 2340-2724) — far/rightmost column
-dragpx 2380 365 2700 615
+@kitty dragpx 2380 365 2700 615
+@wezterm dragpx 2380 501 2700 721
 wait 400
 desc Dual: drag in RIGHT column of RIGHT page. Expect: only P2 R03..R06 highlighted (correct page AND column).
 screenshot dual_p2_right

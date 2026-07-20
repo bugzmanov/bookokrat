@@ -75,11 +75,15 @@ wait 500
 repeat_key L 40 0.02
 wait 400
 ctrl d
+# WezTerm's cell metrics land the same keys on the giant title glyphs, where no
+# version letter is visible; scroll deeper so the crop reaches the label grid.
+@wezterm ctrl d
+@wezterm ctrl d
 wait 500
 wait 500
 wait 500
 wait 500
-desc VERSION A page 2: fit-width, zoomed in x4, panned right to the clamp (L x40), scrolled half a screen (Ctrl+d). Expect: an off-origin crop of the A2 label grid - c1 cropped away on the left, c3 at the right edge, rows advanced past r02. This exact viewport must survive the update.
+desc VERSION A page 2: fit-width, zoomed in x4, panned right to the clamp (L x40), scrolled down (Ctrl+d). Expect: an off-origin crop of the A2 label grid - left column cropped, rows advanced, "A2 rNN" labels readable. This exact viewport must survive the update.
 screenshot position_before
 
 # Update the content (A -> C, same page count). Let the reload HUD expire.

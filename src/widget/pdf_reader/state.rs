@@ -389,6 +389,14 @@ pub struct PdfReaderState {
     /// When set, a solid-color Kitty image is placed over this area after PDF
     /// images so active PDF modals have an opaque background. (col, row, width, height)
     pub modal_overlay_rect: Option<(u16, u16, u16, u16)>,
+    /// Set on the non-kitty path when the whole screen must be re-emitted
+    /// (e.g. to paint the page image over a stale iTerm2 modal backing that
+    /// cannot be deleted). Consumed by the main loop (terminal.clear()).
+    pub pending_screen_refresh: bool,
+    /// True when pages are displayed via the iTerm2 graphics protocol
+    /// (WezTerm, Warp, Konsole, actual iTerm). Unlike `is_iterm`, which is
+    /// only true for the real iTerm app.
+    pub uses_iterm2_protocol: bool,
     /// Last overlay rect that was actually transmitted to Kitty, used to avoid
     /// redundant delete+retransmit cycles that cause blinking.
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
@@ -415,6 +423,7 @@ pub struct PdfReaderState {
     /// Last overlay cleanup state to detect when clearing is needed (Konsole)
     pub last_nonkitty_cleanup_area: Option<Rect>,
     pub last_nonkitty_cleanup_zoom: f32,
+    pub last_nonkitty_cleanup_page: Option<usize>,
     /// Last Kitty cache window (page indices) used to bound terminal cache
     pub last_kitty_cache_window: Option<(usize, usize)>,
     /// Pages with active Kitty placements from the last display pass
@@ -508,6 +517,8 @@ impl PdfReaderState {
             comment_input: CommentInputState::default(),
             highlight_palette_active: false,
             modal_overlay_rect: None,
+            pending_screen_refresh: false,
+            uses_iterm2_protocol: false,
             modal_overlay_sent: None,
             comment_rects: Vec::new(),
             highlight_overlays: Vec::new(),
@@ -523,6 +534,7 @@ impl PdfReaderState {
             last_sent_viewport: None,
             last_nonkitty_cleanup_area: None,
             last_nonkitty_cleanup_zoom: if is_kitty { 1.0 } else { zoom_factor },
+            last_nonkitty_cleanup_page: None,
             last_kitty_cache_window: None,
             kitty_visible_pages: HashSet::new(),
             kitty_delete_range_supported: false,

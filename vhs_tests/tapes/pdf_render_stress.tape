@@ -179,52 +179,53 @@ screenshot single_enhance_from_dual
 key z
 wait 400
 
-# --- S4: scroll render-mode stress ------------------------------------------
-key space
-key S
-wait 800
-key g
-key g
-wait 600
-desc Scroll render-mode at top. Expect: continuous scroll layout, page 01 with page 02 following contiguously.
-screenshot scroll_mode
+# --- S4: scroll render-mode stress (KITTY ONLY: scroll mode requires the
+#     Kitty graphics protocol; on other terminals Space+S shows an error HUD) --
+@kitty key space
+@kitty key S
+@kitty wait 800
+@kitty key g
+@kitty key g
+@kitty wait 600
+@kitty desc Scroll render-mode at top. Expect: continuous scroll layout, page 01 with page 02 following contiguously.
+@kitty screenshot scroll_mode
 
-key =
-key =
-key =
-key =
-key =
-wait 500
-key e
-wait 800
-desc Scroll-mode -> zoom ~1.6x -> enhance. Expect: stable, crisp, contiguous, no gaps.
-screenshot scroll_enhance
+@kitty key =
+@kitty key =
+@kitty key =
+@kitty key =
+@kitty key =
+@kitty wait 500
+@kitty key e
+@kitty wait 800
+@kitty desc Scroll-mode -> zoom ~1.6x -> enhance. Expect: stable, crisp, contiguous, no gaps.
+@kitty screenshot scroll_enhance
 
-ctrl d
-ctrl d
-ctrl d
-ctrl d
-ctrl d
-ctrl d
-ctrl d
-ctrl d
-wait 800
-desc Scrolled far down in scroll-mode (8x half-page). Expect: later pages stream in with no blank gaps or torn tiles.
-screenshot scroll_far
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty ctrl d
+@kitty wait 800
+@kitty desc Scrolled far down in scroll-mode (8x half-page). Expect: later pages stream in with no blank gaps or torn tiles.
+@kitty screenshot scroll_far
 
-key space
-key D
-wait 800
-desc Scroll-mode + dual (dual-scroll path). Expect: two-up continuous layout, no corruption.
-screenshot dual_scroll
+@kitty key space
+@kitty key D
+@kitty wait 800
+@kitty desc Scroll-mode + dual (dual-scroll path). Expect: two-up continuous layout, no corruption.
+@kitty screenshot dual_scroll
 
 # back to page mode, single, fit-page for the race section
-key space
-key D
-wait 400
-key space
-key S
-wait 600
+@kitty key space
+@kitty key D
+@kitty wait 400
+@kitty key space
+@kitty key S
+@kitty wait 600
 key z
 wait 400
 key space
@@ -328,12 +329,12 @@ ctrl d
 ctrl d
 ctrl d
 wait 600
-desc Zoomed in ~2.7x into the dense body text. Expect: text heavily upscaled from the ~37% fit render = clearly BLURRY (enhance not applied yet).
+desc Zoomed in ~2.7x into the dense body text. Expect on KITTY: display-upscaled = clearly BLURRY (enhance not applied yet). On WezTerm/iTerm2 zoom re-renders at scale, so text is already crisp and identical to the enhance shot (by design).
 screenshot zoom_blurry
 
 key e
 wait 900
-desc Enhance (e) re-renders at the true zoom = CRISP text. Compare to zoom_blurry (note enhance also settles framing/size to the native-rendered zoom).
+desc Enhance (e). KITTY: re-renders at the true zoom = CRISP text vs zoom_blurry (also settles framing to the native-rendered zoom). WezTerm/iTerm2: no-op, matches zoom_blurry.
 screenshot enhance
 
 key q

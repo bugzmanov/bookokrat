@@ -3,14 +3,17 @@ about PDF normal mode regression: cursor must stay visible after a page jump, th
 
 pdf tests/testdata/vhs_test.pdf
 
-# Wait for initial load (1000ms needed for app startup + PDF rendering)
+# Wait for initial load. Two waits: app startup + first page render must be
+# fully settled before the Space+g prompt, or the jump is silently dropped
+# (seen flaking on wezterm with a single 1000ms wait).
 wait 1000
+wait 500
 
 # Go to page 17 using Space+g<page>Enter
 key space
-wait 50
+wait 200
 key g
-wait 100
+wait 300
 key 1
 key 7
 return

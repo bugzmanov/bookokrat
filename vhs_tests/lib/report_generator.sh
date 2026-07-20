@@ -46,7 +46,7 @@ generate_aggregate_report() {
         local actual_rel="../screenshots/$term/$tape_name"
         local golden_rel="../../golden/$term/$tape_name"
 
-        local screenshots=($(grep '^screenshot' "$tape_file" 2>/dev/null | awk '{print $2}'))
+        local screenshots=($(awk -v cond="@${TERMINAL_TYPE}" '$1 == "screenshot" { print $2 } $1 == cond && $2 == "screenshot" { print $3 }' "$tape_file" 2>/dev/null))
         [ ${#screenshots[@]} -eq 0 ] && continue
 
         local about_html=""
