@@ -123,11 +123,17 @@ launch_wezterm() {
     WEZTERM_LAUNCH_STAMP="${SCRATCHPAD:-/tmp}/wezterm_launch_stamp_$$"
     touch "$WEZTERM_LAUNCH_STAMP"
 
-    # Launch WezTerm with large initial size
+    # Launch WezTerm at a size that FITS the screen unclamped. Requesting an
+    # oversized window (the old 250x70) made macOS clamp it to the visible
+    # screen area, which varies by a few pixels with menu bar / display state —
+    # so capture dimensions differed between sessions and every golden
+    # comparison failed on size. 214x51 is the effective grid the clamped
+    # window always resolved to, so app layout and measured pixel coordinates
+    # are unchanged; only the window height is now deterministic.
     # Note: Must redirect stdin/stdout/stderr and disown to prevent subshell from waiting
     "$WEZTERM_CMD" \
-        --config initial_cols=250 \
-        --config initial_rows=70 \
+        --config initial_cols=214 \
+        --config initial_rows=51 \
         start \
         --always-new-process \
         --class "VHS_TEST" \

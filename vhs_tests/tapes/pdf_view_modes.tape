@@ -1,5 +1,5 @@
 # pdf_view_modes.tape
-about PDF display-mode toggles on a WHITE-background bitmap-image page (Kitty): image inversion (i), themed vs original rendering (I), dual layout (Space+D), and zen border (Space+b), plus their combinations. Verifies each toggle and that it survives a re-render (zoom). White-authored fixture makes themed-vs-original unambiguous (vhs_test.pdf is dark-authored and cannot show the difference).
+about PDF display-mode toggles on a WHITE-background bitmap-image page: image inversion (i), themed vs original rendering (I), dual layout (Space+D), and hiding the zen border (Space+b, single + dual), plus their combinations. Verifies each toggle and that it survives a re-render (zoom). White-authored fixture makes themed-vs-original unambiguous (vhs_test.pdf is dark-authored and cannot show the difference).
 
 pdf tests/testdata/vhs_viewmodes.pdf
 
@@ -54,14 +54,27 @@ wait 400
 desc Dual + theme OFF. Expect: both pages white with original colors.
 screenshot vm_dual_theme_off
 
+# --- M3: app border disabled (Space+b hides the zen frame) -------------------
+# Default zen shows the border (test mode never loads persisted settings), so
+# one Space+b = border hidden.
 key I
 wait 300
 key i
 wait 300
 key space
+key D
+wait 500
+key space
 key b
-wait 400
-desc Restored themed+inverted, then toggled zen border (Space+b). Expect: a border/frame drawn around the zen content.
-screenshot vm_dual_border
+wait 500
+desc Single page, themed+inverted, zen border HIDDEN (Space+b). Expect: no frame and no page indicator around the content, page bleeds to the window edges.
+screenshot vm_border_off_single
+
+key space
+key D
+wait 500
+wait 500
+desc Dual layout with the border still hidden. Expect: two pages side by side, no zen frame around them.
+screenshot vm_border_off_dual
 
 key q
