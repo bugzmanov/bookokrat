@@ -1829,9 +1829,20 @@ impl PdfReaderState {
         }
 
         let max_offset = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
-            self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
-                .map(|layout| layout.max_pan)
-                .unwrap_or(0)
+            let Some(layout) =
+                self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
+            else {
+                // Layout unavailable mid re-render: ignore the press. Treating
+                // this as max_pan=0 would destructively reset the pan.
+                return None;
+            };
+            let right_exists = self.page.saturating_add(1) < self.rendered.len();
+            if right_exists && layout.right_width == 0 {
+                // Right page transiently not ready: its width is missing from
+                // the strip, so the clamp would collapse and erase the pan.
+                return None;
+            }
+            layout.max_pan
         } else {
             let full_width = self
                 .rendered

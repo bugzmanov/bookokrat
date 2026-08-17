@@ -843,23 +843,32 @@ impl PdfReaderState {
         let left_end = u32::from(left_width);
         let left_inter_start = left_start.max(window_start);
         let left_inter_end = left_end.min(window_end);
-        if left_inter_end <= left_inter_start {
-            return None;
-        }
-        let left_slice = NonKittyDualSlice {
-            page: left_page,
-            screen_start: if overflows {
-                (left_inter_start.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset
-            },
-            screen_end: if overflows {
-                (left_inter_end.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset.saturating_add(left_width)
-            },
-            page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
-            width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+        let left_slice = if left_inter_end <= left_inter_start {
+            // Left page panned fully out of the window (right-clamped view):
+            // an empty slice, NOT a bail-out — the right slice still renders.
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: 0,
+                screen_end: 0,
+                page_x_offset: 0,
+                width: 0,
+            }
+        } else {
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: if overflows {
+                    (left_inter_start.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset
+                },
+                screen_end: if overflows {
+                    (left_inter_end.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset.saturating_add(left_width)
+                },
+                page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
+                width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+            }
         };
 
         let right_slice = if has_right {

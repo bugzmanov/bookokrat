@@ -53,37 +53,37 @@ desc 1gg to the first page of the reloaded doc. Expect: VERSION B PAGE 1 / 2, in
 screenshot reloaded_b_p1
 
 # --- Position preservation across a content update ---------------------------
-# Back to VERSION A (3 pages), then set up an arbitrary viewport: page 2,
-# zoomed in x3, panned right, scrolled down. Wait out the reload + zoom HUDs.
+# Back to VERSION A (3 pages), then set up an arbitrary viewport far from the
+# origin: DUAL layout (pages 1+2 side by side), zoomed past fit, clamped to
+# the bottom-right of the strip. Wait out the reload + layout + zoom HUDs.
 shell cp tests/testdata/vhs_reload_a.pdf tests/testdata/vhs_reload.pdf
 wait 500
 wait 500
-key 2
-key g
-key g
+key space
+key D
+wait 500
+wait 500
+# Zoom deep enough that the spread overflows both axes, then clamp the
+# viewport to the BOTTOM-RIGHT corner: pan and scroll counts deliberately
+# overshoot so both hit their clamps - fully deterministic on any terminal.
+key =
+key =
+key =
+key =
+key =
+key =
+key =
+key =
+wait 500
+wait 500
+repeat_key L 160 0.01
 wait 400
-# Fit-width first, then zoom past it so the page overflows horizontally and
-# panning has room to move.
-key Z
-wait 500
-key =
-key =
-key =
-key =
-wait 500
-wait 500
-repeat_key L 40 0.02
-wait 400
-ctrl d
-# WezTerm's cell metrics land the same keys on the giant title glyphs, where no
-# version letter is visible; scroll deeper so the crop reaches the label grid.
-@wezterm ctrl d
-@wezterm ctrl d
+repeat_ctrl d 8 0.1
 wait 500
 wait 500
 wait 500
 wait 500
-desc VERSION A page 2: fit-width, zoomed in x4, panned right to the clamp (L x40), scrolled down (Ctrl+d). Expect: an off-origin crop of the A2 label grid - left column cropped, rows advanced, "A2 rNN" labels readable. This exact viewport must survive the update.
+desc VERSION A dual spread (pages 1+2), zoomed x8, viewport clamped to the BOTTOM-RIGHT of the strip. Expect: right columns of the A2 grid with the BR/BOT A2 corner markers - this exact viewport must survive the update.
 screenshot position_before
 
 # Update the content (A -> C, same page count). Let the reload HUD expire.
@@ -93,7 +93,7 @@ wait 500
 wait 500
 wait 500
 wait 500
-desc File updated to VERSION C while watching. Expect: SAME page [2/3], SAME zoom/pan/scroll crop - identical rNN/cN label positions and edge clipping, now reading C2; no HUD.
+desc File updated to VERSION C while watching. Expect: SAME dual spread, SAME bottom-right crop - identical rNN/cN label positions and clipping, labels now reading C2 with BR/BOT C2 markers; no HUD.
 screenshot position_preserved
 
 # --- Watching OFF: no reload --------------------------------------------------

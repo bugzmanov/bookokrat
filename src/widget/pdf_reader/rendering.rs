@@ -412,7 +412,7 @@ pub(crate) fn apply_render_responses(
                             info.img = Some(frame.image);
                             info.image_requested_scale = Some(frame.requested_scale);
                             info.image_achieved_scale = Some(frame.achieved_scale);
-                            log::trace!("Set img for page {}", frame_index);
+                            log::debug!("Set img for page {}", frame_index);
                         }
                     }
 
@@ -433,8 +433,16 @@ pub(crate) fn apply_render_responses(
                         // Fresh converted frame can change dual strip intersections.
                         pdf_reader.last_sent_viewport = None;
                     }
-                    // Track the current page's frame arrival for waiting_for_page optimization
-                    if frame_index == pdf_reader.page {
+                    // Track the current page's frame arrival for waiting_for_page
+                    // optimization. In dual layout the pair partner counts too:
+                    // at a right-clamped pan only the right page has a visible
+                    // slice, so only its frames arrive — gating on the left page
+                    // alone would leave the redraw-suppression flag set forever
+                    // (state advances, screen frozen).
+                    let dual_partner = crate::settings::get_pdf_page_layout_mode()
+                        == crate::settings::PdfPageLayoutMode::Dual
+                        && frame_index == pdf_reader.page.saturating_add(1);
+                    if frame_index == pdf_reader.page || dual_partner {
                         converted_frame_page = Some(frame_index);
                     }
                 }
@@ -1564,19 +1572,40 @@ pub(crate) fn update_non_kitty_viewport(
     let Some(tx) = conversion_tx else {
         return;
     };
-    // Deadlock recovery: if we have no displayable image for the page we're about
+    // Deadlock recovery: if we have no displayable image for a page we're about
     // to request, the converter may believe it already sent one (sent_for_viewport)
     // and refuse to re-tile an unchanged viewport — leaving us stuck on "loading"
     // until a manual scroll. Clear the converter's sent state for the page (the
     // same mechanism used for failed Kitty transmissions) so the viewport command
     // below forces a fresh render. Self-correcting: once the frame lands, img is
     // Some and this no longer fires.
-    if pdf_reader
-        .rendered
-        .get(viewport.page)
-        .is_none_or(|info| info.img.is_none())
+    //
+    // Probe the pages the outgoing command actually COVERS, not the base page:
+    // in dual layout at a hard pan clamp one page has an empty slice and its
+    // image legitimately never exists — probing it would fire DisplayFailed on
+    // every frame, churning the converter forever.
+    let covered_pages: Vec<usize> = if crate::settings::get_pdf_page_layout_mode()
+        == crate::settings::PdfPageLayoutMode::Dual
     {
-        let _ = tx.send(ConversionCommand::DisplayFailed(vec![viewport.page]));
+        pdf_reader
+            .dual_viewports_for_non_kitty(viewport)
+            .iter()
+            .map(|v| v.page)
+            .collect()
+    } else {
+        vec![viewport.page]
+    };
+    let missing: Vec<usize> = covered_pages
+        .into_iter()
+        .filter(|&p| {
+            pdf_reader
+                .rendered
+                .get(p)
+                .is_none_or(|info| info.img.is_none())
+        })
+        .collect();
+    if !missing.is_empty() {
+        let _ = tx.send(ConversionCommand::DisplayFailed(missing));
     }
     if let Some(cmd) = pdf_reader.viewport_command(viewport) {
         if PdfReaderState::debug_non_kitty_dual_enabled() {
@@ -3316,24 +3345,32 @@ impl PdfReaderState {
         if page_layout_mode == PdfPageLayoutMode::Dual {
             let right_page = self.page.saturating_add(1);
             let right_exists = right_page < self.rendered.len();
-            // Non-kitty: only hold the frame for the pair when the CURRENT
-            // layout actually has a right slice in the window. At high zoom /
-            // pan the right page is legitimately off-screen and demanding it
-            // would show [LOADING] forever (the right page never converts at
-            // this scale because its viewport slice is empty).
-            let expect_right = right_exists
-                && (self.is_kitty
-                    || self
-                        .build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset)
-                        .and_then(|l| l.right_slice)
-                        .is_some());
-            if page_sizes.len() < 2 && expect_right {
+            // Hold the frame only for pages whose slice is actually VISIBLE in
+            // the current window. At high zoom/pan either page can be
+            // legitimately off-screen (empty slice) — its image never converts
+            // at this scale, and demanding it would show [LOADING] forever.
+            let (need_left, need_right) = if self.is_kitty {
+                (true, right_exists)
+            } else {
+                match self.build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset) {
+                    Some(layout) => (
+                        layout.left_slice.width > 0,
+                        right_exists && layout.right_slice.is_some(),
+                    ),
+                    None => (true, right_exists),
+                }
+            };
+            let have = |p: usize| page_sizes.iter().any(|&(idx, _, _)| idx == p);
+            let missing = (need_left && !have(self.page)) || (need_right && !have(right_page));
+            if missing {
                 if PdfReaderState::debug_non_kitty_dual_enabled() {
                     log::debug!(
-                        "dual-render waiting for pair page={} right_page={} sizes_ready={}",
+                        "dual-render waiting for pair page={} right_page={} sizes_ready={} need=({},{})",
                         self.page,
                         right_page,
-                        page_sizes.len()
+                        page_sizes.len(),
+                        need_left,
+                        need_right
                     );
                 }
                 page_sizes.clear();
@@ -3460,6 +3497,7 @@ impl PdfReaderState {
             } else {
                 None
             };
+            let dual_right_exists = self.page.saturating_add(1) < self.rendered.len();
             let total_width = if dual_layout {
                 dual_layout_info
                     .map(|layout| layout.strip_width)
@@ -3549,7 +3587,13 @@ impl PdfReaderState {
             let mut to_display = Vec::new();
             if dual_layout {
                 if let Some(layout) = dual_layout_info {
-                    self.non_kitty_pan_offset = layout.pan;
+                    // Normalize the stored pan to the layout's clamp — but only
+                    // when the strip is complete. If the right page is
+                    // transiently missing, the degraded single-page strip has a
+                    // tiny max_pan and writing it back would erase a valid pan.
+                    if !dual_right_exists || layout.right_width > 0 {
+                        self.non_kitty_pan_offset = layout.pan;
+                    }
                     log::debug!(
                         "dual-render: pan={} img_area=({},{} {}x{}) left=[start={} end={} w={} page={}] right={:?}",
                         layout.pan,
@@ -3576,6 +3620,9 @@ impl PdfReaderState {
                         let Some(slice) = slice else {
                             continue;
                         };
+                        if slice.width == 0 {
+                            continue;
+                        }
                         let maybe_img = Self::render_single_page(
                             frame,
                             img,
