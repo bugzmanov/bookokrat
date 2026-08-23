@@ -98,7 +98,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let chapter_path = self.current_chapter_file.as_deref();
                 match book_images.get_image_size_with_context(&url, chapter_path) {
                     Some((w, h)) => {
-                        let height_cells = EmbeddedImage::height_in_cells(w, h);
+                        let height_cells = self.image_height_in_cells(w, h);
                         self.embedded_images.borrow_mut().insert(
                             url.clone(),
                             EmbeddedImage {
@@ -126,6 +126,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn preload_image_dimensions(&mut self, book_images: &BookImages) {
+        self.image_source = Some(book_images.clone());
         if let Some(doc) = self.markdown_document.clone() {
             self.background_loader.cancel_loading();
 
@@ -136,32 +137,129 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
 
             debug!("Found {} images to load in document", images_to_load.len());
-            if !images_to_load.is_empty() {
-                if let Some(ref picker) = self.image_picker {
-                    let font_size = picker.font_size();
-                    let (cell_width, cell_height) = (font_size.0, font_size.1);
-                    let chapter_path = self.current_chapter_file.clone();
-                    self.background_loader.start_loading_with_context(
-                        images_to_load.clone(),
-                        book_images,
-                        cell_width,
-                        cell_height,
-                        chapter_path,
-                    );
-                    for (img_src, _) in images_to_load.iter() {
-                        if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img_src)
-                        {
-                            img_state.state = ImageLoadState::Loading;
-                        }
-                    }
-                } else {
-                    for (img, _) in images_to_load.iter() {
-                        if let Some(img_state) = self.embedded_images.borrow_mut().get_mut(img) {
-                            img_state.state = ImageLoadState::Unsupported;
-                        }
-                    }
+            if self.image_viewport.is_some() {
+                self.start_image_loading(images_to_load, book_images);
+            }
+        }
+    }
+
+    fn image_height_in_cells(&self, width: u32, height: u32) -> u16 {
+        let Some((viewport_width, viewport_height)) = self.image_viewport else {
+            return EmbeddedImage::height_in_cells(width, height);
+        };
+        let (cell_width, cell_height) = self
+            .image_picker
+            .as_ref()
+            .map(|picker| picker.font_size())
+            .unwrap_or((1, 2));
+
+        EmbeddedImage::height_in_viewport(
+            width,
+            height,
+            viewport_width,
+            viewport_height,
+            cell_width,
+            cell_height,
+        )
+    }
+
+    fn start_image_loading(
+        &mut self,
+        images_to_load: Vec<(String, u16)>,
+        book_images: &BookImages,
+    ) {
+        if images_to_load.is_empty() {
+            return;
+        }
+
+        let Some((cell_width, cell_height)) =
+            self.image_picker.as_ref().map(|picker| picker.font_size())
+        else {
+            for (img_src, _) in images_to_load {
+                if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src) {
+                    image.state = ImageLoadState::Unsupported;
                 }
             }
+            return;
+        };
+
+        let chapter_path = self.current_chapter_file.clone();
+        if self.background_loader.start_loading_with_context(
+            images_to_load.clone(),
+            book_images,
+            cell_width,
+            cell_height,
+            chapter_path,
+        ) {
+            for (img_src, _) in images_to_load {
+                if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src) {
+                    image.state = ImageLoadState::Loading;
+                }
+            }
+        }
+    }
+
+    pub fn prepare_images_for_viewport(&mut self, viewport_width: u16, viewport_height: u16) {
+        let viewport = (viewport_width, viewport_height);
+        if self.image_viewport == Some(viewport) {
+            return;
+        }
+        self.image_viewport = Some(viewport);
+
+        let (cell_width, cell_height) = self
+            .image_picker
+            .as_ref()
+            .map(|picker| picker.font_size())
+            .unwrap_or((1, 2));
+        let mut heights_changed = false;
+        let mut had_loading_images = false;
+
+        for image in self.embedded_images.borrow_mut().values_mut() {
+            if matches!(image.state, ImageLoadState::Failed { .. }) {
+                continue;
+            }
+            had_loading_images |= matches!(image.state, ImageLoadState::Loading);
+
+            let height_cells = EmbeddedImage::height_in_viewport(
+                image.width,
+                image.height,
+                viewport_width,
+                viewport_height,
+                cell_width,
+                cell_height,
+            );
+            if image.height_cells != height_cells {
+                image.height_cells = height_cells;
+                heights_changed = true;
+                if !matches!(image.state, ImageLoadState::Unsupported) {
+                    image.state = ImageLoadState::NotLoaded;
+                }
+            }
+        }
+
+        if heights_changed {
+            self.cache_generation += 1;
+        }
+        if heights_changed && had_loading_images {
+            self.background_loader.cancel_loading();
+            for image in self.embedded_images.borrow_mut().values_mut() {
+                if matches!(image.state, ImageLoadState::Loading) {
+                    image.state = ImageLoadState::NotLoaded;
+                }
+            }
+        }
+
+        let images_to_load = self
+            .embedded_images
+            .borrow()
+            .iter()
+            .filter_map(|(src, image)| {
+                matches!(image.state, ImageLoadState::NotLoaded)
+                    .then(|| (src.clone(), image.height_cells))
+            })
+            .collect();
+        if let Some(book_images) = self.image_source.clone() {
+            self.start_image_loading(images_to_load, &book_images);
         }
     }
 
