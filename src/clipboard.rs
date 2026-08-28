@@ -56,6 +56,7 @@ fn detect() -> Provider {
     }
 
     // No clipboard tool available — clipboard operations will be no-ops
+    #[cfg(target_os = "android")]
     Provider::Noop
 }
 
