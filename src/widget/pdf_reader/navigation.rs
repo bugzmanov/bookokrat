@@ -203,6 +203,14 @@ impl PdfReaderState {
             self.comment_input.clear();
             self.comment_nav_active = false;
         }
+        // Capture the viewport-top position as (page, in-page ratio) BEFORE the
+        // zoom factor / effective factor change below, so the reader stays on
+        // the same content instead of snapping to the top of the current page.
+        let scroll_anchor = self.capture_kitty_scroll_anchor();
+        // Refresh the remembered pan fraction while the pre-toggle geometry is
+        // still valid; apply_render_responses re-applies it once the pages have
+        // been re-rendered for the new viewport width.
+        self.capture_kitty_pan_fraction();
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
 
@@ -257,18 +265,35 @@ impl PdfReaderState {
 
         let page = self.page;
         let current_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
-        let terminal_width = terminal_width as f32;
-        let nav_width = nav_width as f32;
+        let terminal_width = f64::from(terminal_width);
+        let nav_width = f64::from(nav_width);
 
         if self.is_kitty {
-            // Kitty: adjust zoom to keep visual size constant when viewport width changes
+            // Kitty: adjust zoom to keep visual size constant when viewport width changes.
+            // Done in f64 so that a zen round trip (ratio, then its reciprocal)
+            // lands back on the original f32 factor instead of drifting.
             let width_ratio = if zen_mode {
                 (terminal_width - nav_width) / terminal_width
             } else {
                 terminal_width / (terminal_width - nav_width)
             };
 
-            let adjusted_factor = crate::pdf::Zoom::clamp_factor(current_factor * width_ratio);
+            let mut adjusted_factor =
+                crate::pdf::Zoom::clamp_factor((f64::from(current_factor) * width_ratio) as f32);
+            if zen_mode {
+                self.pending_zoom_restore = Some(current_factor);
+            } else if let Some(before) = self.pending_zoom_restore.take() {
+                // Restore the exact pre-zen factor, but only if the current
+                // factor is still what entering zen produced from it (no zoom
+                // or resize happened in between) - keyed by recomputing the
+                // entry transform instead of storing a second factor.
+                let expected_zen = crate::pdf::Zoom::clamp_factor(
+                    (f64::from(before) * (terminal_width - nav_width) / terminal_width) as f32,
+                );
+                if (current_factor - expected_zen).abs() <= crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS {
+                    adjusted_factor = before;
+                }
+            }
             let adjusted_effective = crate::pdf::Zoom::clamp_factor(
                 adjusted_factor * self.rendered_scale_for_page(page),
             );
@@ -281,13 +306,27 @@ impl PdfReaderState {
             self.zoom = Some(crate::pdf::Zoom {
                 factor: adjusted_factor,
                 cell_pan_from_left: 0,
-                global_scroll_offset: if get_pdf_render_mode() == PdfRenderMode::Scroll {
-                    self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
-                } else {
-                    0
-                },
+                global_scroll_offset: 0,
             });
+            if get_pdf_render_mode() == PdfRenderMode::Scroll {
+                // Re-project the captured anchor onto the adjusted zoom. The
+                // pages get re-rendered for the new width afterwards; that
+                // re-render preserves the anchor again via apply_render_responses.
+                let scroll_offset = scroll_anchor
+                    .and_then(|anchor| self.kitty_scroll_offset_for_anchor(anchor))
+                    .unwrap_or_else(|| {
+                        self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
+                    });
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = scroll_offset;
+                }
+            }
             self.last_render.rect = ratatui::layout::Rect::default();
+            // Invalidate pan geometry until the next draw stores the real new
+            // viewport width: the factor above already changed, so a width
+            // that still matches the old render must not look "fresh" to
+            // capture/restore_kitty_pan_fraction in the meantime.
+            self.last_render.img_area_width = 0;
             crate::settings::set_pdf_scale(adjusted_effective);
             crate::settings::set_pdf_pan_shift(0);
 
@@ -2612,6 +2651,70 @@ impl PdfReaderState {
                 new_offset,
                 final_offset
             );
+        }
+    }
+
+    fn kitty_max_pan_for_page(&self, page: usize) -> Option<u16> {
+        if !self.is_kitty || get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            return None;
+        }
+        let area_w = self.last_render.img_area_width;
+        if area_w == 0 {
+            return None;
+        }
+        let cell_size = self.rendered.get(page)?.layout_cell_size()?;
+        let page_zoom = self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor);
+        if !page_zoom.is_finite() || page_zoom <= 0.0 {
+            return None;
+        }
+        let dest_w = ((f32::from(cell_size.width) * page_zoom).ceil() as u16).max(1);
+        if dest_w <= area_w {
+            return Some(0);
+        }
+        let visible_source = (f32::from(area_w) / page_zoom).ceil() as u16;
+        Some(cell_size.width.saturating_sub(visible_source))
+    }
+
+    fn kitty_pan_geometry_fresh(&self) -> bool {
+        self.rendered
+            .get(self.page)
+            .and_then(|info| info.render_area_width_cells)
+            .is_some_and(|w| w == self.last_render.img_area_width)
+    }
+
+    pub(crate) fn capture_kitty_pan_fraction(&mut self) -> Option<f64> {
+        if !self.kitty_pan_geometry_fresh() {
+            return self.kitty_pan_fraction;
+        }
+        let max_pan = self.kitty_max_pan_for_page(self.page)?;
+        if max_pan == 0 {
+            // Page fits: the pan is forced to 0, so keep the last real one.
+            return self.kitty_pan_fraction;
+        }
+        let pan = self.zoom.as_ref()?.cell_pan_from_left.min(max_pan);
+        let fraction = f64::from(pan) / f64::from(max_pan);
+        self.kitty_pan_fraction = Some(fraction);
+        Some(fraction)
+    }
+
+    pub(crate) fn restore_kitty_pan_fraction(&mut self, fraction: f64) {
+        if !self.kitty_pan_geometry_fresh() {
+            return;
+        }
+        let Some(max_pan) = self.kitty_max_pan_for_page(self.page) else {
+            return;
+        };
+        if max_pan == 0 {
+            return;
+        }
+        let new_pan = (fraction.clamp(0.0, 1.0) * f64::from(max_pan)).round() as u16;
+        let Some(zoom) = self.zoom.as_mut() else {
+            return;
+        };
+        if zoom.cell_pan_from_left != new_pan {
+            zoom.cell_pan_from_left = new_pan;
+            self.last_render.rect = Rect::default();
+            crate::settings::set_pdf_pan_shift(new_pan);
         }
     }
 

@@ -281,6 +281,13 @@ term_mouse_move() {         # COL ROW
     esac
 }
 
+term_resize_window() {      # DCOLS DROWS (signed cell increments)
+    case "$TERMINAL_TYPE" in
+        kitty) send_kitty_resize_window "$@" ;;
+        *) log_error "resize not supported for $TERMINAL_TYPE" ;;
+    esac
+}
+
 term_close() {
     case "$TERMINAL_TYPE" in
         kitty)
@@ -597,6 +604,23 @@ execute_command() {
             log_verbose "$cmd: ($mcol,$mrow)"
             term_mouse_move "$mcol" "$mrow"
             KITTY_MOUSE_RAW_PX=false
+            ;;
+
+        resize)
+            # Resize the terminal OS window mid-tape by a signed CELL delta.
+            # Usage: resize <dcols> [drows]  (e.g. `resize -20 0` shrinks by 20
+            # columns). Exercises the app's SIGWINCH/viewport-change path.
+            # Kitty only. Restore the original size before quitting so the
+            # shared kitty instance keeps its geometry for subsequent tapes.
+            local rw=$(echo "$arg" | awk '{print $1}')
+            local rh=$(echo "$arg" | awk '{print $2}')
+            rh="${rh:-0}"
+            if [ -z "$rw" ]; then
+                log_error "resize requires: dcols [drows]"
+                return 1
+            fi
+            log_verbose "resize: ${rw} cols, ${rh} rows (incremental)"
+            term_resize_window "$rw" "$rh"
             ;;
 
         wait)

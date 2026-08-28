@@ -1464,6 +1464,7 @@ key q
 | `dragpx` | `<x1> <y1> <x2> <y2> [button]` | Drag between two pixels (precise PDF text selection) |
 | `scrollpx` | `up\|down <x> <y> [count]` | Wheel scroll at a pixel |
 | `mousemovepx` | `<x> <y>` | Move pointer to a pixel |
+| `resize` | `<dcols> [drows]` | Resize the terminal OS window by a signed cell delta (Kitty only); exercises the app's SIGWINCH/viewport-change path. Restore the original size before quitting |
 | `wait` | `<ms>` | Wait specified milliseconds (default: 500) |
 
 **Per-terminal conditional lines:** Prefix any tape line with `@kitty ` or `@wezterm ` to run it only under that terminal (e.g. `@kitty clickpx 770 725` / `@wezterm clickpx 786 836`). Use this for terminal-specific coordinates — window geometry differs between terminals, so pixel/cell coordinates measured on one terminal do not map to the same content on another.

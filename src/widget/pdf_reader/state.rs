@@ -448,6 +448,8 @@ pub struct PdfReaderState {
     pub pending_enhance: Option<PendingEnhance>,
     /// One-shot scroll alignment for a restored Kitty scroll-mode page.
     pub pending_initial_scroll_page: Option<usize>,
+    pub kitty_pan_fraction: Option<f64>,
+    pub pending_zoom_restore: Option<f32>,
 }
 
 impl PdfReaderState {
@@ -546,6 +548,8 @@ impl PdfReaderState {
             synctex_scanner: None,
             pending_enhance: None,
             pending_initial_scroll_page: None,
+            kitty_pan_fraction: None,
+            pending_zoom_restore: None,
         }
     }
 

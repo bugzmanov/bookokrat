@@ -225,6 +225,11 @@ pub(crate) fn apply_render_responses(
     let mut reloaded = false;
     let use_kitty = pdf_reader.is_kitty;
     let scroll_anchor = pdf_reader.capture_kitty_scroll_anchor();
+    let pan_fraction = if use_kitty {
+        pdf_reader.capture_kitty_pan_fraction()
+    } else {
+        None
+    };
 
     for response in responses {
         match response {
@@ -490,11 +495,13 @@ pub(crate) fn apply_render_responses(
         }
     }
 
-    if use_kitty
-        && updated
-        && let Some(anchor) = scroll_anchor
-    {
-        pdf_reader.restore_kitty_scroll_anchor(anchor);
+    if use_kitty && updated {
+        if let Some(anchor) = scroll_anchor {
+            pdf_reader.restore_kitty_scroll_anchor(anchor);
+        }
+        if let Some(fraction) = pan_fraction {
+            pdf_reader.restore_kitty_pan_fraction(fraction);
+        }
     }
 
     RenderUpdateResult {

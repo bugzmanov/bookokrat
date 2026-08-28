@@ -23,7 +23,37 @@ _tape := $(if $(TAPE),--tape $(TAPE),)
 _shot := $(if $(SHOT),--screenshot $(SHOT),)
 _open := $(if $(OPEN),--open-report,)
 
-.PHONY: vhs vhs-kitty vhs-ghostty vhs-wezterm vhs-iterm vhs-update vhs-accept vhs-list help
+.PHONY: vhs vhs-kitty vhs-ghostty vhs-wezterm vhs-iterm vhs-update vhs-accept vhs-list help \
+	pre-release-check lint svg-tests nix-build
+
+## Pre-release gate: lint, SVG snapshot tests, nix build, then all VHS tapes
+## on kitty + wezterm. Fails on the first broken step. VHS runs last because
+## it drives real terminal windows (wezterm steals focus).
+pre-release-check: lint svg-tests nix-build
+	$(VHS) --terminal kitty
+	$(VHS) --terminal wezterm
+	@echo "════════════════════════════════════════════════════════════"
+	@echo "pre-release-check: ALL CHECKS PASSED"
+
+## Clippy with warnings denied, both feature configurations.
+lint:
+	cargo clippy --features pdf -- -D warnings
+	cargo clippy -- -D warnings
+
+## SVG snapshot tests; opens the HTML report in the browser.
+svg-tests:
+	OPEN_REPORT=1 cargo test --features pdf --test svg_snapshots
+
+## Build the nix package. Uses local nix when installed; otherwise falls back
+## to the nixos/nix Docker image (start docker/colima first).
+nix-build:
+	@if command -v nix >/dev/null 2>&1; then \
+		nix --extra-experimental-features "nix-command flakes" build; \
+	else \
+		echo "nix not found locally — building via Docker (nixos/nix)"; \
+		docker run --rm -v "$(CURDIR)":/src -w /src nixos/nix \
+			nix --extra-experimental-features "nix-command flakes" build /src; \
+	fi
 
 ## Run tapes for TERM (default kitty); set TAPE=name for a single tape.
 vhs:

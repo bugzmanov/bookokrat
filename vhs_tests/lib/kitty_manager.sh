@@ -243,6 +243,24 @@ send_kitty_return() {
     fi
 }
 
+# Resize the OS window holding the test window by a signed cell delta.
+# Usage: send_kitty_resize_window DCOLS DROWS
+# Drives the app's SIGWINCH path (viewport change + re-render), which cell/pixel
+# injection cannot. Invalidate the cached mouse calibration: the capture size
+# and grid both change, so a later cell->pixel conversion must recalibrate.
+send_kitty_resize_window() {
+    local dw="$1" dh="${2:-0}"
+    if [ -z "$KITTY_WINDOW_ID" ]; then
+        echo "WARNING: KITTY_WINDOW_ID is empty, cannot resize" >&2
+        return 1
+    fi
+    "$KITTY_CMD" @ --to "$KITTY_SOCKET" resize-os-window \
+        --match "id:$KITTY_WINDOW_ID" --action resize --unit cells \
+        --incremental --width="$dw" --height="$dh" 2>/dev/null
+    KITTY_CELL_W=""
+    KITTY_CELL_H=""
+}
+
 # ─── Mouse injection ────────────────────────────────────────────────────────
 #
 # We do NOT move the OS cursor (cliclick/CGEvent would steal the pointer, need
