@@ -1730,3 +1730,5 @@ NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - Do not put useless comments. Comments should be only for code that does something unusual or tricky
+- The developer actively deletes sloppy comments. If you notice comments were deleted from the working tree, NEVER restore them back
+- Commit messages must be exactly as told. Never reword, "fix", or expand the message the user gave you

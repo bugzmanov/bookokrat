@@ -112,6 +112,7 @@ impl ImagePopup {
                 Resize::Viewport(ViewportOptions {
                     y_offset: 0,
                     x_offset: 0,
+                    settled: false,
                 }),
             ) {
                 Ok(protocol) => {

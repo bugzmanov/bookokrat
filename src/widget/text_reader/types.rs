@@ -228,12 +228,27 @@ pub struct EmbeddedImage {
     pub src: String,
     pub lines_before_image: usize,
     pub height_cells: u16,
+    /// Width in cells the loaded bitmap targets; used to detect viewport
+    /// width changes that require a reload even when the height is unchanged.
+    pub target_width_cells: u16,
+    /// Set when the loaded bitmap no longer matches the target size but still
+    /// fits the viewport: it stays on screen until the debounced reload swaps it.
+    pub needs_reload: bool,
     pub width: u32,
     pub height: u32,
     pub state: ImageLoadState,
 }
 
+/// Inline images are capped at this fraction of the viewport width, leaving
+/// a small margin on each side.
+pub const IMAGE_MAX_WIDTH_PCT: u32 = 90;
+
 impl EmbeddedImage {
+    /// Maximum display width for an inline image in the given viewport.
+    pub fn max_image_width_cells(viewport_width: u16) -> u16 {
+        ((viewport_width as u32 * IMAGE_MAX_WIDTH_PCT) / 100).max(1) as u16
+    }
+
     pub fn height_in_cells(width: u32, height: u32) -> u16 {
         let aspect_ratio = width as f32 / height as f32;
 
@@ -253,6 +268,7 @@ impl EmbeddedImage {
         viewport_height: u16,
         cell_width: u16,
         cell_height: u16,
+        adaptive: bool,
     ) -> u16 {
         if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 {
             return Self::height_in_cells(width, height);
@@ -260,11 +276,12 @@ impl EmbeddedImage {
 
         let available_height = viewport_height.saturating_sub(2).max(1);
         let preferred_height = match Self::height_in_cells(width, height) {
-            IMAGE_HEIGHT_REGULAR => available_height,
-            compact_height => compact_height,
+            IMAGE_HEIGHT_REGULAR if adaptive => available_height,
+            class_height => class_height,
         };
+        let max_width_cells = Self::max_image_width_cells(viewport_width);
         let width_limited_height =
-            (u64::from(viewport_width) * u64::from(cell_width) * u64::from(height)
+            (u64::from(max_width_cells) * u64::from(cell_width) * u64::from(height)
                 / (u64::from(width) * u64::from(cell_height)))
             .clamp(1, u64::from(u16::MAX)) as u16;
 
@@ -273,12 +290,46 @@ impl EmbeddedImage {
             .min(width_limited_height)
     }
 
+    pub fn size_in_viewport(
+        width: u32,
+        height: u32,
+        viewport_width: u16,
+        viewport_height: u16,
+        cell_width: u16,
+        cell_height: u16,
+        adaptive: bool,
+    ) -> (u16, u16) {
+        let height_cells = Self::height_in_viewport(
+            width,
+            height,
+            viewport_width,
+            viewport_height,
+            cell_width,
+            cell_height,
+            adaptive,
+        );
+        let max_width_cells = Self::max_image_width_cells(viewport_width);
+        if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 {
+            return (height_cells, max_width_cells);
+        }
+        let width_px =
+            u64::from(height_cells) * u64::from(cell_height) * u64::from(width) / u64::from(height);
+        let max_px = u64::from(max_width_cells) * u64::from(cell_width);
+        let width_cells = width_px
+            .min(max_px)
+            .div_ceil(u64::from(cell_width))
+            .clamp(1, u64::from(u16::MAX)) as u16;
+        (height_cells, width_cells)
+    }
+
     pub fn failed_img(img_src: &str, error_msg: &str) -> EmbeddedImage {
         let height_cells = EmbeddedImage::height_in_cells(200, 200);
         EmbeddedImage {
             src: img_src.into(),
             lines_before_image: 0, // Will be set properly in parse_styled_text_internal_with_raw
             height_cells,
+            target_width_cells: 0,
+            needs_reload: false,
             width: 200,
             height: 200,
             state: ImageLoadState::Failed {

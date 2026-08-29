@@ -1,12 +1,13 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    EpubColumnMode, LookupDisplay, PdfPageLayoutMode, PdfRenderMode, get_epub_column_mode,
-    get_lookup_command, get_lookup_display, get_pdf_page_layout_mode, get_pdf_render_mode,
-    get_synctex_editor, is_invert_scroll_direction, is_pdf_enabled, is_transparent_background,
-    is_zen_hide_border, set_epub_column_mode, set_integrations, set_invert_scroll_direction,
-    set_lookup_display, set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode,
-    set_transparent_background, set_zen_hide_border,
+    EpubColumnMode, EpubImageSize, LookupDisplay, PdfPageLayoutMode, PdfRenderMode,
+    get_epub_column_mode, get_epub_image_size, get_lookup_command, get_lookup_display,
+    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_invert_scroll_direction,
+    is_pdf_enabled, is_transparent_background, is_zen_hide_border, set_epub_column_mode,
+    set_epub_image_size, set_integrations, set_invert_scroll_direction, set_lookup_display,
+    set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
+    set_zen_hide_border,
 };
 use crate::terminal;
 use crate::theme::{
@@ -30,6 +31,7 @@ pub enum SettingsAction {
     PageLayoutChanged,
     ZenBorderChanged,
     RenderModeChanged,
+    EpubImageSizeChanged,
     TestLookupCommand,
     TestSynctexEditor,
 }
@@ -125,9 +127,11 @@ enum GeneralOption {
     EpubDual,
     ZenBorderShown,
     ZenBorderHidden,
+    EpubImagesAdaptive,
+    EpubImagesCompact,
 }
 
-const GENERAL_OPTIONS: [GeneralOption; 12] = [
+const GENERAL_OPTIONS: [GeneralOption; 14] = [
     GeneralOption::PdfEnabled,
     GeneralOption::PdfDisabled,
     GeneralOption::PdfRenderPage,
@@ -140,6 +144,8 @@ const GENERAL_OPTIONS: [GeneralOption; 12] = [
     GeneralOption::EpubDual,
     GeneralOption::ZenBorderShown,
     GeneralOption::ZenBorderHidden,
+    GeneralOption::EpubImagesAdaptive,
+    GeneralOption::EpubImagesCompact,
 ];
 
 impl GeneralOption {
@@ -157,6 +163,8 @@ impl GeneralOption {
             Self::EpubDual => 9,
             Self::ZenBorderShown => 10,
             Self::ZenBorderHidden => 11,
+            Self::EpubImagesAdaptive => 12,
+            Self::EpubImagesCompact => 13,
         }
     }
 
@@ -770,6 +778,7 @@ impl SettingsPopup {
         let invert_scroll = is_invert_scroll_direction();
         let current_column_mode = get_epub_column_mode();
         let zen_hide_border = is_zen_hide_border();
+        let current_image_size = get_epub_image_size();
 
         vec![
             SettingsSection {
@@ -837,6 +846,29 @@ impl SettingsPopup {
                         label: "Hidden",
                         hint: Some("content only"),
                         selected: zen_hide_border,
+                        enabled: true,
+                    },
+                ],
+            },
+            SettingsSection {
+                title: "EPUB Images",
+                title_indent: 0,
+                options_indent: 2,
+                options_top_spacing: 0,
+                enabled: true,
+                options: vec![
+                    SettingsOption {
+                        id: GeneralOption::EpubImagesAdaptive,
+                        label: "Adaptive",
+                        hint: Some("fit to viewport"),
+                        selected: current_image_size == EpubImageSize::Adaptive,
+                        enabled: true,
+                    },
+                    SettingsOption {
+                        id: GeneralOption::EpubImagesCompact,
+                        label: "Compact",
+                        hint: Some("fixed small size"),
+                        selected: current_image_size == EpubImageSize::Compact,
                         enabled: true,
                     },
                 ],
@@ -1281,7 +1313,9 @@ impl SettingsPopup {
             | GeneralOption::EpubSingle
             | GeneralOption::EpubDual
             | GeneralOption::ZenBorderShown
-            | GeneralOption::ZenBorderHidden => true,
+            | GeneralOption::ZenBorderHidden
+            | GeneralOption::EpubImagesAdaptive
+            | GeneralOption::EpubImagesCompact => true,
         }
     }
 
@@ -1391,6 +1425,20 @@ impl SettingsPopup {
                 if !is_zen_hide_border() {
                     set_zen_hide_border(true);
                     return Some(SettingsAction::ZenBorderChanged);
+                }
+                None
+            }
+            GeneralOption::EpubImagesAdaptive => {
+                if get_epub_image_size() != EpubImageSize::Adaptive {
+                    set_epub_image_size(EpubImageSize::Adaptive);
+                    return Some(SettingsAction::EpubImageSizeChanged);
+                }
+                None
+            }
+            GeneralOption::EpubImagesCompact => {
+                if get_epub_image_size() != EpubImageSize::Compact {
+                    set_epub_image_size(EpubImageSize::Compact);
+                    return Some(SettingsAction::EpubImageSizeChanged);
                 }
                 None
             }

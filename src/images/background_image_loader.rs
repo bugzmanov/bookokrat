@@ -31,23 +31,13 @@ impl BackgroundImageLoader {
         }
     }
 
-    /// Start loading images in a background thread
+    /// Start loading images in a background thread with chapter context for path resolution.
     /// Returns true if loading was started, false if already in progress
-    pub fn start_loading(
-        &mut self,
-        images_to_load: Vec<(String, u16)>, // (src, height_cells)
-        book_images: &BookImages,
-        cell_width: u16,
-        cell_height: u16,
-    ) -> bool {
-        self.start_loading_with_context(images_to_load, book_images, cell_width, cell_height, None)
-    }
-
-    /// Start loading images with chapter context for path resolution
     pub fn start_loading_with_context(
         &mut self,
         images_to_load: Vec<(String, u16)>, // (src, height_cells)
         book_images: &BookImages,
+        max_width_cells: u16,
         cell_width: u16,
         cell_height: u16,
         chapter_path: Option<String>,
@@ -72,6 +62,7 @@ impl BackgroundImageLoader {
             Self::background_loading_thread(
                 images_to_load,
                 book_images,
+                max_width_cells,
                 cell_width,
                 cell_height,
                 chapter_path,
@@ -117,6 +108,7 @@ impl BackgroundImageLoader {
     fn background_loading_thread(
         images_to_load: Vec<(String, u16)>,
         book_images: BookImages,
+        max_width_cells: u16,
         cell_width: u16,
         cell_height: u16,
         chapter_path: Option<String>,
@@ -136,6 +128,7 @@ impl BackgroundImageLoader {
                 .load_and_resize_image_with_context(
                     &img_src,
                     height_cells,
+                    max_width_cells,
                     cell_width,
                     cell_height,
                     chapter_path.as_deref(),

@@ -327,8 +327,10 @@ pub struct CropOptions {
 pub struct ViewportOptions {
     /// Offset from the top of the image in pixels
     pub y_offset: u32,
-    /// Offset from the left of the image in pixels  
+    /// Offset from the left of the image in pixels
     pub x_offset: u32,
+    /// True when scrolling has come to rest.
+    pub settled: bool,
 }
 
 impl Resize {
