@@ -203,6 +203,14 @@ impl PdfReaderState {
             self.comment_input.clear();
             self.comment_nav_active = false;
         }
+        // Capture the viewport-top position as (page, in-page ratio) BEFORE the
+        // zoom factor / effective factor change below, so the reader stays on
+        // the same content instead of snapping to the top of the current page.
+        let scroll_anchor = self.capture_kitty_scroll_anchor();
+        // Refresh the remembered pan fraction while the pre-toggle geometry is
+        // still valid; apply_render_responses re-applies it once the pages have
+        // been re-rendered for the new viewport width.
+        self.capture_kitty_pan_fraction();
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
 
@@ -257,18 +265,35 @@ impl PdfReaderState {
 
         let page = self.page;
         let current_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
-        let terminal_width = terminal_width as f32;
-        let nav_width = nav_width as f32;
+        let terminal_width = f64::from(terminal_width);
+        let nav_width = f64::from(nav_width);
 
         if self.is_kitty {
-            // Kitty: adjust zoom to keep visual size constant when viewport width changes
+            // Kitty: adjust zoom to keep visual size constant when viewport width changes.
+            // Done in f64 so that a zen round trip (ratio, then its reciprocal)
+            // lands back on the original f32 factor instead of drifting.
             let width_ratio = if zen_mode {
                 (terminal_width - nav_width) / terminal_width
             } else {
                 terminal_width / (terminal_width - nav_width)
             };
 
-            let adjusted_factor = crate::pdf::Zoom::clamp_factor(current_factor * width_ratio);
+            let mut adjusted_factor =
+                crate::pdf::Zoom::clamp_factor((f64::from(current_factor) * width_ratio) as f32);
+            if zen_mode {
+                self.pending_zoom_restore = Some(current_factor);
+            } else if let Some(before) = self.pending_zoom_restore.take() {
+                // Restore the exact pre-zen factor, but only if the current
+                // factor is still what entering zen produced from it (no zoom
+                // or resize happened in between) - keyed by recomputing the
+                // entry transform instead of storing a second factor.
+                let expected_zen = crate::pdf::Zoom::clamp_factor(
+                    (f64::from(before) * (terminal_width - nav_width) / terminal_width) as f32,
+                );
+                if (current_factor - expected_zen).abs() <= crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS {
+                    adjusted_factor = before;
+                }
+            }
             let adjusted_effective = crate::pdf::Zoom::clamp_factor(
                 adjusted_factor * self.rendered_scale_for_page(page),
             );
@@ -281,13 +306,27 @@ impl PdfReaderState {
             self.zoom = Some(crate::pdf::Zoom {
                 factor: adjusted_factor,
                 cell_pan_from_left: 0,
-                global_scroll_offset: if get_pdf_render_mode() == PdfRenderMode::Scroll {
-                    self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
-                } else {
-                    0
-                },
+                global_scroll_offset: 0,
             });
+            if get_pdf_render_mode() == PdfRenderMode::Scroll {
+                // Re-project the captured anchor onto the adjusted zoom. The
+                // pages get re-rendered for the new width afterwards; that
+                // re-render preserves the anchor again via apply_render_responses.
+                let scroll_offset = scroll_anchor
+                    .and_then(|anchor| self.kitty_scroll_offset_for_anchor(anchor))
+                    .unwrap_or_else(|| {
+                        self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
+                    });
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = scroll_offset;
+                }
+            }
             self.last_render.rect = ratatui::layout::Rect::default();
+            // Invalidate pan geometry until the next draw stores the real new
+            // viewport width: the factor above already changed, so a width
+            // that still matches the old render must not look "fresh" to
+            // capture/restore_kitty_pan_fraction in the meantime.
+            self.last_render.img_area_width = 0;
             crate::settings::set_pdf_scale(adjusted_effective);
             crate::settings::set_pdf_pan_shift(0);
 
@@ -734,6 +773,16 @@ impl PdfReaderState {
             self.clear_highlight_palette();
         }
 
+        // Pending vim states (f/F/t/T target char, i-text-object) consume the
+        // next character and must bypass the keymap: otherwise a target char
+        // that is itself a bound key (l, w, e, ...) dispatches as a motion and
+        // the pending state is silently dropped.
+        if let KeyCode::Char(c) = key.code {
+            if self.normal_mode.has_pending_char_motion() || self.normal_mode.pending_inner {
+                return InputResponse::handled(self.handle_normal_mode_key(c));
+            }
+        }
+
         let input = key_event_to_input(&key);
         let km = crate::keybindings::keymap();
 
@@ -874,6 +923,7 @@ impl PdfReaderState {
                 InputResponse::handled(None)
             }
             Action::Cancel => InputResponse::handled(self.handle_escape_key()),
+            Action::DeleteComment => InputResponse::handled(self.delete_annotation_at_cursor()),
             Action::EnterCommentNav => {
                 self.normal_mode.exit_visual();
                 self.normal_mode.deactivate();
@@ -1697,7 +1747,7 @@ impl PdfReaderState {
         }
     }
 
-    fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
+    pub(crate) fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
         if self.is_kitty {
@@ -1818,9 +1868,20 @@ impl PdfReaderState {
         }
 
         let max_offset = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
-            self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
-                .map(|layout| layout.max_pan)
-                .unwrap_or(0)
+            let Some(layout) =
+                self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
+            else {
+                // Layout unavailable mid re-render: ignore the press. Treating
+                // this as max_pan=0 would destructively reset the pan.
+                return None;
+            };
+            let right_exists = self.page.saturating_add(1) < self.rendered.len();
+            if right_exists && layout.right_width == 0 {
+                // Right page transiently not ready: its width is missing from
+                // the strip, so the clamp would collapse and erase the pan.
+                return None;
+            }
+            layout.max_pan
         } else {
             let full_width = self
                 .rendered
@@ -2593,6 +2654,70 @@ impl PdfReaderState {
         }
     }
 
+    fn kitty_max_pan_for_page(&self, page: usize) -> Option<u16> {
+        if !self.is_kitty || get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+            return None;
+        }
+        let area_w = self.last_render.img_area_width;
+        if area_w == 0 {
+            return None;
+        }
+        let cell_size = self.rendered.get(page)?.layout_cell_size()?;
+        let page_zoom = self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor);
+        if !page_zoom.is_finite() || page_zoom <= 0.0 {
+            return None;
+        }
+        let dest_w = ((f32::from(cell_size.width) * page_zoom).ceil() as u16).max(1);
+        if dest_w <= area_w {
+            return Some(0);
+        }
+        let visible_source = (f32::from(area_w) / page_zoom).ceil() as u16;
+        Some(cell_size.width.saturating_sub(visible_source))
+    }
+
+    fn kitty_pan_geometry_fresh(&self) -> bool {
+        self.rendered
+            .get(self.page)
+            .and_then(|info| info.render_area_width_cells)
+            .is_some_and(|w| w == self.last_render.img_area_width)
+    }
+
+    pub(crate) fn capture_kitty_pan_fraction(&mut self) -> Option<f64> {
+        if !self.kitty_pan_geometry_fresh() {
+            return self.kitty_pan_fraction;
+        }
+        let max_pan = self.kitty_max_pan_for_page(self.page)?;
+        if max_pan == 0 {
+            // Page fits: the pan is forced to 0, so keep the last real one.
+            return self.kitty_pan_fraction;
+        }
+        let pan = self.zoom.as_ref()?.cell_pan_from_left.min(max_pan);
+        let fraction = f64::from(pan) / f64::from(max_pan);
+        self.kitty_pan_fraction = Some(fraction);
+        Some(fraction)
+    }
+
+    pub(crate) fn restore_kitty_pan_fraction(&mut self, fraction: f64) {
+        if !self.kitty_pan_geometry_fresh() {
+            return;
+        }
+        let Some(max_pan) = self.kitty_max_pan_for_page(self.page) else {
+            return;
+        };
+        if max_pan == 0 {
+            return;
+        }
+        let new_pan = (fraction.clamp(0.0, 1.0) * f64::from(max_pan)).round() as u16;
+        let Some(zoom) = self.zoom.as_mut() else {
+            return;
+        };
+        if zoom.cell_pan_from_left != new_pan {
+            zoom.cell_pan_from_left = new_pan;
+            self.last_render.rect = Rect::default();
+            crate::settings::set_pdf_pan_shift(new_pan);
+        }
+    }
+
     fn rendered_scale_for_page(&self, page: usize) -> f32 {
         self.rendered
             .get(page)
@@ -2606,6 +2731,22 @@ impl PdfReaderState {
 
     fn display_zoom_for_effective(&self, page: usize, effective_zoom: f32) -> f32 {
         Zoom::display_zoom_for(effective_zoom, Some(self.rendered_scale_for_page(page)))
+    }
+
+    /// Highest user zoom the worker can actually rasterize for this page
+    /// before the `KITTY_MAX_DIMENSION` clamp kicks in, estimated from the
+    /// last rendered frame's scale and pixel dimensions.
+    fn max_render_scale_for_page(&self, page: usize) -> Option<f32> {
+        let info = self.rendered.get(page)?;
+        let scale = info
+            .achieved_scale
+            .or(info.requested_scale)
+            .filter(|s| s.is_finite() && *s > 0.0)?;
+        let max_px = info.pixel_w?.max(info.pixel_h?) as f32;
+        if max_px <= 0.0 {
+            return None;
+        }
+        Some(scale * crate::pdf::KITTY_MAX_DIMENSION / max_px)
     }
 
     fn scroll_start_for_page_at_display_zoom(&self, page: usize, display_factor: f32) -> u32 {
@@ -2846,8 +2987,25 @@ impl PdfReaderState {
         let rendered_scale = self.rendered_scale_for_page(self.page);
         let effective_zoom = self.kitty_effective_zoom_factor;
 
-        if (rendered_scale - effective_zoom).abs() < Zoom::ZOOM_USER_EPS {
-            self.set_error_hud("Already enhanced at this zoom level".into());
+        // The worker clamps rasters to KITTY_MAX_DIMENSION, so above the cap a
+        // re-render cannot get any crisper. Mirror that clamp here so `e` at
+        // the ceiling is a no-op instead of an endless identical re-render.
+        let render_cap = self.max_render_scale_for_page(self.page);
+        let at_cap = render_cap.is_some_and(|cap| cap < effective_zoom);
+        let target_scale = render_cap.map_or(effective_zoom, |cap| effective_zoom.min(cap));
+        // The cap estimate is derived from cell-aligned pixel dims, so allow a
+        // relative tolerance there; exact comparison otherwise.
+        let tolerance = if at_cap {
+            target_scale * 0.01
+        } else {
+            Zoom::ZOOM_USER_EPS
+        };
+        if (rendered_scale - target_scale).abs() < tolerance {
+            self.set_error_hud(if at_cap {
+                "Already at max render resolution".into()
+            } else {
+                "Already enhanced at this zoom level".into()
+            });
             return Some(InputAction::Redraw);
         }
 
@@ -2881,7 +3039,7 @@ impl PdfReaderState {
     }
 
     /// Adjust viewport after an enhanced Kitty image arrives so content does not jump.
-    pub(crate) fn apply_enhance_adjustment(&mut self, page: usize) {
+    pub fn apply_enhance_adjustment(&mut self, page: usize) {
         let Some(pending) = self.pending_enhance.as_ref() else {
             return;
         };
@@ -2889,13 +3047,18 @@ impl PdfReaderState {
             return;
         }
 
-        let Some((s_new, new_cell_size, new_pixel_h)) = self.rendered.get(page).map(|new_info| {
-            (
-                new_info.image_scale().unwrap_or(pending.old_rendered_scale),
-                new_info.full_cell_size,
-                new_info.pixel_h,
-            )
-        }) else {
+        let Some((s_match, s_new, new_cell_size, new_pixel_h)) =
+            self.rendered.get(page).map(|new_info| {
+                (
+                    new_info.image_scale().unwrap_or(pending.old_rendered_scale),
+                    new_info
+                        .image_geometry_scale()
+                        .unwrap_or(pending.old_rendered_scale),
+                    new_info.full_cell_size,
+                    new_info.pixel_h,
+                )
+            })
+        else {
             return;
         };
         let s_old = pending.old_rendered_scale;
@@ -2904,11 +3067,14 @@ impl PdfReaderState {
             return;
         }
 
-        if (s_new - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
+        // Frame identity is matched on the requested scale (echoed verbatim by
+        // the worker); the achieved scale in `s_new` may be lower if the raster
+        // hit the max-dimension clamp.
+        if (s_match - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
             log::debug!(
                 "Waiting for enhanced frame page={} requested_scale={} target_scale={}",
                 page,
-                s_new,
+                s_match,
                 pending.effective_zoom
             );
             return;
@@ -3028,7 +3194,14 @@ impl PdfReaderState {
         crate::settings::set_pdf_pan_shift(new_pan);
         self.last_render.rect = Rect::default();
         self.clamp_kitty_scroll_offset();
-        self.set_zoom_hud(enhance.effective_zoom);
+        if s_new < enhance.effective_zoom * 0.98 {
+            let achieved_percent = (s_new * 100.0).round() as u32;
+            self.set_error_hud(format!(
+                "Enhanced to max render resolution ({achieved_percent}%)"
+            ));
+        } else {
+            self.set_zoom_hud(enhance.effective_zoom);
+        }
     }
 
     pub(crate) fn set_page(&mut self, page: usize) {
@@ -4692,6 +4865,75 @@ impl PdfReaderState {
         }
         let page = pdf_rects.iter().map(|r| r.page).min()?;
         Some(CommentTarget::pdf(page, pdf_rects))
+    }
+
+    /// Delete the annotation (comment or highlight) under the normal-mode
+    /// cursor. Stored annotation rects are in unscaled (scale-1.0) pixel
+    /// coordinates, so the cursor position is unscaled before hit-testing.
+    fn delete_annotation_at_cursor(&mut self) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Annotations are unavailable".to_string());
+            return Some(InputAction::Redraw);
+        }
+        let cursor = self.normal_mode.cursor;
+        let (ux, uy) = self.cursor_unscaled_point()?;
+        let annotation_id = self.book_comments.as_ref().and_then(|comments| {
+            let locked = comments.lock().ok()?;
+            locked
+                .get_doc_comments(&self.comments_doc_id)
+                .into_iter()
+                .find(|comment| {
+                    let CommentTarget::Pdf { rects, .. } = &comment.target else {
+                        return false;
+                    };
+                    rects.iter().any(|r| {
+                        r.page == cursor.page
+                            && (r.topleft_x..=r.bottomright_x).contains(&ux)
+                            && (r.topleft_y..=r.bottomright_y).contains(&uy)
+                    })
+                })
+                .map(|comment| comment.id.clone())
+        });
+        let Some(id) = annotation_id else {
+            self.set_error_hud("No annotation under the cursor".to_string());
+            return Some(InputAction::Redraw);
+        };
+        let delete_result = self.book_comments.as_ref().cloned().and_then(|comments| {
+            comments
+                .lock()
+                .map(|mut l| l.delete_comment_by_id(&id))
+                .ok()
+        });
+        if let Some(Err(e)) = delete_result {
+            log::error!("Failed to delete annotation {id}: {e}");
+            self.set_error_hud("Failed to delete annotation".to_string());
+            return Some(InputAction::Redraw);
+        }
+        self.refresh_comment_rects();
+        self.refresh_highlight_overlays();
+        Some(InputAction::CommentDeleted {
+            rects: self.comment_rects.clone(),
+            selection_rects: Vec::new(),
+        })
+    }
+
+    /// The normal-mode cursor position in unscaled (scale-1.0) pixel
+    /// coordinates — the space annotation target rects are stored in.
+    fn cursor_unscaled_point(&self) -> Option<(u32, u32)> {
+        let cursor = self.normal_mode.cursor;
+        let rendered = self.rendered.get(cursor.page)?;
+        let line = rendered.line_bounds.get(cursor.line_idx)?;
+        let x = line
+            .chars
+            .get(cursor.char_idx)
+            .or_else(|| line.chars.last())
+            .map(|c| c.x)?;
+        let scale = rendered.scale_factor.unwrap_or(1.0);
+        let y = f64::from(line.y0 + line.y1) / 2.0;
+        Some((
+            (f64::from(x) / f64::from(scale)).round() as u32,
+            (y / f64::from(scale)).round() as u32,
+        ))
     }
 
     fn start_comment_nav(&mut self) -> Option<InputAction> {
@@ -6545,6 +6787,9 @@ impl PdfReaderState {
                 selection_rects,
             } => {
                 send_conversion(crate::pdf::ConversionCommand::UpdateComments(rects));
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(
+                    self.highlight_overlays.clone(),
+                ));
                 send_conversion(crate::pdf::ConversionCommand::UpdateSelection(
                     selection_rects.clone(),
                 ));

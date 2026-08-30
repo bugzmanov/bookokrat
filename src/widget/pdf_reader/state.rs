@@ -389,6 +389,14 @@ pub struct PdfReaderState {
     /// When set, a solid-color Kitty image is placed over this area after PDF
     /// images so active PDF modals have an opaque background. (col, row, width, height)
     pub modal_overlay_rect: Option<(u16, u16, u16, u16)>,
+    /// Set on the non-kitty path when the whole screen must be re-emitted
+    /// (e.g. to paint the page image over a stale iTerm2 modal backing that
+    /// cannot be deleted). Consumed by the main loop (terminal.clear()).
+    pub pending_screen_refresh: bool,
+    /// True when pages are displayed via the iTerm2 graphics protocol
+    /// (WezTerm, Warp, Konsole, actual iTerm). Unlike `is_iterm`, which is
+    /// only true for the real iTerm app.
+    pub uses_iterm2_protocol: bool,
     /// Last overlay rect that was actually transmitted to Kitty, used to avoid
     /// redundant delete+retransmit cycles that cause blinking.
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
@@ -415,6 +423,7 @@ pub struct PdfReaderState {
     /// Last overlay cleanup state to detect when clearing is needed (Konsole)
     pub last_nonkitty_cleanup_area: Option<Rect>,
     pub last_nonkitty_cleanup_zoom: f32,
+    pub last_nonkitty_cleanup_page: Option<usize>,
     /// Last Kitty cache window (page indices) used to bound terminal cache
     pub last_kitty_cache_window: Option<(usize, usize)>,
     /// Pages with active Kitty placements from the last display pass
@@ -439,6 +448,8 @@ pub struct PdfReaderState {
     pub pending_enhance: Option<PendingEnhance>,
     /// One-shot scroll alignment for a restored Kitty scroll-mode page.
     pub pending_initial_scroll_page: Option<usize>,
+    pub kitty_pan_fraction: Option<f64>,
+    pub pending_zoom_restore: Option<f32>,
 }
 
 impl PdfReaderState {
@@ -508,6 +519,8 @@ impl PdfReaderState {
             comment_input: CommentInputState::default(),
             highlight_palette_active: false,
             modal_overlay_rect: None,
+            pending_screen_refresh: false,
+            uses_iterm2_protocol: false,
             modal_overlay_sent: None,
             comment_rects: Vec::new(),
             highlight_overlays: Vec::new(),
@@ -523,6 +536,7 @@ impl PdfReaderState {
             last_sent_viewport: None,
             last_nonkitty_cleanup_area: None,
             last_nonkitty_cleanup_zoom: if is_kitty { 1.0 } else { zoom_factor },
+            last_nonkitty_cleanup_page: None,
             last_kitty_cache_window: None,
             kitty_visible_pages: HashSet::new(),
             kitty_delete_range_supported: false,
@@ -534,6 +548,8 @@ impl PdfReaderState {
             synctex_scanner: None,
             pending_enhance: None,
             pending_initial_scroll_page: None,
+            kitty_pan_fraction: None,
+            pending_zoom_restore: None,
         }
     }
 
@@ -831,23 +847,32 @@ impl PdfReaderState {
         let left_end = u32::from(left_width);
         let left_inter_start = left_start.max(window_start);
         let left_inter_end = left_end.min(window_end);
-        if left_inter_end <= left_inter_start {
-            return None;
-        }
-        let left_slice = NonKittyDualSlice {
-            page: left_page,
-            screen_start: if overflows {
-                (left_inter_start.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset
-            },
-            screen_end: if overflows {
-                (left_inter_end.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset.saturating_add(left_width)
-            },
-            page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
-            width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+        let left_slice = if left_inter_end <= left_inter_start {
+            // Left page panned fully out of the window (right-clamped view):
+            // an empty slice, NOT a bail-out — the right slice still renders.
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: 0,
+                screen_end: 0,
+                page_x_offset: 0,
+                width: 0,
+            }
+        } else {
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: if overflows {
+                    (left_inter_start.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset
+                },
+                screen_end: if overflows {
+                    (left_inter_end.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset.saturating_add(left_width)
+                },
+                page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
+                width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+            }
         };
 
         let right_slice = if has_right {

@@ -248,6 +248,9 @@ fn pdf_specifics(keymap: &mut Keymap) {
 fn pdf_normal_specifics(keymap: &mut Keymap) {
     let ctx = keymap.context_mut(KeyContext::PdfNormal);
     bind!(ctx, "a" => Action::AddComment);
+    // `dd` deletes the annotation (comment or highlight) under the cursor.
+    // Mirrors the EpubNormal binding.
+    bind!(ctx, "dd" => Action::DeleteComment);
     bind!(ctx, "c" => Action::CopySelection);
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "gd" => Action::SynctexInverse); // #2: restore gd
@@ -505,6 +508,20 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::PdfNormal, "gd"),
             LookupResult::Found(Action::SynctexInverse)
+        );
+    }
+
+    #[test]
+    fn pdf_normal_dd_delete_annotation() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfNormal, "dd"),
+            LookupResult::Found(Action::DeleteComment)
+        );
+        // Single d must be a prefix, not an action
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfNormal, "d"),
+            LookupResult::Prefix
         );
     }
 

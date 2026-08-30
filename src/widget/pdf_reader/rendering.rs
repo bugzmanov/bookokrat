@@ -225,6 +225,11 @@ pub(crate) fn apply_render_responses(
     let mut reloaded = false;
     let use_kitty = pdf_reader.is_kitty;
     let scroll_anchor = pdf_reader.capture_kitty_scroll_anchor();
+    let pan_fraction = if use_kitty {
+        pdf_reader.capture_kitty_pan_fraction()
+    } else {
+        None
+    };
 
     for response in responses {
         match response {
@@ -255,7 +260,11 @@ pub(crate) fn apply_render_responses(
                 let new_cell_size =
                     CellSize::new(data.img_data.width_cell, data.img_data.height_cell);
                 if let Some(ref existing_img) = info.img {
-                    if existing_img.cell_dimensions() != new_cell_size {
+                    let full_page_image = !matches!(
+                        existing_img,
+                        ConvertedImage::Tiled { .. } | ConvertedImage::TileUpdate { .. }
+                    );
+                    if full_page_image && existing_img.cell_dimensions() != new_cell_size {
                         log::trace!(
                             "Dropping stale image for page {page}: \
                              old={}x{} new={}x{}",
@@ -273,6 +282,7 @@ pub(crate) fn apply_render_responses(
                 info.full_cell_size = Some(new_cell_size);
                 info.scale_factor = Some(data.scale_factor);
                 info.requested_scale = Some(data.requested_scale);
+                info.achieved_scale = Some(data.achieved_scale);
                 info.render_area_width_cells = Some(data.render_area_width_cells);
                 info.render_area_height_cells = Some(data.render_area_height_cells);
                 info.line_bounds = data.line_bounds.clone();
@@ -305,6 +315,7 @@ pub(crate) fn apply_render_responses(
                         if let Some(converted) = convert_page_image(&data.img_data, picker) {
                             info.img = Some(converted);
                             info.image_requested_scale = Some(data.requested_scale);
+                            info.image_achieved_scale = Some(data.achieved_scale);
                         }
                     }
                 }
@@ -393,6 +404,7 @@ pub(crate) fn apply_render_responses(
                             if let Some(ref mut existing) = info.img {
                                 if existing.merge_tile_update(frame.image) {
                                     info.image_requested_scale = Some(frame.requested_scale);
+                                    info.image_achieved_scale = Some(frame.achieved_scale);
                                     log::trace!("Merged tile update for page {}", frame_index);
                                 } else {
                                     log::warn!(
@@ -404,7 +416,8 @@ pub(crate) fn apply_render_responses(
                         } else {
                             info.img = Some(frame.image);
                             info.image_requested_scale = Some(frame.requested_scale);
-                            log::trace!("Set img for page {}", frame_index);
+                            info.image_achieved_scale = Some(frame.achieved_scale);
+                            log::debug!("Set img for page {}", frame_index);
                         }
                     }
 
@@ -425,8 +438,16 @@ pub(crate) fn apply_render_responses(
                         // Fresh converted frame can change dual strip intersections.
                         pdf_reader.last_sent_viewport = None;
                     }
-                    // Track the current page's frame arrival for waiting_for_page optimization
-                    if frame_index == pdf_reader.page {
+                    // Track the current page's frame arrival for waiting_for_page
+                    // optimization. In dual layout the pair partner counts too:
+                    // at a right-clamped pan only the right page has a visible
+                    // slice, so only its frames arrive — gating on the left page
+                    // alone would leave the redraw-suppression flag set forever
+                    // (state advances, screen frozen).
+                    let dual_partner = crate::settings::get_pdf_page_layout_mode()
+                        == crate::settings::PdfPageLayoutMode::Dual
+                        && frame_index == pdf_reader.page.saturating_add(1);
+                    if frame_index == pdf_reader.page || dual_partner {
                         converted_frame_page = Some(frame_index);
                     }
                 }
@@ -474,11 +495,13 @@ pub(crate) fn apply_render_responses(
         }
     }
 
-    if use_kitty
-        && updated
-        && let Some(anchor) = scroll_anchor
-    {
-        pdf_reader.restore_kitty_scroll_anchor(anchor);
+    if use_kitty && updated {
+        if let Some(anchor) = scroll_anchor {
+            pdf_reader.restore_kitty_scroll_anchor(anchor);
+        }
+        if let Some(fraction) = pan_fraction {
+            pdf_reader.restore_kitty_pan_fraction(fraction);
+        }
     }
 
     RenderUpdateResult {
@@ -963,7 +986,7 @@ impl PdfReaderState {
         if is_kitty {
             *pending_display = Some(build_display_plan(display_batch));
         } else {
-            *pending_display = None;
+            *pending_display = Some(PdfDisplayPlan::NoChange);
             let _ = display_batch;
         }
 
@@ -1137,6 +1160,13 @@ pub(crate) fn execute_display_plan(
             log::error!("Failed to clear kitty graphics for popup: {e}");
         }
         pdf_reader.last_render.rect = Rect::default();
+        return;
+    }
+
+    // Non-kitty: pages were already drawn through the ratatui buffer; only the
+    // modal backing overlay needs a post-draw emission.
+    if !pdf_reader.is_kitty {
+        emit_modal_overlay(pdf_reader);
         return;
     }
 
@@ -1342,6 +1372,7 @@ const MODAL_OVERLAY_IMAGE_ID: u32 = u32::MAX - 1;
 
 fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     if !pdf_reader.is_kitty {
+        emit_modal_overlay_iterm2(pdf_reader);
         return;
     }
 
@@ -1444,6 +1475,83 @@ fn emit_modal_overlay(pdf_reader: &mut PdfReaderState) {
     let _ = std::io::Write::flush(&mut stdout);
 }
 
+/// iTerm2-protocol equivalent of the Kitty modal backing overlay, close-side.
+///
+/// The backing itself is embedded into the ratatui buffer at render time (see
+/// `render_iterm2_modal_backing`) so it lands between the page image and the
+/// modal glyphs in emission order. iTerm2 has no image-delete command, so when
+/// the modal CLOSES the stale backing is removed by requesting a full screen
+/// repaint (terminal.clear() re-emits the page image over it).
+fn emit_modal_overlay_iterm2(pdf_reader: &mut PdfReaderState) {
+    if !pdf_reader.uses_iterm2_protocol {
+        return;
+    }
+
+    let wanted = pdf_reader
+        .modal_overlay_rect
+        .filter(|&(_, _, w, h)| w > 0 && h > 0);
+
+    match wanted {
+        Some(rect) => pdf_reader.modal_overlay_sent = Some(rect),
+        None => {
+            if pdf_reader.modal_overlay_sent.take().is_some() {
+                pdf_reader.pending_screen_refresh = true;
+            }
+        }
+    }
+}
+
+/// Build the iTerm2 inline-image escape for a solid `base_01` panel of
+/// `width`x`height` cells and write it into the buffer cell at (x, y).
+///
+/// Terminals composite iTerm2 inline images in cell-emission order: the page
+/// image's escape lives near the top of the img area, so an escape placed on
+/// the backing's top row is emitted AFTER it (covering the page) while the
+/// modal's glyph cells on later rows still paint on top. Without this the
+/// modal is a "ghost": only glyph strokes over the page image.
+fn render_iterm2_modal_backing(
+    frame: &mut Frame<'_>,
+    x: u16,
+    y: u16,
+    width: u16,
+    height: u16,
+    panel_bg: Color,
+) {
+    let (r, g, b) = crate::color_mode::color_to_rgb(panel_bg).unwrap_or((0x34, 0x3D, 0x46));
+
+    let mut png_bytes: Vec<u8> = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, 1, 1);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        let Ok(mut writer) = encoder.write_header() else {
+            return;
+        };
+        if writer.write_image_data(&[r, g, b]).is_err() {
+            return;
+        }
+    }
+    let data = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(&png_bytes)
+    };
+
+    let escape = format!(
+        "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:{}\x07",
+        png_bytes.len(),
+        width,
+        height,
+        data,
+    );
+
+    let buf = frame.buffer_mut();
+    let area = *buf.area();
+    if x >= area.right() || y >= area.bottom() {
+        return;
+    }
+    buf[(x, y)].set_symbol(&escape);
+}
+
 pub(crate) fn update_non_kitty_viewport(
     pdf_reader: &mut PdfReaderState,
     conversion_tx: Option<&flume::Sender<ConversionCommand>>,
@@ -1471,19 +1579,40 @@ pub(crate) fn update_non_kitty_viewport(
     let Some(tx) = conversion_tx else {
         return;
     };
-    // Deadlock recovery: if we have no displayable image for the page we're about
+    // Deadlock recovery: if we have no displayable image for a page we're about
     // to request, the converter may believe it already sent one (sent_for_viewport)
     // and refuse to re-tile an unchanged viewport — leaving us stuck on "loading"
     // until a manual scroll. Clear the converter's sent state for the page (the
     // same mechanism used for failed Kitty transmissions) so the viewport command
     // below forces a fresh render. Self-correcting: once the frame lands, img is
     // Some and this no longer fires.
-    if pdf_reader
-        .rendered
-        .get(viewport.page)
-        .is_none_or(|info| info.img.is_none())
+    //
+    // Probe the pages the outgoing command actually COVERS, not the base page:
+    // in dual layout at a hard pan clamp one page has an empty slice and its
+    // image legitimately never exists — probing it would fire DisplayFailed on
+    // every frame, churning the converter forever.
+    let covered_pages: Vec<usize> = if crate::settings::get_pdf_page_layout_mode()
+        == crate::settings::PdfPageLayoutMode::Dual
     {
-        let _ = tx.send(ConversionCommand::DisplayFailed(vec![viewport.page]));
+        pdf_reader
+            .dual_viewports_for_non_kitty(viewport)
+            .iter()
+            .map(|v| v.page)
+            .collect()
+    } else {
+        vec![viewport.page]
+    };
+    let missing: Vec<usize> = covered_pages
+        .into_iter()
+        .filter(|&p| {
+            pdf_reader
+                .rendered
+                .get(p)
+                .is_none_or(|info| info.img.is_none())
+        })
+        .collect();
+    if !missing.is_empty() {
+        let _ = tx.send(ConversionCommand::DisplayFailed(missing));
     }
     if let Some(cmd) = pdf_reader.viewport_command(viewport) {
         if PdfReaderState::debug_non_kitty_dual_enabled() {
@@ -2848,6 +2977,7 @@ impl PdfReaderState {
                         popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
+                        self.uses_iterm2_protocol,
                     );
                 } else if !sidebar_comments.is_empty() {
                     // Use the full pdf_area as bounds for page mode
@@ -3080,6 +3210,7 @@ impl PdfReaderState {
                         popup_border,
                         modal_panel_bg,
                         modal_panel_header_bg,
+                        self.uses_iterm2_protocol,
                     );
                 } else if let Some(page_idx) = sidebar_page_idx
                     && let Some(info) = visible_pages.iter().find(|info| info.page_idx == page_idx)
@@ -3190,9 +3321,10 @@ impl PdfReaderState {
         let zoom_changed =
             (self.last_nonkitty_cleanup_zoom - self.non_kitty_zoom_factor).abs() > f32::EPSILON;
         let area_changed = self.last_nonkitty_cleanup_area != Some(img_area);
+        let page_changed = self.last_nonkitty_cleanup_page != Some(self.page);
         let warp_content_changed =
             crate::terminal::is_warp_terminal() && self.last_render.rect != size;
-        let needs_clear = zoom_changed || area_changed || warp_content_changed;
+        let needs_clear = zoom_changed || area_changed || page_changed || warp_content_changed;
         frame.render_widget(
             Block::default().style(Style::default().bg(bg_color)),
             img_area,
@@ -3220,13 +3352,32 @@ impl PdfReaderState {
         if page_layout_mode == PdfPageLayoutMode::Dual {
             let right_page = self.page.saturating_add(1);
             let right_exists = right_page < self.rendered.len();
-            if page_sizes.len() < 2 && right_exists {
+            // Hold the frame only for pages whose slice is actually VISIBLE in
+            // the current window. At high zoom/pan either page can be
+            // legitimately off-screen (empty slice) — its image never converts
+            // at this scale, and demanding it would show [LOADING] forever.
+            let (need_left, need_right) = if self.is_kitty {
+                (true, right_exists)
+            } else {
+                match self.build_non_kitty_dual_layout(img_area.width, self.non_kitty_pan_offset) {
+                    Some(layout) => (
+                        layout.left_slice.width > 0,
+                        right_exists && layout.right_slice.is_some(),
+                    ),
+                    None => (true, right_exists),
+                }
+            };
+            let have = |p: usize| page_sizes.iter().any(|&(idx, _, _)| idx == p);
+            let missing = (need_left && !have(self.page)) || (need_right && !have(right_page));
+            if missing {
                 if PdfReaderState::debug_non_kitty_dual_enabled() {
                     log::debug!(
-                        "dual-render waiting for pair page={} right_page={} sizes_ready={}",
+                        "dual-render waiting for pair page={} right_page={} sizes_ready={} need=({},{})",
                         self.page,
                         right_page,
-                        page_sizes.len()
+                        page_sizes.len(),
+                        need_left,
+                        need_right
                     );
                 }
                 page_sizes.clear();
@@ -3290,6 +3441,7 @@ impl PdfReaderState {
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
+                    self.uses_iterm2_protocol,
                 );
             }
             if highlight_palette_modal {
@@ -3309,11 +3461,42 @@ impl PdfReaderState {
             if terminal_overlay::kitty_delete_overlay_hack_enabled() && needs_clear {
                 terminal_overlay::emit_kitty_delete_all();
             }
-            if terminal_overlay::overlay_force_clear_enabled() {
-                terminal_overlay::clear_rect_direct(img_area);
+            if needs_clear || terminal_overlay::overlay_force_clear_enabled() {
+                // Inline images (iTerm2 protocol) survive in cells the ratatui
+                // diff considers unchanged: when the new image is smaller than
+                // the previous one, the vacated cells keep showing the OLD
+                // image's fragments (the "right-edge strip" leak). Direct-write
+                // spaces over both the previous and the current image area so
+                // stale fragments cannot outlive a zoom/area/page change. The
+                // theme bg keeps the flash invisible.
+                // Pad by a couple of cells: WezTerm rounds the scaled image up
+                // to whole cells, so fragments can sit one column/row past the
+                // declared area.
+                let pad_rect = |r: Rect| Rect {
+                    width: r
+                        .width
+                        .saturating_add(2)
+                        .min(size.width.saturating_sub(r.x)),
+                    height: r
+                        .height
+                        .saturating_add(1)
+                        .min(size.height.saturating_sub(r.y)),
+                    ..r
+                };
+                let mut rects = vec![pad_rect(img_area)];
+                if let Some(prev) = self.last_nonkitty_cleanup_area {
+                    if prev != img_area {
+                        rects.push(pad_rect(prev));
+                    }
+                }
+                terminal_overlay::clear_rects_direct_bg(
+                    rects,
+                    crate::color_mode::color_to_rgb(bg_color),
+                );
             }
             self.last_nonkitty_cleanup_area = Some(img_area);
             self.last_nonkitty_cleanup_zoom = self.non_kitty_zoom_factor;
+            self.last_nonkitty_cleanup_page = Some(self.page);
 
             let dual_layout = page_layout_mode == PdfPageLayoutMode::Dual;
             let dual_layout_info = if dual_layout {
@@ -3321,6 +3504,7 @@ impl PdfReaderState {
             } else {
                 None
             };
+            let dual_right_exists = self.page.saturating_add(1) < self.rendered.len();
             let total_width = if dual_layout {
                 dual_layout_info
                     .map(|layout| layout.strip_width)
@@ -3375,30 +3559,21 @@ impl PdfReaderState {
                 }
             }
 
-            let current_scale_pages: Option<HashSet<usize>> = if dual_layout {
-                let mut set = HashSet::new();
-                for offset in 0..page_sizes.len() {
-                    let page_idx = self.page + offset;
-                    if self.page_matches_dual_scale(page_idx, img_area.width) {
-                        set.insert(page_idx);
-                    }
-                }
-                Some(set)
-            } else {
-                None
-            };
-
+            // page_sizes is NOT necessarily a contiguous [self.page..] prefix:
+            // at a right-clamped dual pan the left page has an empty slice and
+            // its image may legitimately not exist (never converts), leaving
+            // only the right page in page_sizes. Select pages by membership,
+            // never by a positional take() from self.page — that would stop at
+            // the absent left page and silently render nothing.
+            let displayed_pages: HashSet<usize> =
+                page_sizes.iter().map(|&(idx, _, _)| idx).collect();
             let page_images = self.rendered[self.page..]
                 .iter_mut()
                 .enumerate()
-                .take(page_sizes.len())
+                .take(pages_to_render)
                 .filter_map(|(idx, page)| {
                     let page_idx = self.page + idx;
-                    if dual_layout
-                        && !current_scale_pages
-                            .as_ref()
-                            .is_some_and(|set| set.contains(&page_idx))
-                    {
+                    if !displayed_pages.contains(&page_idx) {
                         return None;
                     }
                     let img = page.img.as_mut()?;
@@ -3410,7 +3585,13 @@ impl PdfReaderState {
             let mut to_display = Vec::new();
             if dual_layout {
                 if let Some(layout) = dual_layout_info {
-                    self.non_kitty_pan_offset = layout.pan;
+                    // Normalize the stored pan to the layout's clamp — but only
+                    // when the strip is complete. If the right page is
+                    // transiently missing, the degraded single-page strip has a
+                    // tiny max_pan and writing it back would erase a valid pan.
+                    if !dual_right_exists || layout.right_width > 0 {
+                        self.non_kitty_pan_offset = layout.pan;
+                    }
                     log::debug!(
                         "dual-render: pan={} img_area=({},{} {}x{}) left=[start={} end={} w={} page={}] right={:?}",
                         layout.pan,
@@ -3437,6 +3618,9 @@ impl PdfReaderState {
                         let Some(slice) = slice else {
                             continue;
                         };
+                        if slice.width == 0 {
+                            continue;
+                        }
                         let maybe_img = Self::render_single_page(
                             frame,
                             img,
@@ -3572,6 +3756,7 @@ impl PdfReaderState {
                     popup_border,
                     modal_panel_bg,
                     modal_panel_header_bg,
+                    self.uses_iterm2_protocol,
                 );
             }
             if highlight_palette_modal {
@@ -3829,6 +4014,7 @@ impl PdfReaderState {
         accent_color: Color,
         panel_bg: Color,
         header_bg: Color,
+        iterm2_backing: bool,
     ) -> Option<(u16, u16, u16, u16)> {
         let textarea = comment_input.textarea.as_mut()?;
 
@@ -3861,6 +4047,12 @@ impl PdfReaderState {
         let backing_y = modal_area.y.saturating_sub(pad);
         let backing_w = (modal_area.width + pad * 2).min(area.x + area.width - backing_x);
         let backing_h = (modal_area.height + pad * 2).min(area.y + area.height - backing_y);
+
+        if iterm2_backing {
+            render_iterm2_modal_backing(
+                frame, backing_x, backing_y, backing_w, backing_h, panel_bg,
+            );
+        }
 
         frame.render_widget(Clear, modal_area);
 

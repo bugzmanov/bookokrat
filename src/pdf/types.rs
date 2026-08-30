@@ -124,6 +124,9 @@ pub struct PageData {
     pub scale_factor: f32,
     /// Requested user zoom factor used for rendering
     pub requested_scale: f32,
+    /// User zoom factor actually achieved after the max-dimension clamp.
+    /// Equals `requested_scale` unless the raster hit `KITTY_MAX_DIMENSION`.
+    pub achieved_scale: f32,
     /// Viewport width (in terminal cells) used for rendering
     pub render_area_width_cells: u16,
     /// Viewport height (in terminal cells) used for rendering
@@ -144,6 +147,7 @@ impl std::fmt::Debug for PageData {
             .field("img_data.cell_height", &self.img_data.height_cell)
             .field("scale_factor", &self.scale_factor)
             .field("requested_scale", &self.requested_scale)
+            .field("achieved_scale", &self.achieved_scale)
             .field("render_area_width_cells", &self.render_area_width_cells)
             .field("render_area_height_cells", &self.render_area_height_cells)
             .field("page_height_px", &self.page_height_px)

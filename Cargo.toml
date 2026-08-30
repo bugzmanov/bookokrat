@@ -31,6 +31,12 @@ exclude = [
   "bookmarks.json",
 ]
 
+[lints.clippy]
+# The large Err is flume's SendError echoing the unsent frame back; it only
+# materializes on channel disconnect (shutdown), so boxing it would cost the
+# hot path to optimize a path that never runs.
+result_large_err = "allow"
+
 [lib]
 name = "bookokrat"
 path = "src/lib.rs"

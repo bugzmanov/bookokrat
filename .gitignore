@@ -17,11 +17,25 @@ flamegraph.svg
 *.pdf
 !tests/testdata/di_book_toc_test.pdf
 !tests/testdata/vhs_test.pdf
+!tests/testdata/vhs_many.pdf
+!tests/testdata/vhs_links.pdf
+!tests/testdata/vhs_twocol.pdf
+!tests/testdata/vhs_viewmodes.pdf
+!tests/testdata/vhs_offset.pdf
+!tests/testdata/vhs_reload.pdf
+!tests/testdata/vhs_reload_a.pdf
+!tests/testdata/vhs_reload_b.pdf
+!tests/testdata/vhs_reload_c.pdf
 .claude/
 .agentastic/
 result/
 *.djvu
 tldr-cache/
+
+# change-report artifacts
+/report/
+/report-*/
+/report-out/
 
 # LaTeX build artifacts
 *.aux
@@ -29,3 +43,10 @@ tldr-cache/
 *.fls
 *.out
 *.toc
+
+# VHS golden screenshots live in a separate repo (tests-bookokrat-snapshots),
+# cloned into this path. See vhs_tests/run.sh / CLAUDE.md.
+vhs_tests/golden/
+
+# nix build output symlink
+result

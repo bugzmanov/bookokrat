@@ -56,28 +56,35 @@ compare_images() {
     echo "GOLDEN_SIZE=$golden_size"
     echo "ACTUAL_SIZE=$actual_size"
 
-    # SSIM comparison (pass if SSIM >= 0.98), fallback to pixel diff
-    local ssim_value=""
+    # Pixel comparison via ImageMagick. We use the NORMALIZED RMSE — the value in
+    # parentheses, e.g. "16375.7 (0.249878)" — which is 0.0 for identical images
+    # and grows with difference. This is stable across ImageMagick versions;
+    # notably IM 7's `-metric SSIM` reports a distance here (0 = identical), not
+    # the classic 1.0 = identical index, so the old ">= 0.98" check was inverted.
+    # Pass when dissimilarity is below DIFF_THRESHOLD (default 2%).
     local total_pixels=$((golden_width * golden_height))
     local diff_pct=""
+    local diff_norm=""
+    local DIFF_THRESHOLD="${VHS_DIFF_THRESHOLD:-0.02}"
 
     if command -v compare >/dev/null 2>&1; then
-        ssim_value=$(compare -metric SSIM "$golden" "$actual" null: 2>&1 || true)
-        ssim_value=$(echo "$ssim_value" | awk '{print $1}' | sed -E 's/[^0-9.].*$//')
-        if ! [[ "$ssim_value" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-            ssim_value=""
-        fi
+        local raw
+        raw=$(compare -metric RMSE "$golden" "$actual" null: 2>&1 || true)
+        diff_norm=$(printf '%s' "$raw" | sed -nE 's/.*\(([0-9.eE+-]+)\).*/\1/p' | head -1)
     fi
 
-    if [ -n "$ssim_value" ]; then
-        echo "SSIM=$ssim_value"
-        if (( $(echo "$ssim_value >= 0.98" | bc -l) )); then
+    if [[ "$diff_norm" =~ ^[0-9.]+([eE][+-]?[0-9]+)?$ ]]; then
+        local pass pct
+        pass=$(awk -v v="$diff_norm" -v t="$DIFF_THRESHOLD" 'BEGIN{print (v+0<=t+0)?1:0}')
+        pct=$(awk -v v="$diff_norm" 'BEGIN{printf "%.3f", (v+0)*100}')
+        echo "SSIM=$diff_norm"
+        if [ "$pass" = "1" ]; then
             echo "STATUS=match"
-            echo "MESSAGE=SSIM ${ssim_value}"
+            echo "MESSAGE=diff ${pct}%"
             return 0
         fi
         echo "STATUS=mismatch"
-        echo "MESSAGE=SSIM ${ssim_value} (< 0.98)"
+        echo "MESSAGE=diff ${pct}% (> threshold)"
         return 1
     fi
 
@@ -294,17 +301,32 @@ generate_diff_image() {
         return 1
     fi
 
-    # Use ImageMagick if available (best quality diff)
+    # Use ImageMagick if available (best quality diff).
+    # NOTE: `compare` exits 1 when images DIFFER (which is exactly when we want a
+    # diff), so we must NOT use its exit code as success/failure — we check that
+    # the diff file was actually written. We also crop both images to their common
+    # region first so captures that differ in size (e.g. a 6px height change) still
+    # produce a visible diff instead of erroring out.
+    # -fuzz tolerates anti-aliasing / sub-pixel color noise so only meaningful
+    # changes are highlighted (without it, every AA text edge lights up red).
+    local fuzz="${VHS_DIFF_FUZZ:-12%}"
     if command -v magick &>/dev/null; then
-        # Generate diff with red highlighting for changed pixels
-        magick compare -highlight-color red -lowlight-color 'rgba(0,0,0,0)' \
-            -compose src "$golden" "$actual" "$diff_output" 2>/dev/null
-        return $?
+        local gw gh aw ah cw ch
+        gw=$(magick identify -format '%w' "$golden" 2>/dev/null); gh=$(magick identify -format '%h' "$golden" 2>/dev/null)
+        aw=$(magick identify -format '%w' "$actual" 2>/dev/null); ah=$(magick identify -format '%h' "$actual" 2>/dev/null)
+        if [[ "$gw" =~ ^[0-9]+$ && "$aw" =~ ^[0-9]+$ && "$gh" =~ ^[0-9]+$ && "$ah" =~ ^[0-9]+$ ]]; then
+            cw=$(( gw < aw ? gw : aw )); ch=$(( gh < ah ? gh : ah ))
+            magick compare -fuzz "$fuzz" -metric AE -highlight-color red \
+                \( "$golden" -crop "${cw}x${ch}+0+0" +repage \) \
+                \( "$actual" -crop "${cw}x${ch}+0+0" +repage \) \
+                "$diff_output" 2>/dev/null
+        else
+            magick compare -fuzz "$fuzz" -metric AE -highlight-color red "$golden" "$actual" "$diff_output" 2>/dev/null
+        fi
+        [ -s "$diff_output" ] && return 0 || return 1
     elif command -v compare &>/dev/null; then
-        # Older ImageMagick
-        compare -highlight-color red -lowlight-color 'rgba(0,0,0,0)' \
-            -compose src "$golden" "$actual" "$diff_output" 2>/dev/null
-        return $?
+        compare -fuzz "$fuzz" -highlight-color red "$golden" "$actual" "$diff_output" 2>/dev/null
+        [ -s "$diff_output" ] && return 0 || return 1
     fi
 
     # Fallback: Use sips + CoreImage via Swift for basic diff

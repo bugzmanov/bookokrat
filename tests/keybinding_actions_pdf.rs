@@ -419,6 +419,10 @@ pdf_binding_tests! {
     pdf_normal_d: KeyContext::PdfNormal, "d",
         setup = |state| { state.normal_mode.active = true; },
         check = |_state, action| action.is_none();
+    // dd = DeleteComment; comments disabled in test state → error HUD + Redraw
+    pdf_normal_dd: KeyContext::PdfNormal, "dd",
+        setup = |state| { state.normal_mode.active = true; },
+        check = |_state, action| matches!(action, Some(InputAction::Redraw));
     // a = AddComment; without visual mode or selection, returns None
     pdf_normal_a: KeyContext::PdfNormal, "a",
         setup = |state| { state.normal_mode.active = true; },

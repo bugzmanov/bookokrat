@@ -525,6 +525,19 @@ fn derive_pdf_capabilities(
     let mut supported = caps.supports_graphics;
     let mut blocked_reason = None;
 
+    // PDF pages are raster images - they need a real graphics protocol.
+    // Halfblocks (or no protocol at all) cannot display them. Block PDF even
+    // when the terminal env claims graphics support, so an explicit
+    // BOOKOKRAT_PROTOCOL=halfblocks override inside a graphics-capable
+    // terminal doesn't produce a broken half-configured PDF pipeline.
+    if !protocol_supports_graphics(caps.protocol) {
+        supported = false;
+        blocked_reason = Some(
+            "PDF requires a graphics protocol (Kitty, iTerm2, or Sixel); the current protocol cannot display PDF pages"
+                .to_string(),
+        );
+    }
+
     if caps.kind == TerminalKind::ITerm && !iterm_supports_kitty(&caps.env) {
         supported = false;
         let iterm_version = if caps.env.tmux {
@@ -706,6 +719,36 @@ mod underline_color_tests {
             assert!(
                 caps.supports_underline_color,
                 "terminal {tp:?} should keep colored underlines (denylist default-on)"
+            );
+        }
+    }
+
+    #[test]
+    fn pdf_blocked_on_halfblocks_protocol() {
+        // Even in a graphics-capable terminal (kitty env), forcing the
+        // halfblocks protocol must disable PDF entirely - halfblocks cannot
+        // display PDF page rasters.
+        let mut caps = detect_terminal_from_env(env_with_term_program("kitty"));
+        caps.protocol = Some(GraphicsProtocol::Halfblocks);
+        refresh_pdf_capabilities(&mut caps);
+        assert!(!caps.pdf.supported, "PDF must be blocked on halfblocks");
+        assert!(caps.pdf.blocked_reason.is_some());
+    }
+
+    #[test]
+    fn pdf_allowed_on_graphics_protocols() {
+        for protocol in [
+            GraphicsProtocol::Kitty,
+            GraphicsProtocol::Iterm2,
+            GraphicsProtocol::Sixel,
+        ] {
+            let mut caps = detect_terminal_from_env(env_with_term_program("kitty"));
+            caps.protocol = Some(protocol);
+            caps.supports_graphics = true;
+            refresh_pdf_capabilities(&mut caps);
+            assert!(
+                caps.pdf.supported,
+                "PDF should stay supported on {protocol:?}"
             );
         }
     }

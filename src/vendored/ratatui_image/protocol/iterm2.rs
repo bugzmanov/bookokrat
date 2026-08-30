@@ -537,6 +537,27 @@ fn render(rect: Rect, data: &str, area: Rect, buf: &mut Buffer, overdraw: bool) 
         bottom - render_area.y,
     );
 
+    // The escape header was encoded with the protocol rect's cell span. If
+    // that span would extend past the terminal grid, clamp the declared
+    // width/height to the clip point: WezTerm renders the off-grid part of an
+    // inline image into the window padding, where no erase op can ever remove
+    // it (a permanent right-edge "sliver" of stale image pixels).
+    let avail_w = buf_area.right().saturating_sub(render_area.x);
+    let avail_h = buf_area.bottom().saturating_sub(render_area.y);
+    let patched;
+    let data = if rect.width > avail_w || rect.height > avail_h {
+        patched = data.replace(
+            &format!("width={};height={};", rect.width, rect.height),
+            &format!(
+                "width={};height={};",
+                rect.width.min(avail_w),
+                rect.height.min(avail_h)
+            ),
+        );
+        patched.as_str()
+    } else {
+        data
+    };
     buf[(render_area.x, render_area.y)].set_symbol(data);
 
     for x in (render_area.left() + 1)..render_area.right() {

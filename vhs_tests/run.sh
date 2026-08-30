@@ -83,11 +83,13 @@ NC='\033[0m'
 
 # Arguments
 UPDATE_MODE=false
+ACCEPT_MODE=false          # accept already-captured screenshots as golden (no re-run)
 SPECIFIC_TAPE=""
+SPECIFIC_SCREENSHOT=""     # limit update/accept/compare to a single screenshot
 LIST_TAPES=false
 OPEN_REPORT=false
 VERBOSE=false
-MEMORY_LEAK_LIMIT_MB=100  # Default: fail if memory leak > 100MB (includes ~80MB harness overhead)
+MEMORY_LEAK_LIMIT_MB=200  # Default: fail if memory leak > 200MB (includes ~80MB harness overhead; measures SYSTEM-WIDE anonymous pages via vm_stat, so other processes on the machine add noise)
 EXCLUDED_DEFAULT_TAPES=(
     "demo_combined"
     "demo_epub"
@@ -95,6 +97,15 @@ EXCLUDED_DEFAULT_TAPES=(
     "docsite_epub"
     "docsite_pdf"
 )
+
+# List screenshot names a tape produces for the current terminal: plain
+# `screenshot X` lines plus `@<terminal> screenshot X` conditional lines.
+tape_screenshot_names() {
+    local tape_file="$1"
+    awk -v cond="@${TERMINAL_TYPE}" \
+        '$1 == "screenshot" { print $2 }
+         $1 == cond && $2 == "screenshot" { print $3 }' "$tape_file" 2>/dev/null
+}
 
 is_default_excluded_tape() {
     local tape_name="$1"
@@ -118,7 +129,7 @@ print_usage() {
     echo "  --list                   List available tapes"
     echo "  --open-report            Open HTML report after run"
     echo "  --verbose                Enable verbose output"
-    echo "  --memory-leak-limit MB   Fail if memory leak exceeds MB (default: 100)"
+    echo "  --memory-leak-limit MB   Fail if memory leak exceeds MB (default: 200)"
     echo "  --help                   Show this help"
     echo ""
     echo "Terminals:"
@@ -150,6 +161,14 @@ while [[ $# -gt 0 ]]; do
         --update)
             UPDATE_MODE=true
             shift
+            ;;
+        --accept)
+            ACCEPT_MODE=true
+            shift
+            ;;
+        --screenshot)
+            SPECIFIC_SCREENSHOT="$2"
+            shift 2
             ;;
         --list)
             LIST_TAPES=true
@@ -250,46 +269,74 @@ echo -e "${CYAN}║     🎬 VHS Terminal Screenshot Test Harness               
 echo -e "${CYAN}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# Check prerequisites
-echo "Checking prerequisites (terminal: $TERMINAL_TYPE)..."
-case "$TERMINAL_TYPE" in
-    kitty)
-        if ! check_kitty; then
-            exit 1
-        fi
-        ;;
-    wezterm)
-        if ! check_wezterm; then
-            exit 1
-        fi
-        ;;
-    iterm)
-        if ! check_iterm; then
-            exit 1
-        fi
-        ;;
-    ghostty|*)
-        if ! check_ghostty; then
-            exit 1
-        fi
-        ;;
-esac
+# Accept mode does not launch a terminal or build — it only copies already
+# captured screenshots into golden. Skip all terminal prerequisites for it.
+if ! $ACCEPT_MODE; then
+    # Check prerequisites
+    echo "Checking prerequisites (terminal: $TERMINAL_TYPE)..."
+    case "$TERMINAL_TYPE" in
+        kitty)
+            if ! check_kitty; then
+                exit 1
+            fi
+            ;;
+        wezterm)
+            if ! check_wezterm; then
+                exit 1
+            fi
+            ;;
+        iterm)
+            if ! check_iterm; then
+                exit 1
+            fi
+            ;;
+        ghostty|*)
+            if ! check_ghostty; then
+                exit 1
+            fi
+            ;;
+    esac
 
-if [ ! -f "$TEST_PDF" ]; then
-    echo -e "${RED}ERROR: Test PDF not found: $TEST_PDF${NC}"
-    exit 1
-fi
+    if [ ! -f "$TEST_PDF" ]; then
+        echo -e "${RED}ERROR: Test PDF not found: $TEST_PDF${NC}"
+        exit 1
+    fi
 
-# Build if needed
-if [ ! -f "$BINARY" ]; then
-    echo "Building release binary with PDF support..."
-    (cd "$PROJECT_ROOT" && cargo build --release --features pdf)
+    # Build if needed
+    if [ ! -f "$BINARY" ]; then
+        echo "Building release binary with PDF support..."
+        (cd "$PROJECT_ROOT" && cargo build --release --features pdf)
+    fi
 fi
 
 # Create output directories
 mkdir -p "$SCREENSHOTS_DIR"
 mkdir -p "$REPORTS_DIR"
 mkdir -p "$GOLDEN_DIR"
+
+# Golden screenshots live in a separate repo (gitignored here), so a fresh
+# checkout of bookokrat has an empty vhs_tests/golden. Comparing against
+# nothing would report every screenshot as missing - catch it up front.
+# Update/accept modes create goldens, so they're exempt.
+if ! $UPDATE_MODE && ! $ACCEPT_MODE; then
+    if ! find "$GOLDEN_DIR" -name "*.png" -type f 2>/dev/null | head -1 | grep -q .; then
+        echo -e "${RED}ERROR: no golden snapshots found in $GOLDEN_DIR${NC}"
+        echo "Goldens live in a separate repo. Clone it first:"
+        echo "  git clone https://github.com/bugzmanov/tests-bookokrat-snapshots vhs_tests/golden"
+        exit 1
+    fi
+fi
+
+# A tape may declare `terminal <type>` to restrict itself to one terminal
+# (e.g. pdf_dual_wezterm only makes sense on wezterm, pdf_halfblocks_blocked
+# relies on the kitty launcher's appenv support). Returns 0 if the tape is
+# allowed on the current terminal.
+tape_matches_terminal() {
+    local tape_file="$1"
+    local wanted
+    wanted=$(grep -E '^terminal[[:space:]]' "$tape_file" | head -1 | awk '{print $2}')
+    [ -z "$wanted" ] || [ "$wanted" = "$TERMINAL_TYPE" ]
+}
 
 # Collect tapes to run
 tapes_to_run=()
@@ -300,12 +347,16 @@ if [ -n "$SPECIFIC_TAPE" ]; then
         echo "Use --list to see available tapes"
         exit 1
     fi
+    if ! tape_matches_terminal "$tape_file"; then
+        echo -e "${RED}ERROR: Tape $SPECIFIC_TAPE is restricted to terminal '$(grep -E '^terminal[[:space:]]' "$tape_file" | head -1 | awk '{print $2}')' (current: $TERMINAL_TYPE)${NC}"
+        exit 1
+    fi
     tapes_to_run+=("$tape_file")
 else
     for tape in "$TAPES_DIR"/*.tape; do
         if [ -f "$tape" ]; then
             tape_name=$(basename "$tape" .tape)
-            if ! is_default_excluded_tape "$tape_name"; then
+            if ! is_default_excluded_tape "$tape_name" && tape_matches_terminal "$tape"; then
                 tapes_to_run+=("$tape")
             fi
         fi
@@ -315,6 +366,29 @@ fi
 if [ ${#tapes_to_run[@]} -eq 0 ]; then
     echo -e "${YELLOW}No tapes found in $TAPES_DIR${NC}"
     echo "Create a .tape file to get started"
+    exit 0
+fi
+
+# Accept mode: copy already-captured screenshots into golden, WITHOUT re-running
+# tapes. Accepts all screenshots of the selected tape(s), or just one with
+# --screenshot. This is what the report's per-snapshot "Accept" buttons call.
+if $ACCEPT_MODE; then
+    accepted_total=0
+    for tape_file in "${tapes_to_run[@]}"; do
+        tape_name=$(basename "$tape_file" .tape)
+        src_dir="$SCREENSHOTS_DIR/$TERMINAL_TYPE/$tape_name"
+        dst_dir="$GOLDEN_DIR/$TERMINAL_TYPE/$tape_name"
+        if [ -n "$SPECIFIC_SCREENSHOT" ]; then
+            shots=("$SPECIFIC_SCREENSHOT")
+        else
+            shots=($(tape_screenshot_names "$tape_file"))
+        fi
+        [ ${#shots[@]} -eq 0 ] && continue
+        echo -e "${YELLOW}Accepting golden(s) for $tape_name ($TERMINAL_TYPE)...${NC}"
+        update_golden_snapshots "$src_dir" "$dst_dir" "${shots[@]}"
+        accepted_total=$((accepted_total + ${#shots[@]}))
+    done
+    echo -e "${GREEN}✓ Accepted $accepted_total snapshot(s) into golden${NC}"
     exit 0
 fi
 
@@ -328,21 +402,31 @@ MEMORY_BEFORE=$(get_anonymous_pages)
 total_passed=0
 total_failed=0
 reports_generated=()
+ran_tapes=()   # tape names that produced screenshots (for the aggregate report)
 
 for tape_file in "${tapes_to_run[@]}"; do
     tape_name=$(basename "$tape_file" .tape)
     tape_screenshots_dir="$SCREENSHOTS_DIR/$TERMINAL_TYPE/$tape_name"
     tape_golden_dir="$GOLDEN_DIR/$TERMINAL_TYPE/$tape_name"
-    tape_report="$REPORTS_DIR/${TERMINAL_TYPE}_${tape_name}_report.html"
 
     mkdir -p "$tape_screenshots_dir"
     mkdir -p "$tape_golden_dir"
+
+    # Kitty: give each tape its OWN fresh instance. In a shared instance the
+    # previous tape's window can linger/occlude, so the next tape's window opens
+    # not-frontmost and macOS pauses its GPU graphics -> blank PDF capture. A
+    # fresh instance per tape matches the reliable single-tape path.
+    if [ "$TERMINAL_TYPE" = "kitty" ]; then
+        cleanup_kitty 2>/dev/null || true
+        sleep 0.5
+        check_kitty || { echo -e "${RED}Kitty relaunch failed for $tape_name${NC}"; continue; }
+    fi
 
     # Run the tape (|| true prevents set -e from exiting on tape errors)
     run_tape "$tape_file" "$BINARY" "$TEST_PDF" "$tape_screenshots_dir" || true
 
     # Get screenshots that were taken (parse from tape file)
-    screenshots=($(grep '^screenshot' "$tape_file" | awk '{print $2}'))
+    screenshots=($(tape_screenshot_names "$tape_file"))
 
     if [ ${#screenshots[@]} -eq 0 ]; then
         echo -e "${YELLOW}No screenshots in tape: $tape_name${NC}"
@@ -355,17 +439,23 @@ for tape_file in "${tapes_to_run[@]}"; do
         update_golden_snapshots "$tape_screenshots_dir" "$tape_golden_dir" "${screenshots[@]}"
         echo -e "${GREEN}✓ Golden snapshots updated for $tape_name${NC}"
     else
-        # Generate report and compare
-        echo ""
-        echo "Generating report..."
-        if generate_report "$tape_name" "$tape_golden_dir" "$tape_screenshots_dir" "$tape_report" "${screenshots[@]}"; then
-            total_passed=$((total_passed + 1))
-        else
-            total_failed=$((total_failed + 1))
-        fi
-        reports_generated+=("$tape_report")
+        ran_tapes+=("$tape_name")
     fi
 done
+
+# One aggregate report for all tapes (grouped by scenario, images by path).
+if ! $UPDATE_MODE && [ ${#ran_tapes[@]} -gt 0 ]; then
+    echo ""
+    echo "Generating aggregate report..."
+    aggregate_report="$REPORTS_DIR/${TERMINAL_TYPE}_report.html"
+    if generate_aggregate_report "$TERMINAL_TYPE" "$aggregate_report" \
+        "$GOLDEN_DIR" "$SCREENSHOTS_DIR" "$TAPES_DIR" "${ran_tapes[@]}"; then
+        total_passed=${#ran_tapes[@]}
+    else
+        total_failed=1
+    fi
+    reports_generated+=("$aggregate_report")
+fi
 
 # Measure memory after tests
 MEMORY_AFTER=$(get_anonymous_pages)

@@ -157,6 +157,7 @@ mod tests {
             page_num: page,
             scale_factor: 1.0,
             requested_scale: 1.0,
+            achieved_scale: 1.0,
             render_area_width_cells: 100,
             render_area_height_cells: 50,
             line_bounds: vec![],
