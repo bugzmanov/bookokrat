@@ -438,6 +438,9 @@ binding_tests! {
     content_c: KeyContext::EpubContent, "c",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| !app.text_reader().has_text_selection(); // still no selection
+    content_h_upper: KeyContext::EpubContent, "H",
+        setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
+        check = |app| !app.is_highlight_palette_active();
     content_ctrl_i: KeyContext::EpubContent, "<C-i>",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)); // no jump history, stays

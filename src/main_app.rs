@@ -2615,6 +2615,8 @@ impl App {
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                self.clear_highlight_palette();
+
                 if self.handle_help_bar_click(mouse_event.column, mouse_event.row) {
                     return;
                 }
@@ -3469,10 +3471,6 @@ impl App {
 
     pub fn is_normal_mode(&self) -> bool {
         self.text_reader.is_normal_mode_active()
-    }
-
-    pub fn is_highlight_palette_active(&self) -> bool {
-        self.highlight_palette_active()
     }
 
     pub fn current_chapter(&self) -> Option<usize> {
@@ -4348,13 +4346,15 @@ impl App {
         }
     }
 
-    fn highlight_palette_active(&self) -> bool {
+    pub fn is_highlight_palette_active(&self) -> bool {
         self.pending_highlight_palette
-            && (self.text_reader.is_visual_mode_active() || self.highlight_palette_target.is_some())
+            && (self.text_reader.is_visual_mode_active()
+                || self.text_reader.has_text_selection()
+                || self.highlight_palette_target.is_some())
     }
 
     fn render_highlight_palette(&self, f: &mut ratatui::Frame) {
-        if !self.highlight_palette_active() {
+        if !self.is_highlight_palette_active() {
             return;
         }
 
@@ -5584,6 +5584,23 @@ impl App {
         self.highlight_palette_target = None;
     }
 
+    fn open_highlight_palette(&mut self) {
+        self.text_reader.clear_count();
+        let existing = self.text_reader.highlight_for_palette();
+        if self.text_reader.is_visual_mode_active() || self.text_reader.has_text_selection() {
+            self.highlight_palette_target = existing;
+            self.pending_highlight_palette = true;
+            self.show_highlight_palette_hud();
+        } else if existing.is_some() {
+            self.highlight_palette_target = existing;
+            self.pending_highlight_palette = true;
+            self.show_highlight_palette_hud();
+        } else {
+            self.text_reader
+                .set_error_hud("Select text, or place the cursor on a highlight, then press H");
+        }
+    }
+
     fn handle_highlight_palette_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         if !self.pending_highlight_palette {
             return false;
@@ -5600,20 +5617,21 @@ impl App {
             HighlightPaletteAction::Apply(color) => {
                 let target = self.highlight_palette_target.take();
                 self.clear_highlight_palette();
-                let visual = self.text_reader.is_visual_mode_active();
+                let has_selection = self.text_reader.is_visual_mode_active()
+                    || self.text_reader.has_text_selection();
                 match target {
                     // Re-picking the highlight's own color clears it (toggle off).
                     Some((id, existing)) if existing == color => {
                         self.text_reader.remove_highlight_by_id(&id);
                     }
-                    // In visual mode, recolor means "replace": drop the
+                    // With a selection, recolor means "replace": drop the
                     // existing highlight and create a new one covering the
                     // user's current selection range. Without this the user's
                     // selection range silently doesn't apply and only the old
                     // highlight changes color.
-                    Some((id, _)) if visual => {
+                    Some((id, _)) if has_selection => {
                         self.text_reader.delete_comment_by_id(&id);
-                        self.text_reader.add_highlight_from_visual_selection(color);
+                        self.text_reader.add_highlight_from_selection(color);
                     }
                     // Cursor sits inside a highlight (no selection): change
                     // color in place.
@@ -5621,7 +5639,7 @@ impl App {
                         self.text_reader.recolor_highlight(&id, color);
                     }
                     None => {
-                        self.text_reader.add_highlight_from_visual_selection(color);
+                        self.text_reader.add_highlight_from_selection(color);
                     }
                 }
                 self.text_reader.clear_count();
@@ -5817,25 +5835,7 @@ impl App {
                 true
             }
             Action::OpenHighlightPalette => {
-                self.text_reader.clear_count();
-                let existing = self.text_reader.highlight_for_palette();
-                if self.text_reader.is_visual_mode_active() {
-                    // In visual mode the palette acts on the selection: create a
-                    // new highlight, or recolor/remove one the selection overlaps.
-                    self.highlight_palette_target = existing;
-                    self.pending_highlight_palette = true;
-                    self.show_highlight_palette_hud();
-                } else if existing.is_some() {
-                    // No selection, but the cursor sits inside a highlight:
-                    // open the palette to recolor or remove it.
-                    self.highlight_palette_target = existing;
-                    self.pending_highlight_palette = true;
-                    self.show_highlight_palette_hud();
-                } else {
-                    self.text_reader.set_error_hud(
-                        "Select text, or place the cursor on a highlight, then press H",
-                    );
-                }
+                self.open_highlight_palette();
                 true
             }
             _ => false,
@@ -5948,6 +5948,9 @@ impl App {
                 {
                     debug!("Started comment input mode");
                 }
+            }
+            Action::OpenHighlightPalette => {
+                self.open_highlight_palette();
             }
             Action::CopySelection => {
                 if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
@@ -6853,6 +6856,10 @@ impl App {
                 }
                 _ => {}
             }
+        }
+
+        if self.handle_highlight_palette_key(&key) {
+            return None;
         }
 
         // Keymap-based dispatch for EpubContent context

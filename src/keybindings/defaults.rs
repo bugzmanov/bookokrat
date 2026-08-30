@@ -194,6 +194,7 @@ fn content_specifics(keymap: &mut Keymap) {
     bind!(ctx, "v" => Action::EnterVisualMode);
     bind!(ctx, "V" => Action::EnterVisualLineMode);
     bind!(ctx, "y" => Action::StartYank);
+    bind!(ctx, "H" => Action::OpenHighlightPalette);
     bind!(ctx, "q" => Action::Quit);
     bind!(ctx, "<CR>" => Action::FollowLink);
     bind!(ctx, "ss" => Action::ToggleRawHtml);
@@ -489,6 +490,15 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::EpubNormal, "E"),
             LookupResult::Found(Action::WordEnd)
+        );
+    }
+
+    #[test]
+    fn content_highlight_palette_binding() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::EpubContent, "H"),
+            LookupResult::Found(Action::OpenHighlightPalette)
         );
     }
 

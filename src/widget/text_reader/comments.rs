@@ -277,26 +277,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         comments.has_overlapping_annotation(chapter_file, target)
     }
 
-    pub fn add_highlight_from_visual_selection(&mut self, color: HighlightColor) -> bool {
-        if !self.is_visual_mode_active() {
+    pub fn add_highlight_from_selection(&mut self, color: HighlightColor) -> bool {
+        let range = if let Some((start, end)) = self.text_selection.get_selection_range() {
+            Some((start, end))
+        } else if self.is_visual_mode_active() {
+            self.get_visual_selection_range()
+                .map(|(start_line, start_col, end_line, end_col)| {
+                    (
+                        SelectionPoint {
+                            line: start_line,
+                            column: start_col,
+                        },
+                        SelectionPoint {
+                            line: end_line,
+                            column: end_col,
+                        },
+                    )
+                })
+        } else {
+            None
+        };
+        let Some((start, end)) = range else {
             self.set_error_hud("Select text first, then press H and a color");
             return false;
-        }
+        };
 
         let selected_text = self.get_selected_text();
-        let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
-        else {
-            self.set_error_hud("No visual selection");
-            return false;
-        };
-        let start = SelectionPoint {
-            line: start_line,
-            column: start_col,
-        };
-        let end = SelectionPoint {
-            line: end_line,
-            column: end_col,
-        };
         let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
 
         // One unified target: single-block selections produce a 1-slice
@@ -304,26 +310,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Either way the result is exactly one Comment in storage.
         let Some(target) = self.compute_selection_target(&norm_start, &norm_end) else {
             self.set_error_hud("This selection cannot be highlighted");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         let Some(chapter_file) = self.current_chapter_file.clone() else {
             self.set_error_hud("No chapter loaded");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         let Some(comments_arc) = self.book_comments.as_ref().cloned() else {
             self.set_error_hud("Annotations are unavailable");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         if let Ok(mut comments) = comments_arc.lock() {
             if comments.has_overlapping_annotation(&chapter_file, &target) {
                 self.set_error_hud("Selection overlaps an existing annotation");
-                self.exit_visual_mode();
+                self.clear_active_selection();
                 return false;
             }
 
@@ -337,20 +343,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Err(e) = comments.add_comment(highlight) {
                 warn!("Failed to add highlight: {e}");
                 self.set_error_hud(format!("Failed to add highlight: {e}"));
-                self.exit_visual_mode();
+                self.clear_active_selection();
                 return false;
             }
         } else {
             self.set_error_hud("Annotations are unavailable");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         }
 
         self.rebuild_chapter_comments();
-        self.exit_visual_mode();
+        self.clear_active_selection();
         self.cache_generation += 1;
         self.set_normal_hud(format!("{} highlight", color.label()));
         true
+    }
+
+    fn clear_active_selection(&mut self) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
     }
 
     fn init_comment_textarea(&mut self, target: CommentTarget, start_line: usize, end_line: usize) {
@@ -784,7 +797,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// For a range selection this re-uses [`compute_selection_target`] +
     /// [`BookComments::find_overlapping_highlight`] so that detection here can
     /// never disagree with the overlap check inside
-    /// [`add_highlight_from_visual_selection`]. For a bare cursor we fall back
+    /// [`add_highlight_from_selection`]. For a bare cursor we fall back
     /// to the canonical-position scan in [`highlight_hits_in_range`].
     pub fn highlight_for_palette(&self) -> Option<(String, HighlightColor)> {
         let (start_line, end_line, start, end) = self.cursor_selection_range()?;

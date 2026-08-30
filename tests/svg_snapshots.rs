@@ -75,6 +75,25 @@ fn selection_for_text(
     panic!("could not find selection text: {needle}");
 }
 
+fn screen_position_of(
+    terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+    needle: &str,
+) -> (u16, u16) {
+    let buffer = terminal.backend().buffer();
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        for x in 0..buffer.area.width {
+            row.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        if let Some(byte_idx) = row.find(needle) {
+            let col = row[..byte_idx].chars().count() as u16;
+            return (col, y);
+        }
+    }
+
+    panic!("could not find text on screen: {needle}");
+}
+
 /// Helper trait for simpler key event handling in tests
 trait TestKeyEventHandler {
     fn press_key(&mut self, key: crossterm::event::KeyCode);
@@ -4681,6 +4700,115 @@ fn test_epub_highlight_palette_modal_svg() {
         std::path::Path::new("tests/snapshots/epub_highlight_palette_modal.svg"),
         "test_epub_highlight_palette_modal_svg",
         create_test_failure_handler("test_epub_highlight_palette_modal_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_epub_highlight_palette_from_mouse_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_mouse_selection_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Highlight Mouse Selection Test</title>
+</head>
+<body>
+    <p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron.</p>
+    <p>Second paragraph keeps the modal over real reading content.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Mouse-select "beta gamma" by dragging across it on the first paragraph.
+    let (start_col, row) = screen_position_of(&terminal, "beta gamma");
+    let end_col = start_col + "beta gamma".chars().count() as u16 - 1;
+    let modifiers = crossterm::event::KeyModifiers::empty();
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: end_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: end_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+
+    assert!(
+        app.text_reader().has_text_selection(),
+        "mouse drag should produce a text selection"
+    );
+
+    // H must open the highlight palette for a mouse selection, just like it
+    // does for a visual-mode selection in normal mode.
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_palette_from_mouse_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert!(
+        app.is_highlight_palette_active(),
+        "pressing H with a mouse text selection should open the highlight palette"
+    );
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_palette_from_mouse_selection.svg"),
+        "test_epub_highlight_palette_from_mouse_selection_svg",
+        create_test_failure_handler("test_epub_highlight_palette_from_mouse_selection_svg"),
     );
 }
 
