@@ -246,6 +246,33 @@ impl EmbeddedImage {
         }
     }
 
+    pub fn height_in_viewport(
+        width: u32,
+        height: u32,
+        viewport_width: u16,
+        viewport_height: u16,
+        cell_width: u16,
+        cell_height: u16,
+    ) -> u16 {
+        if width == 0 || height == 0 || cell_width == 0 || cell_height == 0 {
+            return Self::height_in_cells(width, height);
+        }
+
+        let available_height = viewport_height.saturating_sub(2).max(1);
+        let preferred_height = match Self::height_in_cells(width, height) {
+            IMAGE_HEIGHT_REGULAR => available_height,
+            compact_height => compact_height,
+        };
+        let width_limited_height =
+            (u64::from(viewport_width) * u64::from(cell_width) * u64::from(height)
+                / (u64::from(width) * u64::from(cell_height)))
+            .clamp(1, u64::from(u16::MAX)) as u16;
+
+        preferred_height
+            .min(available_height)
+            .min(width_limited_height)
+    }
+
     pub fn failed_img(img_src: &str, error_msg: &str) -> EmbeddedImage {
         let height_cells = EmbeddedImage::height_in_cells(200, 200);
         EmbeddedImage {

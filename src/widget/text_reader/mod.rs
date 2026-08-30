@@ -13,6 +13,7 @@ pub use types::*;
 
 use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
+use crate::images::book_images::BookImages;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
@@ -21,7 +22,7 @@ use crate::terminal_overlay;
 use crate::theme::{Base16Palette, theme_background};
 use crate::types::LinkInfo;
 use crate::widget::hud_message::{HudMessage, HudMode};
-use image::{DynamicImage, GenericImageView};
+use image::GenericImageView;
 use log::{info, warn};
 use normal_mode::{CursorPosition, NormalModeState};
 use ratatui::{
@@ -166,6 +167,8 @@ pub struct MarkdownTextReader {
     last_rendered_image_rects: HashMap<String, Rect>,
     last_overlay_cleanup_key: Option<(usize, u64, u64, Rect)>,
     inline_images_suppressed: bool,
+    image_viewport: Option<(u16, u16)>,
+    image_source: Option<BookImages>,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -348,6 +351,8 @@ impl MarkdownTextReader {
             last_rendered_image_rects: HashMap::new(),
             last_overlay_cleanup_key: None,
             inline_images_suppressed: false,
+            image_viewport: None,
+            image_source: None,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             pending_node_highlight: None,
@@ -611,6 +616,8 @@ impl MarkdownTextReader {
                 None,
             )
         };
+
+        self.prepare_images_for_viewport(left_rect.width, left_rect.height);
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -1261,7 +1268,7 @@ impl MarkdownTextReader {
                 let page = start / page_height;
                 let rect = if page % 2 == 0 { left_rect } else { right_rect };
                 let page_offset = start % page_height;
-                let image_cells = calculate_image_height_in_cells(image) as usize;
+                let image_cells = embedded_image.height_cells as usize;
                 let page_remaining = page_height.saturating_sub(page_offset);
                 let image_end_vrow = start_vrow + image_cells.min(page_remaining);
                 let viewport_top = self.dual.vtop;
@@ -1350,8 +1357,6 @@ impl MarkdownTextReader {
                             .min(area_height - image_screen_start);
 
                         if visible_image_height > 0 {
-                            let image_height_cells = calculate_image_height_in_cells(scaled_image);
-
                             let (render_y, render_height) = if image_top_clipped > 0 {
                                 (
                                     col_rect.y,
@@ -1750,6 +1755,7 @@ impl MarkdownTextReader {
         self.last_rendered_image_rects.clear();
         self.last_overlay_cleanup_key = None;
         self.inline_images_suppressed = false;
+        self.image_source = None;
         self.dual.clear();
     }
 
@@ -1849,11 +1855,6 @@ impl MarkdownTextReader {
     pub fn request_overlay_cleanup_on_next_frame(&mut self) {
         self.last_overlay_cleanup_key = None;
     }
-}
-
-fn calculate_image_height_in_cells(image: &DynamicImage) -> u16 {
-    let (width, height) = image.dimensions();
-    EmbeddedImage::height_in_cells(width, height)
 }
 
 #[cfg(test)]
