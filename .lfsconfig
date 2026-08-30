@@ -1,0 +1,5 @@
+# Default clones skip downloading the VHS golden screenshots (~120MB) so
+# casual clones cost no LFS bandwidth. To work on VHS tests, fetch them with:
+#   git lfs pull --include="vhs_tests/golden"
+[lfs]
+	fetchexclude = vhs_tests/golden

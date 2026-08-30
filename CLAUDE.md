@@ -1368,6 +1368,8 @@ For most UI testing, use the SVG-based snapshot tests described above.
 
 ### Running VHS Tests
 
+**Golden screenshots live in Git LFS and are NOT downloaded by default clones** (`.lfsconfig` sets `lfs.fetchexclude = vhs_tests/golden` to save LFS bandwidth). Before running VHS comparisons on a fresh clone, fetch them: `git lfs pull --include="vhs_tests/golden"`. `run.sh` detects pointer stubs and refuses to compare against them.
+
 ```bash
 # Run ALL tapes (full test suite)
 ./vhs_tests/run.sh --terminal kitty

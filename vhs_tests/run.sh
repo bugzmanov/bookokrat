@@ -314,6 +314,20 @@ mkdir -p "$SCREENSHOTS_DIR"
 mkdir -p "$REPORTS_DIR"
 mkdir -p "$GOLDEN_DIR"
 
+# Default clones exclude the golden LFS objects (.lfsconfig fetchexclude), so
+# a fresh checkout has 3-line pointer stubs instead of PNGs. Comparing against
+# stubs would fail every tape with confusing diffs - catch it up front.
+# Update/accept modes overwrite goldens with fresh captures, so they're exempt.
+if ! $UPDATE_MODE && ! $ACCEPT_MODE; then
+    sample_golden=$(find "$GOLDEN_DIR" -name "*.png" -type f 2>/dev/null | head -1)
+    if [ -n "$sample_golden" ] && head -c 60 "$sample_golden" | grep -q "git-lfs"; then
+        echo -e "${RED}ERROR: golden snapshots are Git LFS pointer stubs, not images.${NC}"
+        echo "Fetch the real screenshots first:"
+        echo "  git lfs pull --include=\"vhs_tests/golden\""
+        exit 1
+    fi
+fi
+
 # A tape may declare `terminal <type>` to restrict itself to one terminal
 # (e.g. pdf_dual_wezterm only makes sense on wezterm, pdf_halfblocks_blocked
 # relies on the kitty launcher's appenv support). Returns 0 if the tape is
