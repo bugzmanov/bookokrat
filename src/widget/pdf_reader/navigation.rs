@@ -980,6 +980,23 @@ impl PdfReaderState {
                 self.normal_mode.move_word_end(&lb);
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
             }
+            // PDF word motions are already whitespace-delimited, so the
+            // big-word (WORD) actions share the same movement functions.
+            Action::BigWordForward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_forward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::BigWordBackward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_backward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::BigWordEnd => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_end(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
             Action::LineStart => {
                 self.normal_mode.move_line_start();
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
@@ -1979,18 +1996,6 @@ impl PdfReaderState {
         self.navigate_pages(-step)
     }
 
-    #[allow(dead_code)]
-    fn next_screen(&mut self) -> Option<InputAction> {
-        let pages = self.last_render.pages_shown.max(1) as isize;
-        self.navigate_pages(pages)
-    }
-
-    #[allow(dead_code)]
-    fn prev_screen(&mut self) -> Option<InputAction> {
-        let pages = self.last_render.pages_shown.max(1) as isize;
-        self.navigate_pages(-pages)
-    }
-
     fn navigate_pages(&mut self, delta: isize) -> Option<InputAction> {
         let old = self.page;
         let mut new_page = if delta >= 0 {
@@ -2098,21 +2103,6 @@ impl PdfReaderState {
     fn scroll_to_document_top(&mut self) -> Option<InputAction> {
         if let Some(z) = &mut self.zoom {
             z.scroll_to_top();
-        }
-        self.last_render.rect = Rect::default();
-        Some(InputAction::Redraw)
-    }
-
-    #[allow(dead_code)]
-    fn scroll_to_document_bottom(&mut self) -> Option<InputAction> {
-        let heights = self
-            .zoom
-            .as_ref()
-            .map(|z| self.page_heights_scaled(z.factor()))
-            .unwrap_or_default();
-        let bottom_offset = self.total_scroll_height(&heights).saturating_sub(1);
-        if let Some(z) = &mut self.zoom {
-            z.global_scroll_offset = bottom_offset;
         }
         self.last_render.rect = Rect::default();
         Some(InputAction::Redraw)
@@ -3237,30 +3227,6 @@ impl PdfReaderState {
                     zoom.global_scroll_offset = page_offset;
                 }
             }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
-        if page != self.page {
-            self.set_page(page);
-            return;
-        }
-
-        self.last_render.rect = Rect::default();
-        self.clear_pending_scroll();
-
-        if self.is_kitty {
-            self.clamp_kitty_scroll_offset();
-        } else {
-            let viewport_height = self.last_render.img_area_height;
-            let full_height = self
-                .rendered
-                .get(self.page)
-                .and_then(|r| r.full_cell_size.map(|size| size.height))
-                .unwrap_or(viewport_height);
-            let max_offset = u32::from(full_height.saturating_sub(viewport_height));
-            self.non_kitty_scroll_offset = self.non_kitty_scroll_offset.min(max_offset);
         }
     }
 
@@ -6048,10 +6014,6 @@ impl PdfReaderState {
 
     pub fn notify_error(&mut self, msg: impl Into<String>) {
         self.notifications.error(msg);
-    }
-
-    pub fn notify_info(&mut self, msg: impl Into<String>) {
-        self.notifications.info(msg);
     }
 
     pub fn get_selected_text(&self) -> Option<String> {

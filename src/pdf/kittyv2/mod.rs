@@ -71,11 +71,7 @@ pub use image::{Dimensions, Image, ImageId, ImageState, Transmission};
 pub use kgfx::{
     DeleteCommand, DirectTransmit, DisplayCommand, Format, Quiet, TransmitCommand, tracker,
 };
-pub use terminal_canvas::{
-    FrameHandle, FrameRegistry, FrameSpec, OperationBatch, PixelEncoder, RemovalTarget,
-    ResponseMode, ScreenPlacement, SubmissionError, SubmissionOutcome, TerminalCanvas,
-    TransferMode, probe_capabilities,
-};
+pub use terminal_canvas::{TransferMode, probe_capabilities};
 
 /// Z-index for PDF images. Negative values draw images below text but
 /// above the terminal background, allowing ratatui overlays (comments, HUD)

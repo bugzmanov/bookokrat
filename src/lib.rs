@@ -6,6 +6,7 @@ pub mod clipboard;
 pub mod color_mode;
 pub mod comments;
 pub mod config_migration;
+mod epub_analysis;
 pub mod export;
 pub use inputs::event_source;
 pub mod components;

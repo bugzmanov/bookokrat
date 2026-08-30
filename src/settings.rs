@@ -1057,13 +1057,6 @@ pub fn set_lookup_display(mode: LookupDisplay) {
     save_settings();
 }
 
-pub fn set_synctex_editor(cmd: Option<String>) {
-    if let Ok(mut s) = SETTINGS.write() {
-        s.synctex_editor = cmd;
-    }
-    save_settings();
-}
-
 pub fn set_integrations(
     lookup_command: Option<String>,
     lookup_display: LookupDisplay,

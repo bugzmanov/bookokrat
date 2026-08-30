@@ -41,14 +41,10 @@ enum CommentScope<'a> {
     Node,
     /// Top-level list items only (legacy list rendering).
     LegacyList,
-    /// A specific list item at the top level.
-    ListItem { item_index: usize },
     /// A specific list item at a nested path.
     ListItemPath(&'a [usize]),
     /// A definition list term/definition.
     DefinitionItem { item_index: usize, is_term: bool },
-    /// A specific paragraph inside a quote block.
-    QuoteParagraph { paragraph_index: usize },
 }
 
 /// Slice-level scope match. Each rendered block asks `does this slice
@@ -63,14 +59,6 @@ fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'
             &slice.subtarget,
             BlockSubtarget::ListItem { list_path, .. } if list_path.is_empty()
         ),
-        CommentScope::ListItem { item_index } => match &slice.subtarget {
-            BlockSubtarget::ListItem {
-                item_index: idx,
-                list_path,
-                ..
-            } => *idx == item_index && list_path.is_empty(),
-            _ => false,
-        },
         CommentScope::ListItemPath(path) => matches!(
             &slice.subtarget,
             BlockSubtarget::ListItem { list_path, .. } if list_path.as_slice() == path
@@ -85,13 +73,6 @@ fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'
                 is_term: term,
                 ..
             } if *idx == item_index && *term == is_term
-        ),
-        CommentScope::QuoteParagraph { paragraph_index } => matches!(
-            &slice.subtarget,
-            BlockSubtarget::QuoteParagraph {
-                paragraph_index: idx,
-                ..
-            } if *idx == paragraph_index
         ),
     }
 }
@@ -1040,16 +1021,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         Ok(true)
     }
 
-    pub fn delete_comment_by_location(&mut self, chapter_href: &str, target: &CommentTarget) {
-        if let Some(comments_arc) = &self.book_comments {
-            if let Ok(mut comments) = comments_arc.lock() {
-                let _ = comments.delete_comment(chapter_href, target);
-            }
-        }
-        self.rebuild_chapter_comments();
-        self.cache_generation += 1;
-    }
-
     pub fn delete_comment_by_id(&mut self, comment_id: &str) {
         if let Some(comments_arc) = &self.book_comments {
             if let Ok(mut comments) = comments_arc.lock() {
@@ -1181,30 +1152,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         )
     }
 
-    pub fn get_annotation_ranges_for_list_item(
-        &self,
-        block_address: Option<&BlockAddress>,
-        item_index: usize,
-    ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::ListItem { item_index },
-            slice_annotation_range,
-        )
-    }
-
-    pub fn get_highlight_ranges_for_list_item(
-        &self,
-        block_address: Option<&BlockAddress>,
-        item_index: usize,
-    ) -> Vec<HighlightRange> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::ListItem { item_index },
-            slice_highlight_range,
-        )
-    }
-
     pub fn get_annotation_ranges_for_list_item_path(
         &self,
         block_address: Option<&BlockAddress>,
@@ -1257,30 +1204,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_index,
                 is_term,
             },
-            slice_highlight_range,
-        )
-    }
-
-    pub fn get_annotation_ranges_for_quote_paragraph(
-        &self,
-        block_address: Option<&BlockAddress>,
-        paragraph_index: usize,
-    ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::QuoteParagraph { paragraph_index },
-            slice_annotation_range,
-        )
-    }
-
-    pub fn get_highlight_ranges_for_quote_paragraph(
-        &self,
-        block_address: Option<&BlockAddress>,
-        paragraph_index: usize,
-    ) -> Vec<HighlightRange> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::QuoteParagraph { paragraph_index },
             slice_highlight_range,
         )
     }

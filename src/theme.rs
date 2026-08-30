@@ -226,17 +226,6 @@ pub fn get_theme_index_by_name(name: &str) -> Option<usize> {
     None
 }
 
-/// Set theme by name and save to settings
-pub fn set_theme_by_name(name: &str) -> bool {
-    if let Some(index) = get_theme_index_by_name(name) {
-        CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
-        settings::set_theme_name(name);
-        true
-    } else {
-        false
-    }
-}
-
 /// Set theme by index and save to settings
 pub fn set_theme_by_index_and_save(index: usize) {
     if index < theme_count() {

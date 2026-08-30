@@ -193,14 +193,6 @@ pub enum RichSpan {
 }
 
 impl RichSpan {
-    /// Extract the underlying ratatui Span
-    pub fn into_span(self) -> Span<'static> {
-        match self {
-            RichSpan::Text(span) => span,
-            RichSpan::Link { span, .. } => span,
-        }
-    }
-
     /// Get link info if this is a link
     pub fn link_info(&self) -> Option<&LinkInfo> {
         match self {

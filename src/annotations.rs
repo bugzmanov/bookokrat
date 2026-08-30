@@ -92,11 +92,6 @@ pub fn highlight_accent_rgb(color: HighlightColor, palette: &Base16Palette) -> R
     RgbColor::new(r, g, b)
 }
 
-pub fn comment_accent_rgb(palette: &Base16Palette) -> RgbColor {
-    let (r, g, b) = color_to_rgb(palette.base_0e).unwrap_or((0xc5, 0x94, 0xc5));
-    RgbColor::new(r, g, b)
-}
-
 pub fn pdf_highlight_rgb(
     color: HighlightColor,
     palette: &Base16Palette,

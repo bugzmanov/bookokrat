@@ -368,7 +368,6 @@ dependencies = [
  "flate2",
  "flume",
  "html5ever",
- "human-panic",
  "icy_sixel",
  "image",
  "imagesize",
@@ -1540,22 +1539,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "human-panic"
-version = "2.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac63a746b187e95d51fe16850eb04d1cfef203f6af98e6c405a6f262ad3df00a"
-dependencies = [
- "anstream",
- "anstyle",
- "backtrace",
- "os_info",
- "serde",
- "serde_derive",
- "toml 0.9.5",
- "uuid",
-]
-
-[[package]]
 name = "iana-time-zone"
 version = "0.1.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2417,18 +2400,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "os_info"
-version = "3.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0e1ac5fde8d43c34139135df8ea9ee9465394b2d8d20f032d38998f64afffc3"
-dependencies = [
- "log",
- "plist",
- "serde",
- "windows-sys 0.52.0",
-]
-
-[[package]]
 name = "os_pipe"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2633,19 +2604,6 @@ name = "pkg-config"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
-
-[[package]]
-name = "plist"
-version = "1.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3af6b589e163c5a788fab00ce0c0366f6efbb9959c2f9874b224936af7fce7e1"
-dependencies = [
- "base64",
- "indexmap",
- "quick-xml 0.38.4",
- "serde",
- "time",
-]
 
 [[package]]
 name = "png"
@@ -4634,15 +4592,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "677d2418bec65e3338edb076e806bc1ec15693c5d0104683f2efe857f61056a9"
 dependencies = [
  "windows-targets 0.48.5",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets 0.52.6",
 ]
 
 [[package]]

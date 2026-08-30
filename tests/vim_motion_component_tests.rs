@@ -9,7 +9,6 @@ use bookokrat::theme::Base16Palette;
 mod snapshot_assertions;
 mod svg_generation;
 mod test_report;
-mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
 use std::sync::Once;
 use svg_generation::terminal_to_svg;
@@ -28,7 +27,7 @@ fn create_test_failure_handler(
 ) -> impl FnOnce(String, String, String, usize, usize, usize, Option<usize>) + '_ {
     move |expected,
           actual,
-          snapshot_path,
+          _snapshot_path,
           expected_lines,
           actual_lines,
           diff_count,
@@ -43,7 +42,6 @@ fn create_test_failure_handler(
                 diff_count,
                 first_diff_line,
             },
-            snapshot_path,
         });
     }
 }

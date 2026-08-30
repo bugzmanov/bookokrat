@@ -19,7 +19,6 @@ use tempfile::TempDir;
 mod snapshot_assertions;
 mod svg_generation;
 mod test_report;
-mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
 use svg_generation::terminal_to_svg;
 
@@ -141,7 +140,7 @@ fn create_test_failure_handler(
 ) -> impl FnOnce(String, String, String, usize, usize, usize, Option<usize>) + '_ {
     move |expected,
           actual,
-          snapshot_path,
+          _snapshot_path,
           expected_lines,
           actual_lines,
           diff_count,
@@ -156,7 +155,6 @@ fn create_test_failure_handler(
                 diff_count,
                 first_diff_line,
             },
-            snapshot_path,
         });
     }
 }
@@ -1062,7 +1060,7 @@ fn test_content_scrolling_svg() {
         "test_content_scrolling_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1078,7 +1076,6 @@ fn test_content_scrolling_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1199,7 +1196,7 @@ fn test_chapter_title_normal_length_svg() {
         "test_chapter_title_normal_length_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1215,7 +1212,6 @@ fn test_chapter_title_normal_length_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1257,7 +1253,7 @@ fn test_chapter_title_narrow_terminal_svg() {
         "test_chapter_title_narrow_terminal_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1273,7 +1269,6 @@ fn test_chapter_title_narrow_terminal_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1321,7 +1316,7 @@ fn test_mouse_scroll_file_list_svg() {
         "test_mouse_scroll_file_list_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1336,7 +1331,6 @@ fn test_mouse_scroll_file_list_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1387,7 +1381,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
         "test_mouse_scroll_bounds_checking_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1402,7 +1396,6 @@ fn test_mouse_scroll_bounds_checking_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1478,7 +1471,7 @@ fn test_mouse_event_batching_svg() {
         "test_mouse_event_batching_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1493,7 +1486,6 @@ fn test_mouse_event_batching_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1606,7 +1598,7 @@ fn test_horizontal_scroll_handling_svg() {
         "test_horizontal_scroll_handling_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1621,7 +1613,6 @@ fn test_horizontal_scroll_handling_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1703,7 +1694,7 @@ fn test_edge_case_mouse_coordinates_svg() {
         "test_edge_case_mouse_coordinates_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1718,7 +1709,6 @@ fn test_edge_case_mouse_coordinates_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1788,7 +1778,7 @@ fn test_text_selection_svg() {
         "test_text_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1803,7 +1793,6 @@ fn test_text_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1877,7 +1866,7 @@ fn test_text_selection_with_auto_scroll_svg() {
         "test_text_selection_with_auto_scroll_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1892,7 +1881,6 @@ fn test_text_selection_with_auto_scroll_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1991,7 +1979,7 @@ fn test_continuous_auto_scroll_down_svg() {
         "test_continuous_auto_scroll_down_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2006,7 +1994,6 @@ fn test_continuous_auto_scroll_down_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2111,7 +2098,7 @@ fn test_continuous_auto_scroll_up_svg() {
         "test_continuous_auto_scroll_up_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2126,7 +2113,6 @@ fn test_continuous_auto_scroll_up_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2236,7 +2222,7 @@ fn test_timer_based_auto_scroll_svg() {
         "test_timer_based_auto_scroll_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2251,7 +2237,6 @@ fn test_timer_based_auto_scroll_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2350,7 +2335,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         "test_auto_scroll_stops_when_cursor_returns_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2365,7 +2350,6 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2447,7 +2431,7 @@ fn test_double_click_word_selection_svg() {
         "test_double_click_word_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2462,7 +2446,6 @@ fn test_double_click_word_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2560,7 +2543,7 @@ fn test_triple_click_paragraph_selection_svg() {
         "test_triple_click_paragraph_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2575,7 +2558,6 @@ fn test_triple_click_paragraph_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2646,7 +2628,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         "test_text_selection_click_on_book_text_bug_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2661,7 +2643,6 @@ fn test_text_selection_click_on_book_text_bug_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2714,7 +2695,7 @@ fn test_toc_navigation_bug_svg() {
         "test_toc_navigation_bug_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2729,7 +2710,6 @@ fn test_toc_navigation_bug_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -3095,7 +3075,7 @@ fn test_book_reading_history_with_many_entries_svg() {
         "test_book_reading_history_with_many_entries_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -3110,7 +3090,6 @@ fn test_book_reading_history_with_many_entries_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -7451,5 +7430,367 @@ fn test_pdf_enhance_capped_hud_svg() {
         std::path::Path::new("tests/snapshots/pdf_enhance_capped_hud.svg"),
         "test_pdf_enhance_capped_hud_svg",
         create_test_failure_handler("test_pdf_enhance_capped_hud_svg"),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Book-wide search (Space+F / Space+f), popup rendering coverage:
+// book stats, reading history entries, comments viewer actions,
+// keybinding errors popup, lookup popup.
+// ---------------------------------------------------------------------------
+
+fn create_book_search_test_app() -> (App, bookokrat::test_utils::test_helpers::TempBookManager) {
+    let book_configs = vec![FakeBookConfig {
+        title: "Search Target Book".to_string(),
+        chapter_count: 12,
+        words_per_chapter: 120,
+    }];
+    let (mut app, temp_manager) = create_test_app_with_custom_fake_books(&book_configs);
+    app.press_key(crossterm::event::KeyCode::Enter); // open the only book
+    (app, temp_manager)
+}
+
+fn type_chars(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+}
+
+fn draw_and_snapshot(
+    terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+    app: &mut App,
+    name: &str,
+    test_name: &'static str,
+) {
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(format!("tests/snapshots/debug_{name}.svg"), &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new(&format!("tests/snapshots/{name}.svg")),
+        test_name,
+        create_test_failure_handler(test_name),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_input_empty_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_input_empty",
+        "test_book_search_input_empty_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_results_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    // Enter executes the search synchronously (bypasses the 200ms debounce)
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_results",
+        "test_book_search_results_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_result_jump_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    app.press_key(crossterm::event::KeyCode::Enter); // execute search, focus results
+    app.press_key(crossterm::event::KeyCode::Char('j')); // select second result
+    app.press_key(crossterm::event::KeyCode::Enter); // jump to it
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_result_jump",
+        "test_book_search_result_jump_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_reopen_cached_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    app.press_key(crossterm::event::KeyCode::Enter);
+    app.press_key(crossterm::event::KeyCode::Enter); // jump to first result, popup closes
+
+    // Space+f reopens the search with cached results
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('f'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_reopen_cached",
+        "test_book_search_reopen_cached_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_stats_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    // Draw once so the app knows the terminal size before computing stats
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_stats_popup",
+        "test_book_stats_popup_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_reading_history_navigation_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let book_configs: Vec<FakeBookConfig> = (0..6)
+        .map(|i| FakeBookConfig {
+            title: format!("History Book {}", i + 1),
+            chapter_count: 5,
+            words_per_chapter: 80,
+        })
+        .collect();
+    let temp_manager =
+        bookokrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
+            .expect("Failed to create temp books");
+
+    // Craft a bookmarks file with fixed timestamps so the history rows are
+    // deterministic (update_bookmark() would stamp the current time).
+    let bookmarks_dir = tempfile::tempdir().unwrap();
+    let bookmark_path = bookmarks_dir.path().join("bookmarks.json");
+    let mut books = serde_json::Map::new();
+    for (i, path) in temp_manager.get_book_paths().iter().enumerate() {
+        books.insert(
+            path.clone(),
+            serde_json::json!({
+                "chapter_href": "chapter1.xhtml",
+                "last_read": format!("2024-03-{:02}T12:00:00Z", 10 - i),
+                "chapter_index": 1,
+                "total_chapters": 5,
+                "book_progress": 0.15 * (i as f32 + 1.0),
+                "book_title": format!("History Book {}", i + 1),
+            }),
+        );
+    }
+    let root = serde_json::json!({ "books": books });
+    std::fs::write(&bookmark_path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(&temp_manager.get_directory()),
+        Some(&bookmark_path.to_string_lossy()),
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('h'));
+    // Move the selection to the third entry
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "reading_history_navigation",
+        "test_reading_history_navigation_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_comments_viewer_jump_to_comment_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+
+    // Select the second comment and jump to it in the reader
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "comments_viewer_jump_to_comment",
+        "test_comments_viewer_jump_to_comment_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_comments_viewer_delete_comment_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+
+    // Delete the first comment with dd; the viewer stays open with the rest
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "comments_viewer_delete_comment",
+        "test_comments_viewer_delete_comment_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_keybinding_errors_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    app.open_keybinding_errors_popup(vec![
+        bookokrat::keybindings::config::LoadError {
+            line: Some(3),
+            message: "unknown action 'scroll_dwn' for key 'j'".to_string(),
+        },
+        bookokrat::keybindings::config::LoadError {
+            line: Some(17),
+            message: "invalid key notation '<Ctl-x>'".to_string(),
+        },
+        bookokrat::keybindings::config::LoadError {
+            line: None,
+            message: "unknown context 'pddf'".to_string(),
+        },
+    ]);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "keybinding_errors_popup",
+        "test_keybinding_errors_popup_svg",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn test_lookup_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Select a single line of text with the mouse
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 31,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 60,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 60,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+
+    // The selected text lands inside single quotes of a no-op, so the popup
+    // body only ever shows the fixed printf output.
+    bookokrat::settings::set_lookup_command(Some(
+        "true '{}' ; printf 'noun: classical placeholder text, in use since the 1500s'".to_string(),
+    ));
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('l'));
+
+    bookokrat::settings::set_lookup_command(None);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "lookup_popup",
+        "test_lookup_popup_svg",
     );
 }

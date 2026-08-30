@@ -148,15 +148,9 @@ fn normalize_title_whitespace(text: &str) -> String {
 #[derive(Debug, Clone)]
 enum ContentCollectionMode {
     /// Collect as flat text (for headings, simple content)
-    FlatText {
-        #[allow(dead_code)]
-        in_table: bool,
-    },
+    FlatText,
     /// Collect as structured blocks (for complex content with math)
-    StructuredBlocks {
-        #[allow(dead_code)]
-        in_table: bool,
-    },
+    StructuredBlocks,
 }
 
 /// Result of content collection
@@ -329,12 +323,12 @@ impl HtmlToMarkdownConverter {
         context: ProcessingContext,
     ) -> ContentResult {
         match mode {
-            ContentCollectionMode::FlatText { .. } => {
+            ContentCollectionMode::FlatText => {
                 let mut text = Text::default();
                 self.collect_as_text(node, &mut text, context);
                 ContentResult::Text(text)
             }
-            ContentCollectionMode::StructuredBlocks { .. } => {
+            ContentCollectionMode::StructuredBlocks => {
                 let mut blocks = Vec::new();
                 let mut current_text = Text::default();
                 self.collect_as_blocks(node, &mut blocks, &mut current_text, context);
@@ -362,7 +356,7 @@ impl HtmlToMarkdownConverter {
         let math_html = self.serialize_node_to_html(node);
         match mathml_to_ascii(&math_html, true) {
             Ok(ascii_math) => match mode {
-                ContentCollectionMode::StructuredBlocks { .. } if ascii_math.contains('\n') => {
+                ContentCollectionMode::StructuredBlocks if ascii_math.contains('\n') => {
                     MathContent::Block(ascii_math)
                 }
                 _ => MathContent::Inline(ascii_math),
@@ -2139,7 +2133,7 @@ impl HtmlToMarkdownConverter {
     }
 
     fn extract_formatted_content(&self, node: &Rc<markup5ever_rcdom::Node>) -> Text {
-        let mode = ContentCollectionMode::FlatText { in_table: false };
+        let mode = ContentCollectionMode::FlatText;
         let context = ProcessingContext {
             in_table: false,
             current_style: None,
@@ -2153,7 +2147,7 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         in_table: bool,
     ) -> Text {
-        let mode = ContentCollectionMode::FlatText { in_table };
+        let mode = ContentCollectionMode::FlatText;
         let context = ProcessingContext {
             in_table,
             current_style: None,
@@ -2167,7 +2161,7 @@ impl HtmlToMarkdownConverter {
         node: &Rc<markup5ever_rcdom::Node>,
         in_table: bool,
     ) -> Vec<Node> {
-        let mode = ContentCollectionMode::StructuredBlocks { in_table };
+        let mode = ContentCollectionMode::StructuredBlocks;
         let context = ProcessingContext {
             in_table,
             current_style: None,
@@ -2317,9 +2311,7 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "math" => {
-                let mode = ContentCollectionMode::FlatText {
-                    in_table: context.in_table,
-                };
+                let mode = ContentCollectionMode::FlatText;
                 match self.handle_math_element(node, &mode) {
                     MathContent::Inline(math_text) | MathContent::Block(math_text) => {
                         text.push_text(TextNode::new(math_text, None));
@@ -2422,9 +2414,7 @@ impl HtmlToMarkdownConverter {
                 }
             }
             "math" => {
-                let mode = ContentCollectionMode::StructuredBlocks {
-                    in_table: context.in_table,
-                };
+                let mode = ContentCollectionMode::StructuredBlocks;
                 match self.handle_math_element(node, &mode) {
                     MathContent::Block(math_text) => {
                         if !current_text.is_empty() {

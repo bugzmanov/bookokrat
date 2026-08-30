@@ -205,13 +205,6 @@ impl MockSystemCommandExecutor {
         }
     }
 
-    pub fn new_with_failure() -> Self {
-        Self {
-            executed_commands: std::cell::RefCell::new(Vec::new()),
-            should_fail: true,
-        }
-    }
-
     pub fn get_executed_commands(&self) -> Vec<String> {
         self.executed_commands.borrow().clone()
     }

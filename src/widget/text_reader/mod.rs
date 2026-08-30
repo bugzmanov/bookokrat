@@ -1731,13 +1731,21 @@ impl MarkdownTextReader {
         content_raw_html: &str,
         chapter_title: Option<String>,
     ) {
-        self.clear_content();
-
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = Arc::new(converter.convert(content_raw_html));
 
-        self.markdown_document = Some(doc);
+        self.set_content_from_document(doc, chapter_title);
+    }
+
+    pub(crate) fn set_content_from_document(
+        &mut self,
+        document: Arc<Document>,
+        chapter_title: Option<String>,
+    ) {
+        self.clear_content();
+
+        self.markdown_document = Some(document);
         self.chapter_title = chapter_title;
 
         // Mark cached render as stale so next draw rebuilds it

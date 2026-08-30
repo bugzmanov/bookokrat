@@ -60,7 +60,6 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 textwrap = "0.16"
 better-panic = "0.3"
-human-panic = "2.0"
 libc = "0.2"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"], optional = true }
 

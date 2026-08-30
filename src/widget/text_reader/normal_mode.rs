@@ -205,10 +205,6 @@ impl MarkdownTextReader {
         }
     }
 
-    pub fn get_count(&self) -> usize {
-        self.normal_mode.count.unwrap_or(1)
-    }
-
     pub fn take_count(&mut self) -> usize {
         self.normal_mode.count.take().unwrap_or(1)
     }
@@ -317,6 +313,66 @@ impl MarkdownTextReader {
         }
         let (mut new_line, new_col) =
             self.find_prev_word_start(self.normal_mode.cursor.line, self.normal_mode.cursor.column);
+        // Skip image lines
+        if self.is_image_line(new_line) {
+            new_line = self.find_next_valid_line(new_line, -1);
+        }
+        self.normal_mode.cursor.line = new_line;
+        self.normal_mode.cursor.column = if self.is_image_line(new_line) {
+            0
+        } else {
+            new_col
+        };
+        self.clamp_column_to_line_length();
+        self.ensure_cursor_visible();
+    }
+
+    pub fn normal_mode_big_word_forward(&mut self) {
+        if !self.normal_mode.active {
+            return;
+        }
+        let (mut new_line, new_col) = self
+            .find_next_big_word_start(self.normal_mode.cursor.line, self.normal_mode.cursor.column);
+        // Skip image lines
+        if self.is_image_line(new_line) {
+            new_line = self.find_next_valid_line(new_line, 1);
+        }
+        self.normal_mode.cursor.line = new_line;
+        self.normal_mode.cursor.column = if self.is_image_line(new_line) {
+            0
+        } else {
+            new_col
+        };
+        self.clamp_column_to_line_length();
+        self.ensure_cursor_visible();
+    }
+
+    pub fn normal_mode_big_word_end(&mut self) {
+        if !self.normal_mode.active {
+            return;
+        }
+        let (mut new_line, new_col) =
+            self.find_big_word_end(self.normal_mode.cursor.line, self.normal_mode.cursor.column);
+        // Skip image lines
+        if self.is_image_line(new_line) {
+            new_line = self.find_next_valid_line(new_line, 1);
+        }
+        self.normal_mode.cursor.line = new_line;
+        self.normal_mode.cursor.column = if self.is_image_line(new_line) {
+            0
+        } else {
+            new_col
+        };
+        self.clamp_column_to_line_length();
+        self.ensure_cursor_visible();
+    }
+
+    pub fn normal_mode_big_word_backward(&mut self) {
+        if !self.normal_mode.active {
+            return;
+        }
+        let (mut new_line, new_col) = self
+            .find_prev_big_word_start(self.normal_mode.cursor.line, self.normal_mode.cursor.column);
         // Skip image lines
         if self.is_image_line(new_line) {
             new_line = self.find_next_valid_line(new_line, -1);
@@ -983,15 +1039,115 @@ impl MarkdownTextReader {
         )
     }
 
-    pub fn normal_mode_big_word_forward(&mut self) {
-        if !self.normal_mode.active {
-            return;
+    fn find_big_word_end(&self, line: usize, col: usize) -> (usize, usize) {
+        let mut current_line = line;
+        let mut current_col = col + 1;
+        let total_lines = self.raw_text_lines.len();
+
+        while current_line < total_lines {
+            let chars: Vec<char> = self
+                .raw_text_lines
+                .get(current_line)
+                .map(|s| s.chars().collect())
+                .unwrap_or_default();
+
+            // Skip leading whitespace
+            while current_col < chars.len() && chars[current_col].is_whitespace() {
+                current_col += 1;
+            }
+
+            // Find end of WORD
+            while current_col < chars.len() {
+                if current_col + 1 >= chars.len() || chars[current_col + 1].is_whitespace() {
+                    return (current_line, current_col);
+                }
+                current_col += 1;
+            }
+
+            current_line += 1;
+            current_col = 0;
         }
-        let (new_line, new_col) = self
-            .find_next_big_word_start(self.normal_mode.cursor.line, self.normal_mode.cursor.column);
-        self.normal_mode.cursor.line = new_line;
-        self.normal_mode.cursor.column = new_col;
-        self.ensure_cursor_visible();
+
+        let last_line = total_lines.saturating_sub(1);
+        (
+            last_line,
+            self.get_line_char_count(last_line).saturating_sub(1),
+        )
+    }
+
+    fn find_prev_big_word_start(&self, line: usize, col: usize) -> (usize, usize) {
+        let mut current_line = line;
+        let mut current_col = col;
+
+        // If at column 0, must go to previous line
+        if current_col == 0 {
+            if current_line == 0 {
+                return (0, 0);
+            }
+            current_line -= 1;
+            current_col = self.get_line_char_count(current_line);
+        } else {
+            current_col -= 1;
+        }
+
+        loop {
+            let chars: Vec<char> = self
+                .raw_text_lines
+                .get(current_line)
+                .map(|s| s.chars().collect())
+                .unwrap_or_default();
+
+            // If line is empty, go to previous line
+            if chars.is_empty() {
+                if current_line == 0 {
+                    return (0, 0);
+                }
+                current_line -= 1;
+                current_col = self.get_line_char_count(current_line);
+                continue;
+            }
+
+            // Clamp column to valid range
+            current_col = current_col.min(chars.len().saturating_sub(1));
+
+            // Skip whitespace going backward
+            while current_col > 0
+                && chars
+                    .get(current_col)
+                    .copied()
+                    .unwrap_or(' ')
+                    .is_whitespace()
+            {
+                current_col -= 1;
+            }
+
+            // Check if we found a non-whitespace char
+            if !chars
+                .get(current_col)
+                .copied()
+                .unwrap_or(' ')
+                .is_whitespace()
+            {
+                // Find start of this WORD
+                while current_col > 0
+                    && !chars
+                        .get(current_col - 1)
+                        .copied()
+                        .unwrap_or(' ')
+                        .is_whitespace()
+                {
+                    current_col -= 1;
+                }
+                return (current_line, current_col);
+            }
+
+            // No WORD found, go to previous line
+            if current_line == 0 {
+                return (0, 0);
+            }
+            current_line -= 1;
+            current_col = self.get_line_char_count(current_line);
+        }
     }
 
     fn find_big_word_bounds(&self, line: usize, col: usize) -> Option<(usize, usize)> {
@@ -1114,14 +1270,6 @@ impl MarkdownTextReader {
                 self.normal_mode.yank_highlight = None;
             }
         }
-    }
-
-    pub fn has_yank_highlight(&self) -> bool {
-        self.normal_mode
-            .yank_highlight
-            .as_ref()
-            .map(|h| !h.is_expired())
-            .unwrap_or(false)
     }
 
     fn set_yank_highlight(
@@ -1367,11 +1515,6 @@ impl MarkdownTextReader {
         self.set_yank_highlight(start_line, 0, end_line, end_len);
         self.normal_mode.pending_yank = PendingYank::None;
         Some(text)
-    }
-
-    // Yank with find char (yf, yF, yt, yT) - kept for compatibility
-    pub fn yank_find_char(&mut self, motion: PendingCharMotion, ch: char) -> Option<String> {
-        self.yank_find_char_with_count(motion, ch, 1)
     }
 
     // Yank with find char and count (2yfa = yank to 2nd 'a')

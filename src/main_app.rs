@@ -3,6 +3,7 @@ use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
 use crate::bookmarks::Bookmarks;
 use crate::comments::BookComments;
+use crate::epub_analysis::{AnalyzedChapter, analyze_epub};
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
@@ -129,31 +130,24 @@ struct ChapterNodeCounts {
     total: usize,
 }
 
-impl ChapterNodeCounts {
-    /// Create from a saved total when per-chapter counts aren't available.
-    /// Distributes nodes evenly across chapters for progress estimation.
-    fn from_total(total: usize, num_chapters: usize) -> Self {
-        let per_chapter = if num_chapters > 0 {
-            total / num_chapters
-        } else {
-            0
-        };
-        let counts = vec![per_chapter; num_chapters];
-        Self { counts, total }
-    }
-}
-
 struct EpubBook {
     file: String,
     epub: EpubDoc<BufReader<std::fs::File>>,
-    chapter_node_counts: Arc<Mutex<Option<ChapterNodeCounts>>>,
+    chapter_node_counts: ChapterNodeCounts,
+    initial_chapter_analysis: Option<AnalyzedChapter>,
 }
 impl EpubBook {
-    fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
+    fn new(
+        file: String,
+        doc: EpubDoc<BufReader<std::fs::File>>,
+        chapter_node_counts: ChapterNodeCounts,
+        initial_chapter_analysis: Option<AnalyzedChapter>,
+    ) -> Self {
         Self {
             file,
             epub: doc,
-            chapter_node_counts: Arc::new(Mutex::new(None)),
+            chapter_node_counts,
+            initial_chapter_analysis,
         }
     }
 
@@ -165,14 +159,9 @@ impl EpubBook {
         self.epub.get_current_chapter()
     }
 
-    /// Returns (book_progress, total_nodes) if background counting is done.
+    /// Returns book progress and the exact total node count from chapter analysis.
     fn compute_book_progress(&self, current_node_index: usize) -> (Option<f32>, Option<usize>) {
-        let Ok(guard) = self.chapter_node_counts.lock() else {
-            return (None, None);
-        };
-        let Some(counts) = guard.as_ref() else {
-            return (None, None);
-        };
+        let counts = &self.chapter_node_counts;
         if counts.total == 0 {
             return (Some(0.0), Some(0));
         }
@@ -183,99 +172,6 @@ impl EpubBook {
         let progress = (completed + clamped_node) as f32 / counts.total as f32;
         (Some(progress.clamp(0.0, 1.0)), Some(counts.total))
     }
-
-    fn start_node_counting(&self, saved_total_nodes: Option<usize>) {
-        if let Some(total) = saved_total_nodes {
-            if let Ok(mut slot) = self.chapter_node_counts.lock() {
-                let num_chapters = self.epub.get_num_chapters();
-                *slot = Some(ChapterNodeCounts::from_total(total, num_chapters));
-            }
-            return;
-        }
-        let path = self.file.clone();
-        let counts_slot = self.chapter_node_counts.clone();
-        std::thread::spawn(move || {
-            if let Ok(result) = Self::count_all_chapter_nodes(&path) {
-                if let Ok(mut slot) = counts_slot.lock() {
-                    *slot = Some(result);
-                }
-            }
-        });
-    }
-
-    fn count_all_chapter_nodes(path: &str) -> anyhow::Result<ChapterNodeCounts> {
-        use crate::parsing::html_to_markdown::{HtmlToMarkdownConverter, extract_chapter_title};
-
-        let mut doc = EpubDoc::new(path)?;
-        let num_chapters = doc.get_num_chapters();
-        let mut counts = Vec::with_capacity(num_chapters);
-
-        for idx in 0..num_chapters {
-            if !doc.set_current_chapter(idx) {
-                counts.push(0);
-                continue;
-            }
-            let node_count = match doc.get_current_str() {
-                Some((html, _)) => {
-                    if is_non_content_chapter(extract_chapter_title(&html).as_deref(), &html) {
-                        0
-                    } else {
-                        let mut converter = HtmlToMarkdownConverter::new();
-                        let document = converter.convert(&html);
-                        document.blocks.len()
-                    }
-                }
-                None => 0,
-            };
-            counts.push(node_count);
-        }
-
-        let total = counts.iter().sum();
-        Ok(ChapterNodeCounts { counts, total })
-    }
-}
-
-/// Detect chapters that are reference/backmatter and shouldn't count toward reading progress.
-/// Checks both the chapter title and epub:type attributes in the raw HTML.
-fn is_non_content_chapter(title: Option<&str>, html: &str) -> bool {
-    const EPUB_TYPE_PATTERNS: &[&str] = &[
-        "epub:type=\"index\"",
-        "epub:type=\"glossary\"",
-        "epub:type=\"bibliography\"",
-    ];
-    for pattern in EPUB_TYPE_PATTERNS {
-        if html.contains(pattern) {
-            return true;
-        }
-    }
-
-    if let Some(title) = title {
-        let normalized: String = title
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
-
-        // Only match backmatter-style titles: "[Qualifier] Index/Glossary/Bibliography"
-        // e.g. "Index", "Subject Index", "Author Index", "Selected Bibliography"
-        // Must NOT match content chapters like "B-Tree Indexes", "Index Structures",
-        // "Glossary-Based Methods", "Building an Index"
-        const BACKMATTER_EXACT: &[&str] = &[
-            "index",
-            "glossary",
-            "bibliography",
-            "works cited",
-            "further reading",
-            "list of figures",
-            "list of tables",
-            "list of illustrations",
-        ];
-        if BACKMATTER_EXACT.contains(&normalized.as_str()) {
-            return true;
-        }
-    }
-
-    false
 }
 
 /// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
@@ -1269,8 +1165,6 @@ impl App {
             error!("Failed to load book in BookImages: {e}");
         }
 
-        self.initialize_search_engine(&mut doc);
-
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
         let comments = if ignore_bookmarks {
             BookComments::new_empty()
@@ -1288,12 +1182,10 @@ impl App {
 
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
-        let mut saved_total_nodes = None;
 
         if !ignore_bookmarks
             && let Some(bookmark) = self.current_book_bookmarks().get_bookmark(path)
         {
-            saved_total_nodes = bookmark.total_nodes;
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
@@ -1339,8 +1231,22 @@ impl App {
             }
         }
 
-        let mut current_book = EpubBook::new(path.to_string(), doc);
-        current_book.start_node_counting(saved_total_nodes);
+        let initial_chapter = doc.get_current_chapter();
+        let analysis = analyze_epub(&mut doc, initial_chapter);
+        let mut search_engine = SearchEngine::new();
+        search_engine.process_chapters(analysis.search_sections);
+        self.book_search = Some(BookSearch::new(search_engine));
+
+        let chapter_node_counts = ChapterNodeCounts {
+            counts: analysis.node_counts,
+            total: analysis.total_nodes,
+        };
+        let mut current_book = EpubBook::new(
+            path.to_string(),
+            doc,
+            chapter_node_counts,
+            analysis.initial_chapter,
+        );
         self.switch_to_toc_mode(&mut current_book);
 
         self.current_book = Some(current_book);
@@ -2274,25 +2180,40 @@ impl App {
 
     fn update_content(&mut self) {
         if let Some(book) = &mut self.current_book {
-            let (content, title) = match book.epub.get_current_str() {
-                Some((raw_html, _mime)) => {
-                    let title = extract_chapter_title(&raw_html);
-                    (raw_html, title)
-                }
-                None => {
-                    error!("Failed to get raw HTML");
-                    ("Error reading chapter content.".to_string(), None)
-                }
+            let current_chapter = book.current_chapter();
+            let analyzed_chapter = if book
+                .initial_chapter_analysis
+                .as_ref()
+                .is_some_and(|analysis| analysis.index == current_chapter)
+            {
+                book.initial_chapter_analysis.take()
+            } else {
+                None
             };
 
-            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, book.current_chapter()) {
+            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, current_chapter) {
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
             } else {
                 self.text_reader.set_current_chapter_file(None);
             }
 
-            self.text_reader.set_content_from_string(&content, title);
+            if let Some(analysis) = analyzed_chapter {
+                self.text_reader
+                    .set_content_from_document(analysis.document, analysis.title);
+            } else {
+                let (content, title) = match book.epub.get_current_str() {
+                    Some((raw_html, _mime)) => {
+                        let title = extract_chapter_title(&raw_html);
+                        (raw_html, title)
+                    }
+                    None => {
+                        error!("Failed to get raw HTML");
+                        ("Error reading chapter content.".to_string(), None)
+                    }
+                };
+                self.text_reader.set_content_from_string(&content, title);
+            }
             self.text_reader.preload_image_dimensions(&self.book_images);
         } else {
             error!("No EPUB document loaded");
@@ -4789,14 +4710,6 @@ impl App {
         self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
     }
 
-    pub fn show_all_libraries_history(&mut self) {
-        if let FocusedPanel::Main(panel) = self.focused_panel {
-            self.previous_main_panel = panel;
-        }
-        self.reading_history = Some(ReadingHistory::new_all_libraries(self.home_bookmarks()));
-        self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
-    }
-
     /// Check if a key is a global hotkey that should work regardless of focus.
     /// Uses the configurable keymap for Global context.
     /// Returns true if the key was handled as a global hotkey.
@@ -5587,11 +5500,10 @@ impl App {
     fn open_highlight_palette(&mut self) {
         self.text_reader.clear_count();
         let existing = self.text_reader.highlight_for_palette();
-        if self.text_reader.is_visual_mode_active() || self.text_reader.has_text_selection() {
-            self.highlight_palette_target = existing;
-            self.pending_highlight_palette = true;
-            self.show_highlight_palette_hud();
-        } else if existing.is_some() {
+        if self.text_reader.is_visual_mode_active()
+            || self.text_reader.has_text_selection()
+            || existing.is_some()
+        {
             self.highlight_palette_target = existing;
             self.pending_highlight_palette = true;
             self.show_highlight_palette_hud();
@@ -5714,6 +5626,27 @@ impl App {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_word_end();
+                }
+                true
+            }
+            Action::BigWordForward => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_forward();
+                }
+                true
+            }
+            Action::BigWordBackward => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_backward();
+                }
+                true
+            }
+            Action::BigWordEnd => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_end();
                 }
                 true
             }
@@ -6923,242 +6856,6 @@ impl App {
         self.text_reader.handle_terminal_resize();
     }
 
-    //todo this does extra parsing of a book. damn claude is dumb
-    fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
-        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> Vec<SearchLine> {
-            let mut lines = Vec::new();
-            for (node_index, node) in doc.blocks.iter().enumerate() {
-                extract_text_from_block(&node.block, node_index, &mut lines);
-            }
-            lines
-        }
-
-        fn extract_text_from_block(
-            block: &crate::markdown::Block,
-            node_index: usize,
-            lines: &mut Vec<SearchLine>,
-        ) {
-            use crate::markdown::Block;
-
-            match block {
-                Block::Paragraph { content } | Block::Heading { content, .. } => {
-                    let plain_text = extract_text_from_text(content);
-                    if !plain_text.trim().is_empty() {
-                        lines.push(SearchLine {
-                            text: plain_text,
-                            node_index,
-                            y_bounds: None,
-                        });
-                    }
-                }
-                Block::List { items, .. } => {
-                    for item in items {
-                        // ListItem content is Vec<Node>, so process each node
-                        for node in &item.content {
-                            extract_text_from_block(&node.block, node_index, lines);
-                        }
-                    }
-                }
-                Block::Quote { content } => {
-                    for node in content {
-                        extract_text_from_block(&node.block, node_index, lines);
-                    }
-                }
-                Block::CodeBlock { content, .. } => {
-                    lines.push(SearchLine {
-                        text: content.clone(),
-                        node_index,
-                        y_bounds: None,
-                    });
-                }
-                Block::Table { rows, header, .. } => {
-                    if let Some(header_row) = header {
-                        let row_text: Vec<String> = header_row
-                            .cells
-                            .iter()
-                            .map(|cell| {
-                                extract_text_from_cell_content(&cell.content, node_index, lines)
-                            })
-                            .collect();
-                        if !row_text.is_empty() {
-                            lines.push(SearchLine {
-                                text: row_text.join(" "),
-                                node_index,
-                                y_bounds: None,
-                            });
-                        }
-                    }
-                    for row in rows {
-                        let row_text: Vec<String> = row
-                            .cells
-                            .iter()
-                            .map(|cell| {
-                                extract_text_from_cell_content(&cell.content, node_index, lines)
-                            })
-                            .collect();
-                        if !row_text.is_empty() {
-                            lines.push(SearchLine {
-                                text: row_text.join(" "),
-                                node_index,
-                                y_bounds: None,
-                            });
-                        }
-                    }
-                }
-                Block::DefinitionList { items } => {
-                    for item in items {
-                        lines.push(SearchLine {
-                            text: extract_text_from_text(&item.term),
-                            node_index,
-                            y_bounds: None,
-                        });
-                        // Process each definition (Vec<Vec<Node>>)
-                        for definition in &item.definitions {
-                            for node in definition {
-                                extract_text_from_block(&node.block, node_index, lines);
-                            }
-                        }
-                    }
-                }
-                Block::EpubBlock { content, .. } => {
-                    for node in content {
-                        extract_text_from_block(&node.block, node_index, lines);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        fn extract_text_from_text(text: &crate::markdown::Text) -> String {
-            let mut result = String::new();
-
-            for part in text.iter() {
-                match part {
-                    crate::markdown::TextOrInline::Text(text_node) => {
-                        result.push_str(&text_node.content);
-                    }
-                    crate::markdown::TextOrInline::Inline(inline) => match inline {
-                        crate::markdown::Inline::Link { text, .. } => {
-                            result.push_str(&extract_text_from_text(text));
-                        }
-                        crate::markdown::Inline::Image { alt_text, .. } => {
-                            result.push_str(alt_text);
-                        }
-                        crate::markdown::Inline::LineBreak => {
-                            result.push(' ');
-                        }
-                        _ => {}
-                    },
-                }
-            }
-
-            result
-        }
-
-        fn extract_text_from_cell_content(
-            content: &crate::markdown::TableCellContent,
-            node_index: usize,
-            lines: &mut Vec<SearchLine>,
-        ) -> String {
-            match content {
-                crate::markdown::TableCellContent::Simple(text) => extract_text_from_text(text),
-                crate::markdown::TableCellContent::Rich(nodes) => {
-                    let mut result = String::new();
-                    for node in nodes {
-                        extract_text_from_block(&node.block, node_index, lines);
-                        // Also collect text inline
-                        result.push_str(&extract_node_text(node));
-                    }
-                    result
-                }
-            }
-        }
-
-        fn extract_node_text(node: &crate::markdown::Node) -> String {
-            use crate::markdown::Block;
-            match &node.block {
-                Block::Paragraph { content } => extract_text_from_text(content),
-                Block::Heading { content, .. } => extract_text_from_text(content),
-                Block::CodeBlock { content, .. } => content.clone(),
-                Block::Quote { content } => content
-                    .iter()
-                    .map(extract_node_text)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                Block::List { items, .. } => items
-                    .iter()
-                    .flat_map(|item| item.content.iter().map(extract_node_text))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                Block::Table { header, rows, .. } => {
-                    let mut text = String::new();
-                    if let Some(h) = header {
-                        text.push_str(
-                            &h.cells
-                                .iter()
-                                .map(|c| match &c.content {
-                                    crate::markdown::TableCellContent::Simple(t) => {
-                                        extract_text_from_text(t)
-                                    }
-                                    crate::markdown::TableCellContent::Rich(n) => n
-                                        .iter()
-                                        .map(extract_node_text)
-                                        .collect::<Vec<_>>()
-                                        .join(" "),
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                        );
-                    }
-                    for row in rows {
-                        text.push_str(
-                            &row.cells
-                                .iter()
-                                .map(|c| match &c.content {
-                                    crate::markdown::TableCellContent::Simple(t) => {
-                                        extract_text_from_text(t)
-                                    }
-                                    crate::markdown::TableCellContent::Rich(n) => n
-                                        .iter()
-                                        .map(extract_node_text)
-                                        .collect::<Vec<_>>()
-                                        .join(" "),
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                        );
-                    }
-                    text
-                }
-                _ => String::new(),
-            }
-        }
-
-        let mut search_engine = SearchEngine::new();
-        let mut chapters = Vec::new();
-        use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-        let mut converter = HtmlToMarkdownConverter::new();
-
-        // Process all chapters to extract readable text
-        for chapter_index in 0..doc.get_num_chapters() {
-            if doc.set_current_chapter(chapter_index) {
-                if let Some((raw_html, _mime)) = doc.get_current_str() {
-                    let title = extract_chapter_title(&raw_html)
-                        .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
-
-                    let markdown_doc = converter.convert(&raw_html);
-
-                    let clean_text = extract_text_from_markdown_doc(&markdown_doc);
-                    chapters.push((chapter_index, title, clean_text));
-                }
-            }
-        }
-
-        search_engine.process_chapters(chapters);
-
-        self.book_search = Some(BookSearch::new(search_engine));
-    }
-
     /// Initialize search engine for PDF/DJVU documents
     /// This extracts text from all pages and indexes them for search
     #[cfg(feature = "pdf")]
@@ -7623,8 +7320,8 @@ impl App {
                 .resize_with(page_count, crate::widget::pdf_reader::RenderedInfo::default);
 
             // Clamp page to new page count but preserve scroll position.
-            // Do NOT call reset_view_after_reload / set_page — those reset the
-            // vertical scroll offset, which is exactly what we want to keep.
+            // Do NOT call set_page — it resets the vertical scroll offset,
+            // which is exactly what we want to keep.
             if page_count > 0 {
                 pdf_reader.page = pdf_reader.page.min(page_count - 1);
             }

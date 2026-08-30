@@ -56,10 +56,6 @@ pub enum PopupWindow {
 }
 
 impl FocusedPanel {
-    pub fn is_popup(&self) -> bool {
-        matches!(self, Self::Popup(_))
-    }
-
     pub fn popup(&self) -> Option<PopupWindow> {
         match self {
             Self::Popup(p) => Some(*p),
@@ -742,17 +738,6 @@ impl PdfReaderState {
 
     pub fn muted_color(&self) -> Color {
         self.palette.base_03
-    }
-
-    pub fn estimated_page_height_cells(&self) -> u16 {
-        self.rendered
-            .iter()
-            .find_map(|page| {
-                page.img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().as_tuple().1)
-            })
-            .unwrap_or(self.last_render.img_area_height)
     }
 
     pub(crate) fn debug_non_kitty_dual_enabled() -> bool {

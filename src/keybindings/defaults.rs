@@ -81,11 +81,11 @@ fn add_normal_layer(ctx: &mut ContextKeymap) {
     bind!(ctx, "l" => Action::MoveRight);
     bind!(ctx, "<Right>" => Action::MoveRight);
     bind!(ctx, "w" => Action::WordForward);
-    bind!(ctx, "W" => Action::WordForward); // #5: uppercase alias
+    bind!(ctx, "W" => Action::BigWordForward);
     bind!(ctx, "b" => Action::WordBackward);
-    bind!(ctx, "B" => Action::WordBackward); // #5: uppercase alias
+    bind!(ctx, "B" => Action::BigWordBackward);
     bind!(ctx, "e" => Action::WordEnd);
-    bind!(ctx, "E" => Action::WordEnd); // #5: uppercase alias
+    bind!(ctx, "E" => Action::BigWordEnd);
     bind!(ctx, "0" => Action::LineStart);
     bind!(ctx, "^" => Action::FirstNonBlank);
     bind!(ctx, "$" => Action::LineEnd);
@@ -475,22 +475,23 @@ mod tests {
         );
     }
 
-    // #5: uppercase aliases
     #[test]
-    fn uppercase_word_aliases() {
+    fn uppercase_big_word_motions() {
         let keymap = default_keymap();
-        assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "W"),
-            LookupResult::Found(Action::WordForward)
-        );
-        assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "B"),
-            LookupResult::Found(Action::WordBackward)
-        );
-        assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "E"),
-            LookupResult::Found(Action::WordEnd)
-        );
+        for ctx in [KeyContext::EpubNormal, KeyContext::PdfNormal] {
+            assert_eq!(
+                lookup(&keymap, ctx, "W"),
+                LookupResult::Found(Action::BigWordForward)
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "B"),
+                LookupResult::Found(Action::BigWordBackward)
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "E"),
+                LookupResult::Found(Action::BigWordEnd)
+            );
+        }
     }
 
     #[test]

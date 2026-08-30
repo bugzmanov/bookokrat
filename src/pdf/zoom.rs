@@ -112,16 +112,6 @@ impl Zoom {
         }
     }
 
-    /// Scroll to position the given page at the top of the viewport
-    pub fn scroll_to_page(&mut self, page: usize, page_heights: &[u32], separator_height: u16) {
-        let offset: u32 = page_heights
-            .iter()
-            .take(page)
-            .map(|&h| h + u32::from(separator_height))
-            .sum();
-        self.global_scroll_offset = offset;
-    }
-
     /// Scroll to the top of the document
     pub fn scroll_to_top(&mut self) {
         self.global_scroll_offset = 0;

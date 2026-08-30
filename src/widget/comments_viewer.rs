@@ -2488,10 +2488,6 @@ impl CommentsViewer {
         }
     }
 
-    pub fn is_in_export_mode(&self) -> bool {
-        self.export_mode
-    }
-
     pub fn export_filename(&self) -> &str {
         &self.export_filename
     }

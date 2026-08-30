@@ -633,14 +633,6 @@ impl BookManager {
         self.books.iter().any(|book| book.path == path)
     }
 
-    /// Get the format of a book by path
-    pub fn get_format(&self, path: &str) -> Option<BookFormat> {
-        self.books
-            .iter()
-            .find(|book| book.path == path)
-            .map(|book| book.format)
-    }
-
     /// Detect format from file extension (for files not in the managed list)
     pub fn detect_format(path: &str) -> Option<BookFormat> {
         let path = Path::new(path);
@@ -658,16 +650,6 @@ impl BookManager {
 
     pub fn is_html_file(&self, path: &str) -> bool {
         Self::detect_format(path) == Some(BookFormat::Html)
-    }
-
-    #[cfg(feature = "pdf")]
-    pub fn is_pdf_file(&self, path: &str) -> bool {
-        Self::detect_format(path) == Some(BookFormat::Pdf)
-    }
-
-    #[cfg(feature = "pdf")]
-    pub fn is_djvu_file(&self, path: &str) -> bool {
-        Self::detect_format(path) == Some(BookFormat::Djvu)
     }
 }
 

@@ -106,36 +106,6 @@ impl MarkLocation {
             },
         }
     }
-
-    /// Returns the corresponding `JumpLocation` if this build supports it.
-    /// PDF marks return `None` in builds without the `pdf` feature.
-    pub fn try_into_jump_location(self) -> Option<crate::jump_list::JumpLocation> {
-        match self {
-            Self::Epub {
-                path,
-                chapter,
-                node,
-                ..
-            } => Some(crate::jump_list::JumpLocation::Epub {
-                path,
-                chapter,
-                node,
-            }),
-            #[cfg(feature = "pdf")]
-            Self::Pdf {
-                path,
-                page,
-                scroll_offset,
-                ..
-            } => Some(crate::jump_list::JumpLocation::Pdf {
-                path,
-                page,
-                scroll_offset,
-            }),
-            #[cfg(not(feature = "pdf"))]
-            Self::Pdf { .. } => None,
-        }
-    }
 }
 
 pub fn validate_mark_char(ch: char) -> Option<MarkScope> {

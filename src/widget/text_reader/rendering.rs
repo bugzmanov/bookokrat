@@ -12,19 +12,11 @@ use ratatui::{
     style::{Color, Modifier, Style as RatatuiStyle},
     text::{Line, Span},
 };
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderContext {
     TopLevel,
     InsideContainer,
-}
-
-#[allow(dead_code)]
-pub struct RenderingContext {
-    pub raw_text_lines: Vec<String>,
-    pub anchor_positions: HashMap<String, usize>,
-    pub links: Vec<LinkInfo>,
 }
 
 #[derive(Clone, Default)]
@@ -87,17 +79,6 @@ impl PrefixFrame {
         }
 
         LinePrefix { raw, spans, width }
-    }
-}
-
-#[allow(dead_code)]
-impl RenderingContext {
-    pub fn new() -> Self {
-        Self {
-            raw_text_lines: Vec::new(),
-            anchor_positions: HashMap::new(),
-            links: Vec::new(),
-        }
     }
 }
 
@@ -4418,8 +4399,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         struct CharWithRichSpan {
             ch: char,
             rich_span_idx: usize, // Index into original_rich_spans
-            #[allow(dead_code)]
-            char_idx_in_span: usize, // Position within the span's text
         }
 
         let mut chars_with_rich = Vec::new();
@@ -4428,11 +4407,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 RichSpan::Text(span) => &span.content,
                 RichSpan::Link { span, .. } => &span.content,
             };
-            for (char_idx, ch) in span_text.chars().enumerate() {
+            for ch in span_text.chars() {
                 chars_with_rich.push(CharWithRichSpan {
                     ch,
                     rich_span_idx: span_idx,
-                    char_idx_in_span: char_idx,
                 });
             }
         }

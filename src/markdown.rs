@@ -117,16 +117,8 @@ pub enum ListKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
-pub enum TaskStatus {
-    Checked,
-    Unchecked,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct ListItem {
     pub content: Vec<Node>,
-    pub task_status: Option<TaskStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -166,19 +158,6 @@ pub struct DefinitionListItem {
 }
 
 impl HeadingLevel {
-    #[allow(dead_code)]
-    pub fn from_u8(level: u8) -> Option<Self> {
-        match level {
-            1 => Some(HeadingLevel::H1),
-            2 => Some(HeadingLevel::H2),
-            3 => Some(HeadingLevel::H3),
-            4 => Some(HeadingLevel::H4),
-            5 => Some(HeadingLevel::H5),
-            6 => Some(HeadingLevel::H6),
-            _ => None,
-        }
-    }
-
     pub fn as_u8(self) -> u8 {
         self as u8
     }
@@ -237,18 +216,7 @@ impl TextNode {
 
 impl ListItem {
     pub fn new(content: Vec<Node>) -> Self {
-        ListItem {
-            content,
-            task_status: None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn new_task(content: Vec<Node>, status: TaskStatus) -> Self {
-        ListItem {
-            content,
-            task_status: Some(status),
-        }
+        ListItem { content }
     }
 }
 
@@ -262,21 +230,6 @@ impl DefinitionListItem {
     pub fn new(term: Text, definitions: Vec<Vec<Node>>) -> Self {
         DefinitionListItem { term, definitions }
     }
-
-    pub fn new_single(term: Text, definition: Vec<Node>) -> Self {
-        DefinitionListItem {
-            term,
-            definitions: vec![definition],
-        }
-    }
-
-    pub fn new_from_text(term: Text, definitions: Vec<Text>) -> Self {
-        let definitions = definitions
-            .into_iter()
-            .map(|text| vec![Node::new(Block::Paragraph { content: text }, 0..0)])
-            .collect();
-        DefinitionListItem { term, definitions }
-    }
 }
 
 impl TableCell {
@@ -285,33 +238,6 @@ impl TableCell {
             content: TableCellContent::Simple(content),
             is_header: false,
             rowspan: 1,
-            colspan: 1,
-        }
-    }
-
-    pub fn new_header(content: Text) -> Self {
-        TableCell {
-            content: TableCellContent::Simple(content),
-            is_header: true,
-            rowspan: 1,
-            colspan: 1,
-        }
-    }
-
-    pub fn new_with_rowspan(content: Text, rowspan: u32) -> Self {
-        TableCell {
-            content: TableCellContent::Simple(content),
-            is_header: false,
-            rowspan,
-            colspan: 1,
-        }
-    }
-
-    pub fn new_header_with_rowspan(content: Text, rowspan: u32) -> Self {
-        TableCell {
-            content: TableCellContent::Simple(content),
-            is_header: true,
-            rowspan,
             colspan: 1,
         }
     }
@@ -331,15 +257,6 @@ impl TableCell {
             is_header: true,
             rowspan,
             colspan,
-        }
-    }
-
-    pub fn new_rich(content: Vec<Node>) -> Self {
-        TableCell {
-            content: TableCellContent::Rich(content),
-            is_header: false,
-            rowspan: 1,
-            colspan: 1,
         }
     }
 

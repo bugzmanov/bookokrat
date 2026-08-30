@@ -644,12 +644,6 @@ impl NormalModeState {
         })
     }
 
-    /// Get visual rectangles for display
-    #[must_use]
-    pub fn get_visual_rects(&self, line_bounds: &[LineBounds]) -> Vec<VisualRect> {
-        self.get_visual_rects_multi(&[line_bounds.to_vec()])
-    }
-
     /// Get visual rectangles for multiple pages
     #[must_use]
     pub fn get_visual_rects_multi(&self, all_line_bounds: &[Vec<LineBounds>]) -> Vec<VisualRect> {

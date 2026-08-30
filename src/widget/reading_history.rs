@@ -637,10 +637,6 @@ impl ReadingHistory {
         }
     }
 
-    pub fn selected_path(&self) -> Option<&str> {
-        self.selected_item().map(|item| item.path.as_str())
-    }
-
     fn delete_selected_bookmark(&mut self) -> Option<ReadingHistoryAction> {
         let item = self.selected_item()?;
         let path = item.path.clone();

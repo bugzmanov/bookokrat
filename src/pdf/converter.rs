@@ -445,8 +445,6 @@ struct ConverterEngine {
 
 #[derive(Clone)]
 struct CommentCacheEntry {
-    #[expect(dead_code)]
-    scale_factor: f32,
     rects: Vec<PixelRect>,
 }
 
@@ -1002,17 +1000,6 @@ impl ConverterEngine {
         Ok(())
     }
 
-    #[expect(dead_code)]
-    fn reconvert_changed_pages<T: PageScoped>(
-        &mut self,
-        old: &[T],
-        new: &[T],
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let affected = Self::collect_affected_pages(old, new);
-        self.reconvert_pages(&affected, sender)
-    }
-
     fn reconvert_changed_visual(
         &mut self,
         old: &[VisualRect],
@@ -1515,13 +1502,7 @@ impl ConverterEngine {
             if rects_px.is_empty() {
                 continue;
             }
-            cache.insert(
-                rect.page,
-                CommentCacheEntry {
-                    scale_factor: cached.data.scale_factor,
-                    rects: rects_px,
-                },
-            );
+            cache.insert(rect.page, CommentCacheEntry { rects: rects_px });
         }
         cache
     }
@@ -1532,13 +1513,8 @@ impl ConverterEngine {
             self.comment_cache.remove(&page_num);
             return;
         }
-        self.comment_cache.insert(
-            page_num,
-            CommentCacheEntry {
-                scale_factor,
-                rects: rects_px,
-            },
-        );
+        self.comment_cache
+            .insert(page_num, CommentCacheEntry { rects: rects_px });
     }
 
     /// Clear decoded images for pages far from the current page to save memory.
