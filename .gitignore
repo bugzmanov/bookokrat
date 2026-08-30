@@ -43,3 +43,10 @@ tldr-cache/
 *.fls
 *.out
 *.toc
+
+# VHS golden screenshots live in a separate repo (tests-bookokrat-snapshots),
+# cloned into this path. See vhs_tests/run.sh / CLAUDE.md.
+vhs_tests/golden/
+
+# nix build output symlink
+result

@@ -1368,7 +1368,7 @@ For most UI testing, use the SVG-based snapshot tests described above.
 
 ### Running VHS Tests
 
-**Golden screenshots live in Git LFS and are NOT downloaded by default clones** (`.lfsconfig` sets `lfs.fetchexclude = vhs_tests/golden` to save LFS bandwidth). Before running VHS comparisons on a fresh clone, fetch them: `git lfs pull --include="vhs_tests/golden"`. `run.sh` detects pointer stubs and refuses to compare against them.
+**Golden screenshots live in a SEPARATE repo and are gitignored here.** `vhs_tests/golden/` is a standalone clone of [tests-bookokrat-snapshots](https://github.com/bugzmanov/tests-bookokrat-snapshots) (kept out of the main repo so app clones stay light — PNGs don't delta-compress). On a fresh clone: `git clone https://github.com/bugzmanov/tests-bookokrat-snapshots vhs_tests/golden`. `run.sh` errors with that command if the directory is empty. Re-blessing (`--update`/`--accept`) writes PNGs into that directory; committing and pushing them happens **inside `vhs_tests/golden`** as its own repo (the golden-blessing permission rules apply to that push too).
 
 ```bash
 # Run ALL tapes (full test suite)

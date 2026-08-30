@@ -314,16 +314,15 @@ mkdir -p "$SCREENSHOTS_DIR"
 mkdir -p "$REPORTS_DIR"
 mkdir -p "$GOLDEN_DIR"
 
-# Default clones exclude the golden LFS objects (.lfsconfig fetchexclude), so
-# a fresh checkout has 3-line pointer stubs instead of PNGs. Comparing against
-# stubs would fail every tape with confusing diffs - catch it up front.
-# Update/accept modes overwrite goldens with fresh captures, so they're exempt.
+# Golden screenshots live in a separate repo (gitignored here), so a fresh
+# checkout of bookokrat has an empty vhs_tests/golden. Comparing against
+# nothing would report every screenshot as missing - catch it up front.
+# Update/accept modes create goldens, so they're exempt.
 if ! $UPDATE_MODE && ! $ACCEPT_MODE; then
-    sample_golden=$(find "$GOLDEN_DIR" -name "*.png" -type f 2>/dev/null | head -1)
-    if [ -n "$sample_golden" ] && head -c 60 "$sample_golden" | grep -q "git-lfs"; then
-        echo -e "${RED}ERROR: golden snapshots are Git LFS pointer stubs, not images.${NC}"
-        echo "Fetch the real screenshots first:"
-        echo "  git lfs pull --include=\"vhs_tests/golden\""
+    if ! find "$GOLDEN_DIR" -name "*.png" -type f 2>/dev/null | head -1 | grep -q .; then
+        echo -e "${RED}ERROR: no golden snapshots found in $GOLDEN_DIR${NC}"
+        echo "Goldens live in a separate repo. Clone it first:"
+        echo "  git clone https://github.com/bugzmanov/tests-bookokrat-snapshots vhs_tests/golden"
         exit 1
     fi
 fi
