@@ -4876,9 +4876,7 @@ impl PdfReaderState {
             return Some(InputAction::Redraw);
         }
         let cursor = self.normal_mode.cursor;
-        let Some((ux, uy)) = self.cursor_unscaled_point() else {
-            return None;
-        };
+        let (ux, uy) = self.cursor_unscaled_point()?;
         let annotation_id = self.book_comments.as_ref().and_then(|comments| {
             let locked = comments.lock().ok()?;
             locked

@@ -3559,30 +3559,21 @@ impl PdfReaderState {
                 }
             }
 
-            let current_scale_pages: Option<HashSet<usize>> = if dual_layout {
-                let mut set = HashSet::new();
-                for offset in 0..page_sizes.len() {
-                    let page_idx = self.page + offset;
-                    if self.page_matches_dual_scale(page_idx, img_area.width) {
-                        set.insert(page_idx);
-                    }
-                }
-                Some(set)
-            } else {
-                None
-            };
-
+            // page_sizes is NOT necessarily a contiguous [self.page..] prefix:
+            // at a right-clamped dual pan the left page has an empty slice and
+            // its image may legitimately not exist (never converts), leaving
+            // only the right page in page_sizes. Select pages by membership,
+            // never by a positional take() from self.page — that would stop at
+            // the absent left page and silently render nothing.
+            let displayed_pages: HashSet<usize> =
+                page_sizes.iter().map(|&(idx, _, _)| idx).collect();
             let page_images = self.rendered[self.page..]
                 .iter_mut()
                 .enumerate()
-                .take(page_sizes.len())
+                .take(pages_to_render)
                 .filter_map(|(idx, page)| {
                     let page_idx = self.page + idx;
-                    if dual_layout
-                        && !current_scale_pages
-                            .as_ref()
-                            .is_some_and(|set| set.contains(&page_idx))
-                    {
+                    if !displayed_pages.contains(&page_idx) {
                         return None;
                     }
                     let img = page.img.as_mut()?;

@@ -299,10 +299,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .embedded_images
             .borrow()
             .iter()
-            .filter_map(|(src, image)| {
-                (matches!(image.state, ImageLoadState::NotLoaded) || image.needs_reload)
-                    .then(|| (src.clone(), image.height_cells))
+            .filter(|(_, image)| {
+                matches!(image.state, ImageLoadState::NotLoaded) || image.needs_reload
             })
+            .map(|(src, image)| (src.clone(), image.height_cells))
             .collect();
         if let Some(book_images) = self.image_source.clone() {
             self.start_image_loading(images_to_load, &book_images);

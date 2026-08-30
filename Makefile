@@ -26,12 +26,12 @@ _open := $(if $(OPEN),--open-report,)
 .PHONY: vhs vhs-kitty vhs-ghostty vhs-wezterm vhs-iterm vhs-update vhs-accept vhs-list help \
 	pre-release-check lint svg-tests nix-build
 
-## Pre-release gate: lint, SVG snapshot tests, nix build, then all VHS tapes
-## on kitty + wezterm. Fails on the first broken step. VHS runs last because
-## it drives real terminal windows (wezterm steals focus).
-pre-release-check: lint svg-tests nix-build
+## Pre-release gate: lint, SVG snapshot tests, all VHS tapes on kitty +
+## wezterm, then the nix build. Fails on the first broken step.
+pre-release-check: lint svg-tests
 	$(VHS) --terminal kitty
 	$(VHS) --terminal wezterm
+	$(MAKE) nix-build
 	@echo "════════════════════════════════════════════════════════════"
 	@echo "pre-release-check: ALL CHECKS PASSED"
 

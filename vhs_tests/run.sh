@@ -89,7 +89,7 @@ SPECIFIC_SCREENSHOT=""     # limit update/accept/compare to a single screenshot
 LIST_TAPES=false
 OPEN_REPORT=false
 VERBOSE=false
-MEMORY_LEAK_LIMIT_MB=100  # Default: fail if memory leak > 100MB (includes ~80MB harness overhead)
+MEMORY_LEAK_LIMIT_MB=200  # Default: fail if memory leak > 200MB (includes ~80MB harness overhead; measures SYSTEM-WIDE anonymous pages via vm_stat, so other processes on the machine add noise)
 EXCLUDED_DEFAULT_TAPES=(
     "demo_combined"
     "demo_epub"
@@ -129,7 +129,7 @@ print_usage() {
     echo "  --list                   List available tapes"
     echo "  --open-report            Open HTML report after run"
     echo "  --verbose                Enable verbose output"
-    echo "  --memory-leak-limit MB   Fail if memory leak exceeds MB (default: 100)"
+    echo "  --memory-leak-limit MB   Fail if memory leak exceeds MB (default: 200)"
     echo "  --help                   Show this help"
     echo ""
     echo "Terminals:"

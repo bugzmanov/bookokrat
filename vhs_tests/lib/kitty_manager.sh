@@ -19,6 +19,15 @@ KITTY_SOCKET_BASE=""  # listen_on path without the PID suffix (for cleanup match
 KITTY_PID=""
 KITTY_MANAGED=false  # True if we launched our own Kitty instance
 
+# Pinned OS-window size in POINTS (kitty reads initial_window_* as points on
+# macOS): 1512x861pt = 3024x1722 device px @2x — the size every kitty golden
+# was captured at. Without pinning, remember_window_size makes each launch
+# inherit whatever geometry the last kitty session (or a resize tape) left
+# behind, and the whole suite fails on dimension mismatch.
+# CHANGING THESE INVALIDATES EVERY GOLDEN under vhs_tests/golden/kitty/.
+KITTY_PIN_WIDTH_PT=1512
+KITTY_PIN_HEIGHT_PT=861
+
 # Find kitty executable
 find_kitty() {
     # Check PATH first
@@ -70,6 +79,9 @@ check_kitty() {
         -o "listen_on=unix:$socket_base" \
         -o confirm_os_window_close=0 \
         -o hide_window_decorations=yes \
+        -o remember_window_size=no \
+        -o "initial_window_width=${KITTY_PIN_WIDTH_PT}" \
+        -o "initial_window_height=${KITTY_PIN_HEIGHT_PT}" \
         --title "VHS_TEST_KITTY" 2>/dev/null
     KITTY_MANAGED=true
 

@@ -1369,14 +1369,14 @@ impl MarkdownTextReader {
                             let (render_y, render_height) = if image_top_clipped > 0 {
                                 (
                                     col_rect.y,
-                                    ((image_height_cells as usize)
-                                        .saturating_sub(image_top_clipped))
-                                    .min(area_height) as u16,
+                                    (image_height_cells.saturating_sub(image_top_clipped))
+                                        .min(area_height)
+                                        as u16,
                                 )
                             } else {
                                 (
                                     col_rect.y + image_screen_start as u16,
-                                    (image_height_cells as usize)
+                                    image_height_cells
                                         .min(area_height.saturating_sub(image_screen_start))
                                         as u16,
                                 )
