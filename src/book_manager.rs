@@ -4,6 +4,7 @@ use crate::settings::is_pdf_enabled;
 use crate::settings::{BookSortOrder, get_book_sort_order};
 use epub::doc::EpubDoc;
 use log::{error, info};
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -15,11 +16,17 @@ pub enum LibraryMode {
 }
 
 pub struct BookManager {
-    pub books: Vec<BookInfo>,
     scan_directory: String,
-    pub library_mode: LibraryMode,
+    root_directory: String,
     #[cfg(feature = "pdf")]
     pub supports_graphics: bool,
+    states: HashMap<String, DirectoryState>,
+}
+
+struct DirectoryState {
+    scan_directory: String,
+    books: Vec<BookInfo>,
+    library_mode: LibraryMode,
 }
 
 /// Format of a book file
@@ -31,6 +38,7 @@ pub enum BookFormat {
     Pdf,
     #[cfg(feature = "pdf")]
     Djvu,
+    Dir,
 }
 
 #[derive(Clone)]
@@ -52,192 +60,65 @@ impl BookManager {
     }
 
     pub fn new_with_directory(directory: &str) -> Self {
+        let state = DirectoryState::new_with_directory(directory);
         let scan_directory = directory.to_string();
-        let library_mode = if Self::is_calibre_library(&scan_directory) {
-            info!("Detected Calibre library at {scan_directory}");
-            LibraryMode::Calibre
-        } else {
-            LibraryMode::Standard
-        };
 
-        let mut books = match library_mode {
-            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&scan_directory),
-            LibraryMode::Standard => Self::discover_books_in_dir(&scan_directory),
-        };
-        books.sort_by(|a, b| {
-            a.display_name
-                .to_lowercase()
-                .cmp(&b.display_name.to_lowercase())
-        });
+        let mut states = HashMap::new();
+        states.insert(scan_directory.clone(), state);
+
         Self {
-            books,
-            scan_directory,
-            library_mode,
+            scan_directory: scan_directory.clone(),
+            root_directory: scan_directory,
             #[cfg(feature = "pdf")]
             supports_graphics: false,
+            states,
         }
     }
 
-    fn is_calibre_library(dir: &str) -> bool {
-        Path::new(dir).join("metadata.db").exists()
+    pub fn set_books(&mut self, books: Vec<BookInfo>) {
+        self.current_state_mut().books = books;
+    }
+
+    fn current_state(&self) -> &DirectoryState {
+        self.states.get(&self.scan_directory).unwrap()
+    }
+
+    fn current_state_mut(&mut self) -> &mut DirectoryState {
+        self.states.get_mut(&self.scan_directory).unwrap()
     }
 
     pub fn is_calibre_mode(&self) -> bool {
-        self.library_mode == LibraryMode::Calibre
+        self.current_state().is_calibre_mode()
     }
 
-    fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
-        std::fs::read_dir(dir)
-            .unwrap_or_else(|e| {
-                error!("Failed to read directory {dir}: {e}");
-                panic!("Failed to read directory {dir}: {e}");
-            })
-            .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                let extension = path.extension()?.to_str()?.to_lowercase();
-                let format = match extension.as_str() {
-                    "epub" => Some(BookFormat::Epub),
-                    "html" | "htm" => Some(BookFormat::Html),
-                    #[cfg(feature = "pdf")]
-                    "pdf" => Some(BookFormat::Pdf),
-                    #[cfg(feature = "pdf")]
-                    "djvu" | "djv" => Some(BookFormat::Djvu),
-                    _ => None,
-                }?;
-                let path_str = path.to_str()?.to_string();
-                let display_name = Self::extract_display_name(&path_str);
-                Some(BookInfo {
-                    path: path_str,
-                    display_name,
-                    format,
-                })
-            })
-            .collect()
+    pub fn navigate_to(&mut self, new_dir: &str) {
+        self.states
+            .entry(new_dir.to_string())
+            .or_insert_with(|| DirectoryState::new_with_directory(new_dir));
+        self.scan_directory = new_dir.to_string();
     }
 
-    fn discover_books_in_calibre_library(dir: &str) -> Vec<BookInfo> {
-        let start = std::time::Instant::now();
-        let mut books = Vec::new();
-        let mut files_visited: u64 = 0;
-
-        // Calibre structure is always: Author/Book Title (id)/file.epub — depth 3 max.
-        // Without a limit, WalkDir would descend into temp_images/, .git/, cloud-synced
-        // dirs, etc., which can stall or take minutes on large filesystems.
-        let mut last_log_time = start;
-        for entry in WalkDir::new(dir)
-            .max_depth(3)
-            .into_iter()
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_file())
-        {
-            files_visited += 1;
-            let now = std::time::Instant::now();
-            if now.duration_since(last_log_time).as_secs() >= 5 {
-                info!(
-                    "Calibre scan in progress: {} books found so far, {} files visited ({:.1}s elapsed)",
-                    books.len(),
-                    files_visited,
-                    now.duration_since(start).as_secs_f64()
-                );
-                last_log_time = now;
-            }
-
-            let path = entry.path();
-            let path_str = match path.to_str() {
-                Some(s) => s.to_string(),
-                None => continue,
-            };
-
-            let format = match Self::detect_format(&path_str) {
-                Some(BookFormat::Epub) => Some(BookFormat::Epub),
-                #[cfg(feature = "pdf")]
-                Some(BookFormat::Pdf) => Some(BookFormat::Pdf),
-                #[cfg(feature = "pdf")]
-                Some(BookFormat::Djvu) => Some(BookFormat::Djvu),
-                _ => None,
-            };
-
-            let Some(format) = format else {
-                continue;
-            };
-
-            let display_name = path
-                .parent()
-                .and_then(Self::parse_calibre_opf)
-                .unwrap_or_else(|| Self::extract_display_name(&path_str));
-
-            books.push(BookInfo {
-                path: path_str,
-                display_name,
-                format,
-            });
+    fn back_entry(&self) -> Option<BookInfo> {
+        if self.scan_directory == self.root_directory {
+            return None;
         }
-
-        info!(
-            "Calibre library scan: {} books found, {} files visited in {:.2}s",
-            books.len(),
-            files_visited,
-            start.elapsed().as_secs_f64()
-        );
-
-        books
-    }
-
-    fn parse_calibre_opf(book_dir: &Path) -> Option<String> {
-        let opf_path = book_dir.join("metadata.opf");
-        let content = std::fs::read_to_string(&opf_path).ok()?;
-        let doc = roxmltree::Document::parse(&content).ok()?;
-
-        let mut title: Option<String> = None;
-        let mut author: Option<String> = None;
-
-        for node in doc.descendants() {
-            if node.tag_name().name() == "title" && title.is_none() {
-                title = node.text().map(|s| s.trim().to_string());
-            }
-            if node.tag_name().name() == "creator" && author.is_none() {
-                author = node.text().map(|s| s.trim().to_string());
-            }
-            if title.is_some() && author.is_some() {
-                break;
-            }
-        }
-
-        let title = title?;
-        Some(match author {
-            Some(a) if !a.is_empty() => format!("{title} - {a}"),
-            _ => title,
+        let parent = Path::new(&self.scan_directory).parent()?;
+        Some(BookInfo {
+            path: parent.to_str()?.to_string(),
+            display_name: "← Go Back".to_string(),
+            format: BookFormat::Dir,
         })
     }
 
-    fn extract_display_name(file_path: &str) -> String {
-        let path = Path::new(file_path);
-
-        // For HTML files, preserve the full filename with extension
-        if let Some(extension) = path.extension() {
-            if extension == "html" || extension == "htm" {
-                return path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-            }
-        }
-
-        // For other files (like EPUB), remove the extension
-        path.file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string()
-    }
-
     pub fn get_book_info(&self, index: usize) -> Option<&BookInfo> {
-        self.books.get(index)
+        self.current_state().books.get(index)
     }
 
     pub fn get_book_by_path(&self, path: &str) -> Option<&BookInfo> {
-        self.books.iter().find(|book| book.path == path)
+        self.current_state()
+            .books
+            .iter()
+            .find(|book| book.path == path)
     }
 
     pub fn load_epub(&self, path: &str) -> Result<EpubDoc<BufReader<std::fs::File>>, String> {
@@ -561,15 +442,7 @@ impl BookManager {
     }
 
     pub fn refresh_books(&mut self) {
-        self.books = match self.library_mode {
-            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&self.scan_directory),
-            LibraryMode::Standard => Self::discover_books_in_dir(&self.scan_directory),
-        };
-        self.books.sort_by(|a, b| {
-            a.display_name
-                .to_lowercase()
-                .cmp(&b.display_name.to_lowercase())
-        });
+        self.current_state_mut().refresh_books();
     }
 
     /// Refresh and get filtered books list
@@ -584,6 +457,7 @@ impl BookManager {
         {
             if !is_pdf_enabled() || !self.supports_graphics {
                 books = self
+                    .current_state()
                     .books
                     .iter()
                     .filter(|book| {
@@ -592,12 +466,12 @@ impl BookManager {
                     .cloned()
                     .collect();
             } else {
-                books = self.books.clone();
+                books = self.current_state().books.clone();
             }
         }
         #[cfg(not(feature = "pdf"))]
         {
-            books = self.books.clone();
+            books = self.current_state().books.clone();
         }
 
         if get_book_sort_order() == BookSortOrder::ByType {
@@ -610,6 +484,7 @@ impl BookManager {
                         BookFormat::Djvu => 0,
                         BookFormat::Epub => 1,
                         BookFormat::Html => 2,
+                        BookFormat::Dir => 3,
                     }
                 };
                 type_order(&a.format)
@@ -622,20 +497,31 @@ impl BookManager {
             });
         }
 
+        if let Some(back_entry) = self.back_entry() {
+            books.insert(0, back_entry);
+        }
+
         books
     }
 
     pub fn find_book_index_by_path(&self, path: &str) -> Option<usize> {
-        self.books.iter().position(|book| book.path == path)
+        self.current_state()
+            .books
+            .iter()
+            .position(|book| book.path == path)
     }
 
     pub fn contains_book(&self, path: &str) -> bool {
-        self.books.iter().any(|book| book.path == path)
+        self.current_state()
+            .books
+            .iter()
+            .any(|book| book.path == path)
     }
 
     /// Get the format of a book by path
     pub fn get_format(&self, path: &str) -> Option<BookFormat> {
-        self.books
+        self.current_state()
+            .books
             .iter()
             .find(|book| book.path == path)
             .map(|book| book.format)
@@ -671,6 +557,217 @@ impl BookManager {
     }
 }
 
+impl DirectoryState {
+    pub fn new_with_directory(directory: &str) -> Self {
+        let scan_directory = directory.to_string();
+        let library_mode = if Self::is_calibre_library(&scan_directory) {
+            info!("Detected Calibre library at {scan_directory}");
+            LibraryMode::Calibre
+        } else {
+            LibraryMode::Standard
+        };
+
+        let mut books = match library_mode {
+            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&scan_directory),
+            LibraryMode::Standard => Self::discover_books_in_dir(&scan_directory),
+        };
+        books.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
+
+        Self {
+            scan_directory,
+            books,
+            library_mode,
+        }
+    }
+
+    fn discover_books_in_calibre_library(dir: &str) -> Vec<BookInfo> {
+        let start = std::time::Instant::now();
+        let mut books = Vec::new();
+        let mut files_visited: u64 = 0;
+
+        // Calibre structure is always: Author/Book Title (id)/file.epub — depth 3 max.
+        // Without a limit, WalkDir would descend into temp_images/, .git/, cloud-synced
+        // dirs, etc., which can stall or take minutes on large filesystems.
+        let mut last_log_time = start;
+        for entry in WalkDir::new(dir)
+            .max_depth(3)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_file())
+        {
+            files_visited += 1;
+            let now = std::time::Instant::now();
+            if now.duration_since(last_log_time).as_secs() >= 5 {
+                info!(
+                    "Calibre scan in progress: {} books found so far, {} files visited ({:.1}s elapsed)",
+                    books.len(),
+                    files_visited,
+                    now.duration_since(start).as_secs_f64()
+                );
+                last_log_time = now;
+            }
+
+            let path = entry.path();
+            let path_str = match path.to_str() {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+
+            let format = match BookManager::detect_format(&path_str) {
+                Some(BookFormat::Epub) => Some(BookFormat::Epub),
+                #[cfg(feature = "pdf")]
+                Some(BookFormat::Pdf) => Some(BookFormat::Pdf),
+                #[cfg(feature = "pdf")]
+                Some(BookFormat::Djvu) => Some(BookFormat::Djvu),
+                _ => None,
+            };
+
+            let Some(format) = format else {
+                continue;
+            };
+
+            let display_name = path
+                .parent()
+                .and_then(Self::parse_calibre_opf)
+                .unwrap_or_else(|| Self::extract_display_name(&path_str, false));
+
+            books.push(BookInfo {
+                path: path_str,
+                display_name,
+                format,
+            });
+        }
+
+        info!(
+            "Calibre library scan: {} books found, {} files visited in {:.2}s",
+            books.len(),
+            files_visited,
+            start.elapsed().as_secs_f64()
+        );
+
+        books
+    }
+
+    fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
+        std::fs::read_dir(dir)
+            .unwrap_or_else(|e| {
+                error!("Failed to read directory {dir}: {e}");
+                panic!("Failed to read directory {dir}: {e}");
+            })
+            .filter_map(|entry| {
+                let entry = entry.ok()?;
+                let path = entry.path();
+
+                let mut format = BookFormat::Dir;
+                if path.is_file() {
+                    let extension = path.extension()?.to_str()?.to_lowercase();
+                    format = match extension.as_str() {
+                        "epub" => Some(BookFormat::Epub),
+                        "html" | "htm" => Some(BookFormat::Html),
+                        #[cfg(feature = "pdf")]
+                        "pdf" => Some(BookFormat::Pdf),
+                        #[cfg(feature = "pdf")]
+                        "djvu" | "djv" => Some(BookFormat::Djvu),
+                        _ => None,
+                    }?;
+                }
+
+                let path_str = path.to_str()?.to_string();
+                let display_name = Self::extract_display_name(&path_str, format == BookFormat::Dir);
+
+                Some(BookInfo {
+                    path: path_str,
+                    display_name,
+                    format,
+                })
+            })
+            .collect()
+    }
+
+    fn is_calibre_library(dir: &str) -> bool {
+        Path::new(dir).join("metadata.db").exists()
+    }
+
+    fn is_calibre_mode(&self) -> bool {
+        self.library_mode == LibraryMode::Calibre
+    }
+
+    fn extract_display_name(file_path: &str, is_dir: bool) -> String {
+        let path = Path::new(file_path);
+
+        // For HTML files, preserve the full filename with extension
+        if let Some(extension) = path.extension() {
+            if extension == "html" || extension == "htm" {
+                return path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+            }
+        }
+
+        // Keep the original file name for dirs adding a visual indicator `/`
+        // and for other files (like EPUB), remove the extension
+        if is_dir {
+            let mut name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            name.push('/');
+            name
+        } else {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        }
+    }
+
+    fn parse_calibre_opf(book_dir: &Path) -> Option<String> {
+        let opf_path = book_dir.join("metadata.opf");
+        let content = std::fs::read_to_string(&opf_path).ok()?;
+        let doc = roxmltree::Document::parse(&content).ok()?;
+
+        let mut title: Option<String> = None;
+        let mut author: Option<String> = None;
+
+        for node in doc.descendants() {
+            if node.tag_name().name() == "title" && title.is_none() {
+                title = node.text().map(|s| s.trim().to_string());
+            }
+            if node.tag_name().name() == "creator" && author.is_none() {
+                author = node.text().map(|s| s.trim().to_string());
+            }
+            if title.is_some() && author.is_some() {
+                break;
+            }
+        }
+
+        let title = title?;
+        Some(match author {
+            Some(a) if !a.is_empty() => format!("{title} - {a}"),
+            _ => title,
+        })
+    }
+
+    fn refresh_books(&mut self) {
+        self.books = match self.library_mode {
+            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&self.scan_directory),
+            LibraryMode::Standard => Self::discover_books_in_dir(&self.scan_directory),
+        };
+        self.books.sort_by(|a, b| {
+            a.display_name
+                .to_lowercase()
+                .cmp(&b.display_name.to_lowercase())
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,7 +793,11 @@ mod tests {
         fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
 
         let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
-        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+        assert_eq!(
+            manager.current_state().books.len(),
+            3,
+            "all 3 files should be discovered"
+        );
 
         let prev = is_pdf_enabled();
         set_pdf_enabled(false);
@@ -728,7 +829,11 @@ mod tests {
         fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
 
         let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
-        assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
+        assert_eq!(
+            manager.current_state().books.len(),
+            3,
+            "all 3 files should be discovered"
+        );
 
         // pdf_enabled is true (default) — simulating a user who has never toggled the setting.
         // But the terminal doesn't support graphics, so PDFs/DJVUs should still be hidden.
@@ -835,5 +940,44 @@ mod tests {
 
         assert!(doc.get_num_chapters() >= 1);
         assert!(doc.get_current_str().is_some());
+    }
+
+    #[test]
+    fn can_navigate_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        let child_dir = temp_dir.path().join("subdir");
+        fs::create_dir_all(&child_dir).unwrap();
+        // Create a dummy file so discover_books_in_dir picks it up
+        fs::write(child_dir.join("novel.epub"), b"fake").unwrap();
+
+        let mut manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        manager.navigate_to(child_dir.to_str().unwrap());
+
+        let books = manager.get_books();
+        assert_eq!(books.len(), 2, "the go-back entry plus the discovered epub",);
+        assert_eq!(
+            books[0].path,
+            temp_dir.path().to_str().unwrap().to_string(),
+            "Parent path is the first item in the list of books",
+        );
+        assert_eq!(books[0].format, BookFormat::Dir);
+    }
+
+    #[test]
+    fn back_entry_survives_refresh() {
+        let temp_dir = TempDir::new().unwrap();
+        let child_dir = temp_dir.path().join("subdir");
+        fs::create_dir_all(&child_dir).unwrap();
+
+        let mut manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        manager.navigate_to(child_dir.to_str().unwrap());
+        manager.refresh_books();
+
+        let books = manager.get_books();
+        assert_eq!(
+            books.first().map(|b| b.path.as_str()),
+            Some(temp_dir.path().to_str().unwrap()),
+            "go-back entry must still be present after refresh_books()"
+        );
     }
 }

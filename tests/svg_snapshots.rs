@@ -145,7 +145,7 @@ fn create_test_failure_handler(
 fn open_test_book(app: &mut App, filename: &str) {
     let path = app
         .book_manager
-        .books
+        .get_books()
         .iter()
         .find(|b| b.path.ends_with(filename))
         .unwrap_or_else(|| panic!("test book {filename} not found in testdata"))
@@ -157,7 +157,7 @@ fn open_test_book(app: &mut App, filename: &str) {
 fn open_first_book(app: &mut App) {
     let path = app
         .book_manager
-        .books
+        .get_books()
         .first()
         .expect("no books found in test directory")
         .path
@@ -976,7 +976,7 @@ fn test_open_at_chapter_svg() {
 
     let path = app
         .book_manager
-        .books
+        .get_books()
         .iter()
         .find(|b| b.path.ends_with("digital_frontier.epub"))
         .expect("digital_frontier.epub not found")

@@ -50,12 +50,12 @@ fn create_app_content_focused() -> (App, TempDir) {
 }
 
 fn open_book(app: &mut App) {
-    let path = app
-        .book_manager
-        .books
+    let books = app.book_manager.get_books();
+    let fallback_book = books.first().expect("no test books");
+    let path = books
         .iter()
         .find(|b| b.path.ends_with("digital_frontier.epub"))
-        .unwrap_or_else(|| app.book_manager.books.first().expect("no test books"))
+        .unwrap_or_else(|| fallback_book)
         .path
         .clone();
     let _ = app.open_book_for_reading_by_path(&path, None);
