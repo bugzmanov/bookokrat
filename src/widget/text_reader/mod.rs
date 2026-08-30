@@ -169,6 +169,10 @@ pub struct MarkdownTextReader {
     inline_images_suppressed: bool,
     image_viewport: Option<(u16, u16)>,
     image_source: Option<BookImages>,
+
+    pending_image_reload: Option<Instant>,
+    image_scroll_state: ((usize, usize), Instant),
+    image_settle_placed: bool,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -353,6 +357,9 @@ impl MarkdownTextReader {
             inline_images_suppressed: false,
             image_viewport: None,
             image_source: None,
+            pending_image_reload: None,
+            image_scroll_state: ((0, 0), Instant::now()),
+            image_settle_placed: false,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             pending_node_highlight: None,
@@ -618,6 +625,7 @@ impl MarkdownTextReader {
         };
 
         self.prepare_images_for_viewport(left_rect.width, left_rect.height);
+        self.update_image_settle_state();
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -1304,6 +1312,7 @@ impl MarkdownTextReader {
                 let image_widget = StatefulImage::new().resize(Resize::Viewport(ViewportOptions {
                     y_offset: y_offset_pixels,
                     x_offset: 0,
+                    settled: self.images_render_settled(),
                 }));
                 frame.render_stateful_widget(image_widget, image_area, protocol);
                 current_image_rects.insert(src.clone(), image_area);
@@ -1401,6 +1410,7 @@ impl MarkdownTextReader {
                             let viewport_options = ViewportOptions {
                                 y_offset: y_offset_pixels,
                                 x_offset: 0, // No horizontal scrolling for now
+                                settled: self.images_render_settled(),
                             };
 
                             let image_widget =
@@ -1756,6 +1766,7 @@ impl MarkdownTextReader {
         self.last_overlay_cleanup_key = None;
         self.inline_images_suppressed = false;
         self.image_source = None;
+        self.pending_image_reload = None;
         self.dual.clear();
     }
 

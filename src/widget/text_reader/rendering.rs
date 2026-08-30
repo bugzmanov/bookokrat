@@ -4595,6 +4595,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 src: url.to_string(),
                 lines_before_image,
                 height_cells: image_height,
+                target_width_cells: 0,
+                needs_reload: false,
                 width: 200,  // Default width, will be updated when loaded
                 height: 200, // Default height, will be updated when loaded
                 state: ImageLoadState::NotLoaded,

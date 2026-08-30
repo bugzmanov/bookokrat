@@ -120,6 +120,15 @@ impl EpubColumnMode {
     }
 }
 
+/// EPUB inline image sizing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EpubImageSize {
+    #[default]
+    Adaptive,
+    Compact,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -154,6 +163,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub epub_column_mode: EpubColumnMode,
+
+    #[serde(default)]
+    pub epub_image_size: EpubImageSize,
 
     /// True if user has seen/configured PDF settings (used for migration prompt)
     #[serde(default)]
@@ -219,6 +231,7 @@ impl Default for Settings {
             pdf_enabled: true,
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
             epub_column_mode: EpubColumnMode::default(),
+            epub_image_size: EpubImageSize::default(),
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             justify_text: false,
@@ -555,6 +568,13 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
             },
         ),
         (
+            "epub_image_size".into(),
+            match settings.epub_image_size {
+                EpubImageSize::Adaptive => "adaptive".into(),
+                EpubImageSize::Compact => "compact".into(),
+            },
+        ),
+        (
             "pdf_show_link_underlines".into(),
             format!("{}", settings.pdf_show_link_underlines),
         ),
@@ -643,6 +663,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         EpubColumnMode::Dual => "dual",
     };
     content.push_str(&format!("epub_column_mode: {}\n", epub_column_str));
+    let epub_image_str = match settings.epub_image_size {
+        EpubImageSize::Adaptive => "adaptive",
+        EpubImageSize::Compact => "compact",
+    };
+    content.push_str(&format!("epub_image_size: {}\n", epub_image_str));
     content.push_str(&format!("pdf_enabled: {}\n", settings.pdf_enabled));
     content.push_str(&format!(
         "pdf_settings_configured: {}\n",
@@ -899,6 +924,20 @@ pub fn get_epub_column_mode() -> EpubColumnMode {
 pub fn set_epub_column_mode(mode: EpubColumnMode) {
     if let Ok(mut settings) = SETTINGS.write() {
         settings.epub_column_mode = mode;
+    }
+    save_settings();
+}
+
+pub fn get_epub_image_size() -> EpubImageSize {
+    SETTINGS
+        .read()
+        .map(|s| s.epub_image_size)
+        .unwrap_or_default()
+}
+
+pub fn set_epub_image_size(size: EpubImageSize) {
+    if let Ok(mut settings) = SETTINGS.write() {
+        settings.epub_image_size = size;
     }
     save_settings();
 }

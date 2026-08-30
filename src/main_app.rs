@@ -108,7 +108,7 @@ use crossterm::event::{
     Event, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
-use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -5379,6 +5379,9 @@ impl App {
                     pdf_reader.force_redraw();
                 }
             }
+            SettingsAction::EpubImageSizeChanged => {
+                self.text_reader.refresh_image_sizing();
+            }
             SettingsAction::RenderModeChanged => {
                 // Page and scroll mode store the reading position differently, so
                 // convert it instead of jumping to the first page.
@@ -8576,6 +8579,8 @@ where
         if last_tick.elapsed() >= tick_rate {
             let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
             let epub_hud_expired = app.text_reader.update_hud_message();
+            let deferred_reload_started = app.text_reader.tick_deferred_image_reload();
+            let image_settle_due = app.text_reader.settle_swap_imminent();
             let images_loaded = app.text_reader.check_for_loaded_images();
             let notification_expired = app.notifications.update();
             #[cfg(feature = "pdf")]
@@ -8589,6 +8594,12 @@ where
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
+            }
+            if deferred_reload_started {
+                needs_redraw = true;
+            }
+            if image_settle_due {
+                needs_redraw = true;
             }
             if highlight_changed {
                 needs_redraw = true;
@@ -8639,7 +8650,14 @@ where
         }
 
         if needs_redraw {
+            let settle_swap = app.text_reader.settle_swap_imminent();
+            if settle_swap {
+                let _ = execute!(stdout(), BeginSynchronizedUpdate);
+            }
             terminal.draw(|f| app.draw(f, &fps_counter))?;
+            if settle_swap {
+                terminal.draw(|f| app.draw(f, &fps_counter))?;
+            }
             #[cfg(feature = "pdf")]
             {
                 app.execute_pdf_display_plan();

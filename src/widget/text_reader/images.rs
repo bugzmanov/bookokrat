@@ -7,6 +7,12 @@ use image::DynamicImage;
 use log::{debug, warn};
 use std::sync::Arc;
 
+const IMAGE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+fn adaptive_images_enabled() -> bool {
+    crate::settings::get_epub_image_size() == crate::settings::EpubImageSize::Adaptive
+}
+
 impl crate::markdown_text_reader::MarkdownTextReader {
     fn extract_images_from_node(
         &mut self,
@@ -98,13 +104,16 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 let chapter_path = self.current_chapter_file.as_deref();
                 match book_images.get_image_size_with_context(&url, chapter_path) {
                     Some((w, h)) => {
-                        let height_cells = self.image_height_in_cells(w, h);
+                        let (height_cells, target_width_cells) =
+                            self.image_target_size_in_cells(w, h);
                         self.embedded_images.borrow_mut().insert(
                             url.clone(),
                             EmbeddedImage {
                                 src: url.clone(),
                                 lines_before_image: 0,
                                 height_cells,
+                                target_width_cells,
+                                needs_reload: false,
                                 width: w,
                                 height: h,
                                 state: ImageLoadState::NotLoaded,
@@ -143,9 +152,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
-    fn image_height_in_cells(&self, width: u32, height: u32) -> u16 {
+    fn image_target_size_in_cells(&self, width: u32, height: u32) -> (u16, u16) {
         let Some((viewport_width, viewport_height)) = self.image_viewport else {
-            return EmbeddedImage::height_in_cells(width, height);
+            return (EmbeddedImage::height_in_cells(width, height), 0);
         };
         let (cell_width, cell_height) = self
             .image_picker
@@ -153,13 +162,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .map(|picker| picker.font_size())
             .unwrap_or((1, 2));
 
-        EmbeddedImage::height_in_viewport(
+        EmbeddedImage::size_in_viewport(
             width,
             height,
             viewport_width,
             viewport_height,
             cell_width,
             cell_height,
+            adaptive_images_enabled(),
         )
     }
 
@@ -177,23 +187,35 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         else {
             for (img_src, _) in images_to_load {
                 if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src) {
-                    image.state = ImageLoadState::Unsupported;
+                    if matches!(image.state, ImageLoadState::NotLoaded) {
+                        image.state = ImageLoadState::Unsupported;
+                    }
                 }
             }
             return;
         };
 
+        let max_width_cells = self
+            .image_viewport
+            .map(|(w, _)| EmbeddedImage::max_image_width_cells(w))
+            .filter(|w| *w > 0)
+            .unwrap_or(u16::MAX);
         let chapter_path = self.current_chapter_file.clone();
         if self.background_loader.start_loading_with_context(
             images_to_load.clone(),
             book_images,
+            max_width_cells,
             cell_width,
             cell_height,
             chapter_path,
         ) {
             for (img_src, _) in images_to_load {
                 if let Some(image) = self.embedded_images.borrow_mut().get_mut(&img_src) {
-                    image.state = ImageLoadState::Loading;
+                    // Images kept on screen (needs_reload) stay Loaded while
+                    // their replacement is produced in the background.
+                    if matches!(image.state, ImageLoadState::NotLoaded) {
+                        image.state = ImageLoadState::Loading;
+                    }
                 }
             }
         }
@@ -204,6 +226,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if self.image_viewport == Some(viewport) {
             return;
         }
+        let first_viewport = self.image_viewport.is_none();
         self.image_viewport = Some(viewport);
 
         let (cell_width, cell_height) = self
@@ -211,6 +234,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .as_ref()
             .map(|picker| picker.font_size())
             .unwrap_or((1, 2));
+        let adaptive = adaptive_images_enabled();
         let mut heights_changed = false;
         let mut had_loading_images = false;
 
@@ -220,19 +244,33 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
             had_loading_images |= matches!(image.state, ImageLoadState::Loading);
 
-            let height_cells = EmbeddedImage::height_in_viewport(
+            let (height_cells, target_width_cells) = EmbeddedImage::size_in_viewport(
                 image.width,
                 image.height,
                 viewport_width,
                 viewport_height,
                 cell_width,
                 cell_height,
+                adaptive,
             );
-            if image.height_cells != height_cells {
+            if image.height_cells != height_cells || image.target_width_cells != target_width_cells
+            {
                 image.height_cells = height_cells;
+                image.target_width_cells = target_width_cells;
                 heights_changed = true;
-                if !matches!(image.state, ImageLoadState::Unsupported) {
+                let still_fits = match &image.state {
+                    ImageLoadState::Loaded { image: bitmap, .. } => {
+                        let bitmap_cells =
+                            (bitmap.width() as f32 / cell_width.max(1) as f32).ceil() as u16;
+                        bitmap_cells <= viewport_width
+                    }
+                    _ => false,
+                };
+                if still_fits {
+                    image.needs_reload = true;
+                } else if !matches!(image.state, ImageLoadState::Unsupported) {
                     image.state = ImageLoadState::NotLoaded;
+                    image.needs_reload = false;
                 }
             }
         }
@@ -249,18 +287,79 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
-        let images_to_load = self
+        if first_viewport {
+            self.start_pending_image_loading();
+        } else if heights_changed {
+            self.pending_image_reload = Some(std::time::Instant::now());
+        }
+    }
+
+    fn start_pending_image_loading(&mut self) {
+        let images_to_load: Vec<(String, u16)> = self
             .embedded_images
             .borrow()
             .iter()
             .filter_map(|(src, image)| {
-                matches!(image.state, ImageLoadState::NotLoaded)
+                (matches!(image.state, ImageLoadState::NotLoaded) || image.needs_reload)
                     .then(|| (src.clone(), image.height_cells))
             })
             .collect();
         if let Some(book_images) = self.image_source.clone() {
             self.start_image_loading(images_to_load, &book_images);
         }
+    }
+
+    fn iterm2_images_active(&self) -> bool {
+        self.image_picker.as_ref().is_some_and(|picker| {
+            matches!(
+                picker.protocol_type(),
+                crate::ratatui_image::picker::ProtocolType::Iterm2
+            )
+        })
+    }
+
+    pub(super) fn update_image_settle_state(&mut self) {
+        if !self.iterm2_images_active() {
+            return;
+        }
+        let scroll_key = (self.scroll_offset, self.dual.vtop);
+        if self.image_scroll_state.0 != scroll_key {
+            self.image_scroll_state = (scroll_key, std::time::Instant::now());
+            self.image_settle_placed = false;
+        }
+        if self.image_scroll_state.1.elapsed() >= IMAGE_SETTLE_DELAY {
+            self.image_settle_placed = true;
+        }
+    }
+
+    pub(super) fn images_render_settled(&self) -> bool {
+        self.iterm2_images_active() && self.image_settle_placed
+    }
+
+    pub fn settle_swap_imminent(&self) -> bool {
+        if self.image_settle_placed || !self.iterm2_images_active() {
+            return false;
+        }
+        !self.embedded_images.borrow().is_empty()
+            && self.image_scroll_state.1.elapsed() >= IMAGE_SETTLE_DELAY
+    }
+
+    pub fn refresh_image_sizing(&mut self) {
+        self.image_viewport = None;
+        self.pending_image_reload = None;
+    }
+
+    pub fn tick_deferred_image_reload(&mut self) -> bool {
+        const IMAGE_RELOAD_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+        let Some(changed_at) = self.pending_image_reload else {
+            return false;
+        };
+        if changed_at.elapsed() < IMAGE_RELOAD_DEBOUNCE {
+            return false;
+        }
+        self.pending_image_reload = None;
+        self.start_pending_image_loading();
+        true
     }
 
     pub fn check_for_loaded_images(&mut self) -> bool {
@@ -278,6 +377,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                     } else {
                         ImageLoadState::Unsupported
                     };
+                    embedded_image.needs_reload = false;
+                    self.image_settle_placed = false;
                     any_loaded = true;
                 } else {
                     warn!(

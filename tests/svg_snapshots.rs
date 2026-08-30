@@ -5956,6 +5956,188 @@ fn test_image_inside_anchor_link_svg() {
     );
 }
 
+#[test]
+#[parallel]
+fn test_image_adaptive_viewport_height_svg() {
+    ensure_test_report_initialized();
+    set_theme_by_index(0);
+    set_margin(0);
+    bookokrat::settings::set_justify_text(false);
+    bookokrat::settings::set_nav_panel_width(None);
+    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // Portrait image with "regular" classification (>=64px sides, aspect <= 3.0,
+    // height >= 150) so its placeholder height adapts to the viewport instead of
+    // using the compact small/wide sizing. Same aspect ratio as the issue #181 cover.
+    // Image metadata only resolves for EPUB books (ImageStorage registers extracted
+    // book dirs), so build a minimal EPUB with the PNG embedded.
+    let mut png_bytes: Vec<u8> = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(270, 384, |_, _| {
+        image::Rgb([0u8, 128u8, 255u8])
+    }))
+    .write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+
+    let epub_path = temp_dir.path().join("adaptive_image_test.epub");
+    {
+        use std::io::Write;
+        use zip::write::FileOptions;
+
+        let file = std::fs::File::create(&epub_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+
+        zip.start_file(
+            "mimetype",
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+
+        zip.start_file("META-INF/container.xml", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/content.opf", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Adaptive Image Test</dc:title>
+        <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">Test Author</dc:creator>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="BookId">adaptive-image-test</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+    </metadata>
+    <manifest>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="chapter1" href="chapters/chapter1.xhtml" media-type="application/xhtml+xml"/>
+        <item id="cover-image" href="images/portrait_cover.png" media-type="image/png"/>
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="chapter1"/>
+    </spine>
+</package>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/toc.ncx", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="adaptive-image-test"/>
+        <meta name="dtb:depth" content="1"/>
+    </head>
+    <docTitle><text>Adaptive Image Test</text></docTitle>
+    <navMap>
+        <navPoint id="navpoint1" playOrder="1">
+            <navLabel><text>Chapter 1</text></navLabel>
+            <content src="chapters/chapter1.xhtml"/>
+        </navPoint>
+    </navMap>
+</ncx>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/chapters/chapter1.xhtml", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+    <p>Text before the portrait image.</p>
+    <p><img src="../images/portrait_cover.png" alt="Portrait Cover"/></p>
+    <p>Text after the portrait image.</p>
+</body>
+</html>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/images/portrait_cover.png", FileOptions::default())
+            .unwrap();
+        zip.write_all(&png_bytes).unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let image_cache_dir = TempDir::new().expect("Failed to create temp image cache dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        Some("/dev/null"),
+        false,
+        Some(comments_dir.path()),
+        Some(image_cache_dir.path().to_path_buf()),
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    // Before/after a viewport resize with the same App instance: the initial
+    // tall render sizes the placeholder to fill the viewport, and the second
+    // draw at a shorter terminal exercises prepare_images_for_viewport's
+    // height invalidation, shrinking the placeholder to the new viewport.
+    // (On main both draws show the fixed 15-row placeholder.)
+    let mut tall_terminal = create_test_terminal(100, 40);
+    tall_terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let tall_svg = terminal_to_svg(&tall_terminal);
+
+    let mut short_terminal = create_test_terminal(100, 22);
+    short_terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let short_svg = terminal_to_svg(&short_terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_image_adaptive_height_tall_initial.svg",
+        &tall_svg,
+    )
+    .unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_image_adaptive_height_short_after_resize.svg",
+        &short_svg,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        tall_svg.clone(),
+        std::path::Path::new("tests/snapshots/image_adaptive_height_tall_initial.svg"),
+        "test_image_adaptive_viewport_height_svg",
+        create_test_failure_handler("test_image_adaptive_viewport_height_svg"),
+    );
+
+    assert_svg_snapshot(
+        short_svg.clone(),
+        std::path::Path::new("tests/snapshots/image_adaptive_height_short_after_resize.svg"),
+        "test_image_adaptive_viewport_height_svg",
+        create_test_failure_handler("test_image_adaptive_viewport_height_svg"),
+    );
+}
+
 fn count_underlined_chars_in_needle(
     lines: &[bookokrat::markdown_text_reader::RenderedLine],
     needle: &str,

@@ -201,7 +201,36 @@ impl ResizeEncodeRender for StatefulProtocol {
                 return;
             }
 
-            // For non-Kitty protocols, fall back to the old viewport handling
+            // ITerm2 uses the same strip-tiling model as Kitty.
+            if let StatefulProtocolType::ITerm2(ref mut iterm) = self.protocol_type {
+                if iterm.tiled_data.is_none() {
+                    iterm.enable_tiling(self.font_size);
+                }
+
+                if self.hash != self.source.hash
+                    || iterm.tiled_data.as_ref().is_none_or(|t| t.rows.is_empty())
+                {
+                    let result = iterm.encode_tiles(&self.source.image);
+                    if result.is_ok() {
+                        self.hash = self.source.hash;
+                    }
+                    self.last_encoding_result = Some(result);
+                }
+
+                if viewport_opts.settled {
+                    let result =
+                        iterm.ensure_settled(&self.source.image, viewport_opts.y_offset, area);
+                    if result.is_err() {
+                        self.last_encoding_result = Some(result);
+                    }
+                }
+
+                self.last_resize = Some(resize.clone());
+                return;
+            }
+
+            // For other protocols (Sixel, Halfblocks), fall back to the old
+            // viewport handling
             self.viewport_cache.clear();
 
             // If not cached, encode it fresh
@@ -231,6 +260,8 @@ impl ResizeEncodeRender for StatefulProtocol {
                     data: String::new(),
                     area: Rect::default(),
                     is_tmux: i.is_tmux,
+                    tiled_data: None,
+                    settled_active: None,
                 }),
             };
 
@@ -279,6 +310,16 @@ impl ResizeEncodeRender for StatefulProtocol {
         {
             if kitty.tiled_data.is_some() {
                 kitty.render_viewport(area, buf, viewport_opts.y_offset);
+                return;
+            }
+        }
+
+        // Same for tiled ITerm2 viewport mode
+        if let (Some(Resize::Viewport(viewport_opts)), StatefulProtocolType::ITerm2(iterm)) =
+            (self.last_resize.as_ref(), &mut self.protocol_type)
+        {
+            if iterm.tiled_data.is_some() {
+                iterm.render_viewport(area, buf, viewport_opts.y_offset, viewport_opts.settled);
                 return;
             }
         }
