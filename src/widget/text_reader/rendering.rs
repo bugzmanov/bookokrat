@@ -5,7 +5,7 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::theme::{Base16Palette, theme_background};
+use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use ratatui::{
     layout::Constraint,
@@ -2081,7 +2081,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 } else {
                     palette.base_03
                 });
-                style = style.bg(theme_background());
+                style = style.bg(self.theme_background());
 
                 if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
                     style = style
@@ -4856,7 +4856,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 40, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -4909,7 +4911,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 60, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -4951,7 +4955,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 80, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -4984,7 +4990,9 @@ beta beta beta beta beta</pre>"#;
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 12, theme::current_theme(), true);
 
         let rendered_text = rendered

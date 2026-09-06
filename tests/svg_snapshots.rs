@@ -1,7 +1,7 @@
 use bookokrat::annotations::HighlightColor;
 use bookokrat::comments::{AnnotationBody, Comment, CommentTarget};
 use bookokrat::main_app::{ChapterDirection, FPSCounter, OpenPosition};
-use bookokrat::settings::set_margin;
+use bookokrat::settings::{RuntimeSettings, Settings};
 use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
@@ -31,19 +31,15 @@ fn ensure_test_report_initialized() {
 }
 
 fn create_test_app_isolated() -> (App, TempDir) {
-    // Reset theme, margin, and justify to defaults to prevent leaking from other tests
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         Some("tests/testdata"),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(Settings::default()),
     );
     // Force graphics support so PDFs show up regardless of sandbox env vars.
     app.book_manager.supports_graphics = true;
@@ -1092,14 +1088,12 @@ fn test_content_scrolling_svg() {
 fn test_dual_column_page_grid_svg() {
     ensure_test_report_initialized();
 
-    // Mirror the global resets in `create_test_app_isolated`, but enable the
-    // dual-column page grid *before* constructing the app — the reader reads the
-    // column mode at construction time.
+    // Enable the dual-column page grid in this app's isolated runtime settings.
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Dual);
+    let settings = Settings {
+        epub_column_mode: bookokrat::settings::EpubColumnMode::Dual,
+        ..Settings::default()
+    };
 
     // A single chapter of contiguous, numbered, non-wrapping lines so the
     // two-up layout and the separator are easy to read at a glance.
@@ -1109,12 +1103,13 @@ fn test_dual_column_page_grid_svg() {
         .expect("create numbered epub");
 
     let comments_dir = TempDir::new().expect("temp comments dir");
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         Some(book_dir.path().to_str().unwrap()),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(settings),
     );
     app.book_manager.supports_graphics = true;
     app.navigation_panel
@@ -1151,9 +1146,6 @@ fn test_dual_column_page_grid_svg() {
         &svg_output,
     )
     .unwrap();
-
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -4403,9 +4395,6 @@ fn test_epub_dual_column_zen_svg() {
     )
     .unwrap();
 
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
-
     assert_svg_snapshot(
         svg_output.clone(),
         std::path::Path::new("tests/snapshots/epub_dual_column_zen.svg"),
@@ -4467,9 +4456,6 @@ fn test_epub_dual_column_comment_input_svg() {
         &svg_output,
     )
     .unwrap();
-
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -6068,10 +6054,6 @@ fn test_image_inside_anchor_link_svg() {
 fn test_image_adaptive_viewport_height_svg() {
     ensure_test_report_initialized();
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     let temp_dir = tempfile::tempdir().unwrap();
 
@@ -6707,12 +6689,7 @@ fn test_search_with_justified_text_svg() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(temp_dir.path().join("justify_search.html"), content).unwrap();
 
-    // Reset globals to prevent leaking from other tests
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = App::new_with_config(
@@ -7335,6 +7312,7 @@ fn test_pdf_enhance_capped_hud_svg() {
         false,
         None,
         "test-doc".to_string(),
+        RuntimeSettings::in_memory(Settings::default()),
     );
 
     // Enhanced frame as the worker returns it for a 612x792pt page in a
@@ -7377,7 +7355,7 @@ fn test_pdf_enhance_capped_hud_svg() {
             let mut pending_display = None;
             let mut bookmarks = bookokrat::bookmarks::Bookmarks::load_or_ephemeral(None);
             let mut last_save = std::time::Instant::now();
-            let mut toc = TableOfContents::new();
+            let mut toc = TableOfContents::new(RuntimeSettings::in_memory(Settings::default()));
             state.render_in_area(
                 f,
                 area,
@@ -7778,14 +7756,17 @@ fn test_lookup_popup_svg() {
 
     // The selected text lands inside single quotes of a no-op, so the popup
     // body only ever shows the fixed printf output.
-    bookokrat::settings::set_lookup_command(Some(
-        "true '{}' ; printf 'noun: classical placeholder text, in use since the 1500s'".to_string(),
-    ));
+    app.update_settings(|settings| {
+        settings.lookup_command = Some(
+            "true '{}' ; printf 'noun: classical placeholder text, in use since the 1500s'"
+                .to_string(),
+        );
+    });
 
     app.press_key(crossterm::event::KeyCode::Char(' '));
     app.press_key(crossterm::event::KeyCode::Char('l'));
 
-    bookokrat::settings::set_lookup_command(None);
+    app.update_settings(|settings| settings.lookup_command = None);
 
     draw_and_snapshot(
         &mut terminal,

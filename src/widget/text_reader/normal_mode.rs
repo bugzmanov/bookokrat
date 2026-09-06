@@ -2308,7 +2308,9 @@ mod tests {
 
     #[test]
     fn full_page_down_is_noop_for_zero_height() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.normal_mode.active = true;
         reader.raw_text_lines = vec!["line".to_string()];
 

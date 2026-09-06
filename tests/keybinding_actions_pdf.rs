@@ -36,6 +36,7 @@ fn create_pdf_state() -> PdfReaderState {
         false,         // supports_comments
         None,          // book_comments
         String::new(), // comments_doc_id
+        bookokrat::settings::RuntimeSettings::in_memory(bookokrat::settings::Settings::default()),
     )
 }
 

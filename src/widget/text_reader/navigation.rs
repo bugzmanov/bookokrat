@@ -741,7 +741,9 @@ mod tests {
 
     #[test]
     fn full_page_scroll_down_is_noop_for_zero_height() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 10;
         reader.visible_height = 0;
 
@@ -753,7 +755,9 @@ mod tests {
 
     #[test]
     fn half_page_scroll_down_highlights_last_overlapping_line() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 100;
         reader.visible_height = 10;
 
@@ -765,7 +769,9 @@ mod tests {
 
     #[test]
     fn half_page_scroll_down_near_end_highlights_actual_overlapping_line() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 13;
         reader.visible_height = 10;
 
@@ -777,7 +783,9 @@ mod tests {
 
     #[test]
     fn half_page_scroll_up_near_top_highlights_actual_overlapping_line() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 13;
         reader.visible_height = 10;
         reader.scroll_offset = 3;
@@ -790,7 +798,9 @@ mod tests {
 
     #[test]
     fn full_page_scroll_down_near_end_highlights_actual_overlapping_line() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 13;
         reader.visible_height = 10;
 
@@ -802,7 +812,9 @@ mod tests {
 
     #[test]
     fn full_page_scroll_up_near_top_highlights_actual_overlapping_line() {
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         reader.total_wrapped_lines = 13;
         reader.visible_height = 10;
         reader.scroll_offset = 3;

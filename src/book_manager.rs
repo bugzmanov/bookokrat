@@ -1,7 +1,5 @@
 use crate::parsing::html_to_markdown::{HtmlTitlePreference, extract_html_title};
-#[cfg(feature = "pdf")]
-use crate::settings::is_pdf_enabled;
-use crate::settings::{BookSortOrder, get_book_sort_order};
+use crate::settings::{BookSortOrder, RuntimeSettings};
 use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::BufReader;
@@ -17,6 +15,7 @@ pub enum LibraryMode {
 pub struct BookManager {
     pub books: Vec<BookInfo>,
     scan_directory: String,
+    pub(crate) settings: RuntimeSettings,
     pub library_mode: LibraryMode,
     #[cfg(feature = "pdf")]
     pub supports_graphics: bool,
@@ -40,18 +39,8 @@ pub struct BookInfo {
     pub format: BookFormat,
 }
 
-impl Default for BookManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl BookManager {
-    pub fn new() -> Self {
-        Self::new_with_directory(".")
-    }
-
-    pub fn new_with_directory(directory: &str) -> Self {
+    pub fn new_with_directory(directory: &str, settings: RuntimeSettings) -> Self {
         let scan_directory = directory.to_string();
         let library_mode = if Self::is_calibre_library(&scan_directory) {
             info!("Detected Calibre library at {scan_directory}");
@@ -72,6 +61,7 @@ impl BookManager {
         Self {
             books,
             scan_directory,
+            settings,
             library_mode,
             #[cfg(feature = "pdf")]
             supports_graphics: false,
@@ -579,10 +569,11 @@ impl BookManager {
 
     /// Get books filtered by current settings (e.g., PDF enabled/disabled)
     pub fn get_books(&self) -> Vec<BookInfo> {
+        let settings = self.settings.load();
         let mut books: Vec<BookInfo>;
         #[cfg(feature = "pdf")]
         {
-            if !is_pdf_enabled() || !self.supports_graphics {
+            if !settings.pdf_enabled || !self.supports_graphics {
                 books = self
                     .books
                     .iter()
@@ -600,7 +591,7 @@ impl BookManager {
             books = self.books.clone();
         }
 
-        if get_book_sort_order() == BookSortOrder::ByType {
+        if settings.book_sort_order == BookSortOrder::ByType {
             books.sort_by(|a, b| {
                 let type_order = |f: &BookFormat| -> u8 {
                     match f {
@@ -669,24 +660,21 @@ mod tests {
     #[cfg(feature = "pdf")]
     #[test]
     fn get_books_filters_pdf_and_djvu_when_pdf_disabled() {
-        use crate::settings::{is_pdf_enabled, set_pdf_enabled};
-
         let temp_dir = TempDir::new().unwrap();
         // Create dummy files so discover_books_in_dir picks them up
         fs::write(temp_dir.path().join("novel.epub"), b"fake").unwrap();
         fs::write(temp_dir.path().join("paper.pdf"), b"fake").unwrap();
         fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
 
-        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let settings = RuntimeSettings::in_memory(crate::settings::Settings {
+            pdf_enabled: false,
+            ..crate::settings::Settings::default()
+        });
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap(), settings);
         assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
-
-        let prev = is_pdf_enabled();
-        set_pdf_enabled(false);
 
         let filtered = manager.get_books();
         let formats: Vec<_> = filtered.iter().map(|b| b.format).collect();
-
-        set_pdf_enabled(prev);
 
         assert!(
             !formats.contains(&BookFormat::Pdf),
@@ -702,25 +690,19 @@ mod tests {
     #[cfg(feature = "pdf")]
     #[test]
     fn get_books_filters_pdf_and_djvu_when_no_graphics_support() {
-        use crate::settings::{is_pdf_enabled, set_pdf_enabled};
-
         let temp_dir = TempDir::new().unwrap();
         fs::write(temp_dir.path().join("novel.epub"), b"fake").unwrap();
         fs::write(temp_dir.path().join("paper.pdf"), b"fake").unwrap();
         fs::write(temp_dir.path().join("scan.djvu"), b"fake").unwrap();
 
-        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let settings = RuntimeSettings::in_memory(crate::settings::Settings::default());
+        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap(), settings);
         assert_eq!(manager.books.len(), 3, "all 3 files should be discovered");
 
         // pdf_enabled is true (default) — simulating a user who has never toggled the setting.
         // But the terminal doesn't support graphics, so PDFs/DJVUs should still be hidden.
-        let prev = is_pdf_enabled();
-        set_pdf_enabled(true);
-
         let filtered = manager.get_books();
         let formats: Vec<_> = filtered.iter().map(|b| b.format).collect();
-
-        set_pdf_enabled(prev);
 
         // This must hold regardless of the pdf_enabled setting:
         // a terminal without graphics cannot render PDFs/DJVUs.
@@ -811,7 +793,10 @@ mod tests {
 </html>"#,
         );
 
-        let manager = BookManager::new_with_directory(temp_dir.path().to_str().unwrap());
+        let manager = BookManager::new_with_directory(
+            temp_dir.path().to_str().unwrap(),
+            RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let book_path = book_dir.to_str().unwrap();
         let mut doc = manager.load_epub(book_path).unwrap();
 

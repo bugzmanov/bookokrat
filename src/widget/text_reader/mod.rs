@@ -18,8 +18,9 @@ use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
 use crate::search::{SearchMode, SearchState};
+use crate::settings::RuntimeSettings;
 use crate::terminal_overlay;
-use crate::theme::{Base16Palette, theme_background};
+use crate::theme::{Base16Palette, theme_background_for};
 use crate::types::LinkInfo;
 use crate::widget::hud_message::{HudMessage, HudMode};
 use image::GenericImageView;
@@ -129,6 +130,7 @@ struct CommentTextareaLayout {
 }
 
 pub struct MarkdownTextReader {
+    settings: RuntimeSettings,
     markdown_document: Option<Arc<Document>>,
     rendered_content: RenderedContent,
 
@@ -251,14 +253,12 @@ pub struct MarkdownTextReader {
     hud_message: Option<HudMessage>,
 }
 
-impl Default for MarkdownTextReader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl MarkdownTextReader {
-    pub fn new() -> Self {
+    pub(crate) fn theme_background(&self) -> RatatuiColor {
+        theme_background_for(self.settings.load().transparent_background)
+    }
+
+    pub fn new(settings: RuntimeSettings) -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 use crate::ratatui_image::picker::{Capability, ProtocolType};
@@ -316,16 +316,17 @@ impl MarkdownTextReader {
             }
         };
 
-        Self::with_image_picker(image_picker)
+        Self::with_image_picker(image_picker, settings)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub fn new_without_image_support() -> Self {
-        Self::with_image_picker(None)
+    pub fn new_without_image_support(settings: RuntimeSettings) -> Self {
+        Self::with_image_picker(None, settings)
     }
 
-    fn with_image_picker(image_picker: Option<Picker>) -> Self {
+    fn with_image_picker(image_picker: Option<Picker>, settings: RuntimeSettings) -> Self {
         Self {
+            settings,
             markdown_document: None,
             rendered_content: RenderedContent {
                 lines: Vec::new(),
@@ -573,7 +574,7 @@ impl MarkdownTextReader {
 
         // In zen mode the user can opt to drop the surrounding frame and render
         // content edge-to-edge.
-        let borderless = zen_mode && crate::settings::is_zen_hide_border();
+        let borderless = zen_mode && self.settings.load().zen_hide_border;
 
         // Base content rectangle inside the border. This is the single-column
         // text area; in dual mode it is split into two side-by-side columns.
@@ -781,7 +782,7 @@ impl MarkdownTextReader {
         self.last_inner_text_area = Some(left_rect);
         self.dual.right_column = right_rect;
 
-        let image_clear_style = RatatuiStyle::default().bg(theme_background());
+        let image_clear_style = RatatuiStyle::default().bg(self.theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
             matches!(
                 picker.protocol_type(),
@@ -1448,6 +1449,7 @@ impl MarkdownTextReader {
         col_rect: Rect,
         palette: &Base16Palette,
     ) {
+        let background = self.theme_background();
         let Some(textarea) = self.comment_input.textarea.as_mut() else {
             return;
         };
@@ -1472,8 +1474,7 @@ impl MarkdownTextReader {
                 height: textarea_height,
             };
 
-            let clear_block =
-                Block::default().style(RatatuiStyle::default().bg(theme_background()));
+            let clear_block = Block::default().style(RatatuiStyle::default().bg(background));
             frame.render_widget(clear_block, textarea_rect);
 
             let padded_rect = Rect {
@@ -1490,11 +1491,7 @@ impl MarkdownTextReader {
             // border/content in the wider `textarea_rect` margins is untouched.
             frame.render_widget(Clear, padded_rect);
 
-            textarea.set_style(
-                RatatuiStyle::default()
-                    .fg(palette.base_05)
-                    .bg(theme_background()),
-            );
+            textarea.set_style(RatatuiStyle::default().fg(palette.base_05).bg(background));
             textarea.set_cursor_style(
                 RatatuiStyle::default()
                     .fg(palette.base_00)
@@ -1506,11 +1503,10 @@ impl MarkdownTextReader {
                 Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
                 _ => "Add Comment (Esc to save)",
             };
-            let block = Block::default().borders(Borders::ALL).title(title).style(
-                RatatuiStyle::default()
-                    .fg(palette.base_04)
-                    .bg(theme_background()),
-            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(RatatuiStyle::default().fg(palette.base_04).bg(background));
             textarea.set_block(block);
 
             frame.render_widget(&*textarea, padded_rect);
@@ -1884,7 +1880,9 @@ mod underline_gate_tests {
     #[test]
     fn annotation_underline_color_gated_by_flag() {
         let palette = current_theme();
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(RuntimeSettings::in_memory(
+            crate::settings::Settings::default(),
+        ));
 
         // Default: colored underline enabled (so snapshots/non-Apple terminals
         // keep the purple underline).

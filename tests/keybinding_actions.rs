@@ -8,7 +8,7 @@ use bookokrat::keybindings::context::KeyContext;
 use bookokrat::keybindings::defaults::default_keymap;
 use bookokrat::keybindings::notation::{format_key_binding, parse_key_binding};
 use bookokrat::main_app::AppAction;
-use bookokrat::settings::set_margin;
+use bookokrat::settings::{RuntimeSettings, Settings};
 use bookokrat::theme::set_theme_by_index;
 use bookokrat::{App, FocusedPanel, MainPanel, PopupWindow};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
@@ -22,17 +22,15 @@ use tempfile::TempDir;
 
 fn create_app() -> (App, TempDir) {
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
     bookokrat::test_utils::set_next_test_terminal_size(120, 36);
     let comments_dir = TempDir::new().expect("temp dir");
-    let app = App::new_with_config(
+    let app = App::new_with_config_and_settings(
         Some("tests/testdata"),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(Settings::default()),
     );
     (app, comments_dir)
 }
@@ -191,9 +189,9 @@ binding_tests! {
     global_space_b: KeyContext::Global, "<Space>b",
         setup = |app, _dir| {
             open_book(&mut app);
-            bookokrat::settings::set_zen_hide_border(false);
+            app.update_settings(|settings| settings.zen_hide_border = false);
         },
-        check = |_app| bookokrat::settings::is_zen_hide_border();
+        check = |app| app.settings_snapshot().zen_hide_border;
     global_ctrl_z: KeyContext::Global, "<C-z>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();

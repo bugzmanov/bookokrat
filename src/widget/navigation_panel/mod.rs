@@ -9,6 +9,7 @@ use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel};
+use crate::settings::RuntimeSettings;
 use crate::theme::Base16Palette;
 use ratatui::{Frame, layout::Rect, style::Modifier, text::Span};
 
@@ -60,15 +61,18 @@ pub struct NavigationPanel {
     pub book_list: BookList,
     pub table_of_contents: TableOfContents,
     pub current_book_path: Option<String>,
+    settings: RuntimeSettings,
 }
 
 impl NavigationPanel {
     pub fn new(book_manager: &BookManager) -> Self {
+        let settings = book_manager.settings.clone();
         Self {
             mode: NavigationMode::BookSelection,
             book_list: BookList::new(book_manager),
-            table_of_contents: TableOfContents::new(),
+            table_of_contents: TableOfContents::new(settings.clone()),
             current_book_path: None,
+            settings,
         }
     }
 
@@ -122,7 +126,7 @@ impl NavigationPanel {
         self.mode = NavigationMode::TableOfContents;
 
         if self.table_of_contents.get_current_book_info().is_none() {
-            self.table_of_contents = TableOfContents::new();
+            self.table_of_contents = TableOfContents::new(self.settings.clone());
             self.table_of_contents.set_current_book_info(book_info);
         } else {
             self.table_of_contents

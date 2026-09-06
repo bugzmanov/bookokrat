@@ -19,7 +19,8 @@ use crate::pdf::{
     CursorRect, ExtractionRequest, HighlightOverlay, NormalModeState, PageNumberTracker,
     SelectionRect, TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
 };
-use crate::theme::{Base16Palette, theme_background};
+use crate::settings::{PdfPageLayoutMode, RuntimeSettings};
+use crate::theme::{Base16Palette, theme_background_for};
 use crate::widget::hud_message::{HudMessage, HudMode};
 
 use super::types::{
@@ -309,6 +310,7 @@ pub(crate) struct KittyScrollAnchor {
 
 /// Main PDF reader widget state
 pub struct PdfReaderState {
+    pub(crate) settings: RuntimeSettings,
     /// Document name
     pub name: String,
     /// Document title from metadata
@@ -465,6 +467,7 @@ impl PdfReaderState {
         supports_comments: bool,
         book_comments: Option<Arc<Mutex<BookComments>>>,
         comments_doc_id: String,
+        settings: RuntimeSettings,
     ) -> Self {
         let zoom_factor = Zoom::clamp_factor(zoom_factor);
         let zoom = if is_kitty {
@@ -478,6 +481,7 @@ impl PdfReaderState {
         };
 
         Self {
+            settings: settings.clone(),
             name,
             doc_title: None,
             page: initial_page,
@@ -507,7 +511,7 @@ impl PdfReaderState {
             comments_enabled,
             invert_images: true,
             themed_rendering: true,
-            show_link_underlines: crate::settings::is_pdf_show_link_underlines(),
+            show_link_underlines: settings.load().pdf_show_link_underlines,
             zen_mode: false,
             supports_comments,
             book_comments,
@@ -547,6 +551,17 @@ impl PdfReaderState {
             kitty_pan_fraction: None,
             pending_zoom_restore: None,
         }
+    }
+
+    pub(crate) fn persist_pdf_view(&self, scale: Option<f32>, pan_shift: Option<u16>) {
+        self.settings.update(|settings| {
+            if let Some(scale) = scale {
+                settings.pdf_scale = scale;
+            }
+            if let Some(pan_shift) = pan_shift {
+                settings.pdf_pan_shift = pan_shift;
+            }
+        });
     }
 
     pub fn set_zoom_hud(&mut self, zoom_factor: f32) {
@@ -725,7 +740,7 @@ impl PdfReaderState {
     }
 
     pub fn bg_color(&self) -> Color {
-        theme_background()
+        theme_background_for(self.settings.load().transparent_background)
     }
 
     pub fn fg_color(&self) -> Color {
@@ -751,10 +766,7 @@ impl PdfReaderState {
     }
 
     pub(crate) fn page_matches_dual_scale(&self, page_idx: usize, viewport_width: u16) -> bool {
-        if self.is_kitty
-            || crate::settings::get_pdf_page_layout_mode()
-                != crate::settings::PdfPageLayoutMode::Dual
-        {
+        if self.is_kitty || self.settings.load().pdf_page_layout_mode != PdfPageLayoutMode::Dual {
             return true;
         }
         let Some(info) = self.rendered.get(page_idx) else {
@@ -985,8 +997,7 @@ impl PdfReaderState {
         &self,
         viewport: ViewportUpdate,
     ) -> Option<crate::pdf::ConversionCommand> {
-        let dual_mode =
-            crate::settings::get_pdf_page_layout_mode() == crate::settings::PdfPageLayoutMode::Dual;
+        let dual_mode = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
         if self.is_kitty || !dual_mode {
             return Some(crate::pdf::ConversionCommand::UpdateViewport(viewport));
         }

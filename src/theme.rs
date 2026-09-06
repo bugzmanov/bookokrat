@@ -226,12 +226,12 @@ pub fn get_theme_index_by_name(name: &str) -> Option<usize> {
     None
 }
 
-/// Set theme by index and save to settings
-pub fn set_theme_by_index_and_save(index: usize) {
+/// Set theme by index and save it into the given settings
+pub fn set_theme_by_index_and_save(index: usize, settings: &settings::RuntimeSettings) {
     if index < theme_count() {
         CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
         let name = theme_name(index);
-        settings::set_theme_name(&name);
+        settings.update(|settings| settings.theme = name);
     }
 }
 
@@ -241,8 +241,8 @@ pub fn current_theme_name() -> String {
 }
 
 /// Get effective background color (transparent or theme color)
-pub fn theme_background() -> Color {
-    if settings::is_transparent_background() {
+pub fn theme_background_for(transparent: bool) -> Color {
+    if transparent {
         Color::Reset
     } else {
         current_theme().base_00

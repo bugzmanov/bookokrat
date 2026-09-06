@@ -553,7 +553,12 @@ impl ConverterEngine {
         Ok(())
     }
 
-    fn new(picker: Picker, prerender: usize, kitty_shm_support: bool) -> Self {
+    fn new(
+        picker: Picker,
+        prerender: usize,
+        kitty_shm_support: bool,
+        show_link_underlines: bool,
+    ) -> Self {
         Self {
             picker,
             prerender,
@@ -568,7 +573,7 @@ impl ConverterEngine {
             comment_cache: HashMap::new(),
             visual_rects: Vec::new(),
             cursor_rect: None,
-            show_link_underlines: crate::settings::is_pdf_show_link_underlines(),
+            show_link_underlines,
             viewport: None,
             last_viewport_by_page: HashMap::new(),
             tiled_pages: HashSet::new(),
@@ -2704,11 +2709,13 @@ pub fn run_conversion_loop(
     picker: Picker,
     prerender: usize,
     kitty_shm_support: bool,
+    show_link_underlines: bool,
 ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
     use std::time::{Duration, Instant};
 
     log::info!("Converter using protocol: {:?}", picker.protocol_type());
-    let mut engine = ConverterEngine::new(picker, prerender, kitty_shm_support);
+    let mut engine =
+        ConverterEngine::new(picker, prerender, kitty_shm_support, show_link_underlines);
     let mut iteration = 0;
     let mut has_work = false;
     let mut last_stats_log = Instant::now();

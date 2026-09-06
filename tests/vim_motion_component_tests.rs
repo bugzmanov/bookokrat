@@ -2,6 +2,7 @@ use bookokrat::book_manager::{BookFormat, BookInfo, BookManager};
 use bookokrat::main_app::VimNavMotions;
 use bookokrat::markdown_text_reader::{ActiveSection, MarkdownTextReader};
 use bookokrat::navigation_panel::{CurrentBookInfo, NavigationMode, NavigationPanel};
+use bookokrat::settings::{RuntimeSettings, Settings};
 use bookokrat::table_of_contents::TocItem;
 use bookokrat::test_utils::test_helpers::create_test_terminal;
 use bookokrat::theme::Base16Palette;
@@ -48,7 +49,8 @@ fn create_test_failure_handler(
 
 // Create a mock book manager with test books
 fn create_test_book_manager() -> BookManager {
-    let mut book_manager = BookManager::new();
+    let mut book_manager =
+        BookManager::new_with_directory(".", RuntimeSettings::in_memory(Settings::default()));
     let mut books = Vec::new();
     for i in 1..=100 {
         books.push(BookInfo {
@@ -256,7 +258,7 @@ fn test_text_reader_vim_motion_g() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 20);
 
-    let mut text_reader = MarkdownTextReader::new();
+    let mut text_reader = MarkdownTextReader::new(RuntimeSettings::in_memory(Settings::default()));
 
     // Create test content with many lines
     let test_content = (0..=100)
@@ -312,7 +314,7 @@ fn test_text_reader_vim_motion_gg() {
     ensure_test_report_initialized();
     let mut terminal = create_test_terminal(50, 20);
 
-    let mut text_reader = MarkdownTextReader::new();
+    let mut text_reader = MarkdownTextReader::new(RuntimeSettings::in_memory(Settings::default()));
 
     // Create test content
     let test_content = (0..=100)

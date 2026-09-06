@@ -17,11 +17,13 @@ use crate::parsing::html_to_markdown::extract_chapter_title;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
-use crate::search_engine::{SearchEngine, SearchLine};
+use crate::search_engine::SearchEngine;
+#[cfg(feature = "pdf")]
+use crate::search_engine::SearchLine;
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::{current_theme, current_theme_name, theme_background};
+use crate::theme::{current_theme, current_theme_name, theme_background_for};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::highlight_palette::{
@@ -263,6 +265,7 @@ pub struct App {
     keybinding_errors_popup: Option<crate::widget::keybinding_errors_popup::KeybindingErrorsPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
+    settings: settings::RuntimeSettings,
     lookup_popup: Option<LookupPopup>,
     pending_visual_inner: bool,
     pending_highlight_palette: bool,
@@ -434,6 +437,29 @@ impl App {
         Self::new_with_config(None, Some("bookmarks.json"), true, None, None)
     }
 
+    fn default_runtime_settings() -> settings::RuntimeSettings {
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            settings::RuntimeSettings::in_memory(settings::Settings::default())
+        }
+        #[cfg(not(any(test, feature = "test-utils")))]
+        {
+            settings::RuntimeSettings::global()
+        }
+    }
+
+    pub fn settings_snapshot(&self) -> std::sync::Arc<settings::Settings> {
+        self.settings.load()
+    }
+
+    pub fn update_settings(&self, edit: impl FnOnce(&mut settings::Settings)) {
+        self.settings.update(edit);
+    }
+
+    fn theme_background(&self) -> Color {
+        theme_background_for(self.settings.load().transparent_background)
+    }
+
     /// Helper method to check if focus is on a main panel (not a popup)
     fn is_main_panel(&self, panel: MainPanel) -> bool {
         match self.focused_panel {
@@ -562,6 +588,7 @@ impl App {
             Box::new(system_executor),
             comments_dir,
             image_cache_dir,
+            Self::default_runtime_settings(),
         )
     }
 
@@ -579,6 +606,28 @@ impl App {
             Box::new(RealSystemCommandExecutor),
             comments_dir,
             image_cache_dir,
+            Self::default_runtime_settings(),
+        )
+    }
+
+    /// Construct an application with explicit runtime settings. This is the
+    /// test seam for isolated settings state and persistence.
+    pub fn new_with_config_and_settings(
+        book_directory: Option<&str>,
+        bookmark_file: Option<&str>,
+        auto_load_recent: bool,
+        comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
+    ) -> Self {
+        Self::new_with_config_and_executor(
+            book_directory,
+            bookmark_file,
+            auto_load_recent,
+            Box::new(RealSystemCommandExecutor),
+            comments_dir,
+            image_cache_dir,
+            settings,
         )
     }
 
@@ -589,10 +638,11 @@ impl App {
         system_executor: Box<dyn SystemCommandExecutor>,
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
     ) -> Self {
         let book_manager = match book_directory {
-            Some(dir) => BookManager::new_with_directory(dir),
-            None => BookManager::new(),
+            Some(dir) => BookManager::new_with_directory(dir, settings.clone()),
+            None => BookManager::new_with_directory(".", settings.clone()),
         };
 
         #[cfg(feature = "pdf")]
@@ -617,13 +667,14 @@ impl App {
 
         let navigation_panel = NavigationPanel::new(&book_manager);
         #[cfg(any(test, feature = "test-utils"))]
-        let mut text_reader = MarkdownTextReader::new_without_image_support();
+        let mut text_reader = MarkdownTextReader::new_without_image_support(settings.clone());
         #[cfg(not(any(test, feature = "test-utils")))]
-        let mut text_reader = MarkdownTextReader::new();
-        text_reader.set_margin(settings::get_margin());
-        text_reader.set_justify_text(settings::is_justify_text());
+        let mut text_reader = MarkdownTextReader::new(settings.clone());
+        let initial_settings = settings.load();
+        text_reader.set_margin(initial_settings.margin);
+        text_reader.set_justify_text(initial_settings.justify_text);
         text_reader
-            .set_dual_columns(settings::get_epub_column_mode() == settings::EpubColumnMode::Dual);
+            .set_dual_columns(initial_settings.epub_column_mode == settings::EpubColumnMode::Dual);
         // Apple Terminal misrenders the colored-underline SGR; gate it off there
         // so annotation underlines fall back to a plain underline. Tests keep
         // the default (enabled) so snapshots don't depend on the host terminal.
@@ -691,6 +742,7 @@ impl App {
             keybinding_errors_popup: None,
             comments_viewer: None,
             settings_popup: None,
+            settings,
             lookup_popup: None,
             pending_visual_inner: false,
             pending_highlight_palette: false,
@@ -699,7 +751,7 @@ impl App {
             help_bar_area: Rect::default(),
             zen_mode: false,
             test_mode: false,
-            nav_panel_width_override: settings::get_nav_panel_width(),
+            nav_panel_width_override: initial_settings.nav_panel_width,
             resizing_nav_panel: false,
             current_context_override: None,
             pending_force_redraw: false,
@@ -753,7 +805,9 @@ impl App {
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
-        crate::settings::fix_incompatible_pdf_settings();
+        #[cfg(feature = "pdf")]
+        app.settings
+            .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
 
         let is_first_time_user = app.home_bookmarks().get_most_recent().is_none();
 
@@ -777,21 +831,22 @@ impl App {
         // (but only if terminal supports graphics and not first-time user)
         #[cfg(feature = "pdf")]
         if !is_first_time_user
-            && !crate::settings::is_pdf_settings_configured()
+            && !app.settings.load().pdf_settings_configured
             && app.pdf_supports_graphics
         {
             app.previous_main_panel = MainPanel::NavigationList;
             app.settings_popup = Some(app.make_settings_popup(SettingsTab::General));
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             // Mark as configured so we don't show again
-            crate::settings::set_pdf_settings_configured(true);
+            app.settings
+                .update(|settings| settings.pdf_settings_configured = true);
         }
 
         app
     }
 
     fn execute_lookup_command(&mut self, selected_text: &str) {
-        let Some(command_template) = settings::get_lookup_command() else {
+        let Some(command_template) = self.settings.load().lookup_command.clone() else {
             self.show_info(
                 "No lookup command configured. Set lookup_command in settings (Space+s).",
             );
@@ -812,7 +867,7 @@ impl App {
             format!("{} '{}'", command_template, escaped)
         };
 
-        let display = settings::get_lookup_display();
+        let display = self.settings.load().lookup_display;
         match display {
             settings::LookupDisplay::FireAndForget => {
                 match std::process::Command::new("sh")
@@ -1448,8 +1503,9 @@ impl App {
 
         // Create PDF reader state with persisted settings
         // Prefer per-book zoom from bookmark, fall back to global setting
-        let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
-        let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
+        let runtime_settings = self.settings.load();
+        let pdf_scale = bookmark_zoom.unwrap_or(runtime_settings.pdf_scale);
+        let pdf_pan_shift = bookmark_pan.unwrap_or(runtime_settings.pdf_pan_shift);
         log::info!(
             "PDF startup params: path={}, cell_size={:?}, picker_ok={}, bookmark_zoom={:?}, effective_zoom={}, layout={:?}, mode={:?}",
             path,
@@ -1457,8 +1513,8 @@ impl App {
             picker.is_some(),
             bookmark_zoom,
             pdf_scale,
-            crate::settings::get_pdf_page_layout_mode(),
-            crate::settings::get_pdf_render_mode()
+            runtime_settings.pdf_page_layout_mode,
+            runtime_settings.pdf_render_mode
         );
         let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
         let mut pdf_reader = PdfReaderState::new(
@@ -1475,11 +1531,12 @@ impl App {
             supports_comments,
             book_comments,
             path.to_string(),
+            self.settings.clone(),
         );
         pdf_reader.uses_iterm2_protocol = uses_iterm2_protocol;
         if use_kitty
             && initial_page > 0
-            && crate::settings::get_pdf_render_mode() == crate::settings::PdfRenderMode::Scroll
+            && runtime_settings.pdf_render_mode == crate::settings::PdfRenderMode::Scroll
         {
             pdf_reader.pending_initial_scroll_page = Some(initial_page);
         }
@@ -1499,7 +1556,7 @@ impl App {
             }
         }
         // Transparent (alpha) rendering is only possible on the Kitty graphics protocol.
-        if use_kitty && crate::settings::is_transparent_background() {
+        if use_kitty && runtime_settings.transparent_background {
             service.apply_command(crate::pdf::Command::SetTransparent(true));
         }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
@@ -1553,6 +1610,7 @@ impl App {
                         picker,
                         PRERENDER_PAGES,
                         kitty_shm_support,
+                        runtime_settings.pdf_show_link_underlines,
                     );
                 })
             {
@@ -1643,7 +1701,7 @@ impl App {
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
-            theme_background(),
+            self.theme_background(),
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.pdf_pending_display,
@@ -2855,7 +2913,9 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.resizing_nav_panel {
                     self.resizing_nav_panel = false;
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     return;
                 }
 
@@ -3194,7 +3254,7 @@ impl App {
             return;
         }
 
-        let scroll_amount = if crate::settings::is_invert_scroll_direction() {
+        let scroll_amount = if self.settings.load().invert_scroll_direction {
             -scroll_amount
         } else {
             scroll_amount
@@ -3943,12 +4003,13 @@ impl App {
                 false
             }
             NavigationPanelAction::ToggleSortOrder => {
-                use crate::settings::{BookSortOrder, get_book_sort_order, set_book_sort_order};
-                let new_order = match get_book_sort_order() {
+                use crate::settings::BookSortOrder;
+                let new_order = match self.settings.load().book_sort_order {
                     BookSortOrder::ByName => BookSortOrder::ByType,
                     BookSortOrder::ByType => BookSortOrder::ByName,
                 };
-                set_book_sort_order(new_order);
+                self.settings
+                    .update(|settings| settings.book_sort_order = new_order);
                 let current_path = self.navigation_panel.current_book_path.clone();
                 self.navigation_panel
                     .book_list
@@ -3983,7 +4044,7 @@ impl App {
 
         self.terminal_size = f.area();
 
-        let background_block = Block::default().style(Style::default().bg(theme_background()));
+        let background_block = Block::default().style(Style::default().bg(self.theme_background()));
         f.render_widget(background_block, f.area());
 
         if self.zen_mode {
@@ -4320,11 +4381,11 @@ impl App {
             .borders(Borders::ALL)
             .title(title)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
 
         let paragraph = Paragraph::new(content)
             .block(content_border)
-            .style(Style::default().fg(text_color).bg(theme_background()));
+            .style(Style::default().fg(text_color).bg(self.theme_background()));
 
         f.render_widget(paragraph, area);
     }
@@ -4609,7 +4670,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
 
         let inner_area = block.inner(area);
         f.render_widget(block, area);
@@ -4622,7 +4683,7 @@ impl App {
         let left_para = Paragraph::new(left_content).style(
             Style::default()
                 .fg(current_theme().base_03)
-                .bg(theme_background()),
+                .bg(self.theme_background()),
         );
         f.render_widget(left_para, inner_area);
 
@@ -4643,7 +4704,7 @@ impl App {
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
         f.render_widget(right_para, inner_area);
     }
 
@@ -4851,8 +4912,9 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     self.resize_nav_panel(-3);
                     self.text_reader.restore_to_node_index(current_node);
-                    #[cfg(not(any(test, feature = "test-utils")))]
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     true
                 } else {
                     false
@@ -4863,8 +4925,9 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     self.resize_nav_panel(3);
                     self.text_reader.restore_to_node_index(current_node);
-                    #[cfg(not(any(test, feature = "test-utils")))]
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     true
                 } else {
                     false
@@ -5004,7 +5067,8 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     let enabled = self.text_reader.toggle_justify_text();
                     self.text_reader.restore_to_node_index(current_node);
-                    settings::set_justify_text(enabled);
+                    self.settings
+                        .update(|settings| settings.justify_text = enabled);
                     if enabled {
                         self.notifications.info("Text justification: on");
                     } else {
@@ -5056,8 +5120,9 @@ impl App {
                 true
             }
             Action::ToggleZenBorder => {
-                let hide = !settings::is_zen_hide_border();
-                settings::set_zen_hide_border(hide);
+                let hide = !self.settings.load().zen_hide_border;
+                self.settings
+                    .update(|settings| settings.zen_hide_border = hide);
                 // PDF re-renders in place (the next draw detects the content-area
                 // change and re-tiles); EPUB re-wraps automatically on width change.
                 #[cfg(feature = "pdf")]
@@ -5116,14 +5181,13 @@ impl App {
                 // for EPUB.
                 #[cfg(feature = "pdf")]
                 let handled_pdf = if self.is_pdf_mode() {
-                    use crate::settings::{
-                        PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
-                    };
-                    let new_mode = match get_pdf_page_layout_mode() {
+                    use crate::settings::PdfPageLayoutMode;
+                    let new_mode = match self.settings.load().pdf_page_layout_mode {
                         PdfPageLayoutMode::Single => PdfPageLayoutMode::Dual,
                         PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
                     };
-                    set_pdf_page_layout_mode(new_mode);
+                    self.settings
+                        .update(|settings| settings.pdf_page_layout_mode = new_mode);
                     let toc_height = self.get_navigation_panel_area().height as usize;
                     if let Some(mut pdf_reader) = self.pdf_reader.take() {
                         // Dual pairs are even-aligned (0,1),(2,3),... so toggling
@@ -5134,8 +5198,8 @@ impl App {
                             let aligned = pdf_reader.page & !1;
                             pdf_reader.set_page(aligned);
                         }
-                        pdf_reader
-                            .align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
+                        let render_mode = self.settings.load().pdf_render_mode;
+                        pdf_reader.align_scroll_for_render_mode(render_mode);
                         pdf_reader.last_sent_viewport = None;
                         pdf_reader.force_redraw();
                         // Non-kitty renders pages at a fixed scale, so the pair
@@ -5178,14 +5242,13 @@ impl App {
                 if !handled_pdf && self.current_book.is_some() {
                     // EPUB: toggle the two-column "book spread" layout. It
                     // renders whenever the reader pane is wide enough.
-                    use crate::settings::{
-                        EpubColumnMode, get_epub_column_mode, set_epub_column_mode,
-                    };
-                    let new_mode = match get_epub_column_mode() {
+                    use crate::settings::EpubColumnMode;
+                    let new_mode = match self.settings.load().epub_column_mode {
                         EpubColumnMode::Single => EpubColumnMode::Dual,
                         EpubColumnMode::Dual => EpubColumnMode::Single,
                     };
-                    set_epub_column_mode(new_mode);
+                    self.settings
+                        .update(|settings| settings.epub_column_mode = new_mode);
                     let current_node = self.text_reader.get_current_node_index();
                     self.text_reader
                         .set_dual_columns(new_mode == EpubColumnMode::Dual);
@@ -5208,14 +5271,13 @@ impl App {
                 #[cfg(feature = "pdf")]
                 if self.is_pdf_mode() {
                     if self.pdf_supports_scroll_mode {
-                        use crate::settings::{
-                            PdfRenderMode, get_pdf_render_mode, set_pdf_render_mode,
-                        };
-                        let new_mode = match get_pdf_render_mode() {
+                        use crate::settings::PdfRenderMode;
+                        let new_mode = match self.settings.load().pdf_render_mode {
                             PdfRenderMode::Page => PdfRenderMode::Scroll,
                             PdfRenderMode::Scroll => PdfRenderMode::Page,
                         };
-                        set_pdf_render_mode(new_mode);
+                        self.settings
+                            .update(|settings| settings.pdf_render_mode = new_mode);
                         if let Some(ref mut pdf_reader) = self.pdf_reader {
                             pdf_reader.align_scroll_for_render_mode(new_mode);
                             pdf_reader.last_sent_viewport = None;
@@ -5260,8 +5322,8 @@ impl App {
             }
             Action::ResetNavPanelWidth => {
                 self.nav_panel_width_override = None;
-                #[cfg(not(any(test, feature = "test-utils")))]
-                settings::set_nav_panel_width(None);
+                self.settings
+                    .update(|settings| settings.nav_panel_width = None);
                 #[cfg(feature = "pdf")]
                 if let Some(pdf_reader) = self.pdf_reader.as_mut() {
                     pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
@@ -5284,15 +5346,22 @@ impl App {
     fn make_settings_popup(&self, tab: SettingsTab) -> SettingsPopup {
         #[cfg(feature = "pdf")]
         {
-            SettingsPopup::new_with_caps(
+            SettingsPopup::new(
                 tab,
                 self.pdf_supports_graphics,
                 self.pdf_supports_scroll_mode,
+                self.settings.clone(),
             )
         }
         #[cfg(not(feature = "pdf"))]
         {
-            SettingsPopup::new_with_tab(tab)
+            let caps = crate::terminal::detect_terminal_with_probe();
+            SettingsPopup::new(
+                tab,
+                caps.supports_graphics,
+                caps.pdf.supports_scroll_mode,
+                self.settings.clone(),
+            )
         }
     }
 
@@ -5310,17 +5379,17 @@ impl App {
                 // clears the waiting flag never arrives).
                 #[cfg(feature = "pdf")]
                 if let Some(ref mut pdf_reader) = self.pdf_reader {
-                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
+                    let render_mode = self.settings.load().pdf_render_mode;
+                    pdf_reader.align_scroll_for_render_mode(render_mode);
                     pdf_reader.last_sent_viewport = None;
                     pdf_reader.force_redraw();
                 }
                 // Keep the EPUB reader's column layout in sync with the
                 // setting the user just changed in the popup.
                 let current_node = self.text_reader.get_current_node_index();
-                self.text_reader.set_dual_columns(
-                    crate::settings::get_epub_column_mode()
-                        == crate::settings::EpubColumnMode::Dual,
-                );
+                let dual_columns =
+                    self.settings.load().epub_column_mode == crate::settings::EpubColumnMode::Dual;
+                self.text_reader.set_dual_columns(dual_columns);
                 self.text_reader.restore_to_node_index(current_node);
             }
             SettingsAction::ZenBorderChanged => {
@@ -5342,7 +5411,8 @@ impl App {
                 // convert it instead of jumping to the first page.
                 #[cfg(feature = "pdf")]
                 if let Some(ref mut pdf_reader) = self.pdf_reader {
-                    pdf_reader.align_scroll_for_render_mode(crate::settings::get_pdf_render_mode());
+                    let render_mode = self.settings.load().pdf_render_mode;
+                    pdf_reader.align_scroll_for_render_mode(render_mode);
                     pdf_reader.last_sent_viewport = None;
                     pdf_reader.force_redraw();
                 }
@@ -5362,7 +5432,7 @@ impl App {
                 #[cfg(feature = "pdf")]
                 {
                     // Close any open PDF if PDF support was disabled
-                    if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                    if !self.settings.load().pdf_enabled && self.is_pdf_mode() {
                         crate::inputs::pixel_mouse::disable();
                         if let Some(ref pdf_reader) = self.pdf_reader {
                             Self::clear_pdf_graphics(pdf_reader.is_kitty);
@@ -5918,13 +5988,15 @@ impl App {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.increase_margin();
                 self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
+                let margin = self.text_reader.get_margin();
+                self.settings.update(|settings| settings.margin = margin);
             }
             Action::DecreaseMargin => {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.decrease_margin();
                 self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
+                let margin = self.text_reader.get_margin();
+                self.settings.update(|settings| settings.margin = margin);
             }
             Action::EnterVisualMode => {
                 use crate::markdown_text_reader::VisualMode;
@@ -7448,7 +7520,7 @@ impl App {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| editor_file.clone());
 
-        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+        if let Some(editor_cmd) = self.settings.load().synctex_editor.clone() {
             let cmd = editor_cmd
                 .replace("{file}", &editor_file)
                 .replace("{line}", &line.to_string())
@@ -7566,7 +7638,7 @@ impl App {
             return;
         }
 
-        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+        if let Some(editor_cmd) = self.settings.load().synctex_editor.clone() {
             let cmd = editor_cmd
                 .replace("{file}", test_file)
                 .replace("{line}", "1")
