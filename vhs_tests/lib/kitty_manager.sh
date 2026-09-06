@@ -62,6 +62,24 @@ check_kitty() {
     local socket_base="/tmp/kitty-vhs-test-$$"
     KITTY_SOCKET_BASE="$socket_base"
 
+    # Refuse to run alongside another VHS suite. Its kitty window sits at the
+    # same pinned position and occludes ours (or vice versa); macOS stops
+    # repainting the hidden window and screencapture then returns stale frames,
+    # so both runs report bogus failures. Our own sockets carry this shell's
+    # PID (kitty is relaunched per tape), so only foreign, LIVE sockets count;
+    # leftovers from a crashed run don't answer `kitty @ ls` and are ignored.
+    local other
+    for other in /tmp/kitty-vhs-test-*; do
+        [ -S "$other" ] || continue
+        [[ "$other" == "$socket_base"-* ]] && continue
+        if "$KITTY_CMD" @ --to "unix:$other" ls &>/dev/null; then
+            echo "ERROR: another VHS kitty instance is running (socket: $other)." >&2
+            echo "Two suites on one display occlude each other and capture stale frames." >&2
+            echo "Wait for that run to finish, or stop it: pkill -f 'listen_on=unix:${other%-*}'" >&2
+            return 1
+        fi
+    done
+
     # Resolve the .app bundle so we can launch in the BACKGROUND without stealing
     # focus. `open -g` launches without activating; a bare `kitty &` would steal
     # focus on launch.

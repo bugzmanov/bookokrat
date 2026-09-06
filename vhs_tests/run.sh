@@ -302,10 +302,13 @@ if ! $ACCEPT_MODE; then
         exit 1
     fi
 
-    # Build if needed
-    if [ ! -f "$BINARY" ]; then
-        echo "Building release binary with PDF support..."
-        (cd "$PROJECT_ROOT" && cargo build --release --features pdf)
+    # Always build. Cargo's own staleness check makes this a no-op when the
+    # binary is current, and it guarantees the tapes exercise HEAD rather than
+    # whatever target/release/bookokrat an earlier build left behind.
+    echo "Building release binary with PDF support..."
+    if ! (cd "$PROJECT_ROOT" && cargo build --release --features pdf); then
+        echo -e "${RED}ERROR: cargo build failed${NC}"
+        exit 1
     fi
 fi
 
