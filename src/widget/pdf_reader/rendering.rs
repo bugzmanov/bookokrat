@@ -25,9 +25,7 @@ use crate::notification::NotificationManager;
 use crate::pdf::kittyv2::{DisplayLocation, ImageState};
 use crate::pdf::{CellSize, ConvertedImage};
 use crate::pdf::{Command, ConversionCommand, RenderResponse, RenderedFrame, WorkerFault};
-use crate::settings::{
-    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
-};
+use crate::settings::{PdfPageLayoutMode, PdfRenderMode};
 use crate::terminal_overlay;
 use crate::theme::{Base16Palette, current_theme};
 use crate::widget::highlight_palette::{
@@ -444,8 +442,8 @@ pub(crate) fn apply_render_responses(
                     // slice, so only its frames arrive — gating on the left page
                     // alone would leave the redraw-suppression flag set forever
                     // (state advances, screen frozen).
-                    let dual_partner = crate::settings::get_pdf_page_layout_mode()
-                        == crate::settings::PdfPageLayoutMode::Dual
+                    let dual_partner = pdf_reader.settings.load().pdf_page_layout_mode
+                        == PdfPageLayoutMode::Dual
                         && frame_index == pdf_reader.page.saturating_add(1);
                     if frame_index == pdf_reader.page || dual_partner {
                         converted_frame_page = Some(frame_index);
@@ -534,6 +532,7 @@ mod tests {
             false,
             None,
             "test-doc".to_string(),
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
         );
 
         // Current page is 0, so index 11 is beyond KITTY_CACHE_RADIUS (10)
@@ -924,7 +923,7 @@ impl PdfReaderState {
 
         // In zen mode the user can opt to drop the surrounding frame so the page
         // renders edge-to-edge.
-        let borderless = self.zen_mode && crate::settings::is_zen_hide_border();
+        let borderless = self.zen_mode && self.settings.load().zen_hide_border;
         let content_block = if borderless {
             Block::default()
                 .borders(Borders::NONE)
@@ -1036,11 +1035,12 @@ impl PdfReaderState {
         if let Some(service) = service {
             // In dual layout, prefetch one full pair ahead/behind (±3 pages)
             // so the next spread is ready before the user scrolls to it.
-            let prefetch_ahead = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
-                3
-            } else {
-                1
-            };
+            let prefetch_ahead =
+                if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+                    3
+                } else {
+                    1
+                };
             let total_pages = self.rendered.len();
 
             if total_pages > 0 {
@@ -1591,17 +1591,16 @@ pub(crate) fn update_non_kitty_viewport(
     // in dual layout at a hard pan clamp one page has an empty slice and its
     // image legitimately never exists — probing it would fire DisplayFailed on
     // every frame, churning the converter forever.
-    let covered_pages: Vec<usize> = if crate::settings::get_pdf_page_layout_mode()
-        == crate::settings::PdfPageLayoutMode::Dual
-    {
-        pdf_reader
-            .dual_viewports_for_non_kitty(viewport)
-            .iter()
-            .map(|v| v.page)
-            .collect()
-    } else {
-        vec![viewport.page]
-    };
+    let covered_pages: Vec<usize> =
+        if pdf_reader.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+            pdf_reader
+                .dual_viewports_for_non_kitty(viewport)
+                .iter()
+                .map(|v| v.page)
+                .collect()
+        } else {
+            vec![viewport.page]
+        };
     let missing: Vec<usize> = covered_pages
         .into_iter()
         .filter(|&p| {
@@ -2787,9 +2786,11 @@ impl PdfReaderState {
         let size = frame.area();
         // Determine Kitty rendering mode
         let is_kitty_with_zoom = self.zoom.is_some() && self.is_kitty;
-        let use_scroll_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Scroll;
-        let use_page_mode = is_kitty_with_zoom && get_pdf_render_mode() == PdfRenderMode::Page;
-        let page_layout_mode = get_pdf_page_layout_mode();
+        let settings = self.settings.load();
+        let use_scroll_mode =
+            is_kitty_with_zoom && settings.pdf_render_mode == PdfRenderMode::Scroll;
+        let use_page_mode = is_kitty_with_zoom && settings.pdf_render_mode == PdfRenderMode::Page;
+        let page_layout_mode = settings.pdf_page_layout_mode;
         // tmux anchors are Unicode placeholders in the ratatui buffer; the
         // frame must keep emitting the anchor cell so tmux owns the image.
         let tmux_requires_anchor_refresh =

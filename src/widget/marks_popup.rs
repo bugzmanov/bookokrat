@@ -89,10 +89,6 @@ impl MarksPopup {
         self.visible = false;
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.visible
-    }
-
     /// Rebuild the row lists. Call before `show()`. `current_book_path` is the
     /// path of the open document and is used both to scope local marks and to
     /// label them.

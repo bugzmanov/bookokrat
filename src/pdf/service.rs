@@ -555,22 +555,6 @@ impl RenderService {
         responses
     }
 
-    /// Get the response receiver for async usage
-    #[must_use]
-    pub fn response_receiver(&self) -> &Receiver<RenderResponse> {
-        &self.response_rx
-    }
-
-    /// Check if a page is cached
-    #[must_use]
-    pub fn is_page_cached(&self, page: usize) -> bool {
-        let key = CacheKey::from_params(page, &self.state.render_params());
-        self.cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .contains(&key)
-    }
-
     /// Get a cached page if available
     #[must_use]
     pub fn get_cached_page(&self, page: usize) -> Option<Arc<PageData>> {

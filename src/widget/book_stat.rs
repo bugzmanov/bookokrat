@@ -407,10 +407,6 @@ impl BookStat {
         self.visible = false;
     }
 
-    pub fn is_visible(&self) -> bool {
-        self.visible
-    }
-
     /// Get the actual EPUB chapter index of the currently selected chapter
     pub fn get_selected_chapter_index(&self) -> Option<usize> {
         self.list_state

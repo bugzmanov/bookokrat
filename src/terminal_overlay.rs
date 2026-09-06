@@ -32,13 +32,6 @@ pub fn clear_overlay_images_if_needed() {
     }
 }
 
-pub fn clear_rect_direct(rect: Rect) {
-    if rect.width == 0 || rect.height == 0 {
-        return;
-    }
-    clear_rects_direct([rect]);
-}
-
 pub fn clear_rects_direct(rects: impl IntoIterator<Item = Rect>) {
     clear_rects_direct_bg(rects, None);
 }

@@ -9,10 +9,6 @@ use std::sync::Arc;
 
 const IMAGE_SETTLE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
-fn adaptive_images_enabled() -> bool {
-    crate::settings::get_epub_image_size() == crate::settings::EpubImageSize::Adaptive
-}
-
 impl crate::markdown_text_reader::MarkdownTextReader {
     fn extract_images_from_node(
         &mut self,
@@ -169,7 +165,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             viewport_height,
             cell_width,
             cell_height,
-            adaptive_images_enabled(),
+            self.settings.load().epub_image_size == crate::settings::EpubImageSize::Adaptive,
         )
     }
 
@@ -234,7 +230,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             .as_ref()
             .map(|picker| picker.font_size())
             .unwrap_or((1, 2));
-        let adaptive = adaptive_images_enabled();
+        let adaptive =
+            self.settings.load().epub_image_size == crate::settings::EpubImageSize::Adaptive;
         let mut heights_changed = false;
         let mut had_loading_images = false;
 

@@ -353,11 +353,14 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Load settings (skip in test mode for reproducible state)
-    if !args.test_mode {
+    // Test mode runs on default settings that never touch the user's config.
+    let runtime_settings = if args.test_mode {
+        settings::RuntimeSettings::in_memory(settings::Settings::default())
+    } else {
         settings::load_settings();
         load_custom_themes();
-    }
+        settings::RuntimeSettings::global()
+    };
 
     // Create app and run it
     let book_directory = args
@@ -401,12 +404,13 @@ fn main() -> Result<()> {
     })?;
 
     let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         book_directory,
         bookmark_file.as_deref(),
         auto_load_recent,
         comments_dir.as_deref(),
         image_cache_dir,
+        runtime_settings,
     );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);

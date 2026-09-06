@@ -1,15 +1,8 @@
 use crate::inputs::KeySeq;
 use crate::main_app::VimNavMotions;
 use crate::settings::{
-    EpubColumnMode, EpubImageSize, LookupDisplay, PdfPageLayoutMode, PdfRenderMode,
-    get_epub_column_mode, get_epub_image_size, get_lookup_command, get_lookup_display,
-    get_pdf_page_layout_mode, get_pdf_render_mode, get_synctex_editor, is_invert_scroll_direction,
-    is_pdf_enabled, is_transparent_background, is_zen_hide_border, set_epub_column_mode,
-    set_epub_image_size, set_integrations, set_invert_scroll_direction, set_lookup_display,
-    set_pdf_enabled, set_pdf_page_layout_mode, set_pdf_render_mode, set_transparent_background,
-    set_zen_hide_border,
+    EpubColumnMode, EpubImageSize, LookupDisplay, PdfPageLayoutMode, PdfRenderMode, RuntimeSettings,
 };
-use crate::terminal;
 use crate::theme::{
     Base16Palette, all_theme_names, current_theme, current_theme_index, set_theme_by_index_and_save,
 };
@@ -205,6 +198,7 @@ impl SettingsSection {
 }
 
 pub struct SettingsPopup {
+    settings: RuntimeSettings,
     current_tab: SettingsTab,
     // General tab state
     general_selected: GeneralOption,
@@ -236,35 +230,18 @@ pub struct SettingsPopup {
     last_popup_area: Option<Rect>,
 }
 
-impl Default for SettingsPopup {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SettingsPopup {
-    pub fn new() -> Self {
-        if cfg!(feature = "pdf") {
-            Self::new_with_tab(SettingsTab::General)
-        } else {
-            Self::new_with_tab(SettingsTab::Themes)
-        }
-    }
-
     pub fn current_tab(&self) -> SettingsTab {
         self.current_tab
     }
 
-    pub fn new_with_tab(tab: SettingsTab) -> Self {
-        let caps = terminal::detect_terminal_with_probe();
-        Self::new_with_caps(tab, caps.supports_graphics, caps.pdf.supports_scroll_mode)
-    }
-
-    pub fn new_with_caps(
+    pub fn new(
         tab: SettingsTab,
         supports_graphics: bool,
         supports_scroll_mode: bool,
+        settings: RuntimeSettings,
     ) -> Self {
+        let snapshot = settings.load();
         let current_tab = if cfg!(feature = "pdf") {
             tab
         } else {
@@ -274,17 +251,17 @@ impl SettingsPopup {
         let general_selected = Self::initial_general_selected_from_state(
             supports_graphics,
             supports_scroll_mode,
-            is_pdf_enabled(),
-            get_pdf_render_mode(),
-            get_pdf_page_layout_mode(),
+            snapshot.pdf_enabled,
+            snapshot.pdf_render_mode,
+            snapshot.pdf_page_layout_mode,
         );
         let theme_names = all_theme_names();
 
         let mut lookup_command_input = crate::vendored::tui_textarea::TextArea::default();
         lookup_command_input.set_placeholder_text("e.g. dict {}");
         lookup_command_input.set_cursor_line_style(Style::default());
-        if let Some(cmd) = get_lookup_command() {
-            lookup_command_input.insert_str(&cmd);
+        if let Some(cmd) = snapshot.lookup_command.as_ref() {
+            lookup_command_input.insert_str(cmd);
         }
 
         let mut synctex_editor_input = crate::vendored::tui_textarea::TextArea::default();
@@ -292,11 +269,12 @@ impl SettingsPopup {
             "nvim --server /tmp/nvim.sock --remote-send '<C-\\><C-n>:e {file}<CR>:{line}<CR>'",
         );
         synctex_editor_input.set_cursor_line_style(Style::default());
-        if let Some(cmd) = get_synctex_editor() {
-            synctex_editor_input.insert_str(&cmd);
+        if let Some(cmd) = snapshot.synctex_editor.as_ref() {
+            synctex_editor_input.insert_str(cmd);
         }
 
         SettingsPopup {
+            settings,
             current_tab,
             general_selected,
             supports_scroll_mode,
@@ -304,12 +282,12 @@ impl SettingsPopup {
             theme_selected_idx: Self::initial_theme_selected_idx_from_state(
                 theme_names.len(),
                 current_theme_index(),
-                is_transparent_background(),
+                snapshot.transparent_background,
             ),
             theme_names,
             integrations_focus: IntegrationsFocus::LookupCommand,
             lookup_command_input,
-            lookup_display_selected: get_lookup_display(),
+            lookup_display_selected: snapshot.lookup_display,
             synctex_editor_input,
             tab_area: None,
             content_chunks: Vec::new(),
@@ -360,7 +338,7 @@ impl SettingsPopup {
     }
 
     fn render_mode_available(&self) -> bool {
-        self.supports_graphics && is_pdf_enabled()
+        self.supports_graphics && self.settings.load().pdf_enabled
     }
 
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
@@ -518,8 +496,13 @@ impl SettingsPopup {
     fn general_natural_height(&self, width: u16) -> u16 {
         let pdf_sections = self.general_pdf_sections();
         let reader_sections = self.general_reader_sections();
+        let settings = self.settings.load();
         let info_h = self
-            .get_pdf_info_lines(current_theme(), is_pdf_enabled(), get_pdf_render_mode())
+            .get_pdf_info_lines(
+                current_theme(),
+                settings.pdf_enabled,
+                settings.pdf_render_mode,
+            )
             .len() as u16;
         let pdf_info_h = if info_h > 0 { 1 + info_h } else { 0 };
         let pdf_h = Self::settings_sections_height(&pdf_sections) + pdf_info_h;
@@ -650,8 +633,9 @@ impl SettingsPopup {
 
         let pdf_sections = self.general_pdf_sections();
         let reader_sections = self.general_reader_sections();
+        let settings = self.settings.load();
         let pdf_info_lines =
-            self.get_pdf_info_lines(palette, is_pdf_enabled(), get_pdf_render_mode());
+            self.get_pdf_info_lines(palette, settings.pdf_enabled, settings.pdf_render_mode);
         let pdf_sections_height = Self::settings_sections_height(&pdf_sections);
         let pdf_info_height = if pdf_info_lines.is_empty() {
             0
@@ -690,9 +674,10 @@ impl SettingsPopup {
     }
 
     fn general_pdf_sections(&self) -> Vec<SettingsSection> {
-        let pdf_enabled = is_pdf_enabled();
-        let current_mode = get_pdf_render_mode();
-        let current_layout_mode = get_pdf_page_layout_mode();
+        let snapshot = self.settings.load();
+        let pdf_enabled = snapshot.pdf_enabled;
+        let current_mode = snapshot.pdf_render_mode;
+        let current_layout_mode = snapshot.pdf_page_layout_mode;
         let effective_pdf_enabled = self.supports_graphics && pdf_enabled;
         let render_mode_available = self.render_mode_available();
         let scroll_suffix = if !self.supports_scroll_mode {
@@ -775,10 +760,11 @@ impl SettingsPopup {
     }
 
     fn general_reader_sections(&self) -> Vec<SettingsSection> {
-        let invert_scroll = is_invert_scroll_direction();
-        let current_column_mode = get_epub_column_mode();
-        let zen_hide_border = is_zen_hide_border();
-        let current_image_size = get_epub_image_size();
+        let snapshot = self.settings.load();
+        let invert_scroll = snapshot.invert_scroll_direction;
+        let current_column_mode = snapshot.epub_column_mode;
+        let zen_hide_border = snapshot.zen_hide_border;
+        let current_image_size = snapshot.epub_image_size;
 
         vec![
             SettingsSection {
@@ -998,7 +984,7 @@ impl SettingsPopup {
         self.render_section_header(buf, chunks[2], "Background", palette, palette.base_06);
 
         // Transparent Background options (indices theme_names.len() and theme_names.len()+1)
-        let transparent = is_transparent_background();
+        let transparent = self.settings.load().transparent_background;
         let radio_selected = "●";
         let radio_unselected = "○";
 
@@ -1341,24 +1327,27 @@ impl SettingsPopup {
     }
 
     fn apply_general_selected(&mut self) -> Option<SettingsAction> {
+        let snapshot = self.settings.load();
         match self.general_selected {
             GeneralOption::PdfEnabled if self.supports_graphics => {
-                if !is_pdf_enabled() {
-                    set_pdf_enabled(true);
+                if !snapshot.pdf_enabled {
+                    self.settings.update(|settings| settings.pdf_enabled = true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
             GeneralOption::PdfDisabled if self.supports_graphics => {
-                if is_pdf_enabled() {
-                    set_pdf_enabled(false);
+                if snapshot.pdf_enabled {
+                    self.settings
+                        .update(|settings| settings.pdf_enabled = false);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
             GeneralOption::PdfRenderPage if self.render_mode_available() => {
-                if get_pdf_render_mode() != PdfRenderMode::Page {
-                    set_pdf_render_mode(PdfRenderMode::Page);
+                if snapshot.pdf_render_mode != PdfRenderMode::Page {
+                    self.settings
+                        .update(|settings| settings.pdf_render_mode = PdfRenderMode::Page);
                     return Some(SettingsAction::RenderModeChanged);
                 }
                 None
@@ -1366,78 +1355,90 @@ impl SettingsPopup {
             GeneralOption::PdfRenderScroll
                 if self.render_mode_available() && self.supports_scroll_mode =>
             {
-                if get_pdf_render_mode() != PdfRenderMode::Scroll {
-                    set_pdf_render_mode(PdfRenderMode::Scroll);
+                if snapshot.pdf_render_mode != PdfRenderMode::Scroll {
+                    self.settings
+                        .update(|settings| settings.pdf_render_mode = PdfRenderMode::Scroll);
                     return Some(SettingsAction::RenderModeChanged);
                 }
                 None
             }
             GeneralOption::PdfLayoutSingle if self.render_mode_available() => {
-                if get_pdf_page_layout_mode() != PdfPageLayoutMode::Single {
-                    set_pdf_page_layout_mode(PdfPageLayoutMode::Single);
+                if snapshot.pdf_page_layout_mode != PdfPageLayoutMode::Single {
+                    self.settings.update(|settings| {
+                        settings.pdf_page_layout_mode = PdfPageLayoutMode::Single
+                    });
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
             GeneralOption::PdfLayoutDual if self.render_mode_available() => {
-                if get_pdf_page_layout_mode() != PdfPageLayoutMode::Dual {
-                    set_pdf_page_layout_mode(PdfPageLayoutMode::Dual);
+                if snapshot.pdf_page_layout_mode != PdfPageLayoutMode::Dual {
+                    self.settings
+                        .update(|settings| settings.pdf_page_layout_mode = PdfPageLayoutMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
             GeneralOption::MouseWheelNormal => {
-                if is_invert_scroll_direction() {
-                    set_invert_scroll_direction(false);
+                if snapshot.invert_scroll_direction {
+                    self.settings
+                        .update(|settings| settings.invert_scroll_direction = false);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
             GeneralOption::MouseWheelInverted => {
-                if !is_invert_scroll_direction() {
-                    set_invert_scroll_direction(true);
+                if !snapshot.invert_scroll_direction {
+                    self.settings
+                        .update(|settings| settings.invert_scroll_direction = true);
                     return Some(SettingsAction::SettingsChanged);
                 }
                 None
             }
             GeneralOption::EpubSingle => {
-                if get_epub_column_mode() != EpubColumnMode::Single {
-                    set_epub_column_mode(EpubColumnMode::Single);
+                if snapshot.epub_column_mode != EpubColumnMode::Single {
+                    self.settings
+                        .update(|settings| settings.epub_column_mode = EpubColumnMode::Single);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
             GeneralOption::EpubDual => {
-                if get_epub_column_mode() != EpubColumnMode::Dual {
-                    set_epub_column_mode(EpubColumnMode::Dual);
+                if snapshot.epub_column_mode != EpubColumnMode::Dual {
+                    self.settings
+                        .update(|settings| settings.epub_column_mode = EpubColumnMode::Dual);
                     return Some(SettingsAction::PageLayoutChanged);
                 }
                 None
             }
             GeneralOption::ZenBorderShown => {
-                if is_zen_hide_border() {
-                    set_zen_hide_border(false);
+                if snapshot.zen_hide_border {
+                    self.settings
+                        .update(|settings| settings.zen_hide_border = false);
                     return Some(SettingsAction::ZenBorderChanged);
                 }
                 None
             }
             GeneralOption::ZenBorderHidden => {
-                if !is_zen_hide_border() {
-                    set_zen_hide_border(true);
+                if !snapshot.zen_hide_border {
+                    self.settings
+                        .update(|settings| settings.zen_hide_border = true);
                     return Some(SettingsAction::ZenBorderChanged);
                 }
                 None
             }
             GeneralOption::EpubImagesAdaptive => {
-                if get_epub_image_size() != EpubImageSize::Adaptive {
-                    set_epub_image_size(EpubImageSize::Adaptive);
+                if snapshot.epub_image_size != EpubImageSize::Adaptive {
+                    self.settings
+                        .update(|settings| settings.epub_image_size = EpubImageSize::Adaptive);
                     return Some(SettingsAction::EpubImageSizeChanged);
                 }
                 None
             }
             GeneralOption::EpubImagesCompact => {
-                if get_epub_image_size() != EpubImageSize::Compact {
-                    set_epub_image_size(EpubImageSize::Compact);
+                if snapshot.epub_image_size != EpubImageSize::Compact {
+                    self.settings
+                        .update(|settings| settings.epub_image_size = EpubImageSize::Compact);
                     return Some(SettingsAction::EpubImageSizeChanged);
                 }
                 None
@@ -1451,19 +1452,21 @@ impl SettingsPopup {
         if self.theme_selected_idx < theme_count {
             // Theme selection
             if self.theme_selected_idx != current_theme_index() {
-                set_theme_by_index_and_save(self.theme_selected_idx);
+                set_theme_by_index_and_save(self.theme_selected_idx, &self.settings);
                 return Some(SettingsAction::SettingsChanged);
             }
         } else if self.theme_selected_idx == theme_count {
             // "Theme color" option - disable transparency
-            if is_transparent_background() {
-                set_transparent_background(false);
+            if self.settings.load().transparent_background {
+                self.settings
+                    .update(|settings| settings.transparent_background = false);
                 return Some(SettingsAction::SettingsChanged);
             }
         } else if self.theme_selected_idx == theme_count + 1 {
             // "Transparent" option - enable transparency
-            if !is_transparent_background() {
-                set_transparent_background(true);
+            if !self.settings.load().transparent_background {
+                self.settings
+                    .update(|settings| settings.transparent_background = true);
                 return Some(SettingsAction::SettingsChanged);
             }
         }
@@ -1680,12 +1683,14 @@ impl SettingsPopup {
         match self.integrations_focus {
             IntegrationsFocus::DisplayPopup => {
                 self.lookup_display_selected = LookupDisplay::Popup;
-                set_lookup_display(LookupDisplay::Popup);
+                self.settings
+                    .update(|settings| settings.lookup_display = LookupDisplay::Popup);
                 Some(SettingsAction::SettingsChanged)
             }
             IntegrationsFocus::DisplayFireAndForget => {
                 self.lookup_display_selected = LookupDisplay::FireAndForget;
-                set_lookup_display(LookupDisplay::FireAndForget);
+                self.settings
+                    .update(|settings| settings.lookup_display = LookupDisplay::FireAndForget);
                 Some(SettingsAction::SettingsChanged)
             }
             IntegrationsFocus::TestLookup => {
@@ -1858,7 +1863,11 @@ impl SettingsPopup {
         } else {
             Some(synctex_text)
         };
-        set_integrations(lookup_cmd, self.lookup_display_selected, synctex_cmd);
+        self.settings.update(|settings| {
+            settings.lookup_command = lookup_cmd;
+            settings.lookup_display = self.lookup_display_selected;
+            settings.synctex_editor = synctex_cmd;
+        });
     }
 
     pub fn handle_key(

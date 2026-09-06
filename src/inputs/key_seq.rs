@@ -118,10 +118,6 @@ impl KeySeq {
         }
     }
 
-    pub fn last_has_modifiers(&self, modifiers: KeyModifiers) -> bool {
-        self.last().is_some_and(|k| k.modifiers.contains(modifiers))
-    }
-
     // === Backward compatible char-based API ===
 
     /// Handle a character key press and return the current sequence as a string.

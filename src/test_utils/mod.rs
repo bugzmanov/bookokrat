@@ -53,12 +53,6 @@ pub mod test_helpers {
             self
         }
 
-        /// Add a Ctrl+character key press
-        pub fn press_ctrl_char(mut self, c: char) -> Self {
-            self.events.push(SimulatedEventSource::ctrl_char_key(c));
-            self
-        }
-
         /// Press Enter
         pub fn press_enter(mut self) -> Self {
             self.events.push(Event::Key(KeyEvent {
@@ -108,30 +102,6 @@ pub mod test_helpers {
             self
         }
 
-        /// Navigate to next chapter (press 'l')
-        pub fn next_chapter(mut self) -> Self {
-            self.events.push(SimulatedEventSource::char_key('l'));
-            self
-        }
-
-        /// Navigate to previous chapter (press 'h')
-        pub fn prev_chapter(mut self) -> Self {
-            self.events.push(SimulatedEventSource::char_key('h'));
-            self
-        }
-
-        /// Scroll half screen down (Ctrl+d)
-        pub fn half_screen_down(mut self) -> Self {
-            self.events.push(SimulatedEventSource::ctrl_char_key('d'));
-            self
-        }
-
-        /// Scroll half screen up (Ctrl+u)
-        pub fn half_screen_up(mut self) -> Self {
-            self.events.push(SimulatedEventSource::ctrl_char_key('u'));
-            self
-        }
-
         /// Quit the application (press 'q')
         pub fn quit(mut self) -> Self {
             self.events.push(SimulatedEventSource::char_key('q'));
@@ -162,43 +132,6 @@ pub mod test_helpers {
         // Hide cursor for test terminals to prevent it from appearing in SVG snapshots
         terminal.hide_cursor().unwrap();
         terminal
-    }
-
-    /// Capture the current terminal buffer as a string
-    pub fn capture_terminal_state(terminal: &Terminal<TestBackend>) -> String {
-        let buffer = terminal.backend().buffer();
-        let mut lines = Vec::new();
-
-        for y in 0..buffer.area.height {
-            let mut line = String::new();
-            for x in 0..buffer.area.width {
-                let cell = buffer.cell((x, y)).unwrap();
-                line.push_str(cell.symbol());
-            }
-            // Trim trailing whitespace from each line
-            lines.push(line.trim_end().to_string());
-        }
-
-        // Remove trailing empty lines
-        while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
-            lines.pop();
-        }
-
-        lines.join("\n")
-    }
-
-    /// Create a test App instance with clean initial conditions
-    /// - Uses testdata directory for EPUBs
-    /// - No bookmark file (starts with empty bookmarks)
-    /// - No auto-loading of recent books
-    pub fn create_test_app() -> crate::App {
-        crate::App::new_with_config(
-            Some("tests/testdata"), // Use tests/testdata directory
-            Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
-            false,                  // Don't auto-load recent books
-            None,                   // Use default comments directory
-            None,                   // Use temp dir for image cache
-        )
     }
 
     /// Creates temporary fake EPUB files for testing
@@ -269,39 +202,6 @@ pub mod test_helpers {
         );
 
         (app, temp_manager)
-    }
-
-    /// Create a test App instance with standard fake books for consistent testing (backward compatibility)
-    /// - Uses temporary directory with fake EPUB files
-    /// - No bookmark file (starts with empty bookmarks)
-    /// - No auto-loading of recent books
-    pub fn create_test_app_with_fake_books() -> (crate::App, TempBookManager) {
-        let temp_manager = TempBookManager::new().expect("Failed to create temp books");
-
-        let app = crate::App::new_with_config(
-            Some(&temp_manager.get_directory()), // Use temporary directory with fake books
-            Some("/dev/null"),                   // Non-existent bookmark file = empty bookmarks
-            false,                               // Don't auto-load recent books
-            None,                                // Use default comments directory
-            None,                                // Use temp dir for image cache
-        );
-
-        (app, temp_manager)
-    }
-
-    /// Create a test App instance with isolated comments directory
-    /// - Uses testdata directory for EPUBs
-    /// - No bookmark file (starts with empty bookmarks)
-    /// - No auto-loading of recent books
-    /// - Uses provided temp directory for comments (test isolation)
-    pub fn create_test_app_with_comments_dir(comments_dir: &std::path::Path) -> crate::App {
-        crate::App::new_with_config(
-            Some("tests/testdata"), // Use tests/testdata directory
-            Some("/dev/null"),      // Non-existent bookmark file = empty bookmarks
-            false,                  // Don't auto-load recent books
-            Some(comments_dir),     // Use isolated comments directory
-            None,                   // Use temp dir for image cache
-        )
     }
 }
 

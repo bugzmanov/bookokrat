@@ -2,8 +2,8 @@
 use crate::book_manager::BookFormat;
 use crate::book_manager::{BookInfo, BookManager};
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
-use crate::settings::{BookSortOrder, get_book_sort_order};
-use crate::theme::{Base16Palette, theme_background};
+use crate::settings::{BookSortOrder, RuntimeSettings};
+use crate::theme::{Base16Palette, theme_background_for};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -17,6 +17,7 @@ pub struct BookList {
     pub list_state: ListState,
     book_infos: Vec<BookInfo>,
     search_state: SearchState,
+    settings: RuntimeSettings,
 }
 
 impl BookList {
@@ -33,6 +34,7 @@ impl BookList {
             list_state,
             book_infos: books,
             search_state: SearchState::new(),
+            settings: book_manager.settings.clone(),
         }
     }
 
@@ -329,7 +331,8 @@ impl BookList {
             items.push(ListItem::new(content));
         }
 
-        let base_title = match (is_calibre_mode, get_book_sort_order()) {
+        let settings = self.settings.load();
+        let base_title = match (is_calibre_mode, settings.book_sort_order) {
             (true, BookSortOrder::ByType) => "Books [Calibre] [by type]",
             (true, BookSortOrder::ByName) => "Books [Calibre]",
             (false, BookSortOrder::ByType) => "Books [by type]",
@@ -348,16 +351,17 @@ impl BookList {
             Style::default().bg(selection_bg).fg(selection_fg)
         };
 
+        let background = theme_background_for(settings.transparent_background);
         let files = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(theme_background())),
+                    .style(Style::default().bg(background)),
             )
             .highlight_style(highlight_style)
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(background));
 
         f.render_stateful_widget(files, area, &mut self.list_state);
     }

@@ -445,8 +445,6 @@ struct ConverterEngine {
 
 #[derive(Clone)]
 struct CommentCacheEntry {
-    #[expect(dead_code)]
-    scale_factor: f32,
     rects: Vec<PixelRect>,
 }
 
@@ -555,7 +553,12 @@ impl ConverterEngine {
         Ok(())
     }
 
-    fn new(picker: Picker, prerender: usize, kitty_shm_support: bool) -> Self {
+    fn new(
+        picker: Picker,
+        prerender: usize,
+        kitty_shm_support: bool,
+        show_link_underlines: bool,
+    ) -> Self {
         Self {
             picker,
             prerender,
@@ -570,7 +573,7 @@ impl ConverterEngine {
             comment_cache: HashMap::new(),
             visual_rects: Vec::new(),
             cursor_rect: None,
-            show_link_underlines: crate::settings::is_pdf_show_link_underlines(),
+            show_link_underlines,
             viewport: None,
             last_viewport_by_page: HashMap::new(),
             tiled_pages: HashSet::new(),
@@ -1000,17 +1003,6 @@ impl ConverterEngine {
             }
         }
         Ok(())
-    }
-
-    #[expect(dead_code)]
-    fn reconvert_changed_pages<T: PageScoped>(
-        &mut self,
-        old: &[T],
-        new: &[T],
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let affected = Self::collect_affected_pages(old, new);
-        self.reconvert_pages(&affected, sender)
     }
 
     fn reconvert_changed_visual(
@@ -1515,13 +1507,7 @@ impl ConverterEngine {
             if rects_px.is_empty() {
                 continue;
             }
-            cache.insert(
-                rect.page,
-                CommentCacheEntry {
-                    scale_factor: cached.data.scale_factor,
-                    rects: rects_px,
-                },
-            );
+            cache.insert(rect.page, CommentCacheEntry { rects: rects_px });
         }
         cache
     }
@@ -1532,13 +1518,8 @@ impl ConverterEngine {
             self.comment_cache.remove(&page_num);
             return;
         }
-        self.comment_cache.insert(
-            page_num,
-            CommentCacheEntry {
-                scale_factor,
-                rects: rects_px,
-            },
-        );
+        self.comment_cache
+            .insert(page_num, CommentCacheEntry { rects: rects_px });
     }
 
     /// Clear decoded images for pages far from the current page to save memory.
@@ -2728,11 +2709,13 @@ pub fn run_conversion_loop(
     picker: Picker,
     prerender: usize,
     kitty_shm_support: bool,
+    show_link_underlines: bool,
 ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
     use std::time::{Duration, Instant};
 
     log::info!("Converter using protocol: {:?}", picker.protocol_type());
-    let mut engine = ConverterEngine::new(picker, prerender, kitty_shm_support);
+    let mut engine =
+        ConverterEngine::new(picker, prerender, kitty_shm_support, show_link_underlines);
     let mut iteration = 0;
     let mut has_work = false;
     let mut last_stats_log = Instant::now();
