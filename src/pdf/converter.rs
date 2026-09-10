@@ -27,7 +27,7 @@ use crate::vendored::ratatui_image::{
 
 use super::kittyv2::ImageId;
 use super::normal_mode::{CursorRect, VisualRect};
-use super::selection::{HighlightOverlay, SelectionRect};
+use super::selection::{CommentMarker, CommentOverlay, HighlightOverlay, SelectionRect};
 use super::types::{PageData, VecExt as _, ViewportUpdate};
 
 type PipelineError = super::request::WorkerFault;
@@ -269,6 +269,9 @@ struct OverlaySet {
     /// When true, `comments` contains pre-computed underline coordinates (for tile rendering).
     /// When false, `comments` contains selection rects and underline position is calculated.
     comments_are_underlines: bool,
+    /// Box-annotation outlines, already expanded into edge bars (page-space pixels),
+    /// so plain rect clipping/filling is correct across tiles.
+    boxes: Vec<PixelRect>,
     selection: Vec<PixelRect>,
     visual: Vec<PixelRect>,
     cursor: Option<PixelRect>,
@@ -277,6 +280,7 @@ struct OverlaySet {
 impl OverlaySet {
     fn is_empty(&self) -> bool {
         self.comments.is_empty()
+            && self.boxes.is_empty()
             && self.highlights.is_empty()
             && self.selection.is_empty()
             && self.visual.is_empty()
@@ -370,6 +374,7 @@ impl OverlaySet {
             highlights: clip_highlights(&self.highlights),
             comments: clip_comments(&self.comments),
             comments_are_underlines: true, // Tile rendering pre-computes underline positions
+            boxes: clip(&self.boxes),
             selection: clip(&self.selection),
             visual: clip(&self.visual),
             cursor,
@@ -397,7 +402,7 @@ pub enum ConversionCommand {
     UpdateViewport(ViewportUpdate),
     UpdateDualViewport(Vec<ViewportUpdate>),
     UpdateSelection(Vec<SelectionRect>),
-    UpdateComments(Vec<SelectionRect>),
+    UpdateComments(Vec<CommentOverlay>),
     UpdateHighlights(Vec<HighlightOverlay>),
     UpdateCursor(Option<CursorRect>),
     UpdateVisual(Vec<VisualRect>),
@@ -417,7 +422,7 @@ struct ConverterEngine {
     images: Vec<Option<Arc<PageData>>>,
     page_cache: Vec<Option<CachedPage>>,
     selection_rects: Vec<SelectionRect>,
-    comment_rects: Vec<SelectionRect>,
+    comment_rects: Vec<CommentOverlay>,
     highlight_overlays: Vec<HighlightOverlay>,
     comment_cache: HashMap<usize, CommentCacheEntry>,
     visual_rects: Vec<VisualRect>,
@@ -434,7 +439,10 @@ struct ConverterEngine {
 struct CommentCacheEntry {
     #[expect(dead_code)]
     scale_factor: f32,
+    /// Text-anchored comments (drawn as underlines).
     rects: Vec<PixelRect>,
+    /// Box annotations, expanded into outline edge bars.
+    boxes: Vec<PixelRect>,
 }
 
 impl ConverterEngine {
@@ -788,11 +796,15 @@ impl ConverterEngine {
                 self.invalidate_tiles_for_pages(&affected);
                 self.reconvert_pages(&affected, sender)?;
             }
-            ConversionCommand::UpdateComments(new_rects) => {
-                log::trace!("UpdateComments received: {} rects", new_rects.len());
-                let old_rects = std::mem::take(&mut self.comment_rects);
+            ConversionCommand::UpdateComments(new_overlays) => {
+                log::trace!("UpdateComments received: {} rects", new_overlays.len());
+                let old_overlays = std::mem::take(&mut self.comment_rects);
+                let old_rects: Vec<SelectionRect> =
+                    old_overlays.iter().map(|o| o.rect.clone()).collect();
+                let new_rects: Vec<SelectionRect> =
+                    new_overlays.iter().map(|o| o.rect.clone()).collect();
                 let affected = Self::collect_affected_pages(&old_rects, &new_rects);
-                self.comment_rects = new_rects;
+                self.comment_rects = new_overlays;
                 self.comment_cache = self.build_comment_cache(&self.comment_rects);
                 self.invalidate_tiles_for_pages(&affected);
                 self.reconvert_pages(&affected, sender)?;
@@ -1391,6 +1403,7 @@ impl ConverterEngine {
                     cached_comments.rects.len()
                 );
                 overlays.comments.clone_from(&cached_comments.rects);
+                overlays.boxes.clone_from(&cached_comments.boxes);
             }
         } else {
             log::debug!("get_page_overlays: page={page_num} - no page cache or no comments");
@@ -1459,40 +1472,35 @@ impl ConverterEngine {
         overlays
     }
 
-    fn build_comment_cache(&self, rects: &[SelectionRect]) -> HashMap<usize, CommentCacheEntry> {
+    fn build_comment_cache(
+        &self,
+        overlays: &[CommentOverlay],
+    ) -> HashMap<usize, CommentCacheEntry> {
         let mut cache: HashMap<usize, CommentCacheEntry> = HashMap::new();
-        for rect in rects {
-            let Some(Some(cached)) = self.page_cache.get(rect.page) else {
-                continue;
-            };
-            let rects_px = comment_rects_for_page(rects, rect.page, cached.data.scale_factor);
-            if rects_px.is_empty() {
+        for overlay in overlays {
+            let page = overlay.rect.page;
+            if cache.contains_key(&page) {
                 continue;
             }
-            cache.insert(
-                rect.page,
-                CommentCacheEntry {
-                    scale_factor: cached.data.scale_factor,
-                    rects: rects_px,
-                },
-            );
+            let Some(Some(cached)) = self.page_cache.get(page) else {
+                continue;
+            };
+            if let Some(entry) = comment_cache_entry(overlays, page, cached.data.scale_factor) {
+                cache.insert(page, entry);
+            }
         }
         cache
     }
 
     fn update_comment_cache_for_page(&mut self, page_num: usize, scale_factor: f32) {
-        let rects_px = comment_rects_for_page(&self.comment_rects, page_num, scale_factor);
-        if rects_px.is_empty() {
-            self.comment_cache.remove(&page_num);
-            return;
+        match comment_cache_entry(&self.comment_rects, page_num, scale_factor) {
+            Some(entry) => {
+                self.comment_cache.insert(page_num, entry);
+            }
+            None => {
+                self.comment_cache.remove(&page_num);
+            }
         }
-        self.comment_cache.insert(
-            page_num,
-            CommentCacheEntry {
-                scale_factor,
-                rects: rects_px,
-            },
-        );
     }
 
     /// Clear decoded images for pages far from the current page to save memory.
@@ -2196,6 +2204,8 @@ fn apply_overlays(img: &mut RgbImage, overlays: &OverlaySet) {
         // Comments are selection rects, calculate underline position
         apply_underline_rects(img, &overlays.comments, OverlayOp::Comment);
     }
+    // Box outlines are pre-expanded edge bars in the same color as underlines.
+    draw_underline_rects_direct(img, &overlays.boxes);
     apply_rects_op(img, &overlays.selection, OverlayOp::Selection);
     apply_rects_op(img, &overlays.visual, OverlayOp::Selection);
     if let Some(cursor) = overlays.cursor {
@@ -2253,23 +2263,62 @@ fn apply_overlays_dynamic(img: &mut DynamicImage, overlays: &OverlaySet) {
     *img = DynamicImage::ImageRgb8(rgb);
 }
 
-fn comment_rects_for_page(
-    rects: &[SelectionRect],
+fn scale_rect(rect: &SelectionRect, scale: f64) -> Option<PixelRect> {
+    PixelRect::new(
+        (f64::from(rect.topleft_x) * scale).round() as u32,
+        (f64::from(rect.topleft_y) * scale).round() as u32,
+        (f64::from(rect.bottomright_x) * scale).round() as u32,
+        (f64::from(rect.bottomright_y) * scale).round() as u32,
+    )
+}
+
+/// Outline stroke width for box annotations, in page pixels at `scale`.
+fn box_stroke_px(scale: f64) -> u32 {
+    ((2.0 * scale).round() as u32).clamp(2, 6)
+}
+
+/// Expand a box rect into its four edge bars (top, bottom, left, right).
+fn box_outline_bars(rect: PixelRect, stroke: u32) -> impl Iterator<Item = PixelRect> {
+    let PixelRect { x0, y0, x1, y1 } = rect;
+    [
+        PixelRect::new(x0, y0, x1, y0.saturating_add(stroke).min(y1)),
+        PixelRect::new(x0, y1.saturating_sub(stroke).max(y0), x1, y1),
+        PixelRect::new(x0, y0, x0.saturating_add(stroke).min(x1), y1),
+        PixelRect::new(x1.saturating_sub(stroke).max(x0), y0, x1, y1),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// Build the per-page comment overlay cache: underline rects for text comments
+/// and outline edge bars for box annotations, both in page pixels at `scale_factor`.
+/// Returns `None` when the page has no comment overlays.
+fn comment_cache_entry(
+    overlays: &[CommentOverlay],
     page_num: usize,
     scale_factor: f32,
-) -> Vec<PixelRect> {
+) -> Option<CommentCacheEntry> {
     let scale = f64::from(scale_factor);
-    rects
-        .iter()
-        .filter(|rect| rect.page == page_num)
-        .filter_map(|rect| {
-            let topleft_x = (f64::from(rect.topleft_x) * scale).round() as u32;
-            let topleft_y = (f64::from(rect.topleft_y) * scale).round() as u32;
-            let bottomright_x = (f64::from(rect.bottomright_x) * scale).round() as u32;
-            let bottomright_y = (f64::from(rect.bottomright_y) * scale).round() as u32;
-            PixelRect::new(topleft_x, topleft_y, bottomright_x, bottomright_y)
-        })
-        .collect()
+    let stroke = box_stroke_px(scale);
+    let mut rects = Vec::new();
+    let mut boxes = Vec::new();
+    for overlay in overlays.iter().filter(|o| o.rect.page == page_num) {
+        let Some(px) = scale_rect(&overlay.rect, scale) else {
+            continue;
+        };
+        match overlay.marker {
+            CommentMarker::Underline => rects.push(px),
+            CommentMarker::Box => boxes.extend(box_outline_bars(px, stroke)),
+        }
+    }
+    if rects.is_empty() && boxes.is_empty() {
+        return None;
+    }
+    Some(CommentCacheEntry {
+        scale_factor,
+        rects,
+        boxes,
+    })
 }
 
 #[derive(Copy, Clone, Debug)]

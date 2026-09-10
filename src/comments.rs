@@ -194,6 +194,10 @@ pub enum CommentTarget {
     Pdf {
         page: usize,
         rects: Vec<PdfSelectionRect>,
+        /// True when the rect was drawn by the user as a region (box
+        /// annotation) rather than derived from a text selection. Region
+        /// comments render as an outline instead of an underline.
+        region: bool,
     },
 }
 
@@ -298,9 +302,27 @@ impl CommentTarget {
         Self::from_single_at(block, BlockSubtarget::CodeLines { line_range })
     }
 
-    /// Create a Pdf target for PDF selection
+    /// Create a Pdf target for PDF text selection
     pub fn pdf(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
-        Self::Pdf { page, rects }
+        Self::Pdf {
+            page,
+            rects,
+            region: false,
+        }
+    }
+
+    /// Create a Pdf target for a user-drawn region (box annotation)
+    pub fn pdf_region(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
+        Self::Pdf {
+            page,
+            rects,
+            region: true,
+        }
+    }
+
+    /// True for PDF region (box) targets
+    pub fn is_region(&self) -> bool {
+        matches!(self, Self::Pdf { region: true, .. })
     }
 
     /// All slices for a Text target. Empty slice for Pdf.
@@ -388,7 +410,7 @@ impl CommentTarget {
                 .first_slice()
                 .map(|s| s.subtarget.secondary_sort_key())
                 .unwrap_or((0, 0)),
-            Self::Pdf { page, rects } => {
+            Self::Pdf { page, rects, .. } => {
                 let y = rects.first().map(|r| r.topleft_y as usize).unwrap_or(0);
                 (*page, y)
             }
@@ -497,6 +519,8 @@ struct CommentPdfSerde {
     pub target_type: String, // "pdf"
     pub page: usize,
     pub rects: Vec<PdfSelectionRect>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub region: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content: String,
     pub updated_at: DateTime<Utc>,
@@ -681,6 +705,7 @@ impl From<CommentPdfSerde> for Comment {
             target: CommentTarget::Pdf {
                 page: pdf.page,
                 rects: pdf.rects,
+                region: pdf.region,
             },
             content: pdf.content,
             body: body_from_serde(&pdf.annotation_type, pdf.color),
@@ -749,7 +774,11 @@ impl Serialize for Comment {
                     serde.serialize(serializer)
                 }
             }
-            CommentTarget::Pdf { page, rects } => {
+            CommentTarget::Pdf {
+                page,
+                rects,
+                region,
+            } => {
                 let serde = CommentPdfSerde {
                     id: Some(self.id.clone()),
                     chapter_href: self.chapter_href.clone(),
@@ -758,6 +787,7 @@ impl Serialize for Comment {
                     target_type: "pdf".to_string(),
                     page: *page,
                     rects: rects.clone(),
+                    region: *region,
                     content: self.content.clone(),
                     updated_at: self.updated_at,
                     quoted_text: self.quoted_text.clone(),
@@ -918,12 +948,23 @@ impl CommentTarget {
                     .iter()
                     .any(|a| b_slices.iter().any(|b| slices_overlap(a, b)))
             }
-            (CommentTarget::Pdf { rects: a, .. }, CommentTarget::Pdf { rects: b, .. }) => {
-                a.iter().any(|left| {
-                    b.iter()
-                        .any(|right| left.page == right.page && pdf_rects_overlap(left, right))
-                })
-            }
+            // A drawn region may legitimately enclose text anchors (and vice
+            // versa); only same-kind PDF anchors conflict.
+            (
+                CommentTarget::Pdf {
+                    rects: a,
+                    region: a_region,
+                    ..
+                },
+                CommentTarget::Pdf {
+                    rects: b,
+                    region: b_region,
+                    ..
+                },
+            ) if a_region == b_region => a.iter().any(|left| {
+                b.iter()
+                    .any(|right| left.page == right.page && pdf_rects_overlap(left, right))
+            }),
             _ => false,
         }
     }

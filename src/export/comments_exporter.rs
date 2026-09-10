@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::comments::Comment;
+use crate::comments::{Comment, CommentTarget};
 use crate::markdown::{Document, Inline, TableCellContent};
 use crate::widget::comments_viewer::{ChapterDisplay, CommentEntry};
 
@@ -63,6 +63,12 @@ impl<'a> CommentsExporter<'a> {
                 let full_context = self
                     .extract_full_context_for_export(&entry.chapter_href, entry.primary_comment());
 
+                // PDF anchors: emit the page and rect so consumers can locate them.
+                if let Some(anchor) = Self::pdf_anchor_line(entry.primary_comment()) {
+                    output.push_str(&anchor);
+                    output.push_str("\n\n");
+                }
+
                 // Render the book fragment as a quote
                 for line in full_context.lines() {
                     output.push_str("> ");
@@ -84,6 +90,32 @@ impl<'a> CommentsExporter<'a> {
         }
 
         output
+    }
+
+    /// `*page N · box x0,y0 – x1,y1 pt*` for PDF comments (1-based page,
+    /// PDF points, origin top-left). Multiple rects are joined with `;`.
+    /// `box` marks a drawn region; text anchors say `text`.
+    fn pdf_anchor_line(comment: &Comment) -> Option<String> {
+        let CommentTarget::Pdf {
+            page,
+            rects,
+            region,
+        } = &comment.target
+        else {
+            return None;
+        };
+        let kind = if *region { "box" } else { "text" };
+        let coords = rects
+            .iter()
+            .map(|r| {
+                format!(
+                    "{},{} – {},{}",
+                    r.topleft_x, r.topleft_y, r.bottomright_x, r.bottomright_y
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        Some(format!("*page {} · {kind} {coords} pt*", page + 1))
     }
 
     pub fn generate_filename(book_title: &str) -> String {

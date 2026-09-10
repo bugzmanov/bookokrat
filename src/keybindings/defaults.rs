@@ -133,6 +133,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>S" => Action::TogglePdfRenderMode);
     bind!(ctx, "<Space>g" => Action::GoToPage);
     bind!(ctx, "<Space>l" => Action::LookupSelection);
+    bind!(ctx, "<Space>b" => Action::AddBoxAnnotation);
     bind!(ctx, "<Space><lt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<C-l>" => Action::ForceRedraw);
@@ -227,6 +228,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "x" => Action::DumpDebugState);
     bind!(ctx, "a" => Action::AddComment);
+    bind!(ctx, "b" => Action::AddBoxAnnotation);
     bind!(ctx, "z" => Action::ZoomReset);
     bind!(ctx, "Z" => Action::ZoomFitWidth);
     bind!(ctx, "e" => Action::ZoomEnhance);

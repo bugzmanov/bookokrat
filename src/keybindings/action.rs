@@ -62,6 +62,7 @@ pub enum Action {
 
     // === Content operations ===
     AddComment,
+    AddBoxAnnotation,
     OpenHighlightPalette,
     DeleteComment,
     CopySelection,
@@ -250,6 +251,7 @@ impl Action {
         Action::TogglePdfRenderMode,
         Action::DumpDebugState,
         Action::SynctexInverse,
+        Action::AddBoxAnnotation,
         Action::ScrollDown,
         Action::ScrollUp,
         Action::ToggleSortOrder,
@@ -393,6 +395,7 @@ impl Action {
             TogglePdfRenderMode => "Toggle scroll / page render mode (PDF)",
             DumpDebugState => "Dump PDF debug state to the log",
             SynctexInverse => "SyncTeX inverse search: jump to LaTeX source",
+            AddBoxAnnotation => "Draw a box on the page and attach a comment (PDF)",
             ScrollDown => "Scroll the reader down by one line",
             ScrollUp => "Scroll the reader up by one line",
 
@@ -498,7 +501,8 @@ mod tests {
                 | DecreaseMargin => a,
                 ZoomIn | ZoomOut | ZoomReset | ZoomFitWidth | ZoomEnhance | PanLeft | PanRight => a,
                 GoToPage | ToggleInvertImages | TogglePdfTheming | TogglePdfWatching => a,
-                TogglePdfPageLayout | TogglePdfRenderMode | DumpDebugState | SynctexInverse => a,
+                TogglePdfPageLayout | TogglePdfRenderMode | DumpDebugState | SynctexInverse
+                | AddBoxAnnotation => a,
                 ScrollDown | ScrollUp => a,
                 ToggleSortOrder | CollapseAll | ExpandAll | Collapse | Expand | SwitchNavMode => a,
                 DeleteEntry | CopyEntry | ExportComments | EnterCommentNav => a,

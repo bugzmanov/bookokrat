@@ -5031,6 +5031,15 @@ impl App {
                 }
                 true
             }
+            Action::AddBoxAnnotation => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    if let Some(pdf_reader) = &mut self.pdf_reader {
+                        pdf_reader.start_box_annotation();
+                    }
+                }
+                true
+            }
             Action::TogglePdfRenderMode => {
                 #[cfg(feature = "pdf")]
                 if self.is_pdf_mode() {

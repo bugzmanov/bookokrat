@@ -136,3 +136,71 @@ impl Widget for DimOverlay {
         }
     }
 }
+
+/// Live outline for box-annotation drawing: a bordered rectangle in cell
+/// space, or a crosshair when only the cursor is positioned. Glyphs render
+/// above the page image (Kitty z=-1), so only the edge cells are touched.
+#[derive(Debug, Clone, Copy)]
+pub struct BoxDrawOverlay {
+    pub rect: Rect,
+    pub cursor: (u16, u16),
+    pub has_anchor: bool,
+    pub color: Color,
+}
+
+impl Widget for BoxDrawOverlay {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let clip = area.intersection(*buf.area());
+        let style = Style::default().fg(self.color);
+        let mut put = |x: u16, y: u16, sym: &str| {
+            if clip.contains(ratatui::layout::Position::new(x, y)) {
+                let cell = &mut buf[(x, y)];
+                cell.set_skip(false);
+                cell.set_symbol(sym);
+                cell.set_style(style);
+            }
+        };
+
+        if !self.has_anchor {
+            put(self.cursor.0, self.cursor.1, "┼");
+            return;
+        }
+
+        let r = self.rect;
+        if r.width == 0 || r.height == 0 {
+            return;
+        }
+        let (x0, y0) = (r.x, r.y);
+        let (x1, y1) = (r.right().saturating_sub(1), r.bottom().saturating_sub(1));
+
+        match (r.width, r.height) {
+            (1, 1) => put(x0, y0, "┼"),
+            (1, _) => {
+                for y in y0..=y1 {
+                    put(x0, y, "│");
+                }
+            }
+            (_, 1) => {
+                for x in x0..=x1 {
+                    put(x, y0, "─");
+                }
+            }
+            _ => {
+                for x in (x0 + 1)..x1 {
+                    put(x, y0, "─");
+                    put(x, y1, "─");
+                }
+                for y in (y0 + 1)..y1 {
+                    put(x0, y, "│");
+                    put(x1, y, "│");
+                }
+                put(x0, y0, "┌");
+                put(x1, y0, "┐");
+                put(x0, y1, "└");
+                put(x1, y1, "┘");
+            }
+        }
+        // Mark the moving corner so the user can see which one hjkl drives.
+        put(self.cursor.0, self.cursor.1, "◆");
+    }
+}

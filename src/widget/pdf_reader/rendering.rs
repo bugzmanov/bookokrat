@@ -36,7 +36,7 @@ use crate::widget::highlight_palette::{
 use crate::{bookmarks::Bookmarks, navigation_panel::TableOfContents};
 
 use super::navigation::{get_pdf_chapter_title, save_pdf_bookmark, update_pdf_toc_active};
-use super::region::{ImageRegion, KittyTmuxAnchorCell};
+use super::region::{BoxDrawOverlay, ImageRegion, KittyTmuxAnchorCell};
 use super::state::{CommentEditMode, CommentInputState, PdfReaderState, SEPARATOR_HEIGHT};
 use super::types::{
     DisplayBatch, ImageRequest, LastRender, PdfDisplayPlan, PdfDisplayRequest, PendingScroll,
@@ -756,6 +756,25 @@ impl PdfReaderState {
         Some((top, bottom.min(img_area.y + img_area.height)))
     }
 
+    /// Draw the live box-annotation outline over the page area, if active.
+    fn render_box_draw_overlay(&self, f: &mut ratatui::Frame) {
+        let Some(state) = self.box_draw else {
+            return;
+        };
+        let Some((img_area, _)) = self.coord_info else {
+            return;
+        };
+        f.render_widget(
+            BoxDrawOverlay {
+                rect: state.cell_rect(),
+                cursor: state.cursor,
+                has_anchor: state.anchor.is_some(),
+                color: self.palette.base_0e,
+            },
+            img_area,
+        );
+    }
+
     pub fn render_in_area(
         &mut self,
         f: &mut ratatui::Frame,
@@ -941,6 +960,7 @@ impl PdfReaderState {
             *pending_display = None;
             let _ = display_batch;
         }
+        self.render_box_draw_overlay(f);
 
         let service_needs_page_update = service
             .as_ref()
@@ -2679,6 +2699,7 @@ impl PdfReaderState {
             && !comment_modal
             && !highlight_palette_modal
             && !current_page_needs_display
+            && self.box_draw.is_none()
         {
             frame.render_widget(ImageRegion, img_area);
             return DisplayBatch::NoChange;
