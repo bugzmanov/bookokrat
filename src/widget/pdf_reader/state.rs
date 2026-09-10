@@ -85,6 +85,8 @@ pub struct CommentInputState {
     pub quoted_text: Option<String>,
     /// Read-only preview mode used for comment navigation.
     pub read_only: bool,
+    /// Transient mouse preview, dismissed when the pointer leaves its region.
+    pub hover_preview: bool,
     /// Screen-space cursor position (col, row) computed during rendering.
     pub computed_cursor_pos: Option<(u16, u16)>,
 }
@@ -101,6 +103,17 @@ pub struct BoxDrawState {
 }
 
 impl BoxDrawState {
+    pub fn clamp_cursor(&mut self, area: Rect) {
+        self.cursor.0 = self
+            .cursor
+            .0
+            .clamp(area.x, area.right().saturating_sub(1).max(area.x));
+        self.cursor.1 = self
+            .cursor
+            .1
+            .clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
+    }
+
     /// Cell rectangle spanned by anchor..=cursor, or a 1x1 rect at the cursor.
     pub fn cell_rect(&self) -> Rect {
         let (cx, cy) = self.cursor;
@@ -225,6 +238,7 @@ impl CommentInputState {
         self.target = None;
         self.quoted_text = None;
         self.read_only = false;
+        self.hover_preview = false;
         self.computed_cursor_pos = None;
     }
 
@@ -423,6 +437,8 @@ pub struct PdfReaderState {
     pub go_to_page_error: Option<String>,
     /// Active box-annotation drawing, if any
     pub box_draw: Option<BoxDrawState>,
+    /// Press on a box, deferred until release distinguishes a click from selection.
+    pub pending_box_click: Option<(u16, u16)>,
     /// Currently focused panel
     pub focused_panel: FocusedPanel,
     /// Notification manager
@@ -531,6 +547,7 @@ impl PdfReaderState {
             comment_nav_page: 0,
             comment_nav_index: 0,
             box_draw: None,
+            pending_box_click: None,
             go_to_page_mode: PageJumpMode::Pdf,
             go_to_page_error: None,
             focused_panel: FocusedPanel::default(),

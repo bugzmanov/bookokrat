@@ -799,11 +799,7 @@ impl ConverterEngine {
             ConversionCommand::UpdateComments(new_overlays) => {
                 log::trace!("UpdateComments received: {} rects", new_overlays.len());
                 let old_overlays = std::mem::take(&mut self.comment_rects);
-                let old_rects: Vec<SelectionRect> =
-                    old_overlays.iter().map(|o| o.rect.clone()).collect();
-                let new_rects: Vec<SelectionRect> =
-                    new_overlays.iter().map(|o| o.rect.clone()).collect();
-                let affected = Self::collect_affected_pages(&old_rects, &new_rects);
+                let affected = Self::collect_affected_pages(&old_overlays, &new_overlays);
                 self.comment_rects = new_overlays;
                 self.comment_cache = self.build_comment_cache(&self.comment_rects);
                 self.invalidate_tiles_for_pages(&affected);
@@ -1649,6 +1645,12 @@ impl PageScoped for SelectionRect {
 }
 
 impl PageScoped for HighlightOverlay {
+    fn page(&self) -> usize {
+        self.rect.page
+    }
+}
+
+impl PageScoped for CommentOverlay {
     fn page(&self) -> usize {
         self.rect.page
     }
@@ -2600,6 +2602,81 @@ pub fn run_conversion_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_comment_pixels(overlay: CommentOverlay, expected: &RgbImage) {
+        let cache = comment_cache_entry(&[overlay], 0, 1.0).unwrap();
+        let overlays = OverlaySet {
+            comments: cache.rects,
+            boxes: cache.boxes,
+            ..OverlaySet::default()
+        };
+        let background = image::Rgb([255, 255, 255]);
+        let mut page = RgbImage::from_pixel(expected.width(), expected.height(), background);
+        apply_overlays(&mut page, &overlays);
+        assert_eq!(&page, expected, "full-page comment pixels");
+
+        for tile_y in (0..expected.height()).step_by(8) {
+            for tile_x in (0..expected.width()).step_by(8) {
+                let width = 8.min(expected.width() - tile_x);
+                let height = 8.min(expected.height() - tile_y);
+                let mut tile = RgbImage::from_pixel(width, height, background);
+                apply_overlays(&mut tile, &overlays.for_tile(tile_x, width, tile_y, height));
+                let expected_tile =
+                    image::imageops::crop_imm(expected, tile_x, tile_y, width, height).to_image();
+                assert_eq!(tile, expected_tile, "comment tile at ({tile_x}, {tile_y})");
+            }
+        }
+    }
+
+    #[test]
+    fn box_comments_render_clipped_outlines_without_tile_seams() {
+        let overlay = CommentOverlay {
+            rect: SelectionRect {
+                page: 0,
+                topleft_x: 7,
+                topleft_y: 7,
+                bottomright_x: 19,
+                bottomright_y: 19,
+            },
+            marker: CommentMarker::Box,
+        };
+        // The top and left strokes straddle tile boundaries at pixel 8.
+        // Tile boundaries through the interior must not acquire new borders.
+        let expected = RgbImage::from_fn(24, 24, |x, y| {
+            let inside = (7..19).contains(&x) && (7..19).contains(&y);
+            let edge = !(9..17).contains(&x) || !(9..17).contains(&y);
+            if inside && edge {
+                image::Rgb([0xC5, 0x94, 0xC5])
+            } else {
+                image::Rgb([255, 255, 255])
+            }
+        });
+        assert_comment_pixels(overlay, &expected);
+    }
+
+    #[test]
+    fn text_comments_preserve_underlines_across_tile_boundaries() {
+        let overlay = CommentOverlay {
+            rect: SelectionRect {
+                page: 0,
+                topleft_x: 7,
+                topleft_y: 3,
+                bottomright_x: 19,
+                bottomright_y: 5,
+            },
+            marker: CommentMarker::Underline,
+        };
+        // The underline begins two pixels below the text and continues into
+        // the next tile even though the text rect does not intersect that tile.
+        let expected = RgbImage::from_fn(24, 16, |x, y| {
+            if (7..19).contains(&x) && (7..10).contains(&y) {
+                image::Rgb([0xC5, 0x94, 0xC5])
+            } else {
+                image::Rgb([255, 255, 255])
+            }
+        });
+        assert_comment_pixels(overlay, &expected);
+    }
 
     fn apply_row_scalar(row: &mut [u8], op: OverlayOp) {
         for px in row.chunks_exact_mut(3) {

@@ -1673,6 +1673,128 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_pdf_missing_region_remains_text_after_serialization() {
+        let legacy_yaml = r#"
+id: legacy-pdf
+chapter_href: document.pdf
+target_type: pdf
+page: 2
+rects:
+  - page: 2
+    topleft_x: 10
+    topleft_y: 20
+    bottomright_x: 110
+    bottomright_y: 40
+content: legacy note
+quoted_text: selected text
+updated_at: "2024-01-01T12:00:00Z"
+"#;
+        let parsed: Comment = serde_yaml::from_str(legacy_yaml).unwrap();
+        assert_eq!(
+            parsed.target,
+            CommentTarget::pdf(
+                2,
+                vec![PdfSelectionRect {
+                    page: 2,
+                    topleft_x: 10,
+                    topleft_y: 20,
+                    bottomright_x: 110,
+                    bottomright_y: 40,
+                }],
+            )
+        );
+
+        let yaml = serde_yaml::to_string(&parsed).unwrap();
+        let serialized: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert!(serialized.get("region").is_none());
+        let reloaded: Comment = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(reloaded, parsed);
+    }
+
+    #[test]
+    fn test_pdf_box_persistence_preserves_target_and_quoted_text() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let comment = Comment::with_quoted_text(
+            "document.pdf".to_string(),
+            CommentTarget::pdf_region(
+                4,
+                vec![PdfSelectionRect {
+                    page: 4,
+                    topleft_x: 15,
+                    topleft_y: 25,
+                    bottomright_x: 215,
+                    bottomright_y: 125,
+                }],
+            ),
+            "Explain this diagram".to_string(),
+            Utc::now(),
+            Some("Figure 2: \"Quoted label\"\nSecond line".to_string()),
+        );
+        {
+            let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+            book_comments.add_comment(comment.clone()).unwrap();
+        }
+
+        let reloaded = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        assert_eq!(
+            reloaded.get_page_comments("document.pdf", 4),
+            vec![&comment]
+        );
+        assert_eq!(reloaded.get_comment_by_id(&comment.id), Some(&comment));
+    }
+
+    #[test]
+    fn test_pdf_text_and_box_anchors_coexist_at_same_coordinates() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        let rect = PdfSelectionRect {
+            page: 1,
+            topleft_x: 10,
+            topleft_y: 20,
+            bottomright_x: 110,
+            bottomright_y: 40,
+        };
+        let text_target = CommentTarget::pdf(1, vec![rect.clone()]);
+        let box_target = CommentTarget::pdf_region(1, vec![rect]);
+        let text_comment = Comment::new(
+            "document.pdf".to_string(),
+            text_target.clone(),
+            "Text note".to_string(),
+            Utc::now(),
+        );
+        let box_comment = Comment::new(
+            "document.pdf".to_string(),
+            box_target.clone(),
+            "Box note".to_string(),
+            Utc::now(),
+        );
+
+        book_comments.add_comment(text_comment.clone()).unwrap();
+        assert!(book_comments.has_overlapping_annotation("document.pdf", &text_target));
+        assert!(!book_comments.has_overlapping_annotation("document.pdf", &box_target));
+        book_comments.add_comment(box_comment.clone()).unwrap();
+        book_comments
+            .delete_comment("document.pdf", &text_target)
+            .unwrap();
+        assert_eq!(
+            book_comments.get_page_comments("document.pdf", 1),
+            vec![&box_comment]
+        );
+        assert!(book_comments.has_overlapping_annotation("document.pdf", &box_target));
+        assert!(!book_comments.has_overlapping_annotation("document.pdf", &text_target));
+
+        book_comments.add_comment(text_comment.clone()).unwrap();
+        book_comments
+            .delete_comment("document.pdf", &box_target)
+            .unwrap();
+        let reloaded = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        assert_eq!(
+            reloaded.get_page_comments("document.pdf", 1),
+            vec![&text_comment]
+        );
+    }
+
+    #[test]
     fn test_comment_serialization_keeps_comment_type_implicit() {
         let comment = create_paragraph_comment("chapter.xhtml", 3, "plain note");
         let yaml = serde_yaml::to_string(&vec![comment]).unwrap();

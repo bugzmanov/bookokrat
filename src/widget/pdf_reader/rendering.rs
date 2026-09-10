@@ -3857,7 +3857,9 @@ impl PdfReaderState {
 
         frame.render_widget(Clear, modal_area);
 
-        let title = if comment_input.read_only {
+        let title = if comment_input.hover_preview {
+            "Box comment (click box to edit)"
+        } else if comment_input.read_only {
             "Comment (Read-only, j/k navigate, e edit)"
         } else {
             match comment_input.edit_mode {

@@ -279,6 +279,19 @@ Add notes directly to your books:
   [4] Press Esc to save the comment
   [5] Press 'dd' when on a commented or highlighted passage to delete it
 
+PDF box annotations:
+
+  Press b in standard PDF mode, or Space+b in normal mode, to begin.
+  Move with hjkl/arrows, set a corner with v/Space, then move and press Enter.
+  Alternatively, left-drag a box after entering drawing mode.
+  Type a comment and press Esc to save. Esc while drawing cancels the box.
+  Resizing also cancels unfinished boxes.
+
+  Hover inside a saved box to preview its comment; move outside to dismiss.
+  Click and release to edit. Dragging inside a saved box still selects text.
+  Exports label each rectangle with its own 1-based page and PDF-point bounds
+  measured from the page's top-left.
+
 Code block annotations:
 
   ▸ Click on a code block line to position cursor

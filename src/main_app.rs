@@ -6625,6 +6625,10 @@ impl App {
     }
 
     pub fn handle_resize(&mut self) {
+        #[cfg(feature = "pdf")]
+        if let Some(reader) = self.pdf_reader.as_mut() {
+            reader.cancel_pointer_interaction();
+        }
         // text reader needs to update image picker and line wraps
         self.text_reader.handle_terminal_resize();
     }
@@ -8165,6 +8169,9 @@ where
                                     || mouse_event.column == border)
                         };
                         if app.resizing_nav_panel || on_border {
+                            if let Some(reader) = app.pdf_reader.as_mut() {
+                                reader.cancel_pointer_interaction();
+                            }
                             app.handle_non_scroll_mouse_event(*mouse_event);
                         } else if app.should_route_pdf_mouse_to_ui(mouse_event) {
                             match mouse_event.kind {

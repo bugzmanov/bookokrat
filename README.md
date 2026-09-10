@@ -108,6 +108,22 @@ bookokrat path/to/book.epub --zen-mode
 
 Press `?` inside the app to open the built-in help.
 
+## PDF Box Annotations
+
+Press `b` in standard PDF mode, or `Space+b` in normal mode, to draw a box.
+Move with `hjkl` or arrow keys, press `v` or Space to set the first corner,
+then move to the opposite corner and press Enter. Alternatively, press `b`
+and drag with the left mouse button. Type a comment and press Esc to save.
+Esc during drawing cancels; resizing the viewport also cancels unfinished boxes.
+
+Hover inside a saved box to preview its comment. Click and release without
+dragging to edit it; dragging still selects text. Moving outside the box dismisses
+the preview. Ctrl+click and right-click retain their SyncTeX behavior.
+
+Annotations are stored separately from the PDF. Markdown exports include
+1-based page numbers and rectangle coordinates in PDF points, measured from
+the top-left of each page. Existing text annotations remain supported.
+
 ## SyncTeX (LaTeX ↔ PDF)
 
 Bookokrat supports bidirectional SyncTeX navigation between LaTeX sources and PDF output. Compile your LaTeX document with `pdflatex --synctex=1` (or equivalent) to generate a `.synctex.gz` sidecar file. When a PDF is opened and its sidecar is found, SyncTeX activates automatically.
