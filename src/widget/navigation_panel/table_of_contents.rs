@@ -2,7 +2,8 @@ use super::{CurrentBookInfo, MouseClickOutcome};
 use crate::bookmarks::TocSectionState;
 use crate::markdown_text_reader::ActiveSection;
 use crate::search::{SearchMode, SearchState, SearchablePanel, find_matches_in_text};
-use crate::theme::{Base16Palette, theme_background};
+use crate::settings::RuntimeSettings;
+use crate::theme::{Base16Palette, theme_background_for};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -79,6 +80,7 @@ impl TocItem {
 }
 
 pub struct TableOfContents {
+    settings: RuntimeSettings,
     pub selected_index: usize,
     pub list_state: ListState,
     current_book_info: Option<CurrentBookInfo>,
@@ -89,18 +91,13 @@ pub struct TableOfContents {
     search_state: SearchState,
 }
 
-impl Default for TableOfContents {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TableOfContents {
-    pub fn new() -> Self {
+    pub fn new(settings: RuntimeSettings) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
 
         Self {
+            settings,
             selected_index: 0,
             list_state,
             current_book_info: None,
@@ -955,15 +952,16 @@ impl TableOfContents {
         } else {
             format!("{book_display_name} - Book")
         };
+        let background = theme_background_for(self.settings.load().transparent_background);
         let mut toc_list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(title)
                     .border_style(Style::default().fg(border_color))
-                    .style(Style::default().bg(theme_background())),
+                    .style(Style::default().bg(background)),
             )
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(background));
 
         if is_focused {
             toc_list = toc_list.highlight_style(Style::default().bg(selection_bg).fg(selection_fg));
@@ -1488,7 +1486,9 @@ mod tests {
     }
 
     fn make_toc_with(toc_items: Vec<TocItem>) -> TableOfContents {
-        let mut toc = TableOfContents::new();
+        let mut toc = TableOfContents::new(RuntimeSettings::in_memory(
+            crate::settings::Settings::default(),
+        ));
         toc.set_current_book_info(CurrentBookInfo {
             path: "test.epub".to_string(),
             toc_items,

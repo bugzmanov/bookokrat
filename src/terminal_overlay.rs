@@ -32,30 +32,37 @@ pub fn clear_overlay_images_if_needed() {
     }
 }
 
-pub fn clear_rect_direct(rect: Rect) {
-    if rect.width == 0 || rect.height == 0 {
-        return;
-    }
-    clear_rects_direct([rect]);
+pub fn clear_rects_direct(rects: impl IntoIterator<Item = Rect>) {
+    clear_rects_direct_bg(rects, None);
 }
 
-pub fn clear_rects_direct(rects: impl IntoIterator<Item = Rect>) {
+/// Like [`clear_rects_direct`] but erases with ECH (`CSI n X`) under an
+/// explicit background color. Two reasons over printing spaces: ECH is the
+/// erase op that reliably detaches inline-image fragments from cells (printing
+/// spaces does not on all terminals), and the bg keeps the cleared strip from
+/// flashing in whatever color the SGR state happened to be.
+pub fn clear_rects_direct_bg(rects: impl IntoIterator<Item = Rect>, bg: Option<(u8, u8, u8)>) {
     let mut out = stdout();
     let _ = write!(out, "\x1b7");
+    if let Some((r, g, b)) = bg {
+        let _ = write!(out, "\x1b[48;2;{r};{g};{b}m");
+    }
     for rect in rects {
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
-        let blank = " ".repeat(rect.width as usize);
         for dy in 0..rect.height {
             let _ = write!(
                 out,
-                "\x1b[{};{}H{}",
+                "\x1b[{};{}H\x1b[{}X",
                 rect.y.saturating_add(dy).saturating_add(1),
                 rect.x.saturating_add(1),
-                blank
+                rect.width
             );
         }
+    }
+    if bg.is_some() {
+        let _ = write!(out, "\x1b[49m");
     }
     let _ = write!(out, "\x1b8");
     let _ = out.flush();

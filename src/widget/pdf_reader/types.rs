@@ -100,6 +100,10 @@ pub struct RenderedInfo {
     /// Worker metadata can arrive before the converted Kitty image, so layout
     /// code must not treat an old image as if it already has the new scale.
     pub image_requested_scale: Option<f32>,
+    /// Scale the worker actually rendered the converted image at (post
+    /// max-dimension clamp). Differs from `image_requested_scale` only when
+    /// the raster hit `KITTY_MAX_DIMENSION`; layout must use this one.
+    pub image_achieved_scale: Option<f32>,
     /// Full size in terminal cells
     pub full_cell_size: Option<CellSize>,
     /// Width in pixels
@@ -110,6 +114,8 @@ pub struct RenderedInfo {
     pub scale_factor: Option<f32>,
     /// Requested user zoom factor used by worker
     pub requested_scale: Option<f32>,
+    /// User zoom factor the worker actually achieved (post max-dimension clamp)
+    pub achieved_scale: Option<f32>,
     /// Render viewport width used by worker request
     pub render_area_width_cells: Option<u16>,
     /// Render viewport height used by worker request
@@ -126,6 +132,13 @@ impl RenderedInfo {
     pub fn clear_image(&mut self) {
         self.img = None;
         self.image_requested_scale = None;
+        self.image_achieved_scale = None;
+    }
+
+    pub fn layout_cell_size(&self) -> Option<CellSize> {
+        self.full_cell_size
+            .or_else(|| self.img.as_ref().map(|img| img.cell_dimensions()))
+            .filter(|size| size.width > 0 && size.height > 0)
     }
 
     pub fn image_scale(&self) -> Option<f32> {
@@ -133,14 +146,23 @@ impl RenderedInfo {
             .filter(|scale| scale.is_finite() && *scale > 0.0)
     }
 
+    /// Scale the converted image was actually rendered at. Falls back to the
+    /// requested scale for frames predating the achieved-scale metadata.
+    pub fn image_geometry_scale(&self) -> Option<f32> {
+        self.image_achieved_scale
+            .filter(|scale| scale.is_finite() && *scale > 0.0)
+            .or_else(|| self.image_scale())
+    }
+
     pub fn layout_scale(&self) -> f32 {
         if self.img.is_some()
-            && let Some(scale) = self.image_scale()
+            && let Some(scale) = self.image_geometry_scale()
         {
             return scale;
         }
 
-        self.requested_scale
+        self.achieved_scale
+            .or(self.requested_scale)
             .filter(|scale| scale.is_finite() && *scale > 0.0)
             .unwrap_or(1.0)
     }

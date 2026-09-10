@@ -110,7 +110,8 @@ Press `?` inside the app to open the built-in help.
 
 ## PDF Box Annotations
 
-Press `b` in standard PDF mode, or `Space+b` in normal mode, to draw a box.
+Press `b` in standard PDF mode, or `Space+B` in normal mode, to draw a box.
+Drawing-mode bindings can be customized under `pdf_box` in `keybindings.yaml`.
 Move with `hjkl` or arrow keys, press `v` or Space to set the first corner,
 then move to the opposite corner and press Enter. Alternatively, press `b`
 and drag with the left mouse button. Type a comment and press Esc to save.

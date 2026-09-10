@@ -3,6 +3,7 @@ use crate::book_search::{BookSearch, BookSearchAction};
 use crate::book_stat::{BookStat, BookStatAction};
 use crate::bookmarks::Bookmarks;
 use crate::comments::BookComments;
+use crate::epub_analysis::{AnalyzedChapter, analyze_epub};
 use crate::event_source::EventSource;
 use crate::images::book_images::BookImages;
 use crate::images::image_popup::ImagePopup;
@@ -16,11 +17,13 @@ use crate::parsing::html_to_markdown::extract_chapter_title;
 use crate::parsing::toc_parser::TocParser;
 use crate::reading_history::ReadingHistory;
 use crate::search::{SearchMode, SearchablePanel};
-use crate::search_engine::{SearchEngine, SearchLine};
+use crate::search_engine::SearchEngine;
+#[cfg(feature = "pdf")]
+use crate::search_engine::SearchLine;
 use crate::settings;
 use crate::system_command::{RealSystemCommandExecutor, SystemCommandExecutor};
 use crate::table_of_contents::TocItem;
-use crate::theme::{current_theme, current_theme_name, theme_background};
+use crate::theme::{current_theme, current_theme_name, theme_background_for};
 use crate::types::LinkInfo;
 use crate::widget::help_popup::{HelpPopup, HelpPopupAction};
 use crate::widget::highlight_palette::{
@@ -108,7 +111,7 @@ use crossterm::event::{
     Event, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use crossterm::execute;
-use crossterm::terminal::{EndSynchronizedUpdate, SetTitle};
+use crossterm::terminal::{BeginSynchronizedUpdate, EndSynchronizedUpdate, SetTitle};
 use epub::doc::EpubDoc;
 use log::{debug, error, info};
 use ratatui::{
@@ -129,31 +132,24 @@ struct ChapterNodeCounts {
     total: usize,
 }
 
-impl ChapterNodeCounts {
-    /// Create from a saved total when per-chapter counts aren't available.
-    /// Distributes nodes evenly across chapters for progress estimation.
-    fn from_total(total: usize, num_chapters: usize) -> Self {
-        let per_chapter = if num_chapters > 0 {
-            total / num_chapters
-        } else {
-            0
-        };
-        let counts = vec![per_chapter; num_chapters];
-        Self { counts, total }
-    }
-}
-
 struct EpubBook {
     file: String,
     epub: EpubDoc<BufReader<std::fs::File>>,
-    chapter_node_counts: Arc<Mutex<Option<ChapterNodeCounts>>>,
+    chapter_node_counts: ChapterNodeCounts,
+    initial_chapter_analysis: Option<AnalyzedChapter>,
 }
 impl EpubBook {
-    fn new(file: String, doc: EpubDoc<BufReader<std::fs::File>>) -> Self {
+    fn new(
+        file: String,
+        doc: EpubDoc<BufReader<std::fs::File>>,
+        chapter_node_counts: ChapterNodeCounts,
+        initial_chapter_analysis: Option<AnalyzedChapter>,
+    ) -> Self {
         Self {
             file,
             epub: doc,
-            chapter_node_counts: Arc::new(Mutex::new(None)),
+            chapter_node_counts,
+            initial_chapter_analysis,
         }
     }
 
@@ -165,14 +161,9 @@ impl EpubBook {
         self.epub.get_current_chapter()
     }
 
-    /// Returns (book_progress, total_nodes) if background counting is done.
+    /// Returns book progress and the exact total node count from chapter analysis.
     fn compute_book_progress(&self, current_node_index: usize) -> (Option<f32>, Option<usize>) {
-        let Ok(guard) = self.chapter_node_counts.lock() else {
-            return (None, None);
-        };
-        let Some(counts) = guard.as_ref() else {
-            return (None, None);
-        };
+        let counts = &self.chapter_node_counts;
         if counts.total == 0 {
             return (Some(0.0), Some(0));
         }
@@ -183,99 +174,6 @@ impl EpubBook {
         let progress = (completed + clamped_node) as f32 / counts.total as f32;
         (Some(progress.clamp(0.0, 1.0)), Some(counts.total))
     }
-
-    fn start_node_counting(&self, saved_total_nodes: Option<usize>) {
-        if let Some(total) = saved_total_nodes {
-            if let Ok(mut slot) = self.chapter_node_counts.lock() {
-                let num_chapters = self.epub.get_num_chapters();
-                *slot = Some(ChapterNodeCounts::from_total(total, num_chapters));
-            }
-            return;
-        }
-        let path = self.file.clone();
-        let counts_slot = self.chapter_node_counts.clone();
-        std::thread::spawn(move || {
-            if let Ok(result) = Self::count_all_chapter_nodes(&path) {
-                if let Ok(mut slot) = counts_slot.lock() {
-                    *slot = Some(result);
-                }
-            }
-        });
-    }
-
-    fn count_all_chapter_nodes(path: &str) -> anyhow::Result<ChapterNodeCounts> {
-        use crate::parsing::html_to_markdown::{HtmlToMarkdownConverter, extract_chapter_title};
-
-        let mut doc = EpubDoc::new(path)?;
-        let num_chapters = doc.get_num_chapters();
-        let mut counts = Vec::with_capacity(num_chapters);
-
-        for idx in 0..num_chapters {
-            if !doc.set_current_chapter(idx) {
-                counts.push(0);
-                continue;
-            }
-            let node_count = match doc.get_current_str() {
-                Some((html, _)) => {
-                    if is_non_content_chapter(extract_chapter_title(&html).as_deref(), &html) {
-                        0
-                    } else {
-                        let mut converter = HtmlToMarkdownConverter::new();
-                        let document = converter.convert(&html);
-                        document.blocks.len()
-                    }
-                }
-                None => 0,
-            };
-            counts.push(node_count);
-        }
-
-        let total = counts.iter().sum();
-        Ok(ChapterNodeCounts { counts, total })
-    }
-}
-
-/// Detect chapters that are reference/backmatter and shouldn't count toward reading progress.
-/// Checks both the chapter title and epub:type attributes in the raw HTML.
-fn is_non_content_chapter(title: Option<&str>, html: &str) -> bool {
-    const EPUB_TYPE_PATTERNS: &[&str] = &[
-        "epub:type=\"index\"",
-        "epub:type=\"glossary\"",
-        "epub:type=\"bibliography\"",
-    ];
-    for pattern in EPUB_TYPE_PATTERNS {
-        if html.contains(pattern) {
-            return true;
-        }
-    }
-
-    if let Some(title) = title {
-        let normalized: String = title
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-            .to_lowercase();
-
-        // Only match backmatter-style titles: "[Qualifier] Index/Glossary/Bibliography"
-        // e.g. "Index", "Subject Index", "Author Index", "Selected Bibliography"
-        // Must NOT match content chapters like "B-Tree Indexes", "Index Structures",
-        // "Glossary-Based Methods", "Building an Index"
-        const BACKMATTER_EXACT: &[&str] = &[
-            "index",
-            "glossary",
-            "bibliography",
-            "works cited",
-            "further reading",
-            "list of figures",
-            "list of tables",
-            "list of illustrations",
-        ];
-        if BACKMATTER_EXACT.contains(&normalized.as_str()) {
-            return true;
-        }
-    }
-
-    false
 }
 
 /// URL-decode percent-encoded characters in a string (e.g., %27 -> ')
@@ -323,6 +221,25 @@ struct PdfEventResult {
     action: Option<AppAction>,
 }
 
+#[cfg(feature = "pdf")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PdfScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+#[cfg(feature = "pdf")]
+#[derive(Clone, Copy, Debug)]
+struct PdfScrollAxisLock {
+    axis: PdfScrollAxis,
+    last_event: Instant,
+}
+
+#[cfg(feature = "pdf")]
+const PDF_SCROLL_AXIS_LOCK_TIMEOUT_MS: u64 = 140;
+#[cfg(feature = "pdf")]
+const PDF_SCROLL_AXIS_SWITCH_MARGIN: usize = 3;
+
 pub struct App {
     pub book_manager: BookManager,
     pub navigation_panel: NavigationPanel,
@@ -348,6 +265,7 @@ pub struct App {
     keybinding_errors_popup: Option<crate::widget::keybinding_errors_popup::KeybindingErrorsPopup>,
     comments_viewer: Option<crate::widget::comments_viewer::CommentsViewer>,
     settings_popup: Option<SettingsPopup>,
+    settings: settings::RuntimeSettings,
     lookup_popup: Option<LookupPopup>,
     pending_visual_inner: bool,
     pending_highlight_palette: bool,
@@ -363,6 +281,12 @@ pub struct App {
     resizing_nav_panel: bool,
     current_context_override: Option<LibraryContext>,
     pub pending_force_redraw: bool,
+    /// One-shot terminal.clear() without touching images. Used on the
+    /// non-kitty PDF path when a freshly converted page image arrives while a
+    /// modal is open: the re-emitted image escape paints over the modal's
+    /// (diff-unchanged) cells, so the whole screen must be re-emitted to put
+    /// the modal back on top.
+    pub pending_screen_refresh: bool,
     #[cfg(unix)]
     pub pending_suspend: bool,
     // PDF support (feature-gated)
@@ -400,6 +324,8 @@ pub struct App {
     pdf_supports_graphics: bool,
     #[cfg(feature = "pdf")]
     pdf_supports_scroll_mode: bool,
+    #[cfg(feature = "pdf")]
+    pdf_scroll_axis_lock: Option<PdfScrollAxisLock>,
     // SyncTeX support (for LaTeX ↔ PDF synchronization)
     #[cfg(feature = "pdf")]
     synctex_scanner: Option<std::sync::Arc<crate::pdf::synctex::SyncTexScanner>>,
@@ -509,6 +435,29 @@ impl Default for App {
 impl App {
     pub fn new() -> Self {
         Self::new_with_config(None, Some("bookmarks.json"), true, None, None)
+    }
+
+    fn default_runtime_settings() -> settings::RuntimeSettings {
+        #[cfg(any(test, feature = "test-utils"))]
+        {
+            settings::RuntimeSettings::in_memory(settings::Settings::default())
+        }
+        #[cfg(not(any(test, feature = "test-utils")))]
+        {
+            settings::RuntimeSettings::global()
+        }
+    }
+
+    pub fn settings_snapshot(&self) -> std::sync::Arc<settings::Settings> {
+        self.settings.load()
+    }
+
+    pub fn update_settings(&self, edit: impl FnOnce(&mut settings::Settings)) {
+        self.settings.update(edit);
+    }
+
+    fn theme_background(&self) -> Color {
+        theme_background_for(self.settings.load().transparent_background)
     }
 
     /// Helper method to check if focus is on a main panel (not a popup)
@@ -639,6 +588,7 @@ impl App {
             Box::new(system_executor),
             comments_dir,
             image_cache_dir,
+            Self::default_runtime_settings(),
         )
     }
 
@@ -656,6 +606,28 @@ impl App {
             Box::new(RealSystemCommandExecutor),
             comments_dir,
             image_cache_dir,
+            Self::default_runtime_settings(),
+        )
+    }
+
+    /// Construct an application with explicit runtime settings. This is the
+    /// test seam for isolated settings state and persistence.
+    pub fn new_with_config_and_settings(
+        book_directory: Option<&str>,
+        bookmark_file: Option<&str>,
+        auto_load_recent: bool,
+        comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
+    ) -> Self {
+        Self::new_with_config_and_executor(
+            book_directory,
+            bookmark_file,
+            auto_load_recent,
+            Box::new(RealSystemCommandExecutor),
+            comments_dir,
+            image_cache_dir,
+            settings,
         )
     }
 
@@ -666,10 +638,11 @@ impl App {
         system_executor: Box<dyn SystemCommandExecutor>,
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
     ) -> Self {
         let book_manager = match book_directory {
-            Some(dir) => BookManager::new_with_directory(dir),
-            None => BookManager::new(),
+            Some(dir) => BookManager::new_with_directory(dir, settings.clone()),
+            None => BookManager::new_with_directory(".", settings.clone()),
         };
 
         #[cfg(feature = "pdf")]
@@ -679,16 +652,29 @@ impl App {
             book_manager.supports_graphics = startup_caps.supports_graphics;
             (book_manager, startup_caps)
         };
+        #[cfg(not(feature = "pdf"))]
+        let startup_caps = {
+            let mut caps = crate::terminal::detect_terminal();
+            caps.pdf.supported = false;
+            caps.pdf.blocked_reason = Some("PDF feature disabled".into());
+            caps.pdf.supports_comments = false;
+            caps.pdf.supports_scroll_mode = false;
+            caps.pdf.supports_normal_mode = false;
+            caps.pdf.supports_kitty_shm = None;
+            caps.pdf.supports_kitty_delete_range = None;
+            caps
+        };
 
         let navigation_panel = NavigationPanel::new(&book_manager);
         #[cfg(any(test, feature = "test-utils"))]
-        let mut text_reader = MarkdownTextReader::new_without_image_support();
+        let mut text_reader = MarkdownTextReader::new_without_image_support(settings.clone());
         #[cfg(not(any(test, feature = "test-utils")))]
-        let mut text_reader = MarkdownTextReader::new();
-        text_reader.set_margin(settings::get_margin());
-        text_reader.set_justify_text(settings::is_justify_text());
+        let mut text_reader = MarkdownTextReader::new(settings.clone());
+        let initial_settings = settings.load();
+        text_reader.set_margin(initial_settings.margin);
+        text_reader.set_justify_text(initial_settings.justify_text);
         text_reader
-            .set_dual_columns(settings::get_epub_column_mode() == settings::EpubColumnMode::Dual);
+            .set_dual_columns(initial_settings.epub_column_mode == settings::EpubColumnMode::Dual);
         // Apple Terminal misrenders the colored-underline SGR; gate it off there
         // so annotation underlines fall back to a plain underline. Tests keep
         // the default (enabled) so snapshots don't depend on the host terminal.
@@ -756,6 +742,7 @@ impl App {
             keybinding_errors_popup: None,
             comments_viewer: None,
             settings_popup: None,
+            settings,
             lookup_popup: None,
             pending_visual_inner: false,
             pending_highlight_palette: false,
@@ -764,10 +751,11 @@ impl App {
             help_bar_area: Rect::default(),
             zen_mode: false,
             test_mode: false,
-            nav_panel_width_override: settings::get_nav_panel_width(),
+            nav_panel_width_override: initial_settings.nav_panel_width,
             resizing_nav_panel: false,
             current_context_override: None,
             pending_force_redraw: false,
+            pending_screen_refresh: false,
             #[cfg(unix)]
             pending_suspend: false,
             #[cfg(feature = "pdf")]
@@ -802,6 +790,8 @@ impl App {
             #[cfg(feature = "pdf")]
             pdf_supports_scroll_mode: startup_caps.pdf.supports_scroll_mode,
             #[cfg(feature = "pdf")]
+            pdf_scroll_axis_lock: None,
+            #[cfg(feature = "pdf")]
             synctex_scanner: None,
             #[cfg(feature = "pdf")]
             synctex_listener: None,
@@ -815,7 +805,9 @@ impl App {
         };
 
         // Fix incompatible PDF settings (e.g., Scroll mode without Kitty protocol)
-        crate::settings::fix_incompatible_pdf_settings();
+        #[cfg(feature = "pdf")]
+        app.settings
+            .fix_incompatible_pdf_settings(startup_caps.pdf.supports_scroll_mode);
 
         let is_first_time_user = app.home_bookmarks().get_most_recent().is_none();
 
@@ -839,21 +831,22 @@ impl App {
         // (but only if terminal supports graphics and not first-time user)
         #[cfg(feature = "pdf")]
         if !is_first_time_user
-            && !crate::settings::is_pdf_settings_configured()
+            && !app.settings.load().pdf_settings_configured
             && app.pdf_supports_graphics
         {
             app.previous_main_panel = MainPanel::NavigationList;
             app.settings_popup = Some(app.make_settings_popup(SettingsTab::General));
             app.focused_panel = FocusedPanel::Popup(PopupWindow::Settings);
             // Mark as configured so we don't show again
-            crate::settings::set_pdf_settings_configured(true);
+            app.settings
+                .update(|settings| settings.pdf_settings_configured = true);
         }
 
         app
     }
 
     fn execute_lookup_command(&mut self, selected_text: &str) {
-        let Some(command_template) = settings::get_lookup_command() else {
+        let Some(command_template) = self.settings.load().lookup_command.clone() else {
             self.show_info(
                 "No lookup command configured. Set lookup_command in settings (Space+s).",
             );
@@ -874,7 +867,7 @@ impl App {
             format!("{} '{}'", command_template, escaped)
         };
 
-        let display = settings::get_lookup_display();
+        let display = self.settings.load().lookup_display;
         match display {
             settings::LookupDisplay::FireAndForget => {
                 match std::process::Command::new("sh")
@@ -1183,6 +1176,8 @@ impl App {
     pub fn load_epub(&mut self, path: &str, ignore_bookmarks: bool) -> Result<()> {
         #[cfg(feature = "pdf")]
         {
+            // SGR-pixel mouse is a PDF-only mode; turn it off when leaving PDF.
+            crate::inputs::pixel_mouse::disable();
             // Clear any PDF graphics from terminal before switching to EPUB
             if let Some(ref pdf_reader) = self.pdf_reader {
                 Self::clear_pdf_graphics(pdf_reader.is_kitty);
@@ -1225,8 +1220,6 @@ impl App {
             error!("Failed to load book in BookImages: {e}");
         }
 
-        self.initialize_search_engine(&mut doc);
-
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
         let comments = if ignore_bookmarks {
             BookComments::new_empty()
@@ -1244,12 +1237,10 @@ impl App {
 
         // Variables to store position to restore after content is loaded
         let mut node_to_restore = None;
-        let mut saved_total_nodes = None;
 
         if !ignore_bookmarks
             && let Some(bookmark) = self.current_book_bookmarks().get_bookmark(path)
         {
-            saved_total_nodes = bookmark.total_nodes;
             let chapter_to_restore = Self::find_chapter_index_by_href(&doc, &bookmark.chapter_href);
 
             if let Some(chapter_index) = chapter_to_restore {
@@ -1295,8 +1286,22 @@ impl App {
             }
         }
 
-        let mut current_book = EpubBook::new(path.to_string(), doc);
-        current_book.start_node_counting(saved_total_nodes);
+        let initial_chapter = doc.get_current_chapter();
+        let analysis = analyze_epub(&mut doc, initial_chapter);
+        let mut search_engine = SearchEngine::new();
+        search_engine.process_chapters(analysis.search_sections);
+        self.book_search = Some(BookSearch::new(search_engine));
+
+        let chapter_node_counts = ChapterNodeCounts {
+            counts: analysis.node_counts,
+            total: analysis.total_nodes,
+        };
+        let mut current_book = EpubBook::new(
+            path.to_string(),
+            doc,
+            chapter_node_counts,
+            analysis.initial_chapter,
+        );
         self.switch_to_toc_mode(&mut current_book);
 
         self.current_book = Some(current_book);
@@ -1498,8 +1503,9 @@ impl App {
 
         // Create PDF reader state with persisted settings
         // Prefer per-book zoom from bookmark, fall back to global setting
-        let pdf_scale = bookmark_zoom.unwrap_or_else(crate::settings::get_pdf_scale);
-        let pdf_pan_shift = bookmark_pan.unwrap_or_else(crate::settings::get_pdf_pan_shift);
+        let runtime_settings = self.settings.load();
+        let pdf_scale = bookmark_zoom.unwrap_or(runtime_settings.pdf_scale);
+        let pdf_pan_shift = bookmark_pan.unwrap_or(runtime_settings.pdf_pan_shift);
         log::info!(
             "PDF startup params: path={}, cell_size={:?}, picker_ok={}, bookmark_zoom={:?}, effective_zoom={}, layout={:?}, mode={:?}",
             path,
@@ -1507,9 +1513,10 @@ impl App {
             picker.is_some(),
             bookmark_zoom,
             pdf_scale,
-            crate::settings::get_pdf_page_layout_mode(),
-            crate::settings::get_pdf_render_mode()
+            runtime_settings.pdf_page_layout_mode,
+            runtime_settings.pdf_render_mode
         );
+        let uses_iterm2_protocol = caps.protocol == Some(crate::terminal::GraphicsProtocol::Iterm2);
         let mut pdf_reader = PdfReaderState::new(
             path.to_string(),
             is_kitty,
@@ -1524,10 +1531,12 @@ impl App {
             supports_comments,
             book_comments,
             path.to_string(),
+            self.settings.clone(),
         );
+        pdf_reader.uses_iterm2_protocol = uses_iterm2_protocol;
         if use_kitty
             && initial_page > 0
-            && crate::settings::get_pdf_render_mode() == crate::settings::PdfRenderMode::Scroll
+            && runtime_settings.pdf_render_mode == crate::settings::PdfRenderMode::Scroll
         {
             pdf_reader.pending_initial_scroll_page = Some(initial_page);
         }
@@ -1545,6 +1554,10 @@ impl App {
                     white: -1,
                 });
             }
+        }
+        // Transparent (alpha) rendering is only possible on the Kitty graphics protocol.
+        if use_kitty && runtime_settings.transparent_background {
+            service.apply_command(crate::pdf::Command::SetTransparent(true));
         }
         if let Some(supported) = self.pdf_kitty_delete_range_support {
             pdf_reader.kitty_delete_range_supported = supported;
@@ -1597,6 +1610,7 @@ impl App {
                         picker,
                         PRERENDER_PAGES,
                         kitty_shm_support,
+                        runtime_settings.pdf_show_link_underlines,
                     );
                 })
             {
@@ -1611,6 +1625,10 @@ impl App {
         self.pdf_reader = Some(pdf_reader);
         self.pdf_document_path = Some(doc_path.clone());
         self.pdf_font_size = cell_size;
+        // Enable SGR-pixel mouse for this PDF session (no-op if unsupported),
+        // using the renderer's authoritative cell size so sub-cell link
+        // hit-testing aligns with what's drawn.
+        crate::inputs::pixel_mouse::enable_for_pdf(cell_size.width, cell_size.height);
         self.pdf_picker = pdf_picker;
         self.pdf_conversion_tx = conversion_tx;
         self.pdf_conversion_rx = conversion_rx;
@@ -1683,7 +1701,7 @@ impl App {
             self.pdf_font_size.as_tuple(),
             text_color,
             border_color,
-            theme_background(),
+            self.theme_background(),
             self.pdf_service.as_mut(),
             self.pdf_conversion_tx.as_ref(),
             &mut self.pdf_pending_display,
@@ -2220,25 +2238,40 @@ impl App {
 
     fn update_content(&mut self) {
         if let Some(book) = &mut self.current_book {
-            let (content, title) = match book.epub.get_current_str() {
-                Some((raw_html, _mime)) => {
-                    let title = extract_chapter_title(&raw_html);
-                    (raw_html, title)
-                }
-                None => {
-                    error!("Failed to get raw HTML");
-                    ("Error reading chapter content.".to_string(), None)
-                }
+            let current_chapter = book.current_chapter();
+            let analyzed_chapter = if book
+                .initial_chapter_analysis
+                .as_ref()
+                .is_some_and(|analysis| analysis.index == current_chapter)
+            {
+                book.initial_chapter_analysis.take()
+            } else {
+                None
             };
 
-            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, book.current_chapter()) {
+            if let Some(chapter_file) = Self::get_chapter_href(&book.epub, current_chapter) {
                 self.text_reader
                     .set_current_chapter_file(Some(chapter_file));
             } else {
                 self.text_reader.set_current_chapter_file(None);
             }
 
-            self.text_reader.set_content_from_string(&content, title);
+            if let Some(analysis) = analyzed_chapter {
+                self.text_reader
+                    .set_content_from_document(analysis.document, analysis.title);
+            } else {
+                let (content, title) = match book.epub.get_current_str() {
+                    Some((raw_html, _mime)) => {
+                        let title = extract_chapter_title(&raw_html);
+                        (raw_html, title)
+                    }
+                    None => {
+                        error!("Failed to get raw HTML");
+                        ("Error reading chapter content.".to_string(), None)
+                    }
+                };
+                self.text_reader.set_content_from_string(&content, title);
+            }
             self.text_reader.preload_image_dimensions(&self.book_images);
         } else {
             error!("No EPUB document loaded");
@@ -2390,6 +2423,163 @@ impl App {
     }
 
     #[cfg(feature = "pdf")]
+    fn pdf_scroll_axis_for_kind(kind: MouseEventKind) -> Option<PdfScrollAxis> {
+        match kind {
+            MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => Some(PdfScrollAxis::Vertical),
+            MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight => {
+                Some(PdfScrollAxis::Horizontal)
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "pdf")]
+    fn choose_pdf_scroll_axis(&mut self, scroll_events: &[MouseEvent]) -> PdfScrollAxis {
+        let vertical_count = scroll_events
+            .iter()
+            .filter(|event| {
+                Self::pdf_scroll_axis_for_kind(event.kind) == Some(PdfScrollAxis::Vertical)
+            })
+            .count();
+        let horizontal_count = scroll_events
+            .iter()
+            .filter(|event| {
+                Self::pdf_scroll_axis_for_kind(event.kind) == Some(PdfScrollAxis::Horizontal)
+            })
+            .count();
+
+        let candidate = if horizontal_count > vertical_count {
+            PdfScrollAxis::Horizontal
+        } else {
+            PdfScrollAxis::Vertical
+        };
+
+        let now = Instant::now();
+        let active_lock = self.pdf_scroll_axis_lock.filter(|lock| {
+            now.duration_since(lock.last_event)
+                <= Duration::from_millis(PDF_SCROLL_AXIS_LOCK_TIMEOUT_MS)
+        });
+
+        let axis = if let Some(lock) = active_lock {
+            if lock.axis == candidate {
+                candidate
+            } else {
+                let candidate_count = match candidate {
+                    PdfScrollAxis::Vertical => vertical_count,
+                    PdfScrollAxis::Horizontal => horizontal_count,
+                };
+                let locked_count = match lock.axis {
+                    PdfScrollAxis::Vertical => vertical_count,
+                    PdfScrollAxis::Horizontal => horizontal_count,
+                };
+
+                if candidate_count < locked_count.saturating_add(PDF_SCROLL_AXIS_SWITCH_MARGIN) {
+                    lock.axis
+                } else {
+                    candidate
+                }
+            }
+        } else {
+            candidate
+        };
+
+        let selected_count = match axis {
+            PdfScrollAxis::Vertical => vertical_count,
+            PdfScrollAxis::Horizontal => horizontal_count,
+        };
+
+        if selected_count > 0 {
+            self.pdf_scroll_axis_lock = Some(PdfScrollAxisLock {
+                axis,
+                last_event: now,
+            });
+        }
+
+        axis
+    }
+
+    #[cfg(feature = "pdf")]
+    fn handle_and_drain_pdf_mouse_scroll_events(
+        &mut self,
+        initial_mouse_event: MouseEvent,
+        event_source: &mut dyn crate::event_source::EventSource,
+    ) -> PdfEventResult {
+        let Some(_) = Self::pdf_scroll_axis_for_kind(initial_mouse_event.kind) else {
+            return self.handle_pdf_event(&Event::Mouse(initial_mouse_event));
+        };
+
+        let mut scroll_events = vec![initial_mouse_event];
+        let mut deferred_event = None;
+        let drain_timeout = Duration::from_millis(0);
+        let max_drain_iterations = 50;
+        let mut drain_count = 0;
+        let batch_start_time = Instant::now();
+
+        while drain_count < max_drain_iterations
+            && event_source.poll(drain_timeout).unwrap_or(false)
+        {
+            drain_count += 1;
+
+            if batch_start_time.elapsed() > Duration::from_millis(100) {
+                break;
+            }
+
+            if drain_count > 20 {
+                warn!(
+                    "Warning: draining many PDF mouse events ({drain_count}), may indicate event accumulation issue"
+                );
+            }
+
+            match event_source.read() {
+                Ok(Event::Mouse(mouse_event))
+                    if Self::pdf_scroll_axis_for_kind(mouse_event.kind).is_some() =>
+                {
+                    scroll_events.push(mouse_event);
+                }
+                Ok(event) => {
+                    deferred_event = Some(event);
+                    break;
+                }
+                Err(e) => {
+                    warn!("Error reading PDF mouse event during batching: {e:?}");
+                    break;
+                }
+            }
+        }
+
+        let axis = self.choose_pdf_scroll_axis(&scroll_events);
+        let mut result = PdfEventResult {
+            handled: true,
+            action: None,
+        };
+
+        for mouse_event in scroll_events
+            .into_iter()
+            .filter(|event| Self::pdf_scroll_axis_for_kind(event.kind) == Some(axis))
+        {
+            let event = Event::Mouse(mouse_event);
+            let event_result = self.handle_pdf_event(&event);
+            result.handled |= event_result.handled;
+            if event_result.action == Some(AppAction::Quit) {
+                result.action = Some(AppAction::Quit);
+                break;
+            }
+        }
+
+        if result.action != Some(AppAction::Quit)
+            && let Some(event) = deferred_event
+        {
+            let event_result = self.handle_pdf_event(&event);
+            result.handled |= event_result.handled;
+            if event_result.action == Some(AppAction::Quit) {
+                result.action = Some(AppAction::Quit);
+            }
+        }
+
+        result
+    }
+
+    #[cfg(feature = "pdf")]
     fn should_route_pdf_mouse_to_ui(&self, mouse_event: &MouseEvent) -> bool {
         crate::widget::pdf_reader::should_route_mouse_to_ui(
             mouse_event,
@@ -2404,6 +2594,8 @@ impl App {
     fn handle_non_scroll_mouse_event(&mut self, mouse_event: MouseEvent) {
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                self.clear_highlight_palette();
+
                 if self.handle_help_bar_click(mouse_event.column, mouse_event.row) {
                     return;
                 }
@@ -2721,7 +2913,9 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 if self.resizing_nav_panel {
                     self.resizing_nav_panel = false;
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     return;
                 }
 
@@ -3060,7 +3254,7 @@ impl App {
             return;
         }
 
-        let scroll_amount = if crate::settings::is_invert_scroll_direction() {
+        let scroll_amount = if self.settings.load().invert_scroll_direction {
             -scroll_amount
         } else {
             scroll_amount
@@ -3258,10 +3452,6 @@ impl App {
 
     pub fn is_normal_mode(&self) -> bool {
         self.text_reader.is_normal_mode_active()
-    }
-
-    pub fn is_highlight_palette_active(&self) -> bool {
-        self.highlight_palette_active()
     }
 
     pub fn current_chapter(&self) -> Option<usize> {
@@ -3813,12 +4003,13 @@ impl App {
                 false
             }
             NavigationPanelAction::ToggleSortOrder => {
-                use crate::settings::{BookSortOrder, get_book_sort_order, set_book_sort_order};
-                let new_order = match get_book_sort_order() {
+                use crate::settings::BookSortOrder;
+                let new_order = match self.settings.load().book_sort_order {
                     BookSortOrder::ByName => BookSortOrder::ByType,
                     BookSortOrder::ByType => BookSortOrder::ByName,
                 };
-                set_book_sort_order(new_order);
+                self.settings
+                    .update(|settings| settings.book_sort_order = new_order);
                 let current_path = self.navigation_panel.current_book_path.clone();
                 self.navigation_panel
                     .book_list
@@ -3853,7 +4044,7 @@ impl App {
 
         self.terminal_size = f.area();
 
-        let background_block = Block::default().style(Style::default().bg(theme_background()));
+        let background_block = Block::default().style(Style::default().bg(self.theme_background()));
         f.render_widget(background_block, f.area());
 
         if self.zen_mode {
@@ -4137,13 +4328,15 @@ impl App {
         }
     }
 
-    fn highlight_palette_active(&self) -> bool {
+    pub fn is_highlight_palette_active(&self) -> bool {
         self.pending_highlight_palette
-            && (self.text_reader.is_visual_mode_active() || self.highlight_palette_target.is_some())
+            && (self.text_reader.is_visual_mode_active()
+                || self.text_reader.has_text_selection()
+                || self.highlight_palette_target.is_some())
     }
 
     fn render_highlight_palette(&self, f: &mut ratatui::Frame) {
-        if !self.highlight_palette_active() {
+        if !self.is_highlight_palette_active() {
             return;
         }
 
@@ -4188,11 +4381,11 @@ impl App {
             .borders(Borders::ALL)
             .title(title)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
 
         let paragraph = Paragraph::new(content)
             .block(content_border)
-            .style(Style::default().fg(text_color).bg(theme_background()));
+            .style(Style::default().fg(text_color).bg(self.theme_background()));
 
         f.render_widget(paragraph, area);
     }
@@ -4477,7 +4670,7 @@ impl App {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
 
         let inner_area = block.inner(area);
         f.render_widget(block, area);
@@ -4490,7 +4683,7 @@ impl App {
         let left_para = Paragraph::new(left_content).style(
             Style::default()
                 .fg(current_theme().base_03)
-                .bg(theme_background()),
+                .bg(self.theme_background()),
         );
         f.render_widget(left_para, inner_area);
 
@@ -4511,7 +4704,7 @@ impl App {
 
         let right_para = Paragraph::new(right_content)
             .alignment(Alignment::Right)
-            .style(Style::default().bg(theme_background()));
+            .style(Style::default().bg(self.theme_background()));
         f.render_widget(right_para, inner_area);
     }
 
@@ -4576,14 +4769,6 @@ impl App {
         self.keybinding_errors_popup =
             Some(crate::widget::keybinding_errors_popup::KeybindingErrorsPopup::new(errors));
         self.focused_panel = FocusedPanel::Popup(PopupWindow::KeybindingErrors);
-    }
-
-    pub fn show_all_libraries_history(&mut self) {
-        if let FocusedPanel::Main(panel) = self.focused_panel {
-            self.previous_main_panel = panel;
-        }
-        self.reading_history = Some(ReadingHistory::new_all_libraries(self.home_bookmarks()));
-        self.focused_panel = FocusedPanel::Popup(PopupWindow::ReadingHistory);
     }
 
     /// Check if a key is a global hotkey that should work regardless of focus.
@@ -4727,8 +4912,9 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     self.resize_nav_panel(-3);
                     self.text_reader.restore_to_node_index(current_node);
-                    #[cfg(not(any(test, feature = "test-utils")))]
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     true
                 } else {
                     false
@@ -4739,8 +4925,9 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     self.resize_nav_panel(3);
                     self.text_reader.restore_to_node_index(current_node);
-                    #[cfg(not(any(test, feature = "test-utils")))]
-                    settings::set_nav_panel_width(self.nav_panel_width_override);
+                    let width = self.nav_panel_width_override;
+                    self.settings
+                        .update(|settings| settings.nav_panel_width = width);
                     true
                 } else {
                     false
@@ -4880,7 +5067,8 @@ impl App {
                     let current_node = self.text_reader.get_current_node_index();
                     let enabled = self.text_reader.toggle_justify_text();
                     self.text_reader.restore_to_node_index(current_node);
-                    settings::set_justify_text(enabled);
+                    self.settings
+                        .update(|settings| settings.justify_text = enabled);
                     if enabled {
                         self.notifications.info("Text justification: on");
                     } else {
@@ -4931,6 +5119,24 @@ impl App {
                 self.toggle_zen_mode();
                 true
             }
+            Action::ToggleZenBorder => {
+                let hide = !self.settings.load().zen_hide_border;
+                self.settings
+                    .update(|settings| settings.zen_hide_border = hide);
+                // PDF re-renders in place (the next draw detects the content-area
+                // change and re-tiles); EPUB re-wraps automatically on width change.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+                if hide {
+                    self.notifications.info("Zen border: hidden");
+                } else {
+                    self.notifications.info("Zen border: shown");
+                }
+                true
+            }
             Action::Suspend => {
                 #[cfg(unix)]
                 {
@@ -4975,25 +5181,56 @@ impl App {
                 // for EPUB.
                 #[cfg(feature = "pdf")]
                 let handled_pdf = if self.is_pdf_mode() {
-                    use crate::settings::{
-                        PdfPageLayoutMode, get_pdf_page_layout_mode, set_pdf_page_layout_mode,
-                    };
-                    let new_mode = match get_pdf_page_layout_mode() {
+                    use crate::settings::PdfPageLayoutMode;
+                    let new_mode = match self.settings.load().pdf_page_layout_mode {
                         PdfPageLayoutMode::Single => PdfPageLayoutMode::Dual,
                         PdfPageLayoutMode::Dual => PdfPageLayoutMode::Single,
                     };
-                    set_pdf_page_layout_mode(new_mode);
-                    if let Some(ref mut pdf_reader) = self.pdf_reader {
-                        if let Some(ref mut zoom) = pdf_reader.zoom {
-                            zoom.global_scroll_offset = 0;
+                    self.settings
+                        .update(|settings| settings.pdf_page_layout_mode = new_mode);
+                    let toc_height = self.get_navigation_panel_area().height as usize;
+                    if let Some(mut pdf_reader) = self.pdf_reader.take() {
+                        // Dual pairs are even-aligned (0,1),(2,3),... so toggling
+                        // dual while anchored on an odd page must snap to the pair
+                        // start; otherwise the odd page renders solo with an empty
+                        // right slot instead of a proper spread.
+                        if new_mode == PdfPageLayoutMode::Dual {
+                            let aligned = pdf_reader.page & !1;
+                            pdf_reader.set_page(aligned);
                         }
+                        let render_mode = self.settings.load().pdf_render_mode;
+                        pdf_reader.align_scroll_for_render_mode(render_mode);
                         pdf_reader.last_sent_viewport = None;
                         pdf_reader.force_redraw();
+                        // Non-kitty renders pages at a fixed scale, so the pair
+                        // must be re-fit to the viewport; without this the two
+                        // full-width pages can never share the window and the
+                        // dual view deadlocks on [LOADING]. (Kitty scales at
+                        // display time and needs no re-render.)
+                        if !pdf_reader.is_kitty {
+                            if let Some(action) = pdf_reader.reset_zoom_to_fit_width() {
+                                let _ = pdf_reader.apply_input_action(
+                                    action,
+                                    self.pdf_service.as_mut(),
+                                    self.pdf_conversion_tx.as_ref(),
+                                    &mut self.notifications,
+                                    self.current_context_override
+                                        .as_mut()
+                                        .map(LibraryContext::bookmarks_mut)
+                                        .unwrap_or_else(|| self.home_context.bookmarks_mut()),
+                                    &mut self.last_bookmark_save,
+                                    &mut self.navigation_panel.table_of_contents,
+                                    toc_height,
+                                    &self.profiler,
+                                );
+                            }
+                        }
                         pdf_reader.set_hud_message(
                             format!("Page layout: {}", new_mode.as_str()),
                             crate::widget::hud_message::HudMode::Normal,
                             std::time::Duration::from_secs(2),
                         );
+                        self.pdf_reader = Some(pdf_reader);
                     }
                     true
                 } else {
@@ -5005,14 +5242,13 @@ impl App {
                 if !handled_pdf && self.current_book.is_some() {
                     // EPUB: toggle the two-column "book spread" layout. It
                     // renders whenever the reader pane is wide enough.
-                    use crate::settings::{
-                        EpubColumnMode, get_epub_column_mode, set_epub_column_mode,
-                    };
-                    let new_mode = match get_epub_column_mode() {
+                    use crate::settings::EpubColumnMode;
+                    let new_mode = match self.settings.load().epub_column_mode {
                         EpubColumnMode::Single => EpubColumnMode::Dual,
                         EpubColumnMode::Dual => EpubColumnMode::Single,
                     };
-                    set_epub_column_mode(new_mode);
+                    self.settings
+                        .update(|settings| settings.epub_column_mode = new_mode);
                     let current_node = self.text_reader.get_current_node_index();
                     self.text_reader
                         .set_dual_columns(new_mode == EpubColumnMode::Dual);
@@ -5044,18 +5280,15 @@ impl App {
                 #[cfg(feature = "pdf")]
                 if self.is_pdf_mode() {
                     if self.pdf_supports_scroll_mode {
-                        use crate::settings::{
-                            PdfRenderMode, get_pdf_render_mode, set_pdf_render_mode,
-                        };
-                        let new_mode = match get_pdf_render_mode() {
+                        use crate::settings::PdfRenderMode;
+                        let new_mode = match self.settings.load().pdf_render_mode {
                             PdfRenderMode::Page => PdfRenderMode::Scroll,
                             PdfRenderMode::Scroll => PdfRenderMode::Page,
                         };
-                        set_pdf_render_mode(new_mode);
+                        self.settings
+                            .update(|settings| settings.pdf_render_mode = new_mode);
                         if let Some(ref mut pdf_reader) = self.pdf_reader {
-                            if let Some(ref mut zoom) = pdf_reader.zoom {
-                                zoom.global_scroll_offset = 0;
-                            }
+                            pdf_reader.align_scroll_for_render_mode(new_mode);
                             pdf_reader.last_sent_viewport = None;
                             pdf_reader.force_redraw();
                             pdf_reader.set_hud_message(
@@ -5098,8 +5331,8 @@ impl App {
             }
             Action::ResetNavPanelWidth => {
                 self.nav_panel_width_override = None;
-                #[cfg(not(any(test, feature = "test-utils")))]
-                settings::set_nav_panel_width(None);
+                self.settings
+                    .update(|settings| settings.nav_panel_width = None);
                 #[cfg(feature = "pdf")]
                 if let Some(pdf_reader) = self.pdf_reader.as_mut() {
                     pdf_reader.handle_viewport_width_change(self.pdf_conversion_tx.as_ref());
@@ -5122,15 +5355,22 @@ impl App {
     fn make_settings_popup(&self, tab: SettingsTab) -> SettingsPopup {
         #[cfg(feature = "pdf")]
         {
-            SettingsPopup::new_with_caps(
+            SettingsPopup::new(
                 tab,
                 self.pdf_supports_graphics,
                 self.pdf_supports_scroll_mode,
+                self.settings.clone(),
             )
         }
         #[cfg(not(feature = "pdf"))]
         {
-            SettingsPopup::new_with_tab(tab)
+            let caps = crate::terminal::detect_terminal_with_probe();
+            SettingsPopup::new(
+                tab,
+                caps.supports_graphics,
+                caps.pdf.supports_scroll_mode,
+                self.settings.clone(),
+            )
         }
     }
 
@@ -5141,22 +5381,50 @@ impl App {
                 self.settings_popup = None;
             }
             SettingsAction::PageLayoutChanged => {
+                // Keep the current page in view across the layout change. Resetting
+                // the scroll offset to 0 would jump to the first page and, in scroll
+                // mode, strand the loop on [ LOADING ] (self.page snaps to 0 while the
+                // converter is still rendering around the old page, so the frame that
+                // clears the waiting flag never arrives).
                 #[cfg(feature = "pdf")]
                 if let Some(ref mut pdf_reader) = self.pdf_reader {
-                    if let Some(ref mut zoom) = pdf_reader.zoom {
-                        zoom.global_scroll_offset = 0;
-                    }
+                    let render_mode = self.settings.load().pdf_render_mode;
+                    pdf_reader.align_scroll_for_render_mode(render_mode);
                     pdf_reader.last_sent_viewport = None;
                     pdf_reader.force_redraw();
                 }
                 // Keep the EPUB reader's column layout in sync with the
                 // setting the user just changed in the popup.
                 let current_node = self.text_reader.get_current_node_index();
-                self.text_reader.set_dual_columns(
-                    crate::settings::get_epub_column_mode()
-                        == crate::settings::EpubColumnMode::Dual,
-                );
+                let dual_columns =
+                    self.settings.load().epub_column_mode == crate::settings::EpubColumnMode::Dual;
+                self.text_reader.set_dual_columns(dual_columns);
                 self.text_reader.restore_to_node_index(current_node);
+            }
+            SettingsAction::ZenBorderChanged => {
+                // The border toggle only changes the content area, not the
+                // reading position. Re-render in place — the next PDF draw
+                // detects the area change and re-tiles; scroll offset is left
+                // untouched so the reader stays where it was.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
+            }
+            SettingsAction::EpubImageSizeChanged => {
+                self.text_reader.refresh_image_sizing();
+            }
+            SettingsAction::RenderModeChanged => {
+                // Page and scroll mode store the reading position differently, so
+                // convert it instead of jumping to the first page.
+                #[cfg(feature = "pdf")]
+                if let Some(ref mut pdf_reader) = self.pdf_reader {
+                    let render_mode = self.settings.load().pdf_render_mode;
+                    pdf_reader.align_scroll_for_render_mode(render_mode);
+                    pdf_reader.last_sent_viewport = None;
+                    pdf_reader.force_redraw();
+                }
             }
             SettingsAction::SettingsChanged => {
                 // Invalidate render cache for theme changes
@@ -5173,7 +5441,8 @@ impl App {
                 #[cfg(feature = "pdf")]
                 {
                     // Close any open PDF if PDF support was disabled
-                    if !crate::settings::is_pdf_enabled() && self.is_pdf_mode() {
+                    if !self.settings.load().pdf_enabled && self.is_pdf_mode() {
+                        crate::inputs::pixel_mouse::disable();
                         if let Some(ref pdf_reader) = self.pdf_reader {
                             Self::clear_pdf_graphics(pdf_reader.is_kitty);
                         }
@@ -5307,6 +5576,22 @@ impl App {
         self.highlight_palette_target = None;
     }
 
+    fn open_highlight_palette(&mut self) {
+        self.text_reader.clear_count();
+        let existing = self.text_reader.highlight_for_palette();
+        if self.text_reader.is_visual_mode_active()
+            || self.text_reader.has_text_selection()
+            || existing.is_some()
+        {
+            self.highlight_palette_target = existing;
+            self.pending_highlight_palette = true;
+            self.show_highlight_palette_hud();
+        } else {
+            self.text_reader
+                .set_error_hud("Select text, or place the cursor on a highlight, then press H");
+        }
+    }
+
     fn handle_highlight_palette_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
         if !self.pending_highlight_palette {
             return false;
@@ -5323,20 +5608,21 @@ impl App {
             HighlightPaletteAction::Apply(color) => {
                 let target = self.highlight_palette_target.take();
                 self.clear_highlight_palette();
-                let visual = self.text_reader.is_visual_mode_active();
+                let has_selection = self.text_reader.is_visual_mode_active()
+                    || self.text_reader.has_text_selection();
                 match target {
                     // Re-picking the highlight's own color clears it (toggle off).
                     Some((id, existing)) if existing == color => {
                         self.text_reader.remove_highlight_by_id(&id);
                     }
-                    // In visual mode, recolor means "replace": drop the
+                    // With a selection, recolor means "replace": drop the
                     // existing highlight and create a new one covering the
                     // user's current selection range. Without this the user's
                     // selection range silently doesn't apply and only the old
                     // highlight changes color.
-                    Some((id, _)) if visual => {
+                    Some((id, _)) if has_selection => {
                         self.text_reader.delete_comment_by_id(&id);
-                        self.text_reader.add_highlight_from_visual_selection(color);
+                        self.text_reader.add_highlight_from_selection(color);
                     }
                     // Cursor sits inside a highlight (no selection): change
                     // color in place.
@@ -5344,7 +5630,7 @@ impl App {
                         self.text_reader.recolor_highlight(&id, color);
                     }
                     None => {
-                        self.text_reader.add_highlight_from_visual_selection(color);
+                        self.text_reader.add_highlight_from_selection(color);
                     }
                 }
                 self.text_reader.clear_count();
@@ -5419,6 +5705,27 @@ impl App {
                 let count = self.text_reader.take_count();
                 for _ in 0..count {
                     self.text_reader.normal_mode_word_end();
+                }
+                true
+            }
+            Action::BigWordForward => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_forward();
+                }
+                true
+            }
+            Action::BigWordBackward => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_backward();
+                }
+                true
+            }
+            Action::BigWordEnd => {
+                let count = self.text_reader.take_count();
+                for _ in 0..count {
+                    self.text_reader.normal_mode_big_word_end();
                 }
                 true
             }
@@ -5540,25 +5847,7 @@ impl App {
                 true
             }
             Action::OpenHighlightPalette => {
-                self.text_reader.clear_count();
-                let existing = self.text_reader.highlight_for_palette();
-                if self.text_reader.is_visual_mode_active() {
-                    // In visual mode the palette acts on the selection: create a
-                    // new highlight, or recolor/remove one the selection overlaps.
-                    self.highlight_palette_target = existing;
-                    self.pending_highlight_palette = true;
-                    self.show_highlight_palette_hud();
-                } else if existing.is_some() {
-                    // No selection, but the cursor sits inside a highlight:
-                    // open the palette to recolor or remove it.
-                    self.highlight_palette_target = existing;
-                    self.pending_highlight_palette = true;
-                    self.show_highlight_palette_hud();
-                } else {
-                    self.text_reader.set_error_hud(
-                        "Select text, or place the cursor on a highlight, then press H",
-                    );
-                }
+                self.open_highlight_palette();
                 true
             }
             _ => false,
@@ -5672,6 +5961,9 @@ impl App {
                     debug!("Started comment input mode");
                 }
             }
+            Action::OpenHighlightPalette => {
+                self.open_highlight_palette();
+            }
             Action::CopySelection => {
                 if let Err(e) = self.text_reader.copy_selection_to_clipboard() {
                     error!("Copy failed: {e}");
@@ -5705,13 +5997,15 @@ impl App {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.increase_margin();
                 self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
+                let margin = self.text_reader.get_margin();
+                self.settings.update(|settings| settings.margin = margin);
             }
             Action::DecreaseMargin => {
                 let current_node = self.text_reader.get_current_node_index();
                 self.text_reader.decrease_margin();
                 self.text_reader.restore_to_node_index(current_node);
-                settings::set_margin(self.text_reader.get_margin());
+                let margin = self.text_reader.get_margin();
+                self.settings.update(|settings| settings.margin = margin);
             }
             Action::EnterVisualMode => {
                 use crate::markdown_text_reader::VisualMode;
@@ -6578,6 +6872,10 @@ impl App {
             }
         }
 
+        if self.handle_highlight_palette_key(&key) {
+            return None;
+        }
+
         // Keymap-based dispatch for EpubContent context
         {
             use crate::keybindings::context::KeyContext;
@@ -6629,244 +6927,18 @@ impl App {
         if let Some(reader) = self.pdf_reader.as_mut() {
             reader.cancel_pointer_interaction();
         }
+        // Cell pixel size can change on font-size changes; keep pixel-mouse
+        // conversion accurate using the renderer's authoritative cell size
+        // (window_size() can round/include padding). No-op when disabled.
+        #[cfg(feature = "pdf")]
+        if crate::inputs::pixel_mouse::is_enabled() {
+            crate::inputs::pixel_mouse::set_cell_size(
+                self.pdf_font_size.width,
+                self.pdf_font_size.height,
+            );
+        }
         // text reader needs to update image picker and line wraps
         self.text_reader.handle_terminal_resize();
-    }
-
-    //todo this does extra parsing of a book. damn claude is dumb
-    fn initialize_search_engine(&mut self, doc: &mut EpubDoc<BufReader<std::fs::File>>) {
-        fn extract_text_from_markdown_doc(doc: &crate::markdown::Document) -> Vec<SearchLine> {
-            let mut lines = Vec::new();
-            for (node_index, node) in doc.blocks.iter().enumerate() {
-                extract_text_from_block(&node.block, node_index, &mut lines);
-            }
-            lines
-        }
-
-        fn extract_text_from_block(
-            block: &crate::markdown::Block,
-            node_index: usize,
-            lines: &mut Vec<SearchLine>,
-        ) {
-            use crate::markdown::Block;
-
-            match block {
-                Block::Paragraph { content } | Block::Heading { content, .. } => {
-                    let plain_text = extract_text_from_text(content);
-                    if !plain_text.trim().is_empty() {
-                        lines.push(SearchLine {
-                            text: plain_text,
-                            node_index,
-                            y_bounds: None,
-                        });
-                    }
-                }
-                Block::List { items, .. } => {
-                    for item in items {
-                        // ListItem content is Vec<Node>, so process each node
-                        for node in &item.content {
-                            extract_text_from_block(&node.block, node_index, lines);
-                        }
-                    }
-                }
-                Block::Quote { content } => {
-                    for node in content {
-                        extract_text_from_block(&node.block, node_index, lines);
-                    }
-                }
-                Block::CodeBlock { content, .. } => {
-                    lines.push(SearchLine {
-                        text: content.clone(),
-                        node_index,
-                        y_bounds: None,
-                    });
-                }
-                Block::Table { rows, header, .. } => {
-                    if let Some(header_row) = header {
-                        let row_text: Vec<String> = header_row
-                            .cells
-                            .iter()
-                            .map(|cell| {
-                                extract_text_from_cell_content(&cell.content, node_index, lines)
-                            })
-                            .collect();
-                        if !row_text.is_empty() {
-                            lines.push(SearchLine {
-                                text: row_text.join(" "),
-                                node_index,
-                                y_bounds: None,
-                            });
-                        }
-                    }
-                    for row in rows {
-                        let row_text: Vec<String> = row
-                            .cells
-                            .iter()
-                            .map(|cell| {
-                                extract_text_from_cell_content(&cell.content, node_index, lines)
-                            })
-                            .collect();
-                        if !row_text.is_empty() {
-                            lines.push(SearchLine {
-                                text: row_text.join(" "),
-                                node_index,
-                                y_bounds: None,
-                            });
-                        }
-                    }
-                }
-                Block::DefinitionList { items } => {
-                    for item in items {
-                        lines.push(SearchLine {
-                            text: extract_text_from_text(&item.term),
-                            node_index,
-                            y_bounds: None,
-                        });
-                        // Process each definition (Vec<Vec<Node>>)
-                        for definition in &item.definitions {
-                            for node in definition {
-                                extract_text_from_block(&node.block, node_index, lines);
-                            }
-                        }
-                    }
-                }
-                Block::EpubBlock { content, .. } => {
-                    for node in content {
-                        extract_text_from_block(&node.block, node_index, lines);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        fn extract_text_from_text(text: &crate::markdown::Text) -> String {
-            let mut result = String::new();
-
-            for part in text.iter() {
-                match part {
-                    crate::markdown::TextOrInline::Text(text_node) => {
-                        result.push_str(&text_node.content);
-                    }
-                    crate::markdown::TextOrInline::Inline(inline) => match inline {
-                        crate::markdown::Inline::Link { text, .. } => {
-                            result.push_str(&extract_text_from_text(text));
-                        }
-                        crate::markdown::Inline::Image { alt_text, .. } => {
-                            result.push_str(alt_text);
-                        }
-                        crate::markdown::Inline::LineBreak => {
-                            result.push(' ');
-                        }
-                        _ => {}
-                    },
-                }
-            }
-
-            result
-        }
-
-        fn extract_text_from_cell_content(
-            content: &crate::markdown::TableCellContent,
-            node_index: usize,
-            lines: &mut Vec<SearchLine>,
-        ) -> String {
-            match content {
-                crate::markdown::TableCellContent::Simple(text) => extract_text_from_text(text),
-                crate::markdown::TableCellContent::Rich(nodes) => {
-                    let mut result = String::new();
-                    for node in nodes {
-                        extract_text_from_block(&node.block, node_index, lines);
-                        // Also collect text inline
-                        result.push_str(&extract_node_text(node));
-                    }
-                    result
-                }
-            }
-        }
-
-        fn extract_node_text(node: &crate::markdown::Node) -> String {
-            use crate::markdown::Block;
-            match &node.block {
-                Block::Paragraph { content } => extract_text_from_text(content),
-                Block::Heading { content, .. } => extract_text_from_text(content),
-                Block::CodeBlock { content, .. } => content.clone(),
-                Block::Quote { content } => content
-                    .iter()
-                    .map(extract_node_text)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                Block::List { items, .. } => items
-                    .iter()
-                    .flat_map(|item| item.content.iter().map(extract_node_text))
-                    .collect::<Vec<_>>()
-                    .join(" "),
-                Block::Table { header, rows, .. } => {
-                    let mut text = String::new();
-                    if let Some(h) = header {
-                        text.push_str(
-                            &h.cells
-                                .iter()
-                                .map(|c| match &c.content {
-                                    crate::markdown::TableCellContent::Simple(t) => {
-                                        extract_text_from_text(t)
-                                    }
-                                    crate::markdown::TableCellContent::Rich(n) => n
-                                        .iter()
-                                        .map(extract_node_text)
-                                        .collect::<Vec<_>>()
-                                        .join(" "),
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                        );
-                    }
-                    for row in rows {
-                        text.push_str(
-                            &row.cells
-                                .iter()
-                                .map(|c| match &c.content {
-                                    crate::markdown::TableCellContent::Simple(t) => {
-                                        extract_text_from_text(t)
-                                    }
-                                    crate::markdown::TableCellContent::Rich(n) => n
-                                        .iter()
-                                        .map(extract_node_text)
-                                        .collect::<Vec<_>>()
-                                        .join(" "),
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" "),
-                        );
-                    }
-                    text
-                }
-                _ => String::new(),
-            }
-        }
-
-        let mut search_engine = SearchEngine::new();
-        let mut chapters = Vec::new();
-        use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
-        let mut converter = HtmlToMarkdownConverter::new();
-
-        // Process all chapters to extract readable text
-        for chapter_index in 0..doc.get_num_chapters() {
-            if doc.set_current_chapter(chapter_index) {
-                if let Some((raw_html, _mime)) = doc.get_current_str() {
-                    let title = extract_chapter_title(&raw_html)
-                        .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
-
-                    let markdown_doc = converter.convert(&raw_html);
-
-                    let clean_text = extract_text_from_markdown_doc(&markdown_doc);
-                    chapters.push((chapter_index, title, clean_text));
-                }
-            }
-        }
-
-        search_engine.process_chapters(chapters);
-
-        self.book_search = Some(BookSearch::new(search_engine));
     }
 
     /// Initialize search engine for PDF/DJVU documents
@@ -7333,8 +7405,8 @@ impl App {
                 .resize_with(page_count, crate::widget::pdf_reader::RenderedInfo::default);
 
             // Clamp page to new page count but preserve scroll position.
-            // Do NOT call reset_view_after_reload / set_page — those reset the
-            // vertical scroll offset, which is exactly what we want to keep.
+            // Do NOT call set_page — it resets the vertical scroll offset,
+            // which is exactly what we want to keep.
             if page_count > 0 {
                 pdf_reader.page = pdf_reader.page.min(page_count - 1);
             }
@@ -7461,7 +7533,7 @@ impl App {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| editor_file.clone());
 
-        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+        if let Some(editor_cmd) = self.settings.load().synctex_editor.clone() {
             let cmd = editor_cmd
                 .replace("{file}", &editor_file)
                 .replace("{line}", &line.to_string())
@@ -7579,7 +7651,7 @@ impl App {
             return;
         }
 
-        if let Some(editor_cmd) = crate::settings::get_synctex_editor() {
+        if let Some(editor_cmd) = self.settings.load().synctex_editor.clone() {
             let cmd = editor_cmd
                 .replace("{file}", test_file)
                 .replace("{line}", "1")
@@ -8084,6 +8156,17 @@ where
             let event = event_source.read()?;
             events_processed += 1;
 
+            // When SGR-pixel mouse mode is active (Kitty/Ghostty), mouse events
+            // carry pixel coordinates; rewrite them to cells for the cell-based
+            // UI while stashing the pixel position for sub-cell link hit-testing.
+            let event = {
+                let mut event = event;
+                if let Event::Mouse(ref mut me) = event {
+                    crate::inputs::pixel_mouse::normalize_mouse_event(me);
+                }
+                event
+            };
+
             // On Windows, crossterm emits both Press and Release key events.
             // Ignore Release (and Repeat) to prevent double-processing.
             if matches!(&event, Event::Key(k) if k.kind != KeyEventKind::Press) {
@@ -8187,7 +8270,17 @@ where
                                 }
                             }
                         } else {
-                            let result = app.handle_pdf_event(&event);
+                            let result = match mouse_event.kind {
+                                MouseEventKind::ScrollLeft
+                                | MouseEventKind::ScrollRight
+                                | MouseEventKind::ScrollDown
+                                | MouseEventKind::ScrollUp => app
+                                    .handle_and_drain_pdf_mouse_scroll_events(
+                                        *mouse_event,
+                                        event_source,
+                                    ),
+                                _ => app.handle_pdf_event(&event),
+                            };
                             if result.action == Some(AppAction::Quit) {
                                 should_quit = true;
                             }
@@ -8264,12 +8357,33 @@ where
             needs_redraw = true;
         }
 
+        #[cfg(feature = "pdf")]
+        if let Some(reader) = app.pdf_reader.as_mut() {
+            if std::mem::take(&mut reader.pending_screen_refresh) {
+                app.pending_screen_refresh = true;
+            }
+        }
+
+        if app.pending_screen_refresh {
+            app.pending_screen_refresh = false;
+            terminal.clear()?;
+            needs_redraw = true;
+        }
+
         #[cfg(unix)]
         if app.pending_suspend {
             app.pending_suspend = false;
             #[cfg(feature = "pdf")]
             let _ = crate::pdf::kittyv2::delete_all_images();
             crossterm::terminal::disable_raw_mode()?;
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::DISABLE_SEQ
+                );
+            }
             execute!(
                 std::io::stdout(),
                 crossterm::terminal::LeaveAlternateScreen,
@@ -8286,6 +8400,17 @@ where
                 crossterm::event::EnableMouseCapture,
                 crossterm::cursor::Hide
             )?;
+            // Re-arm SGR-pixel mouse after resume (EnableMouseCapture reset it).
+            // Keep the cached cell size — it came from the renderer, not stdio.
+            if crate::inputs::pixel_mouse::is_enabled() {
+                use std::io::Write;
+                let _ = write!(
+                    std::io::stdout(),
+                    "{}",
+                    crate::inputs::pixel_mouse::ENABLE_SEQ
+                );
+                let _ = std::io::stdout().flush();
+            }
             crossterm::terminal::enable_raw_mode()?;
             terminal.clear()?;
             #[cfg(feature = "pdf")]
@@ -8301,6 +8426,8 @@ where
         if last_tick.elapsed() >= tick_rate {
             let highlight_changed = app.text_reader.update_highlight(); // Update highlight state
             let epub_hud_expired = app.text_reader.update_hud_message();
+            let deferred_reload_started = app.text_reader.tick_deferred_image_reload();
+            let image_settle_due = app.text_reader.settle_swap_imminent();
             let images_loaded = app.text_reader.check_for_loaded_images();
             let notification_expired = app.notifications.update();
             #[cfg(feature = "pdf")]
@@ -8314,6 +8441,12 @@ where
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");
+            }
+            if deferred_reload_started {
+                needs_redraw = true;
+            }
+            if image_settle_due {
+                needs_redraw = true;
             }
             if highlight_changed {
                 needs_redraw = true;
@@ -8364,7 +8497,14 @@ where
         }
 
         if needs_redraw {
+            let settle_swap = app.text_reader.settle_swap_imminent();
+            if settle_swap {
+                let _ = execute!(stdout(), BeginSynchronizedUpdate);
+            }
             terminal.draw(|f| app.draw(f, &fps_counter))?;
+            if settle_swap {
+                terminal.draw(|f| app.draw(f, &fps_counter))?;
+            }
             #[cfg(feature = "pdf")]
             {
                 app.execute_pdf_display_plan();

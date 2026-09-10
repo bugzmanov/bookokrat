@@ -5,26 +5,18 @@ use crate::markdown::{
     Block as MarkdownBlock, Document, HeadingLevel, Inline, Node, Style, Text as MarkdownText,
     TextOrInline,
 };
-use crate::theme::{Base16Palette, theme_background};
+use crate::theme::Base16Palette;
 use crate::types::LinkInfo;
 use ratatui::{
     layout::Constraint,
     style::{Color, Modifier, Style as RatatuiStyle},
     text::{Line, Span},
 };
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderContext {
     TopLevel,
     InsideContainer,
-}
-
-#[allow(dead_code)]
-pub struct RenderingContext {
-    pub raw_text_lines: Vec<String>,
-    pub anchor_positions: HashMap<String, usize>,
-    pub links: Vec<LinkInfo>,
 }
 
 #[derive(Clone, Default)]
@@ -87,17 +79,6 @@ impl PrefixFrame {
         }
 
         LinePrefix { raw, spans, width }
-    }
-}
-
-#[allow(dead_code)]
-impl RenderingContext {
-    pub fn new() -> Self {
-        Self {
-            raw_text_lines: Vec::new(),
-            anchor_positions: HashMap::new(),
-            links: Vec::new(),
-        }
     }
 }
 
@@ -2100,7 +2081,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 } else {
                     palette.base_03
                 });
-                style = style.bg(theme_background());
+                style = style.bg(self.theme_background());
 
                 if coverage_counts.get(line_idx).copied().unwrap_or(0) > 0 {
                     style = style
@@ -4418,8 +4399,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         struct CharWithRichSpan {
             ch: char,
             rich_span_idx: usize, // Index into original_rich_spans
-            #[allow(dead_code)]
-            char_idx_in_span: usize, // Position within the span's text
         }
 
         let mut chars_with_rich = Vec::new();
@@ -4428,11 +4407,10 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 RichSpan::Text(span) => &span.content,
                 RichSpan::Link { span, .. } => &span.content,
             };
-            for (char_idx, ch) in span_text.chars().enumerate() {
+            for ch in span_text.chars() {
                 chars_with_rich.push(CharWithRichSpan {
                     ch,
                     rich_span_idx: span_idx,
-                    char_idx_in_span: char_idx,
                 });
             }
         }
@@ -4595,6 +4573,8 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 src: url.to_string(),
                 lines_before_image,
                 height_cells: image_height,
+                target_width_cells: 0,
+                needs_reload: false,
                 width: 200,  // Default width, will be updated when loaded
                 height: 200, // Default height, will be updated when loaded
                 state: ImageLoadState::NotLoaded,
@@ -4876,7 +4856,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 40, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -4929,7 +4911,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 60, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -4971,7 +4955,9 @@ mod tests {
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 80, theme::current_theme(), true);
 
         let rendered_text = rendered
@@ -5004,7 +4990,9 @@ beta beta beta beta beta</pre>"#;
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = converter.convert(html);
 
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new();
+        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new(
+            crate::settings::RuntimeSettings::in_memory(crate::settings::Settings::default()),
+        );
         let rendered = reader.render_document_to_lines(&doc, 12, theme::current_theme(), true);
 
         let rendered_text = rendered

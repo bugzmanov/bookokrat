@@ -8,7 +8,7 @@ use bookokrat::keybindings::context::KeyContext;
 use bookokrat::keybindings::defaults::default_keymap;
 use bookokrat::keybindings::notation::{format_key_binding, parse_key_binding};
 use bookokrat::main_app::AppAction;
-use bookokrat::settings::set_margin;
+use bookokrat::settings::{RuntimeSettings, Settings};
 use bookokrat::theme::set_theme_by_index;
 use bookokrat::{App, FocusedPanel, MainPanel, PopupWindow};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
@@ -22,17 +22,15 @@ use tempfile::TempDir;
 
 fn create_app() -> (App, TempDir) {
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
     bookokrat::test_utils::set_next_test_terminal_size(120, 36);
     let comments_dir = TempDir::new().expect("temp dir");
-    let app = App::new_with_config(
+    let app = App::new_with_config_and_settings(
         Some("tests/testdata"),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(Settings::default()),
     );
     (app, comments_dir)
 }
@@ -188,6 +186,12 @@ binding_tests! {
     global_space_z: KeyContext::Global, "<Space>z",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
+    global_space_b: KeyContext::Global, "<Space>b",
+        setup = |app, _dir| {
+            open_book(&mut app);
+            app.update_settings(|settings| settings.zen_hide_border = false);
+        },
+        check = |app| app.settings_snapshot().zen_hide_border;
     global_ctrl_z: KeyContext::Global, "<C-z>",
         setup = |app, _dir| { open_book(&mut app); },
         check = |app| app.is_zen_mode();
@@ -432,6 +436,9 @@ binding_tests! {
     content_c: KeyContext::EpubContent, "c",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| !app.text_reader().has_text_selection(); // still no selection
+    content_h_upper: KeyContext::EpubContent, "H",
+        setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
+        check = |app| !app.is_highlight_palette_active();
     content_ctrl_i: KeyContext::EpubContent, "<C-i>",
         setup = |app, _dir| { open_book(&mut app); app.focused_panel = FocusedPanel::Main(MainPanel::Content); },
         check = |app| matches!(app.focused_panel, FocusedPanel::Main(MainPanel::Content)); // no jump history, stays

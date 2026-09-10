@@ -45,11 +45,6 @@ impl Notification {
     pub fn time_remaining(&self) -> Duration {
         self.expires_at.saturating_duration_since(Instant::now())
     }
-
-    #[deprecated(note = "Use time_remaining() instead")]
-    pub fn remaining_time(&self) -> Duration {
-        self.time_remaining()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -159,10 +154,6 @@ impl NotificationManager {
 
     pub fn has_notification(&self) -> bool {
         !self.notifications.is_empty()
-    }
-
-    pub fn has_notifications(&self) -> bool {
-        self.has_notification()
     }
 
     pub fn count(&self) -> usize {

@@ -26,14 +26,12 @@ use crate::widget::highlight_palette::{
 };
 
 use super::state::{
-    CommentEditMode, HighlightLocator, InputAction, PdfReaderState, PendingHighlight,
-    SEPARATOR_HEIGHT,
+    CommentEditMode, HighlightLocator, InputAction, KittyScrollAnchor, PdfReaderState,
+    PendingHighlight, SEPARATOR_HEIGHT,
 };
 use super::types::{PageJumpMode, PendingScroll, QuickPageJump};
 use crate::comments::{Comment, CommentTarget, PdfSelectionRect};
-use crate::settings::{
-    PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
-};
+use crate::settings::{PdfPageLayoutMode, PdfRenderMode};
 use crate::widget::pdf_reader::rendering::DUAL_PAGE_GAP_CELLS;
 
 #[cfg(feature = "profile")]
@@ -76,22 +74,12 @@ impl PdfReaderState {
         let left_cell = self
             .rendered
             .get(left_page)
-            .and_then(|p| {
-                p.img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions())
-                    .or(p.full_cell_size)
-            })
+            .and_then(crate::widget::pdf_reader::RenderedInfo::layout_cell_size)
             .unwrap_or(CellSize::new(0, 0));
         let right_cell = self
             .rendered
             .get(right_page)
-            .and_then(|p| {
-                p.img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions())
-                    .or(p.full_cell_size)
-            })
+            .and_then(crate::widget::pdf_reader::RenderedInfo::layout_cell_size)
             .unwrap_or(CellSize::new(0, 0));
 
         let left_dest_w = ((f32::from(left_cell.width) * zoom_factor).ceil() as u16).max(1);
@@ -214,6 +202,14 @@ impl PdfReaderState {
             self.comment_input.clear();
             self.comment_nav_active = false;
         }
+        // Capture the viewport-top position as (page, in-page ratio) BEFORE the
+        // zoom factor / effective factor change below, so the reader stays on
+        // the same content instead of snapping to the top of the current page.
+        let scroll_anchor = self.capture_kitty_scroll_anchor();
+        // Refresh the remembered pan fraction while the pre-toggle geometry is
+        // still valid; apply_render_responses re-applies it once the pages have
+        // been re-rendered for the new viewport width.
+        self.capture_kitty_pan_fraction();
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
 
@@ -268,18 +264,35 @@ impl PdfReaderState {
 
         let page = self.page;
         let current_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
-        let terminal_width = terminal_width as f32;
-        let nav_width = nav_width as f32;
+        let terminal_width = f64::from(terminal_width);
+        let nav_width = f64::from(nav_width);
 
         if self.is_kitty {
-            // Kitty: adjust zoom to keep visual size constant when viewport width changes
+            // Kitty: adjust zoom to keep visual size constant when viewport width changes.
+            // Done in f64 so that a zen round trip (ratio, then its reciprocal)
+            // lands back on the original f32 factor instead of drifting.
             let width_ratio = if zen_mode {
                 (terminal_width - nav_width) / terminal_width
             } else {
                 terminal_width / (terminal_width - nav_width)
             };
 
-            let adjusted_factor = crate::pdf::Zoom::clamp_factor(current_factor * width_ratio);
+            let mut adjusted_factor =
+                crate::pdf::Zoom::clamp_factor((f64::from(current_factor) * width_ratio) as f32);
+            if zen_mode {
+                self.pending_zoom_restore = Some(current_factor);
+            } else if let Some(before) = self.pending_zoom_restore.take() {
+                // Restore the exact pre-zen factor, but only if the current
+                // factor is still what entering zen produced from it (no zoom
+                // or resize happened in between) - keyed by recomputing the
+                // entry transform instead of storing a second factor.
+                let expected_zen = crate::pdf::Zoom::clamp_factor(
+                    (f64::from(before) * (terminal_width - nav_width) / terminal_width) as f32,
+                );
+                if (current_factor - expected_zen).abs() <= crate::pdf::Zoom::SCALE_ROUNDTRIP_EPS {
+                    adjusted_factor = before;
+                }
+            }
             let adjusted_effective = crate::pdf::Zoom::clamp_factor(
                 adjusted_factor * self.rendered_scale_for_page(page),
             );
@@ -292,15 +305,28 @@ impl PdfReaderState {
             self.zoom = Some(crate::pdf::Zoom {
                 factor: adjusted_factor,
                 cell_pan_from_left: 0,
-                global_scroll_offset: if get_pdf_render_mode() == PdfRenderMode::Scroll {
-                    self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
-                } else {
-                    0
-                },
+                global_scroll_offset: 0,
             });
+            if self.settings.load().pdf_render_mode == PdfRenderMode::Scroll {
+                // Re-project the captured anchor onto the adjusted zoom. The
+                // pages get re-rendered for the new width afterwards; that
+                // re-render preserves the anchor again via apply_render_responses.
+                let scroll_offset = scroll_anchor
+                    .and_then(|anchor| self.kitty_scroll_offset_for_anchor(anchor))
+                    .unwrap_or_else(|| {
+                        self.scroll_start_for_page_at_display_zoom(page, adjusted_factor)
+                    });
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = scroll_offset;
+                }
+            }
             self.last_render.rect = ratatui::layout::Rect::default();
-            crate::settings::set_pdf_scale(adjusted_effective);
-            crate::settings::set_pdf_pan_shift(0);
+            // Invalidate pan geometry until the next draw stores the real new
+            // viewport width: the factor above already changed, so a width
+            // that still matches the old render must not look "fresh" to
+            // capture/restore_kitty_pan_fraction in the meantime.
+            self.last_render.img_area_width = 0;
+            self.persist_pdf_view(Some(adjusted_effective), Some(0));
 
             for rendered_info in &mut self.rendered {
                 rendered_info.clear_image();
@@ -755,6 +781,16 @@ impl PdfReaderState {
             self.clear_highlight_palette();
         }
 
+        // Pending vim states (f/F/t/T target char, i-text-object) consume the
+        // next character and must bypass the keymap: otherwise a target char
+        // that is itself a bound key (l, w, e, ...) dispatches as a motion and
+        // the pending state is silently dropped.
+        if let KeyCode::Char(c) = key.code {
+            if self.normal_mode.has_pending_char_motion() || self.normal_mode.pending_inner {
+                return InputResponse::handled(self.handle_normal_mode_key(c));
+            }
+        }
+
         let input = key_event_to_input(&key);
         let km = crate::keybindings::keymap();
 
@@ -895,6 +931,7 @@ impl PdfReaderState {
                 InputResponse::handled(None)
             }
             Action::Cancel => InputResponse::handled(self.handle_escape_key()),
+            Action::DeleteComment => InputResponse::handled(self.delete_annotation_at_cursor()),
             Action::EnterCommentNav => {
                 self.normal_mode.exit_visual();
                 self.normal_mode.deactivate();
@@ -947,6 +984,23 @@ impl PdfReaderState {
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
             }
             Action::WordEnd => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_end(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            // PDF word motions are already whitespace-delimited, so the
+            // big-word (WORD) actions share the same movement functions.
+            Action::BigWordForward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_forward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::BigWordBackward => {
+                let lb = self.current_line_bounds();
+                self.normal_mode.move_word_backward(&lb);
+                InputResponse::handled(Some(self.normal_cursor_moved_action()))
+            }
+            Action::BigWordEnd => {
                 let lb = self.current_line_bounds();
                 self.normal_mode.move_word_end(&lb);
                 InputResponse::handled(Some(self.normal_cursor_moved_action()))
@@ -1217,6 +1271,7 @@ impl PdfReaderState {
             Action::Quit => Some(InputAction::QuitApp),
             Action::ToggleInvertImages => Some(InputAction::ToggleInvertImages),
             Action::TogglePdfTheming => Some(InputAction::TogglePdfTheming),
+            Action::TogglePdfLinkHighlight => Some(InputAction::TogglePdfLinkHighlight),
             Action::ToggleProfiling => Some(InputAction::ToggleProfiling),
             Action::DumpDebugState => Some(InputAction::DumpDebugState),
             Action::AddComment => self.start_comment_input(),
@@ -1257,6 +1312,7 @@ impl PdfReaderState {
     pub(crate) fn cancel_pointer_interaction(&mut self) {
         self.dismiss_box_hover();
         if self.box_draw.take().is_some() {
+            self.key_seq.clear();
             self.force_redraw();
         }
         self.pending_box_click = None;
@@ -1328,7 +1384,8 @@ impl PdfReaderState {
         if self.comment_input.is_active() && !self.comment_input.hover_preview {
             return None;
         }
-        if let Some((col, row)) = self.pending_box_click {
+        if let Some(start) = self.pending_box_click {
+            let (col, row) = (start.term_col, start.term_row);
             match mouse.kind {
                 MouseEventKind::Up(MouseButton::Left) => {
                     self.pending_box_click = None;
@@ -1354,8 +1411,12 @@ impl PdfReaderState {
                 }
             }
             self.mouse_down_seen = true;
-            let down =
-                self.handle_selection_mouse(col, row, MouseEventKind::Down(MouseButton::Left));
+            let down = self.handle_selection_mouse_from(
+                col,
+                row,
+                MouseEventKind::Down(MouseButton::Left),
+                Some(start),
+            );
             let kind = if matches!(mouse.kind, MouseEventKind::Up(_)) {
                 self.mouse_down_seen = false;
                 mouse.kind
@@ -1383,7 +1444,9 @@ impl PdfReaderState {
                 if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                     self.dismiss_box_hover();
                     self.comment_nav_active = false;
-                    self.pending_box_click = Some((mouse.column, mouse.row));
+                    let (_, font_size) = self.coord_info?;
+                    self.pending_box_click =
+                        self.terminal_to_selection_point(mouse.column, mouse.row, font_size);
                     self.mouse_down_seen = false;
                     self.force_redraw();
                     return Some(InputAction::Redraw);
@@ -1473,7 +1536,7 @@ impl PdfReaderState {
                 _ => None,
             }
         } else {
-            let direction = if crate::settings::is_invert_scroll_direction() {
+            let direction = if self.settings.load().invert_scroll_direction {
                 match direction {
                     ScrollDirection::Up => ScrollDirection::Down,
                     ScrollDirection::Down => ScrollDirection::Up,
@@ -1795,6 +1858,38 @@ impl PdfReaderState {
         }]
     }
 
+    /// Reposition after a render-mode switch so the current page stays put.
+    /// Page mode reads `global_scroll_offset` as a within-page offset; scroll
+    /// mode reads it as a whole-document offset, so the two must be converted
+    /// rather than zeroed (which would jump to the first page).
+    pub(crate) fn align_scroll_for_render_mode(&mut self, new_mode: PdfRenderMode) {
+        if !self.is_kitty {
+            return;
+        }
+        let Some(factor) = self.zoom.as_ref().map(Zoom::factor) else {
+            return;
+        };
+        match new_mode {
+            PdfRenderMode::Scroll => {
+                // Place the current page at the top of the continuous scroll.
+                let heights = self.page_heights_scaled(factor);
+                let page_offset = self.scroll_offset_for_page_start(self.page, &heights);
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = page_offset;
+                }
+                self.clamp_kitty_scroll_offset();
+            }
+            PdfRenderMode::Page => {
+                // `self.page` already tracks the top visible page in scroll mode,
+                // so a within-page offset of 0 keeps us on that page.
+                if let Some(zoom) = self.zoom.as_mut() {
+                    zoom.global_scroll_offset = 0;
+                }
+            }
+        }
+        self.last_render.rect = Rect::default();
+    }
+
     fn reset_zoom_to_fit(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
@@ -1813,8 +1908,7 @@ impl PdfReaderState {
             self.set_zoom_hud(fit_effective);
             self.clamp_kitty_scroll_offset();
             self.last_render.rect = Rect::default();
-            crate::settings::set_pdf_scale(fit_effective);
-            crate::settings::set_pdf_pan_shift(0);
+            self.persist_pdf_view(Some(fit_effective), Some(0));
             Some(InputAction::Redraw)
         } else {
             let fit_factor = self.fit_to_height_zoom_factor();
@@ -1824,13 +1918,12 @@ impl PdfReaderState {
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
-            crate::settings::set_pdf_scale(fit_factor);
-            crate::settings::set_pdf_pan_shift(0);
+            self.persist_pdf_view(Some(fit_factor), Some(0));
             self.make_render_scale_action(fit_factor)
         }
     }
 
-    fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
+    pub(crate) fn reset_zoom_to_fit_width(&mut self) -> Option<InputAction> {
         self.pending_enhance = None;
         self.pending_initial_scroll_page = None;
         if self.is_kitty {
@@ -1848,8 +1941,7 @@ impl PdfReaderState {
             self.set_zoom_hud(fit_effective);
             self.clamp_kitty_scroll_offset();
             self.last_render.rect = Rect::default();
-            crate::settings::set_pdf_scale(fit_effective);
-            crate::settings::set_pdf_pan_shift(0);
+            self.persist_pdf_view(Some(fit_effective), Some(0));
             Some(InputAction::Redraw)
         } else {
             let fit_factor = self.fit_to_width_zoom_factor();
@@ -1859,8 +1951,7 @@ impl PdfReaderState {
             self.set_zoom_hud(fit_factor);
             self.clear_pending_scroll();
             self.last_render.rect = Rect::default();
-            crate::settings::set_pdf_scale(fit_factor);
-            crate::settings::set_pdf_pan_shift(0);
+            self.persist_pdf_view(Some(fit_factor), Some(0));
             self.make_render_scale_action(fit_factor)
         }
     }
@@ -1950,10 +2041,21 @@ impl PdfReaderState {
             return None;
         }
 
-        let max_offset = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
-            self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
-                .map(|layout| layout.max_pan)
-                .unwrap_or(0)
+        let max_offset = if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+            let Some(layout) =
+                self.build_non_kitty_dual_layout(viewport_width, self.non_kitty_pan_offset)
+            else {
+                // Layout unavailable mid re-render: ignore the press. Treating
+                // this as max_pan=0 would destructively reset the pan.
+                return None;
+            };
+            let right_exists = self.page.saturating_add(1) < self.rendered.len();
+            if right_exists && layout.right_width == 0 {
+                // Right page transiently not ready: its width is missing from
+                // the strip, so the clamp would collapse and erase the pan.
+                return None;
+            }
+            layout.max_pan
         } else {
             let full_width = self
                 .rendered
@@ -1995,7 +2097,7 @@ impl PdfReaderState {
         if self.is_kitty {
             let result = self.update_zoom(|z| z.pan(direction));
             if let Some(z) = &self.zoom {
-                crate::settings::set_pdf_pan_shift(z.cell_pan_from_left);
+                self.persist_pdf_view(None, Some(z.cell_pan_from_left));
             }
             result
         } else {
@@ -2034,7 +2136,7 @@ impl PdfReaderState {
 
     // Unified page navigation
     fn next_page(&mut self) -> Option<InputAction> {
-        let step = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+        let step = if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
             2
         } else {
             1
@@ -2043,24 +2145,12 @@ impl PdfReaderState {
     }
 
     fn prev_page(&mut self) -> Option<InputAction> {
-        let step = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+        let step = if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
             2
         } else {
             1
         };
         self.navigate_pages(-step)
-    }
-
-    #[allow(dead_code)]
-    fn next_screen(&mut self) -> Option<InputAction> {
-        let pages = self.last_render.pages_shown.max(1) as isize;
-        self.navigate_pages(pages)
-    }
-
-    #[allow(dead_code)]
-    fn prev_screen(&mut self) -> Option<InputAction> {
-        let pages = self.last_render.pages_shown.max(1) as isize;
-        self.navigate_pages(-pages)
     }
 
     fn navigate_pages(&mut self, delta: isize) -> Option<InputAction> {
@@ -2070,7 +2160,7 @@ impl PdfReaderState {
         } else {
             self.page.saturating_sub((-delta) as usize)
         };
-        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+        if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
             new_page &= !1;
         }
         self.set_page(new_page);
@@ -2105,7 +2195,8 @@ impl PdfReaderState {
         let page = self.page;
 
         // In page mode, preserve relative scroll position within the page
-        let is_page_mode = self.is_kitty && get_pdf_render_mode() == PdfRenderMode::Page;
+        let is_page_mode =
+            self.is_kitty && self.settings.load().pdf_render_mode == PdfRenderMode::Page;
         let old_scroll_ratio = if is_page_mode {
             self.zoom.as_ref().map(|z| {
                 let old_factor = z.factor();
@@ -2163,28 +2254,13 @@ impl PdfReaderState {
             self.clamp_kitty_scroll_offset();
         }
         self.last_render.rect = Rect::default();
-        crate::settings::set_pdf_scale(effective_factor);
+        self.persist_pdf_view(Some(effective_factor), None);
         Some(InputAction::Redraw)
     }
 
     fn scroll_to_document_top(&mut self) -> Option<InputAction> {
         if let Some(z) = &mut self.zoom {
             z.scroll_to_top();
-        }
-        self.last_render.rect = Rect::default();
-        Some(InputAction::Redraw)
-    }
-
-    #[allow(dead_code)]
-    fn scroll_to_document_bottom(&mut self) -> Option<InputAction> {
-        let heights = self
-            .zoom
-            .as_ref()
-            .map(|z| self.page_heights_scaled(z.factor()))
-            .unwrap_or_default();
-        let bottom_offset = self.total_scroll_height(&heights).saturating_sub(1);
-        if let Some(z) = &mut self.zoom {
-            z.global_scroll_offset = bottom_offset;
         }
         self.last_render.rect = Rect::default();
         Some(InputAction::Redraw)
@@ -2212,7 +2288,7 @@ impl PdfReaderState {
 
     fn scroll_to_page_top_with_viewport(&mut self) -> Option<ViewportUpdate> {
         if self.is_kitty {
-            let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+            let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
             if is_page_mode {
                 // In page mode, just scroll to top of current page
                 if let Some(z) = &mut self.zoom {
@@ -2245,7 +2321,7 @@ impl PdfReaderState {
 
     fn scroll_to_page_bottom_with_viewport(&mut self) -> Option<ViewportUpdate> {
         if self.is_kitty {
-            let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+            let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
             if let Some(factor) = self.zoom.as_ref().map(|z| z.factor()) {
                 let heights = self.page_heights_scaled(factor);
                 let page_height = heights.get(self.page).copied().unwrap_or(0);
@@ -2482,11 +2558,7 @@ impl PdfReaderState {
     pub(crate) fn page_heights_scaled(&self, zoom_factor: f32) -> Vec<u32> {
         if self.is_kitty {
             let reference_base_height: Option<f32> = self.rendered.iter().find_map(|page| {
-                let height = page
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().as_tuple().1)
-                    .or(page.full_cell_size.map(|size| size.height))?;
+                let height = page.layout_cell_size().map(|size| size.height)?;
                 let scale = page.layout_scale();
                 Some(f32::from(height) / scale)
             });
@@ -2499,12 +2571,7 @@ impl PdfReaderState {
                 .rendered
                 .iter()
                 .map(|r| {
-                    let Some(height) = r
-                        .img
-                        .as_ref()
-                        .map(|img| img.cell_dimensions().as_tuple().1)
-                        .or(r.full_cell_size.map(|size| size.height))
-                    else {
+                    let Some(height) = r.layout_cell_size().map(|size| size.height) else {
                         return default_height;
                     };
                     let render_scale = r.layout_scale();
@@ -2515,12 +2582,10 @@ impl PdfReaderState {
                 .collect();
         }
 
-        let reference_height: Option<u16> = self.rendered.iter().find_map(|page| {
-            page.img
-                .as_ref()
-                .map(|img| img.cell_dimensions().as_tuple().1)
-                .or(page.full_cell_size.map(|size| size.height))
-        });
+        let reference_height: Option<u16> = self
+            .rendered
+            .iter()
+            .find_map(|page| page.layout_cell_size().map(|size| size.height));
 
         let default_height = reference_height.unwrap_or(self.last_render.img_area_height);
 
@@ -2528,10 +2593,8 @@ impl PdfReaderState {
             .iter()
             .map(|r| {
                 let h = r
-                    .img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().as_tuple().1)
-                    .or(r.full_cell_size.map(|size| size.height))
+                    .layout_cell_size()
+                    .map(|size| size.height)
                     .unwrap_or(default_height);
                 if h == 0 {
                     ((f32::from(default_height) * zoom_factor).ceil() as u32).max(1)
@@ -2540,6 +2603,267 @@ impl PdfReaderState {
                 }
             })
             .collect()
+    }
+
+    fn kitty_page_vertical_geometry(&self, page: usize) -> Option<(u32, u32, f32, u32)> {
+        let rendered = self.rendered.get(page)?;
+        let cell_size = rendered.layout_cell_size()?;
+        if cell_size.height == 0 {
+            return None;
+        }
+
+        let pixel_h = rendered
+            .pixel_h
+            .unwrap_or(u32::from(cell_size.height))
+            .max(1);
+        let px_per_cell_y = (pixel_h / u32::from(cell_size.height)).max(1);
+        let page_zoom = self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor);
+        if !page_zoom.is_finite() || page_zoom <= 0.0 {
+            return None;
+        }
+        let dest_h = ((f32::from(cell_size.height) * page_zoom).ceil() as u32).max(1);
+
+        Some((pixel_h, px_per_cell_y, page_zoom, dest_h))
+    }
+
+    fn kitty_scroll_anchor_for_page(
+        &self,
+        page: usize,
+        local_dest_cells: u32,
+    ) -> Option<KittyScrollAnchor> {
+        let (pixel_h, px_per_cell_y, page_zoom, dest_h) =
+            self.kitty_page_vertical_geometry(page)?;
+        let local_dest_cells = local_dest_cells
+            .min(dest_h.saturating_sub(1))
+            .min(u32::from(u16::MAX)) as u16;
+        let source_y =
+            super::rendering::kitty_source_offset_px(local_dest_cells, px_per_cell_y, page_zoom)
+                .min(pixel_h.saturating_sub(1));
+
+        Some(KittyScrollAnchor {
+            page,
+            source_y_ratio: source_y as f64 / pixel_h as f64,
+        })
+    }
+
+    fn kitty_dual_anchor_page_for_row(
+        &self,
+        row_start: usize,
+        local_dest_cells: u32,
+        heights: &[u32],
+    ) -> usize {
+        let right_page = row_start.saturating_add(1);
+        if (self.page == row_start || self.page == right_page)
+            && heights
+                .get(self.page)
+                .is_some_and(|height| local_dest_cells < *height)
+        {
+            return self.page;
+        }
+
+        if heights
+            .get(row_start)
+            .is_some_and(|height| local_dest_cells < *height)
+        {
+            row_start
+        } else if right_page < heights.len() {
+            right_page
+        } else {
+            row_start
+        }
+    }
+
+    pub(crate) fn capture_kitty_scroll_anchor(&self) -> Option<KittyScrollAnchor> {
+        if !self.is_kitty
+            || self.settings.load().pdf_render_mode != PdfRenderMode::Scroll
+            || self.pending_initial_scroll_page.is_some()
+        {
+            return None;
+        }
+
+        let zoom = self.zoom.as_ref()?;
+        if self.rendered.is_empty() || self.last_render.img_area_height == 0 {
+            return None;
+        }
+
+        let heights = self.page_heights_scaled(zoom.factor());
+        if heights.is_empty() {
+            return None;
+        }
+
+        let scroll_offset = zoom.global_scroll_offset;
+        let mut cumulative = 0u32;
+
+        if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+            for row_start in (0..heights.len()).step_by(2) {
+                let left_h = heights.get(row_start).copied().unwrap_or(0);
+                let right_h = heights.get(row_start + 1).copied().unwrap_or(0);
+                let row_h = left_h.max(right_h).max(1);
+                let row_end = cumulative.saturating_add(row_h);
+
+                if scroll_offset < row_end {
+                    let local_dest_cells = scroll_offset.saturating_sub(cumulative);
+                    let page =
+                        self.kitty_dual_anchor_page_for_row(row_start, local_dest_cells, &heights);
+                    return self.kitty_scroll_anchor_for_page(page, local_dest_cells);
+                }
+
+                let separator_end = row_end.saturating_add(u32::from(SEPARATOR_HEIGHT));
+                if scroll_offset < separator_end {
+                    let next_row = (row_start + 2).min(heights.len().saturating_sub(1));
+                    return self.kitty_scroll_anchor_for_page(next_row, 0);
+                }
+
+                cumulative = separator_end;
+            }
+        } else {
+            for (page, &height) in heights.iter().enumerate() {
+                let page_h = height.max(1);
+                let page_end = cumulative.saturating_add(page_h);
+
+                if scroll_offset < page_end {
+                    let local_dest_cells = scroll_offset.saturating_sub(cumulative);
+                    return self.kitty_scroll_anchor_for_page(page, local_dest_cells);
+                }
+
+                let separator_end = page_end.saturating_add(u32::from(SEPARATOR_HEIGHT));
+                if scroll_offset < separator_end {
+                    let next_page = (page + 1).min(heights.len().saturating_sub(1));
+                    return self.kitty_scroll_anchor_for_page(next_page, 0);
+                }
+
+                cumulative = separator_end;
+            }
+        }
+
+        let last_page = heights.len().saturating_sub(1);
+        self.kitty_scroll_anchor_for_page(last_page, heights[last_page].saturating_sub(1))
+    }
+
+    fn kitty_scroll_offset_for_anchor(&self, anchor: KittyScrollAnchor) -> Option<u32> {
+        let zoom_factor = self.zoom.as_ref().map(Zoom::factor).unwrap_or(1.0);
+        let heights = self.page_heights_scaled(zoom_factor);
+        if anchor.page >= heights.len() {
+            return None;
+        }
+
+        let page_start = self.scroll_offset_for_page_start(anchor.page, &heights);
+        let (pixel_h, px_per_cell_y, page_zoom, dest_h) =
+            self.kitty_page_vertical_geometry(anchor.page)?;
+        let source_y = (anchor.source_y_ratio.clamp(0.0, 1.0) * pixel_h as f64).round() as u32;
+        let source_y = source_y.min(pixel_h.saturating_sub(1));
+        let raw_scroll = (source_y as f64 * page_zoom as f64) / px_per_cell_y as f64;
+        let lo = raw_scroll.floor().max(0.0) as u32;
+        let hi = lo.saturating_add(1);
+        let lo_cells = lo.min(u32::from(u16::MAX)) as u16;
+        let hi_cells = hi.min(u32::from(u16::MAX)) as u16;
+        let sy_lo = super::rendering::kitty_source_offset_px(lo_cells, px_per_cell_y, page_zoom);
+        let sy_hi = super::rendering::kitty_source_offset_px(hi_cells, px_per_cell_y, page_zoom);
+        let err_lo = (sy_lo as i64 - source_y as i64).unsigned_abs();
+        let err_hi = (sy_hi as i64 - source_y as i64).unsigned_abs();
+        let local_dest_cells = if err_lo <= err_hi { lo } else { hi }.min(dest_h.saturating_sub(1));
+
+        Some(page_start.saturating_add(local_dest_cells))
+    }
+
+    pub(crate) fn restore_kitty_scroll_anchor(&mut self, anchor: KittyScrollAnchor) {
+        if !self.is_kitty
+            || self.settings.load().pdf_render_mode != PdfRenderMode::Scroll
+            || self.pending_initial_scroll_page.is_some()
+        {
+            return;
+        }
+
+        let Some(new_offset) = self.kitty_scroll_offset_for_anchor(anchor) else {
+            return;
+        };
+        let Some(old_offset) = self.zoom.as_ref().map(|z| z.global_scroll_offset) else {
+            return;
+        };
+
+        if old_offset == new_offset {
+            return;
+        }
+
+        if let Some(zoom) = self.zoom.as_mut() {
+            zoom.global_scroll_offset = new_offset;
+        }
+        self.clamp_kitty_scroll_offset();
+        self.last_render.rect = Rect::default();
+
+        if let Some(final_offset) = self.zoom.as_ref().map(|z| z.global_scroll_offset) {
+            log::trace!(
+                "Restored Kitty scroll anchor page={} old_offset={} requested_offset={} final_offset={}",
+                anchor.page,
+                old_offset,
+                new_offset,
+                final_offset
+            );
+        }
+    }
+
+    fn kitty_max_pan_for_page(&self, page: usize) -> Option<u16> {
+        if !self.is_kitty || self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+            return None;
+        }
+        let area_w = self.last_render.img_area_width;
+        if area_w == 0 {
+            return None;
+        }
+        let cell_size = self.rendered.get(page)?.layout_cell_size()?;
+        let page_zoom = self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor);
+        if !page_zoom.is_finite() || page_zoom <= 0.0 {
+            return None;
+        }
+        let dest_w = ((f32::from(cell_size.width) * page_zoom).ceil() as u16).max(1);
+        if dest_w <= area_w {
+            return Some(0);
+        }
+        let visible_source = (f32::from(area_w) / page_zoom).ceil() as u16;
+        Some(cell_size.width.saturating_sub(visible_source))
+    }
+
+    fn kitty_pan_geometry_fresh(&self) -> bool {
+        self.rendered
+            .get(self.page)
+            .and_then(|info| info.render_area_width_cells)
+            .is_some_and(|w| w == self.last_render.img_area_width)
+    }
+
+    pub(crate) fn capture_kitty_pan_fraction(&mut self) -> Option<f64> {
+        if !self.kitty_pan_geometry_fresh() {
+            return self.kitty_pan_fraction;
+        }
+        let max_pan = self.kitty_max_pan_for_page(self.page)?;
+        if max_pan == 0 {
+            // Page fits: the pan is forced to 0, so keep the last real one.
+            return self.kitty_pan_fraction;
+        }
+        let pan = self.zoom.as_ref()?.cell_pan_from_left.min(max_pan);
+        let fraction = f64::from(pan) / f64::from(max_pan);
+        self.kitty_pan_fraction = Some(fraction);
+        Some(fraction)
+    }
+
+    pub(crate) fn restore_kitty_pan_fraction(&mut self, fraction: f64) {
+        if !self.kitty_pan_geometry_fresh() {
+            return;
+        }
+        let Some(max_pan) = self.kitty_max_pan_for_page(self.page) else {
+            return;
+        };
+        if max_pan == 0 {
+            return;
+        }
+        let new_pan = (fraction.clamp(0.0, 1.0) * f64::from(max_pan)).round() as u16;
+        let Some(zoom) = self.zoom.as_mut() else {
+            return;
+        };
+        if zoom.cell_pan_from_left != new_pan {
+            zoom.cell_pan_from_left = new_pan;
+            self.last_render.rect = Rect::default();
+            self.persist_pdf_view(None, Some(new_pan));
+        }
     }
 
     fn rendered_scale_for_page(&self, page: usize) -> f32 {
@@ -2557,8 +2881,24 @@ impl PdfReaderState {
         Zoom::display_zoom_for(effective_zoom, Some(self.rendered_scale_for_page(page)))
     }
 
+    /// Highest user zoom the worker can actually rasterize for this page
+    /// before the `KITTY_MAX_DIMENSION` clamp kicks in, estimated from the
+    /// last rendered frame's scale and pixel dimensions.
+    fn max_render_scale_for_page(&self, page: usize) -> Option<f32> {
+        let info = self.rendered.get(page)?;
+        let scale = info
+            .achieved_scale
+            .or(info.requested_scale)
+            .filter(|s| s.is_finite() && *s > 0.0)?;
+        let max_px = info.pixel_w?.max(info.pixel_h?) as f32;
+        if max_px <= 0.0 {
+            return None;
+        }
+        Some(scale * crate::pdf::KITTY_MAX_DIMENSION / max_px)
+    }
+
     fn scroll_start_for_page_at_display_zoom(&self, page: usize, display_factor: f32) -> u32 {
-        if get_pdf_render_mode() == PdfRenderMode::Page {
+        if self.settings.load().pdf_render_mode == PdfRenderMode::Page {
             0
         } else {
             let heights = self.page_heights_scaled(display_factor);
@@ -2584,7 +2924,7 @@ impl PdfReaderState {
     }
 
     pub(crate) fn scroll_offset_for_page_start(&self, page: usize, heights: &[u32]) -> u32 {
-        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+        if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
             let left_idx = page & !1;
             (0..left_idx)
                 .step_by(2)
@@ -2604,7 +2944,7 @@ impl PdfReaderState {
     }
 
     fn total_scroll_height(&self, heights: &[u32]) -> u32 {
-        if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+        if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
             (0..heights.len())
                 .step_by(2)
                 .map(|left_idx| {
@@ -2638,7 +2978,7 @@ impl PdfReaderState {
         }
 
         // In page mode, clamp to current page height only
-        let max_offset = if get_pdf_render_mode() == PdfRenderMode::Page {
+        let max_offset = if self.settings.load().pdf_render_mode == PdfRenderMode::Page {
             let current_page_height = heights.get(self.page).copied().unwrap_or(0);
             current_page_height.saturating_sub(viewport_height)
         } else {
@@ -2658,10 +2998,11 @@ impl PdfReaderState {
     /// Returns the page index that should be at the top of the viewport.
     pub fn expected_page_from_scroll(&self) -> usize {
         // In page mode, the page is explicitly set, not derived from scroll offset
-        if get_pdf_render_mode() == PdfRenderMode::Page {
+        let settings = self.settings.load();
+        if settings.pdf_render_mode == PdfRenderMode::Page {
             return self.page;
         }
-        let page_layout_mode = get_pdf_page_layout_mode();
+        let page_layout_mode = settings.pdf_page_layout_mode;
 
         let Some(zoom) = &self.zoom else {
             return self.page;
@@ -2737,7 +3078,7 @@ impl PdfReaderState {
     }
 
     fn fit_to_width_zoom_factor(&self) -> f32 {
-        let page_layout_mode = get_pdf_page_layout_mode();
+        let page_layout_mode = self.settings.load().pdf_page_layout_mode;
         let page_cell_w = if page_layout_mode == PdfPageLayoutMode::Dual {
             let left = self
                 .rendered
@@ -2795,8 +3136,25 @@ impl PdfReaderState {
         let rendered_scale = self.rendered_scale_for_page(self.page);
         let effective_zoom = self.kitty_effective_zoom_factor;
 
-        if (rendered_scale - effective_zoom).abs() < Zoom::ZOOM_USER_EPS {
-            self.set_error_hud("Already enhanced at this zoom level".into());
+        // The worker clamps rasters to KITTY_MAX_DIMENSION, so above the cap a
+        // re-render cannot get any crisper. Mirror that clamp here so `e` at
+        // the ceiling is a no-op instead of an endless identical re-render.
+        let render_cap = self.max_render_scale_for_page(self.page);
+        let at_cap = render_cap.is_some_and(|cap| cap < effective_zoom);
+        let target_scale = render_cap.map_or(effective_zoom, |cap| effective_zoom.min(cap));
+        // The cap estimate is derived from cell-aligned pixel dims, so allow a
+        // relative tolerance there; exact comparison otherwise.
+        let tolerance = if at_cap {
+            target_scale * 0.01
+        } else {
+            Zoom::ZOOM_USER_EPS
+        };
+        if (rendered_scale - target_scale).abs() < tolerance {
+            self.set_error_hud(if at_cap {
+                "Already at max render resolution".into()
+            } else {
+                "Already enhanced at this zoom level".into()
+            });
             return Some(InputAction::Redraw);
         }
 
@@ -2830,7 +3188,7 @@ impl PdfReaderState {
     }
 
     /// Adjust viewport after an enhanced Kitty image arrives so content does not jump.
-    pub(crate) fn apply_enhance_adjustment(&mut self, page: usize) {
+    pub fn apply_enhance_adjustment(&mut self, page: usize) {
         let Some(pending) = self.pending_enhance.as_ref() else {
             return;
         };
@@ -2838,13 +3196,18 @@ impl PdfReaderState {
             return;
         }
 
-        let Some((s_new, new_cell_size, new_pixel_h)) = self.rendered.get(page).map(|new_info| {
-            (
-                new_info.image_scale().unwrap_or(pending.old_rendered_scale),
-                new_info.full_cell_size,
-                new_info.pixel_h,
-            )
-        }) else {
+        let Some((s_match, s_new, new_cell_size, new_pixel_h)) =
+            self.rendered.get(page).map(|new_info| {
+                (
+                    new_info.image_scale().unwrap_or(pending.old_rendered_scale),
+                    new_info
+                        .image_geometry_scale()
+                        .unwrap_or(pending.old_rendered_scale),
+                    new_info.full_cell_size,
+                    new_info.pixel_h,
+                )
+            })
+        else {
             return;
         };
         let s_old = pending.old_rendered_scale;
@@ -2853,11 +3216,14 @@ impl PdfReaderState {
             return;
         }
 
-        if (s_new - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
+        // Frame identity is matched on the requested scale (echoed verbatim by
+        // the worker); the achieved scale in `s_new` may be lower if the raster
+        // hit the max-dimension clamp.
+        if (s_match - pending.effective_zoom).abs() > Zoom::ZOOM_USER_EPS {
             log::debug!(
                 "Waiting for enhanced frame page={} requested_scale={} target_scale={}",
                 page,
-                s_new,
+                s_match,
                 pending.effective_zoom
             );
             return;
@@ -2922,7 +3288,7 @@ impl PdfReaderState {
 
         let old_left_w = enhance.old_cell_size.map(|cs| cs.width).unwrap_or(0);
         let new_left_w = new_cell_size.map(|cs| cs.width).unwrap_or(0);
-        let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+        let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
         let old_pan = enhance.old_pan_from_left;
 
         let new_pan = if is_dual && enhance.old_right_cell_w.is_some() {
@@ -2973,11 +3339,17 @@ impl PdfReaderState {
         zoom.global_scroll_offset = new_scroll;
         zoom.cell_pan_from_left = new_pan;
 
-        crate::settings::set_pdf_scale(enhance.effective_zoom);
-        crate::settings::set_pdf_pan_shift(new_pan);
+        self.persist_pdf_view(Some(enhance.effective_zoom), Some(new_pan));
         self.last_render.rect = Rect::default();
         self.clamp_kitty_scroll_offset();
-        self.set_zoom_hud(enhance.effective_zoom);
+        if s_new < enhance.effective_zoom * 0.98 {
+            let achieved_percent = (s_new * 100.0).round() as u32;
+            self.set_error_hud(format!(
+                "Enhanced to max render resolution ({achieved_percent}%)"
+            ));
+        } else {
+            self.set_zoom_hud(enhance.effective_zoom);
+        }
     }
 
     pub(crate) fn set_page(&mut self, page: usize) {
@@ -3003,9 +3375,10 @@ impl PdfReaderState {
             let page_offset = self.scroll_offset_for_page_start(page, &heights);
             let display_factor =
                 self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor);
+            let page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
             if let Some(ref mut zoom) = self.zoom {
                 zoom.factor = display_factor;
-                if get_pdf_render_mode() == PdfRenderMode::Page {
+                if page_mode {
                     // In page mode, reset scroll to top of current page
                     zoom.global_scroll_offset = 0;
                 } else {
@@ -3013,30 +3386,6 @@ impl PdfReaderState {
                     zoom.global_scroll_offset = page_offset;
                 }
             }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn reset_view_after_reload(&mut self, page: usize) {
-        if page != self.page {
-            self.set_page(page);
-            return;
-        }
-
-        self.last_render.rect = Rect::default();
-        self.clear_pending_scroll();
-
-        if self.is_kitty {
-            self.clamp_kitty_scroll_offset();
-        } else {
-            let viewport_height = self.last_render.img_area_height;
-            let full_height = self
-                .rendered
-                .get(self.page)
-                .and_then(|r| r.full_cell_size.map(|size| size.height))
-                .unwrap_or(viewport_height);
-            let max_offset = u32::from(full_height.saturating_sub(viewport_height));
-            self.non_kitty_scroll_offset = self.non_kitty_scroll_offset.min(max_offset);
         }
     }
 
@@ -3091,6 +3440,16 @@ impl PdfReaderState {
         row: u16,
         kind: MouseEventKind,
     ) -> Option<InputAction> {
+        self.handle_selection_mouse_from(col, row, kind, None)
+    }
+
+    fn handle_selection_mouse_from(
+        &mut self,
+        col: u16,
+        row: u16,
+        kind: MouseEventKind,
+        start: Option<crate::pdf::SelectionPoint>,
+    ) -> Option<InputAction> {
         let (_, font_size) = self.coord_info?;
 
         match kind {
@@ -3104,7 +3463,9 @@ impl PdfReaderState {
                     ClickType::Triple => 3,
                 };
 
-                if let Some(point) = self.terminal_to_selection_point(col, row, font_size) {
+                if let Some(point) =
+                    start.or_else(|| self.terminal_to_selection_point(col, row, font_size))
+                {
                     if click_count == 1 {
                         if let Some(target) = self.link_target_at_point(&point) {
                             if self.selection.has_selection() {
@@ -3282,6 +3643,23 @@ impl PdfReaderState {
         term_row: u16,
         font_size: FontSize,
     ) -> Option<crate::pdf::SelectionPoint> {
+        self.terminal_to_selection_point_with_subcell(
+            term_col,
+            term_row,
+            font_size,
+            crate::inputs::pixel_mouse::subcell_fraction(term_col, term_row),
+        )
+    }
+
+    /// Map a cell plus an explicit in-cell offset; box edges use (0, 0)
+    /// rather than the last mouse position, including when drawn by keyboard.
+    fn terminal_to_selection_point_with_subcell(
+        &self,
+        term_col: u16,
+        term_row: u16,
+        font_size: FontSize,
+        (frac_x, frac_y): (f32, f32),
+    ) -> Option<crate::pdf::SelectionPoint> {
         use crate::pdf::SelectionPoint;
 
         let pixels_per_cell = |rendered_page: &super::types::RenderedInfo| -> (f32, f32) {
@@ -3326,21 +3704,22 @@ impl PdfReaderState {
             let zoom_factor = zoom.factor();
             let scroll_offset = zoom.global_scroll_offset;
             let cell_pan_from_left = zoom.cell_pan_from_left;
-            let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
-            let page_layout_mode = get_pdf_page_layout_mode();
+            let settings = self.settings.load();
+            let is_page_mode = settings.pdf_render_mode == PdfRenderMode::Page;
+            let page_layout_mode = settings.pdf_page_layout_mode;
+            let scroll_page_zoom = |page_idx: usize| {
+                self.display_zoom_for_effective(page_idx, self.kitty_effective_zoom_factor)
+            };
 
             // In page mode, page selection is based on visible row geometry.
-            let (page_idx, page_local_y, dest_w) = if is_page_mode {
+            let (page_idx, page_local_y, dest_w, page_zoom, row_zoom) = if is_page_mode {
                 if page_layout_mode == PdfPageLayoutMode::Dual {
                     let left_page = self.page;
                     let right_page = self.page.saturating_add(1);
                     let left_cell_size = self
                         .rendered
                         .get(left_page)?
-                        .img
-                        .as_ref()
-                        .map(|img| img.cell_dimensions())
-                        .or(self.rendered.get(left_page).and_then(|p| p.full_cell_size))
+                        .layout_cell_size()
                         .unwrap_or(CellSize::new(0, 0));
                     if left_cell_size.height == 0 {
                         return None;
@@ -3348,12 +3727,7 @@ impl PdfReaderState {
                     let right_cell_size = self
                         .rendered
                         .get(right_page)
-                        .and_then(|p| {
-                            p.img
-                                .as_ref()
-                                .map(|img| img.cell_dimensions())
-                                .or(p.full_cell_size)
-                        })
+                        .and_then(super::types::RenderedInfo::layout_cell_size)
                         .unwrap_or(CellSize::new(0, 0));
 
                     let left_dest_w =
@@ -3418,6 +3792,8 @@ impl PdfReaderState {
                             left_page,
                             virtual_y.saturating_sub(u32::from(left_page_y)),
                             left_dest_w,
+                            zoom_factor,
+                            zoom_factor,
                         )
                     } else if has_right && rel_col >= right_x_start && rel_col < right_x_end {
                         if virtual_y < u32::from(right_page_y)
@@ -3429,6 +3805,8 @@ impl PdfReaderState {
                             right_page,
                             virtual_y.saturating_sub(u32::from(right_page_y)),
                             right_dest_w,
+                            zoom_factor,
+                            zoom_factor,
                         )
                     } else {
                         return None;
@@ -3436,10 +3814,7 @@ impl PdfReaderState {
                 } else {
                     let rendered_page = self.rendered.get(self.page)?;
                     let cell_size = rendered_page
-                        .img
-                        .as_ref()
-                        .map(|img| img.cell_dimensions())
-                        .or(rendered_page.full_cell_size)
+                        .layout_cell_size()
                         .unwrap_or(CellSize::new(0, 0));
                     if cell_size.height == 0 {
                         return None;
@@ -3447,17 +3822,19 @@ impl PdfReaderState {
                     let dest_w = ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
                     // In page mode, scroll_offset is within the current page
                     let virtual_y = u32::from(rel_row) + scroll_offset;
-                    (self.page, virtual_y, dest_w)
+                    (self.page, virtual_y, dest_w, zoom_factor, zoom_factor)
                 }
             } else {
                 // Scroll mode: iterate through pages with separators
                 let virtual_y = u32::from(rel_row) + scroll_offset;
 
-                let reference_height: Option<u16> = self.rendered.iter().find_map(|page| {
-                    page.img
-                        .as_ref()
-                        .map(|img| img.cell_dimensions().height)
-                        .or(page.full_cell_size.map(|size| size.height))
+                let reference_display_height: Option<u32> = self.rendered.iter().find_map(|page| {
+                    let height = page.layout_cell_size().map(|size| size.height)?;
+                    let scale = page.layout_scale();
+                    Some(
+                        ((f32::from(height) / scale) * self.kitty_effective_zoom_factor).ceil()
+                            as u32,
+                    )
                 });
 
                 let mut cumulative_y: u32 = 0;
@@ -3467,37 +3844,35 @@ impl PdfReaderState {
                 if page_layout_mode == PdfPageLayoutMode::Dual {
                     for left_idx in (0..self.rendered.len()).step_by(2) {
                         let right_idx = left_idx + 1;
+                        let left_page_zoom = scroll_page_zoom(left_idx);
+                        let right_page_zoom = self
+                            .rendered
+                            .get(right_idx)
+                            .map(|_| scroll_page_zoom(right_idx))
+                            .unwrap_or(left_page_zoom);
+                        let row_zoom = left_page_zoom;
                         let left_cell = self.rendered[left_idx]
-                            .img
-                            .as_ref()
-                            .map(|img| img.cell_dimensions())
-                            .or(self.rendered[left_idx].full_cell_size)
+                            .layout_cell_size()
                             .unwrap_or(CellSize::new(0, 0));
                         let right_cell = self
                             .rendered
                             .get(right_idx)
-                            .and_then(|p| {
-                                p.img
-                                    .as_ref()
-                                    .map(|img| img.cell_dimensions())
-                                    .or(p.full_cell_size)
-                            })
+                            .and_then(super::types::RenderedInfo::layout_cell_size)
                             .unwrap_or(CellSize::new(0, 0));
                         let left_dest_h = if left_cell.height == 0 {
-                            let estimated_h = reference_height.unwrap_or(img_area.height);
-                            ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1)
+                            reference_display_height.unwrap_or(u32::from(img_area.height))
                         } else {
-                            ((f32::from(left_cell.height) * zoom_factor).ceil() as u32).max(1)
+                            ((f32::from(left_cell.height) * left_page_zoom).ceil() as u32).max(1)
                         };
                         let right_dest_h = if right_cell.height == 0 {
                             0
                         } else {
-                            ((f32::from(right_cell.height) * zoom_factor).ceil() as u32).max(1)
+                            ((f32::from(right_cell.height) * right_page_zoom).ceil() as u32).max(1)
                         };
                         let left_dest_w =
-                            ((f32::from(left_cell.width) * zoom_factor).ceil() as u16).max(1);
+                            ((f32::from(left_cell.width) * left_page_zoom).ceil() as u16).max(1);
                         let right_dest_w =
-                            ((f32::from(right_cell.width) * zoom_factor).ceil() as u16).max(1);
+                            ((f32::from(right_cell.width) * right_page_zoom).ceil() as u16).max(1);
                         let has_right = right_cell.height > 0 && right_cell.width > 0;
                         let row_dest_h = left_dest_h.max(right_dest_h);
                         let row_start = cumulative_y;
@@ -3509,13 +3884,14 @@ impl PdfReaderState {
                                 .kitty_dual_scroll_page_slice(
                                     left_idx,
                                     img_area.width,
-                                    zoom_factor,
+                                    row_zoom,
                                     cell_pan_from_left,
                                 )
                                 && rel_col >= left_x_start
                                 && rel_col < left_x_end
                             {
-                                target_page = Some((left_idx, left_dest_w));
+                                target_page =
+                                    Some((left_idx, left_dest_w, left_page_zoom, row_zoom));
                                 local_y = y_in_row;
                                 break;
                             } else if has_right
@@ -3523,13 +3899,14 @@ impl PdfReaderState {
                                     .kitty_dual_scroll_page_slice(
                                         right_idx,
                                         img_area.width,
-                                        zoom_factor,
+                                        row_zoom,
                                         cell_pan_from_left,
                                     )
                                 && rel_col >= right_x_start
                                 && rel_col < right_x_end
                             {
-                                target_page = Some((right_idx, right_dest_w));
+                                target_page =
+                                    Some((right_idx, right_dest_w, right_page_zoom, row_zoom));
                                 local_y = y_in_row;
                                 break;
                             } else {
@@ -3541,30 +3918,24 @@ impl PdfReaderState {
                     }
                 } else {
                     for (idx, rendered_page) in self.rendered.iter().enumerate() {
-                        let cell_size = rendered_page
-                            .img
-                            .as_ref()
-                            .map(|img| img.cell_dimensions())
-                            .or(rendered_page.full_cell_size)
-                            .unwrap_or(CellSize::new(0, 0));
-                        if cell_size.height == 0 {
-                            let estimated_h = reference_height.unwrap_or(img_area.height);
+                        let page_zoom = scroll_page_zoom(idx);
+                        let Some(cell_size) = rendered_page.layout_cell_size() else {
                             let dest_h =
-                                ((f32::from(estimated_h) * zoom_factor).ceil() as u32).max(1);
+                                reference_display_height.unwrap_or(u32::from(img_area.height));
                             cumulative_y += dest_h + u32::from(SEPARATOR_HEIGHT);
                             continue;
-                        }
+                        };
 
                         let dest_h =
-                            ((f32::from(cell_size.height) * zoom_factor).ceil() as u32).max(1);
+                            ((f32::from(cell_size.height) * page_zoom).ceil() as u32).max(1);
                         let dest_w =
-                            ((f32::from(cell_size.width) * zoom_factor).ceil() as u16).max(1);
+                            ((f32::from(cell_size.width) * page_zoom).ceil() as u16).max(1);
 
                         let page_start = cumulative_y;
                         let page_end = cumulative_y + dest_h;
 
                         if virtual_y >= page_start && virtual_y < page_end {
-                            target_page = Some((idx, dest_w));
+                            target_page = Some((idx, dest_w, page_zoom, page_zoom));
                             local_y = virtual_y - page_start;
                             break;
                         }
@@ -3573,8 +3944,8 @@ impl PdfReaderState {
                     }
                 }
 
-                let (idx, dest_w) = target_page?;
-                (idx, local_y, dest_w)
+                let (idx, dest_w, page_zoom, row_zoom) = target_page?;
+                (idx, local_y, dest_w, page_zoom, row_zoom)
             };
 
             let rendered_page = self.rendered.get(page_idx)?;
@@ -3588,24 +3959,14 @@ impl PdfReaderState {
                     let left_dest_w = self
                         .rendered
                         .get(left_page)
-                        .and_then(|p| {
-                            p.img
-                                .as_ref()
-                                .map(|img| img.cell_dimensions())
-                                .or(p.full_cell_size)
-                        })
-                        .map(|s| ((f32::from(s.width) * zoom_factor).ceil() as u16).max(1))
+                        .and_then(super::types::RenderedInfo::layout_cell_size)
+                        .map(|s| ((f32::from(s.width) * page_zoom).ceil() as u16).max(1))
                         .unwrap_or(0);
                     let right_dest_w = self
                         .rendered
                         .get(right_page)
-                        .and_then(|p| {
-                            p.img
-                                .as_ref()
-                                .map(|img| img.cell_dimensions())
-                                .or(p.full_cell_size)
-                        })
-                        .map(|s| ((f32::from(s.width) * zoom_factor).ceil() as u16).max(1))
+                        .and_then(super::types::RenderedInfo::layout_cell_size)
+                        .map(|s| ((f32::from(s.width) * page_zoom).ceil() as u16).max(1))
                         .unwrap_or(0);
                     let has_right = right_dest_w > 0;
                     let gap = if has_right {
@@ -3627,46 +3988,49 @@ impl PdfReaderState {
                         if rel_col < group_x || rel_col >= group_x.saturating_add(left_dest_w) {
                             return None;
                         }
-                        f32::from(rel_col - group_x) / zoom_factor
+                        f32::from(rel_col - group_x) / page_zoom
                     } else {
                         let right_start = group_x.saturating_add(left_dest_w).saturating_add(gap);
                         if rel_col < right_start || rel_col >= right_start.saturating_add(dest_w) {
                             return None;
                         }
-                        f32::from(rel_col - right_start) / zoom_factor
+                        f32::from(rel_col - right_start) / page_zoom
                     }
                 } else if let Some((screen_start, screen_end, source_start)) = self
                     .kitty_dual_scroll_page_slice(
                         page_idx,
                         img_area.width,
-                        zoom_factor,
+                        row_zoom,
                         cell_pan_from_left,
                     )
                 {
                     if rel_col < screen_start || rel_col >= screen_end {
                         return None;
                     }
-                    f32::from(source_start) + f32::from(rel_col - screen_start) / zoom_factor
+                    f32::from(source_start) + f32::from(rel_col - screen_start) / page_zoom
                 } else if dest_w <= img_area.width {
                     let x_offset = (img_area.width - dest_w) / 2;
                     if rel_col < x_offset || rel_col >= x_offset + dest_w {
                         return None;
                     }
-                    f32::from(rel_col - x_offset) / zoom_factor
+                    f32::from(rel_col - x_offset) / page_zoom
                 } else {
-                    f32::from(cell_pan_from_left) + f32::from(rel_col) / zoom_factor
+                    f32::from(cell_pan_from_left) + f32::from(rel_col) / page_zoom
                 }
             } else {
                 Self::kitty_single_page_source_x_cells(
                     rel_col,
                     img_area.width,
                     dest_w,
-                    zoom_factor,
+                    page_zoom,
                     cell_pan_from_left,
                 )?
             };
 
-            let source_y_cells = page_local_y as f32 / zoom_factor;
+            // Convert the in-cell offset to source space. Zero offsets preserve
+            // cell-aligned geometry while mouse hit-testing retains pixel precision.
+            let source_x_cells = source_x_cells + frac_x / page_zoom;
+            let source_y_cells = (page_local_y as f32 + frac_y) / page_zoom;
 
             let pdf_x = source_x_cells * px_per_cell_x;
             let pdf_y = source_y_cells * px_per_cell_y;
@@ -3680,7 +4044,7 @@ impl PdfReaderState {
             })
         } else {
             let scroll_offset = self.non_kitty_scroll_offset;
-            let page_layout_mode = get_pdf_page_layout_mode();
+            let page_layout_mode = self.settings.load().pdf_page_layout_mode;
             let (page_idx, x_in_dest, px_per_cell_x, px_per_cell_y) =
                 if page_layout_mode == PdfPageLayoutMode::Dual {
                     let layout = self
@@ -3779,13 +4143,25 @@ impl PdfReaderState {
         let rendered = self.rendered.get(point.page)?;
         let x = point.pdf_x;
         let y = point.pdf_y;
+        // Without SGR-pixel mouse mode (e.g. under tmux, which only reports
+        // cells), the click resolves to the top-left of a whole cell. A text
+        // line is ~one cell tall, so the sampled point can sit up to half a line
+        // off the glyph the user aimed at — landing just outside the box. Allow
+        // a half-line vertical slack in that case so the click hits the line it
+        // visually falls on. With pixel mode active the point is exact, so the
+        // test stays tight (WYSIWYG).
+        let cell_quantized = !crate::inputs::pixel_mouse::is_enabled();
         for link in &rendered.link_rects {
-            if x >= link.x0 as f32
-                && x < link.x1 as f32
-                && y >= link.y0 as f32
-                && y < link.y1 as f32
-            {
-                return Some(link.target.clone());
+            for (bx0, by0, bx1, by1) in crate::pdf::link_visual_boxes(link, &rendered.line_bounds) {
+                let (bx0, by0, bx1, by1) = (bx0 as f32, by0 as f32, bx1 as f32, by1 as f32);
+                let tol_y = if cell_quantized {
+                    (by1 - by0) * 0.5
+                } else {
+                    0.0
+                };
+                if x >= bx0 && x <= bx1 && y + tol_y >= by0 && y - tol_y <= by1 {
+                    return Some(link.target.clone());
+                }
             }
         }
         None
@@ -4129,6 +4505,7 @@ impl PdfReaderState {
         }
     }
 
+    #[cfg(test)]
     fn line_index_at_or_nearest_y(line_bounds: &[crate::pdf::LineBounds], y: f32) -> Option<usize> {
         let mut best_line = None;
         let mut best_dist = f32::MAX;
@@ -4152,6 +4529,46 @@ impl PdfReaderState {
         best_line
     }
 
+    /// Find the line nearest to a point, using X to disambiguate. In multi-column
+    /// layouts, several lines share the same Y range, so a Y-only lookup snaps to
+    /// the wrong column. Scoring lexicographically by (vertical distance, horizontal
+    /// distance) — each being zero when the point is inside the line's range —
+    /// picks the column the point actually falls in while preserving nearest-Y
+    /// behavior for single-column pages.
+    fn line_index_at_or_nearest(
+        line_bounds: &[crate::pdf::LineBounds],
+        x: f32,
+        y: f32,
+    ) -> Option<usize> {
+        let mut best_line = None;
+        let mut best_score = (f32::MAX, f32::MAX);
+
+        for (idx, line) in line_bounds.iter().enumerate() {
+            let v_dist = if y < line.y0 {
+                line.y0 - y
+            } else if y > line.y1 {
+                y - line.y1
+            } else {
+                0.0
+            };
+            let h_dist = if x < line.x0 {
+                line.x0 - x
+            } else if x > line.x1 {
+                x - line.x1
+            } else {
+                0.0
+            };
+
+            let score = (v_dist, h_dist);
+            if score < best_score {
+                best_score = score;
+                best_line = Some(idx);
+            }
+        }
+
+        best_line
+    }
+
     fn selection_point_to_cursor(
         &self,
         point: crate::pdf::SelectionPoint,
@@ -4164,7 +4581,7 @@ impl PdfReaderState {
             return None;
         }
 
-        let line_idx = Self::line_index_at_or_nearest_y(line_bounds, point.pdf_y)?;
+        let line_idx = Self::line_index_at_or_nearest(line_bounds, point.pdf_x, point.pdf_y)?;
         let line = line_bounds.get(line_idx)?;
         if line.chars.is_empty() {
             return None;
@@ -4410,6 +4827,7 @@ impl PdfReaderState {
             img_area.x + img_area.width / 2,
             img_area.y + img_area.height / 2,
         );
+        self.key_seq.clear();
         self.box_draw = Some(super::state::BoxDrawState {
             cursor,
             anchor: None,
@@ -4427,39 +4845,64 @@ impl PdfReaderState {
 
     fn cancel_box_annotation(&mut self) -> Option<InputAction> {
         self.box_draw = None;
+        self.key_seq.clear();
         self.force_redraw();
         Some(InputAction::Redraw)
     }
 
     fn handle_box_draw_key(&mut self, key: KeyEvent) -> Option<InputAction> {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
         let (img_area, _) = self.coord_info?;
         let mut state = self.box_draw?;
+        let km = crate::keybindings::keymap();
+        let mut prospective: Vec<_> = self.key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(key_event_to_input(&key));
+        let mut lookup = km.lookup(KeyContext::PdfBox, &prospective);
+        if matches!(lookup, LookupResult::NoMatch) && !self.key_seq.is_empty() {
+            self.key_seq.clear();
+            lookup = km.lookup(KeyContext::PdfBox, &[key_event_to_input(&key)]);
+        }
+        let action = match lookup {
+            LookupResult::Found(action) => {
+                self.key_seq.clear();
+                action
+            }
+            LookupResult::Prefix => {
+                self.key_seq.push(key);
+                return None;
+            }
+            LookupResult::NoMatch => return None,
+        };
         let fast = key.modifiers.contains(KeyModifiers::SHIFT);
         let step: u16 = if fast { 5 } else { 1 };
         let step_x: u16 = if fast { 10 } else { 2 };
 
         let (cx, cy) = state.cursor;
-        match key.code {
-            KeyCode::Esc => return self.cancel_box_annotation(),
-            KeyCode::Char('h') | KeyCode::Char('H') | KeyCode::Left => {
+        match action {
+            Action::Cancel => return self.cancel_box_annotation(),
+            Action::MoveLeft => {
                 state.cursor = (cx.saturating_sub(step_x), cy);
             }
-            KeyCode::Char('l') | KeyCode::Char('L') | KeyCode::Right => {
+            Action::MoveRight => {
                 state.cursor = (cx.saturating_add(step_x), cy);
             }
-            KeyCode::Char('k') | KeyCode::Char('K') | KeyCode::Up => {
+            Action::MoveUp => {
                 state.cursor = (cx, cy.saturating_sub(step));
             }
-            KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Down => {
+            Action::MoveDown => {
                 state.cursor = (cx, cy.saturating_add(step));
             }
-            KeyCode::Char('v') | KeyCode::Char(' ') => {
+            Action::EnterVisualMode => {
                 state.anchor = match state.anchor {
                     Some(_) => None,
                     None => Some(state.cursor),
                 };
             }
-            KeyCode::Enter => {
+            Action::Select => {
                 if state.anchor.is_none() {
                     self.set_error_hud("Set the first corner with v or Space".to_string());
                     return Some(InputAction::Redraw);
@@ -4517,11 +4960,13 @@ impl PdfReaderState {
 
         // Map the last selected cell, not a position outside the viewport.
         // Expand its outer edge in rendered-page pixels below.
-        let tl = self.terminal_to_selection_point(cells.x, cells.y, font_size);
-        let br = self.terminal_to_selection_point(
+        let tl =
+            self.terminal_to_selection_point_with_subcell(cells.x, cells.y, font_size, (0.0, 0.0));
+        let br = self.terminal_to_selection_point_with_subcell(
             cells.right().saturating_sub(1),
             cells.bottom().saturating_sub(1),
             font_size,
+            (0.0, 0.0),
         );
         let (Some(tl), Some(br)) = (tl, br) else {
             self.set_error_hud("Box must lie on a rendered page".to_string());
@@ -4546,7 +4991,17 @@ impl PdfReaderState {
             ),
             _ => (f32::from(font_size.0), f32::from(font_size.1)),
         };
-        let zoom = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
+        let zoom = self
+            .zoom
+            .as_ref()
+            .map(|zoom| {
+                if self.settings.load().pdf_render_mode == PdfRenderMode::Scroll {
+                    self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor)
+                } else {
+                    zoom.factor()
+                }
+            })
+            .unwrap_or(1.0);
         let (dx, dy) = (px_x / zoom, px_y / zoom);
         // Non-Kitty text hit-testing returns the row centre, not its top edge.
         let y_offset = if self.zoom.is_some() { 0.0 } else { dy * 0.5 };
@@ -4575,6 +5030,7 @@ impl PdfReaderState {
             })?;
 
         self.box_draw = None;
+        self.key_seq.clear();
 
         self.begin_comment(target, quoted_text);
         Some(InputAction::Redraw)
@@ -4829,6 +5285,75 @@ impl PdfReaderState {
         Some(CommentTarget::pdf(page, pdf_rects))
     }
 
+    /// Delete the annotation (comment or highlight) under the normal-mode
+    /// cursor. Stored annotation rects are in unscaled (scale-1.0) pixel
+    /// coordinates, so the cursor position is unscaled before hit-testing.
+    fn delete_annotation_at_cursor(&mut self) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Annotations are unavailable".to_string());
+            return Some(InputAction::Redraw);
+        }
+        let cursor = self.normal_mode.cursor;
+        let (ux, uy) = self.cursor_unscaled_point()?;
+        let annotation_id = self.book_comments.as_ref().and_then(|comments| {
+            let locked = comments.lock().ok()?;
+            locked
+                .get_doc_comments(&self.comments_doc_id)
+                .into_iter()
+                .find(|comment| {
+                    let CommentTarget::Pdf { rects, .. } = &comment.target else {
+                        return false;
+                    };
+                    rects.iter().any(|r| {
+                        r.page == cursor.page
+                            && (r.topleft_x..=r.bottomright_x).contains(&ux)
+                            && (r.topleft_y..=r.bottomright_y).contains(&uy)
+                    })
+                })
+                .map(|comment| comment.id.clone())
+        });
+        let Some(id) = annotation_id else {
+            self.set_error_hud("No annotation under the cursor".to_string());
+            return Some(InputAction::Redraw);
+        };
+        let delete_result = self.book_comments.as_ref().cloned().and_then(|comments| {
+            comments
+                .lock()
+                .map(|mut l| l.delete_comment_by_id(&id))
+                .ok()
+        });
+        if let Some(Err(e)) = delete_result {
+            log::error!("Failed to delete annotation {id}: {e}");
+            self.set_error_hud("Failed to delete annotation".to_string());
+            return Some(InputAction::Redraw);
+        }
+        self.refresh_comment_rects();
+        self.refresh_highlight_overlays();
+        Some(InputAction::CommentDeleted {
+            rects: self.comment_rects.clone(),
+            selection_rects: Vec::new(),
+        })
+    }
+
+    /// The normal-mode cursor position in unscaled (scale-1.0) pixel
+    /// coordinates — the space annotation target rects are stored in.
+    fn cursor_unscaled_point(&self) -> Option<(u32, u32)> {
+        let cursor = self.normal_mode.cursor;
+        let rendered = self.rendered.get(cursor.page)?;
+        let line = rendered.line_bounds.get(cursor.line_idx)?;
+        let x = line
+            .chars
+            .get(cursor.char_idx)
+            .or_else(|| line.chars.last())
+            .map(|c| c.x)?;
+        let scale = rendered.scale_factor.unwrap_or(1.0);
+        let y = f64::from(line.y0 + line.y1) / 2.0;
+        Some((
+            (f64::from(x) / f64::from(scale)).round() as u32,
+            (y / f64::from(scale)).round() as u32,
+        ))
+    }
+
     fn start_comment_nav(&mut self) -> Option<InputAction> {
         if !self.comments_enabled {
             return None;
@@ -4836,8 +5361,7 @@ impl PdfReaderState {
         let mut nav_page = self.page;
         let count = self.comment_count_for_page(self.page);
         if count == 0 {
-            let is_dual = crate::settings::get_pdf_page_layout_mode()
-                == crate::settings::PdfPageLayoutMode::Dual;
+            let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
             if is_dual && self.comment_count_for_page(self.page + 1) > 0 {
                 nav_page = self.page + 1;
             } else {
@@ -4873,8 +5397,7 @@ impl PdfReaderState {
         if !self.comment_nav_active {
             return None;
         }
-        let is_dual =
-            crate::settings::get_pdf_page_layout_mode() == crate::settings::PdfPageLayoutMode::Dual;
+        let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
         let in_spread = self.comment_nav_page == self.page
             || (is_dual && self.comment_nav_page == self.page + 1);
         if !in_spread {
@@ -5063,7 +5586,7 @@ impl PdfReaderState {
             let zoom_factor = self.zoom.as_ref().map(|z| z.factor()).unwrap_or(1.0);
             let top_scaled = (wanted_top as f32 * zoom_factor).floor() as u32;
             let bottom_scaled = (wanted_bottom as f32 * zoom_factor).ceil() as u32;
-            let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+            let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
 
             let global_offset = if is_page_mode {
                 0
@@ -5491,7 +6014,7 @@ impl PdfReaderState {
                 // Fallback: find any line with character bounds in current spread/document.
                 let mut candidate_pages = Vec::with_capacity(self.rendered.len().min(4));
                 candidate_pages.push(self.page);
-                if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
                     candidate_pages.push(self.page.saturating_add(1));
                 }
                 for idx in 0..self.rendered.len() {
@@ -5563,7 +6086,7 @@ impl PdfReaderState {
         let zoom_factor = zoom.factor();
         let scroll_offset = zoom.global_scroll_offset;
         let viewport_height = u32::from(img_area.height);
-        let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+        let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
 
         // In page mode, position is only visible if on current page
         if is_page_mode && page != self.page {
@@ -5597,7 +6120,7 @@ impl PdfReaderState {
 
         let zoom_factor = zoom.factor();
         let scroll_offset = zoom.global_scroll_offset;
-        let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+        let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
 
         if is_page_mode {
             // In page mode, only look at current page
@@ -5625,11 +6148,12 @@ impl PdfReaderState {
             // Scroll mode: get current visible page from layout-aware scroll math,
             // then search that page (and its dual companion) for first visible line.
             let page_hint = self.expected_page_from_scroll();
-            let candidate_pages = if get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
-                [page_hint, page_hint.saturating_add(1)]
-            } else {
-                [page_hint, page_hint]
-            };
+            let candidate_pages =
+                if self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual {
+                    [page_hint, page_hint.saturating_add(1)]
+                } else {
+                    [page_hint, page_hint]
+                };
             let heights = self.page_heights_scaled(zoom_factor);
 
             for page_idx in candidate_pages {
@@ -5801,7 +6325,7 @@ impl PdfReaderState {
             return self.ensure_cursor_visible_non_kitty();
         }
 
-        let is_page_mode = get_pdf_render_mode() == PdfRenderMode::Page;
+        let is_page_mode = self.settings.load().pdf_render_mode == PdfRenderMode::Page;
         let Some(zoom_factor) = self.zoom.as_ref().map(|z| z.factor()) else {
             return false;
         };
@@ -5819,7 +6343,7 @@ impl PdfReaderState {
 
         // In page mode, cursor must be on a visible page
         if is_page_mode && cursor.page != self.page {
-            let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+            let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
             if !(is_dual && cursor.page == self.page + 1) {
                 return false;
             }
@@ -5878,8 +6402,7 @@ impl PdfReaderState {
         let cursor = &self.normal_mode.cursor;
 
         if cursor.page != self.page {
-            let is_dual = crate::settings::get_pdf_page_layout_mode()
-                == crate::settings::PdfPageLayoutMode::Dual;
+            let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
             if is_dual && cursor.page == self.page + 1 {
                 self.non_kitty_scroll_offset = 0;
                 self.last_render.rect = Rect::default();
@@ -5950,10 +6473,6 @@ impl PdfReaderState {
 
     pub fn notify_error(&mut self, msg: impl Into<String>) {
         self.notifications.error(msg);
-    }
-
-    pub fn notify_info(&mut self, msg: impl Into<String>) {
-        self.notifications.info(msg);
     }
 
     pub fn get_selected_text(&self) -> Option<String> {
@@ -6160,7 +6679,8 @@ impl PdfReaderState {
                     Some(InputAction::SelectionChanged(vec![]))
                 } else {
                     let mut rects = self.find_text_selection_rects(self.page, &query);
-                    let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+                    let is_dual =
+                        self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
                     if is_dual && self.rendered.get(self.page + 1).is_some() {
                         rects.extend(self.find_text_selection_rects(self.page + 1, &query));
                     }
@@ -6174,7 +6694,7 @@ impl PdfReaderState {
         use super::state::PageSearchMatch;
 
         let base_page = self.page;
-        let is_dual = get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual;
+        let is_dual = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
 
         let pages_to_search: Vec<usize> = if is_dual {
             let mut pages = vec![base_page];
@@ -6419,7 +6939,9 @@ impl PdfReaderState {
             InputAction::JumpingToPage { page, viewport } => {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::GoToPage(page));
-                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                    if !self.is_kitty
+                        && self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual
+                    {
                         service.request_page(page.saturating_add(1));
                     }
                 }
@@ -6452,7 +6974,9 @@ impl PdfReaderState {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::SetScale(factor));
                     service.request_page(self.page);
-                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                    if !self.is_kitty
+                        && self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual
+                    {
                         service.request_page(self.page.saturating_add(1));
                     }
                 }
@@ -6474,7 +6998,9 @@ impl PdfReaderState {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::SetColors { black, white });
                     service.request_page(self.page);
-                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                    if !self.is_kitty
+                        && self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual
+                    {
                         service.request_page(self.page.saturating_add(1));
                     }
                 }
@@ -6571,6 +7097,27 @@ impl PdfReaderState {
                 self.last_sent_viewport = None;
                 save_pdf_bookmark(bookmarks, self, last_bookmark_save, false);
             }
+            InputAction::TogglePdfLinkHighlight => {
+                self.show_link_underlines = !self.show_link_underlines;
+                self.settings.update(|settings| {
+                    settings.pdf_show_link_underlines = self.show_link_underlines;
+                });
+                send_conversion(crate::pdf::ConversionCommand::SetShowLinkUnderlines(
+                    self.show_link_underlines,
+                ));
+                self.set_hud_message(
+                    if self.show_link_underlines {
+                        "Link highlighting: on".to_string()
+                    } else {
+                        "Link highlighting: off".to_string()
+                    },
+                    crate::widget::hud_message::HudMode::Normal,
+                    std::time::Duration::from_secs(2),
+                );
+                if !self.is_kitty {
+                    self.force_redraw();
+                }
+            }
             InputAction::SelectionChanged(rects) => {
                 self.pending_highlight = None;
                 if !self.is_kitty {
@@ -6621,7 +7168,9 @@ impl PdfReaderState {
             } => {
                 if let Some(service) = service {
                     service.apply_command(crate::pdf::Command::GoToPage(page));
-                    if !self.is_kitty && get_pdf_page_layout_mode() == PdfPageLayoutMode::Dual {
+                    if !self.is_kitty
+                        && self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual
+                    {
                         service.request_page(page.saturating_add(1));
                     }
                 }
@@ -6672,6 +7221,9 @@ impl PdfReaderState {
                 selection_rects,
             } => {
                 send_conversion(crate::pdf::ConversionCommand::UpdateComments(rects));
+                send_conversion(crate::pdf::ConversionCommand::UpdateHighlights(
+                    self.highlight_overlays.clone(),
+                ));
                 send_conversion(crate::pdf::ConversionCommand::UpdateSelection(
                     selection_rects.clone(),
                 ));
@@ -7077,8 +7629,12 @@ pub(crate) fn apply_theme_to_pdf_reader(
         (-1, -1)
     };
 
+    // Transparent (alpha) rendering is only possible on the Kitty graphics protocol.
+    let transparent = pdf_reader.is_kitty && pdf_reader.settings.load().transparent_background;
+
     if let Some(service) = service {
         service.apply_command(crate::pdf::Command::SetColors { black, white });
+        service.apply_command(crate::pdf::Command::SetTransparent(transparent));
         service.request_page(pdf_reader.page);
     }
     if let Some(tx) = conversion_tx {
@@ -7095,17 +7651,24 @@ fn extract_pdf_rgb(color: &ratatui::style::Color) -> (u8, u8, u8) {
 mod tests {
     use super::PdfReaderState;
     use crate::pdf::{CellSize, CharInfo, CursorPosition, LineBounds, SelectionPoint, VisualMode};
-    use crate::settings::{
-        PdfPageLayoutMode, PdfRenderMode, get_pdf_page_layout_mode, get_pdf_render_mode,
-        set_pdf_page_layout_mode, set_pdf_render_mode,
-    };
+    use crate::settings::{PdfPageLayoutMode, PdfRenderMode, RuntimeSettings, Settings};
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
         MouseEventKind,
     };
     use ratatui::layout::Rect;
-    use serial_test::serial;
     use std::path::Path;
+
+    fn runtime_settings(
+        render_mode: PdfRenderMode,
+        layout_mode: PdfPageLayoutMode,
+    ) -> RuntimeSettings {
+        RuntimeSettings::in_memory(Settings {
+            pdf_render_mode: render_mode,
+            pdf_page_layout_mode: layout_mode,
+            ..Settings::default()
+        })
+    }
 
     fn line(y0: f32, y1: f32) -> LineBounds {
         LineBounds {
@@ -7133,6 +7696,7 @@ mod tests {
             false,
             None,
             String::new(),
+            RuntimeSettings::in_memory(Settings::default()),
         );
         state.rendered = vec![crate::widget::pdf_reader::RenderedInfo {
             line_bounds: lines,
@@ -7151,10 +7715,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn box_annotation_includes_last_viewport_cell() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         let mut state = non_kitty_reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         state.comments_enabled = true;
         state.rendered[0].pixel_w = Some(100);
         state.rendered[0].pixel_h = Some(100);
@@ -7179,7 +7742,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn box_annotation_resize_cancels_unconfirmed_geometry() {
         let mut state = non_kitty_reader_with_lines(Vec::new());
         state.comments_enabled = true;
@@ -7192,10 +7754,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn box_annotation_zoom_and_pan_preserve_pdf_coordinates() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         let mut state = reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         state.comments_enabled = true;
         state.rendered[0].pixel_w = Some(200);
         state.rendered[0].pixel_h = Some(200);
@@ -7223,6 +7784,40 @@ mod tests {
         };
         assert_eq!((rects[0].topleft_x, rects[0].topleft_y), (35, 30));
         assert_eq!((rects[0].bottomright_x, rects[0].bottomright_y), (40, 35));
+    }
+
+    #[test]
+    fn box_annotation_uses_selected_pages_zoom_in_scroll_mode() {
+        let mut state = reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Scroll, PdfPageLayoutMode::Single);
+        state.comments_enabled = true;
+        state.rendered = vec![
+            kitty_rendered_page(20, 20, 1.0),
+            kitty_rendered_page(40, 40, 2.0),
+        ];
+        state.kitty_effective_zoom_factor = 2.0;
+        state.coord_info = Some((Rect::new(0, 0, 10, 10), (10, 10)));
+        state.zoom = Some(crate::pdf::Zoom {
+            factor: 2.0,
+            cell_pan_from_left: 3,
+            global_scroll_offset: 40 + u32::from(super::SEPARATOR_HEIGHT),
+        });
+        state.box_draw = Some(super::super::state::BoxDrawState {
+            anchor: Some((8, 8)),
+            cursor: (9, 9),
+            dragging: false,
+        });
+        state.confirm_box_annotation();
+        let Some(crate::comments::CommentTarget::Pdf {
+            page: 1,
+            rects,
+            region: true,
+        }) = &state.comment_input.target
+        else {
+            panic!("box on differently enhanced page was rejected");
+        };
+        assert_eq!((rects[0].topleft_x, rects[0].topleft_y), (55, 40));
+        assert_eq!((rects[0].bottomright_x, rects[0].bottomright_y), (65, 50));
     }
 
     fn reader_with_box_comment() -> (PdfReaderState, tempfile::TempDir) {
@@ -7278,10 +7873,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn box_annotation_click_edits_only_after_release() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         let (mut state, _dir) = reader_with_box_comment();
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         state.handle_mouse_event(mouse(MouseEventKind::Moved, 2, 1));
         assert!(state.comment_input.read_only);
         state.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
@@ -7295,10 +7889,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn box_annotation_drag_selects_text_without_opening_editor() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         let (mut state, _dir) = reader_with_box_comment();
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
         state.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
         state.handle_mouse_event(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 1));
         state.handle_mouse_event(mouse(MouseEventKind::Up(MouseButton::Left), 5, 1));
@@ -7321,6 +7914,7 @@ mod tests {
             false,
             None,
             String::new(),
+            RuntimeSettings::in_memory(Settings::default()),
         );
         state.rendered = vec![crate::widget::pdf_reader::RenderedInfo {
             line_bounds: lines,
@@ -7331,30 +7925,6 @@ mod tests {
         state.last_render.img_area_width = 80;
         state.last_render.img_area_height = 10;
         state
-    }
-
-    struct PdfModeGuard {
-        render_mode: PdfRenderMode,
-        layout_mode: PdfPageLayoutMode,
-    }
-
-    impl PdfModeGuard {
-        fn set(render_mode: PdfRenderMode, layout_mode: PdfPageLayoutMode) -> Self {
-            let guard = Self {
-                render_mode: get_pdf_render_mode(),
-                layout_mode: get_pdf_page_layout_mode(),
-            };
-            set_pdf_render_mode(render_mode);
-            set_pdf_page_layout_mode(layout_mode);
-            guard
-        }
-    }
-
-    impl Drop for PdfModeGuard {
-        fn drop(&mut self) {
-            set_pdf_render_mode(self.render_mode);
-            set_pdf_page_layout_mode(self.layout_mode);
-        }
     }
 
     fn rendered_page(cell_width: u16, cell_height: u16) -> crate::widget::pdf_reader::RenderedInfo {
@@ -7390,9 +7960,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn kitty_jump_to_page_uses_effective_zoom_across_mixed_render_scales() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Scroll, PdfPageLayoutMode::Single);
         let mut state = PdfReaderState::new(
             "test.pdf".to_string(),
             true,
@@ -7407,6 +7975,7 @@ mod tests {
             false,
             None,
             String::new(),
+            runtime_settings(PdfRenderMode::Scroll, PdfPageLayoutMode::Single),
         );
         state.page = 1;
         state.kitty_effective_zoom_factor = 2.0;
@@ -7469,10 +8038,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn dual_page_page_mode_selection_uses_current_spread_not_page_parity() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Page, PdfPageLayoutMode::Dual);
-
         let mut state = PdfReaderState::new(
             "test.pdf".to_string(),
             true,
@@ -7487,6 +8053,7 @@ mod tests {
             false,
             None,
             String::new(),
+            runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Dual),
         );
         state.rendered = vec![
             crate::widget::pdf_reader::RenderedInfo::default(),
@@ -7506,10 +8073,7 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn dual_page_scroll_mode_selection_maps_right_page_x_with_dual_geometry() {
-        let _guard = PdfModeGuard::set(PdfRenderMode::Scroll, PdfPageLayoutMode::Dual);
-
         let mut state = PdfReaderState::new(
             "test.pdf".to_string(),
             true,
@@ -7524,6 +8088,7 @@ mod tests {
             false,
             None,
             String::new(),
+            runtime_settings(PdfRenderMode::Scroll, PdfPageLayoutMode::Dual),
         );
         state.rendered = vec![rendered_page(30, 20), rendered_page(30, 20)];
         state.coord_info = Some((Rect::new(0, 0, 80, 20), (10, 10)));

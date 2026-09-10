@@ -62,6 +62,9 @@ struct RasterSpec {
     output_height: f32,
     transform: Matrix,
     mag: f32,
+    /// User-scale actually rendered after the `KITTY_MAX_DIMENSION` clamp.
+    /// Equals the requested scale when no clamping was needed.
+    achieved_scale: f32,
 }
 
 impl RasterSpec {
@@ -80,6 +83,7 @@ impl RasterSpec {
         };
 
         let mut mag = base_mag * user_scale;
+        let mut achieved_scale = user_scale;
         let out_width = page_width * mag;
         let out_height = page_height * mag;
 
@@ -87,6 +91,7 @@ impl RasterSpec {
         if max_dim > KITTY_MAX_DIMENSION {
             let reduction = KITTY_MAX_DIMENSION / max_dim;
             mag *= reduction;
+            achieved_scale *= reduction;
         }
 
         let (mag, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
@@ -96,6 +101,7 @@ impl RasterSpec {
             output_height,
             transform: Matrix::new_scale(mag, mag),
             mag,
+            achieved_scale,
         }
     }
 }
@@ -485,13 +491,14 @@ pub fn render_page(
     let spec = RasterSpec::compute(page_bounds, viewport_px, params.scale, cell_dims);
 
     log::info!(
-        "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
+        "DIAG worker: page={} page_bounds=({:.1},{:.1}) viewport_px=({:.1},{:.1}) scale={:.3} achieved={:.3} cell=({},{}) mag={:.4} output=({:.1},{:.1}) output_cells=({},{})",
         page_num,
         page_bounds.0,
         page_bounds.1,
         viewport_px.0,
         viewport_px.1,
         params.scale,
+        spec.achieved_scale,
         params.cell_size.width,
         params.cell_size.height,
         spec.mag,
@@ -502,7 +509,13 @@ pub fn render_page(
     );
 
     let rgb = Colorspace::device_rgb();
-    let mut pixmap = page.to_pixmap(&spec.transform, &rgb, false, false)?;
+    let mut pixmap = page.to_pixmap(&spec.transform, &rgb, params.transparent, false)?;
+    // MuPDF renders premultiplied alpha. Convert to straight alpha immediately so
+    // tinting and overlay blending downstream operate on true colors, and the
+    // Kitty f=32 encoder (which expects straight alpha) needs no conversion.
+    if params.transparent {
+        unpremultiply_pixmap(&mut pixmap);
+    }
     let themed_rendering = params.black >= 0 && params.white >= 0;
 
     let image_regions = if themed_rendering && !params.invert_images {
@@ -537,7 +550,7 @@ pub fn render_page(
     let line_bounds = extract_line_bounds_merged(&page, spec.mag);
     let link_rects = extract_link_rects(&page, spec.mag);
 
-    let pixels = pixmap_to_rgb(&pixmap)?;
+    let (pixels, channels) = pixmap_to_pixels(&pixmap, params.transparent)?;
 
     Ok(PageData {
         img_data: ImageData {
@@ -546,10 +559,12 @@ pub fn render_page(
             height_px: pixmap.height(),
             width_cell: (spec.output_width / f32::from(params.cell_size.width)) as u16,
             height_cell: (spec.output_height / f32::from(params.cell_size.height)) as u16,
+            channels,
         },
         page_num,
         scale_factor: spec.mag,
         requested_scale: params.scale,
+        achieved_scale: spec.achieved_scale,
         render_area_width_cells: params.area.width,
         render_area_height_cells: params.area.height,
         line_bounds,
@@ -675,7 +690,49 @@ fn restore_image_regions(pixmap: &mut Pixmap, regions: &[ImageRegion]) {
     }
 }
 
-fn pixmap_to_rgb(pixmap: &Pixmap) -> Result<Vec<u8>, WorkerFault> {
+/// Convert a premultiplied-alpha RGBA pixmap to straight alpha in place.
+fn unpremultiply_pixmap(pixmap: &mut Pixmap) {
+    if pixmap.n() != 4 || !pixmap.alpha() {
+        return;
+    }
+    let width = pixmap.width() as usize;
+    let height = pixmap.height() as usize;
+    let stride = pixmap.stride() as usize;
+    let row_bytes = width * 4;
+    let samples = pixmap.samples_mut();
+    for y in 0..height {
+        let start = y * stride;
+        let Some(row) = samples.get_mut(start..start + row_bytes) else {
+            break;
+        };
+        unpremultiply_rgba(row);
+    }
+}
+
+/// Convert premultiplied RGBA bytes to straight alpha.
+fn unpremultiply_rgba(buf: &mut [u8]) {
+    for px in buf.chunks_exact_mut(4) {
+        let a = px[3];
+        if a == 0 {
+            px[0] = 0;
+            px[1] = 0;
+            px[2] = 0;
+        } else if a != 255 {
+            let a = u32::from(a);
+            px[0] = ((u32::from(px[0]) * 255 + a / 2) / a).min(255) as u8;
+            px[1] = ((u32::from(px[1]) * 255 + a / 2) / a).min(255) as u8;
+            px[2] = ((u32::from(px[2]) * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
+}
+
+/// Extract pixel bytes from a pixmap.
+///
+/// Returns `(bytes, channels)`. When `keep_alpha` is true and the pixmap carries
+/// an alpha channel, RGBA (4 channels) is preserved so undrawn page areas stay
+/// transparent; otherwise the alpha byte is dropped and RGB (3 channels) is
+/// returned.
+fn pixmap_to_pixels(pixmap: &Pixmap, keep_alpha: bool) -> Result<(Vec<u8>, u8), WorkerFault> {
     let n = pixmap.n() as usize;
     if n < 3 {
         return Err(WorkerFault::generic(format!(
@@ -693,20 +750,23 @@ fn pixmap_to_rgb(pixmap: &Pixmap) -> Result<Vec<u8>, WorkerFault> {
         return Err(WorkerFault::generic("Pixmap buffer size mismatch"));
     }
 
-    let mut out = Vec::with_capacity(width * height * 3);
+    let want_rgba = keep_alpha && pixmap.alpha() && n >= 4;
+    let out_channels: u8 = if want_rgba { 4 } else { 3 };
+    let mut out = Vec::with_capacity(width * height * out_channels as usize);
     for y in 0..height {
         let row_start = y * stride;
         let row = &samples[row_start..row_start + row_bytes];
-        if n == 3 {
+        if n == out_channels as usize {
             out.extend_from_slice(row);
         } else {
+            let copy = out_channels as usize;
             for px in row.chunks_exact(n) {
-                out.extend_from_slice(&px[..3]);
+                out.extend_from_slice(&px[..copy]);
             }
         }
     }
 
-    Ok(out)
+    Ok((out, out_channels))
 }
 
 pub(crate) fn extract_line_bounds(page: &Page, scale_factor: f32) -> Vec<LineBounds> {
@@ -1350,10 +1410,12 @@ fn render_djvu_page(
             height_px,
             width_cell: (spec.output_width / f32::from(params.cell_size.width)) as u16,
             height_cell: (spec.output_height / f32::from(params.cell_size.height)) as u16,
+            channels: 3,
         },
         page_num,
         scale_factor: actual_scale,
         requested_scale: params.scale,
+        achieved_scale: spec.achieved_scale,
         render_area_width_cells: params.area.width,
         render_area_height_cells: params.area.height,
         line_bounds: extract_djvu_line_bounds_with_scales(
@@ -1665,6 +1727,7 @@ fn extract_djvu_line_bounds_with_scales(
 struct DjvuRasterSpec {
     output_width: f32,
     output_height: f32,
+    achieved_scale: f32,
 }
 
 impl DjvuRasterSpec {
@@ -1674,29 +1737,36 @@ impl DjvuRasterSpec {
         user_scale: f32,
         cell_dims: (f32, f32),
     ) -> Self {
-        let (page_width, page_height) = page_bounds;
-        let (view_width, view_height) = viewport_px;
-        let base_mag = if page_width / page_height > view_width / view_height {
-            view_height / page_height
-        } else {
-            view_width / page_width
-        };
-
-        let mut mag = base_mag * user_scale;
-        let out_width = page_width * mag;
-        let out_height = page_height * mag;
-
-        let max_dim = out_width.max(out_height);
-        if max_dim > KITTY_MAX_DIMENSION {
-            let reduction = KITTY_MAX_DIMENSION / max_dim;
-            mag *= reduction;
-        }
-
-        let (_, output_width, output_height) = align_raster_to_cells(page_bounds, mag, cell_dims);
-
+        let spec = RasterSpec::compute(page_bounds, viewport_px, user_scale, cell_dims);
         Self {
-            output_width,
-            output_height,
+            output_width: spec.output_width,
+            output_height: spec.output_height,
+            achieved_scale: spec.achieved_scale,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unpremultiply_rgba;
+
+    #[test]
+    fn unpremultiply_restores_straight_alpha() {
+        // Opaque pixel is unchanged.
+        let mut opaque = vec![200, 100, 50, 255];
+        unpremultiply_rgba(&mut opaque);
+        assert_eq!(opaque, vec![200, 100, 50, 255]);
+
+        // Fully transparent pixel is zeroed.
+        let mut clear = vec![123, 45, 67, 0];
+        unpremultiply_rgba(&mut clear);
+        assert_eq!(clear, vec![0, 0, 0, 0]);
+
+        // Half-transparent premultiplied (color already * 0.5) is scaled back up.
+        let mut half = vec![100, 50, 25, 128];
+        unpremultiply_rgba(&mut half);
+        assert_eq!(half[3], 128);
+        // 100 * 255 / 128 ≈ 199 (straight alpha brings the color back toward full).
+        assert!((198..=200).contains(&half[0]), "got {}", half[0]);
     }
 }

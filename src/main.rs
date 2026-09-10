@@ -285,7 +285,7 @@ fn main() -> Result<()> {
     bookokrat::clipboard::init();
 
     #[cfg(feature = "pdf")]
-    {
+    let pixel_mouse_supported = {
         let caps = terminal::detect_terminal_with_probe();
         info!(
             "Startup terminal caps: kind={:?}, tmux={}, truecolor={}, graphics={}, \
@@ -321,20 +321,46 @@ fn main() -> Result<()> {
         }
         set_kitty_shm_support_override(terminal::probe_kitty_shm_support(&caps));
         set_kitty_delete_range_support_override(terminal::probe_kitty_delete_range_support(&caps));
-    }
+
+        // SGR-pixel mouse (?1016) is supported by Kitty and Ghostty. Skip under
+        // tmux: it intercepts mouse reporting and forwards cell coordinates,
+        // which would otherwise be misread as pixels.
+        !caps.env.tmux
+            && matches!(
+                caps.kind,
+                terminal::TerminalKind::Kitty | terminal::TerminalKind::Ghostty
+            )
+    };
     // Terminal initialization
     enable_raw_mode()?;
     let mut stdout = stdout();
 
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+
+    // Record SGR-pixel mouse support (Kitty/Ghostty, not under tmux which
+    // reports cells). The mode itself is only enabled per-PDF-session (see
+    // pixel_mouse::enable_for_pdf): EPUB never emits ?1016, since on some
+    // embedded Ghostty builds it interferes with inline-image transmission.
+    #[cfg(feature = "pdf")]
+    {
+        use bookokrat::inputs::pixel_mouse;
+        pixel_mouse::set_supported(pixel_mouse_supported);
+        if pixel_mouse_supported {
+            pixel_mouse::refresh_cell_size();
+        }
+    }
+
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Load settings (skip in test mode for reproducible state)
-    if !args.test_mode {
+    // Test mode runs on default settings that never touch the user's config.
+    let runtime_settings = if args.test_mode {
+        settings::RuntimeSettings::in_memory(settings::Settings::default())
+    } else {
         settings::load_settings();
         load_custom_themes();
-    }
+        settings::RuntimeSettings::global()
+    };
 
     // Create app and run it
     let book_directory = args
@@ -378,12 +404,13 @@ fn main() -> Result<()> {
     })?;
 
     let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         book_directory,
         bookmark_file.as_deref(),
         auto_load_recent,
         comments_dir.as_deref(),
         image_cache_dir,
+        runtime_settings,
     );
     app.set_zen_mode(args.zen_mode);
     app.set_test_mode(args.test_mode);

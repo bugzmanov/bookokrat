@@ -19,7 +19,8 @@ use crate::pdf::{
     CommentOverlay, CursorRect, ExtractionRequest, HighlightOverlay, NormalModeState,
     PageNumberTracker, SelectionRect, TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
 };
-use crate::theme::{Base16Palette, theme_background};
+use crate::settings::{PdfPageLayoutMode, RuntimeSettings};
+use crate::theme::{Base16Palette, theme_background_for};
 use crate::widget::hud_message::{HudMessage, HudMode};
 
 use super::types::{
@@ -56,10 +57,6 @@ pub enum PopupWindow {
 }
 
 impl FocusedPanel {
-    pub fn is_popup(&self) -> bool {
-        matches!(self, Self::Popup(_))
-    }
-
     pub fn popup(&self) -> Option<PopupWindow> {
         match self {
             Self::Popup(p) => Some(*p),
@@ -262,6 +259,7 @@ pub enum InputAction {
     QuitApp,
     ToggleInvertImages,
     TogglePdfTheming,
+    TogglePdfLinkHighlight,
     RenderScale {
         factor: f32,
         viewport: Option<ViewportUpdate>,
@@ -342,8 +340,15 @@ pub struct PendingEnhance {
     pub old_right_cell_w: Option<u16>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct KittyScrollAnchor {
+    pub page: usize,
+    pub source_y_ratio: f64,
+}
+
 /// Main PDF reader widget state
 pub struct PdfReaderState {
+    pub(crate) settings: RuntimeSettings,
     /// Document name
     pub name: String,
     /// Document title from metadata
@@ -403,6 +408,8 @@ pub struct PdfReaderState {
     pub invert_images: bool,
     /// Whether PDF pages are rendered with app theme tinting
     pub themed_rendering: bool,
+    /// Whether link clickboxes are underlined on the page
+    pub show_link_underlines: bool,
     /// Whether reader is currently in zen mode
     pub zen_mode: bool,
     /// Whether terminal supports PDF comments (Kitty/iTerm2 protocols)
@@ -418,6 +425,14 @@ pub struct PdfReaderState {
     /// When set, a solid-color Kitty image is placed over this area after PDF
     /// images so active PDF modals have an opaque background. (col, row, width, height)
     pub modal_overlay_rect: Option<(u16, u16, u16, u16)>,
+    /// Set on the non-kitty path when the whole screen must be re-emitted
+    /// (e.g. to paint the page image over a stale iTerm2 modal backing that
+    /// cannot be deleted). Consumed by the main loop (terminal.clear()).
+    pub pending_screen_refresh: bool,
+    /// True when pages are displayed via the iTerm2 graphics protocol
+    /// (WezTerm, Warp, Konsole, actual iTerm). Unlike `is_iterm`, which is
+    /// only true for the real iTerm app.
+    pub uses_iterm2_protocol: bool,
     /// Last overlay rect that was actually transmitted to Kitty, used to avoid
     /// redundant delete+retransmit cycles that cause blinking.
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
@@ -438,7 +453,7 @@ pub struct PdfReaderState {
     /// Active box-annotation drawing, if any
     pub box_draw: Option<BoxDrawState>,
     /// Press on a box, deferred until release distinguishes a click from selection.
-    pub pending_box_click: Option<(u16, u16)>,
+    pub pending_box_click: Option<crate::pdf::SelectionPoint>,
     /// Currently focused panel
     pub focused_panel: FocusedPanel,
     /// Notification manager
@@ -448,6 +463,7 @@ pub struct PdfReaderState {
     /// Last overlay cleanup state to detect when clearing is needed (Konsole)
     pub last_nonkitty_cleanup_area: Option<Rect>,
     pub last_nonkitty_cleanup_zoom: f32,
+    pub last_nonkitty_cleanup_page: Option<usize>,
     /// Last Kitty cache window (page indices) used to bound terminal cache
     pub last_kitty_cache_window: Option<(usize, usize)>,
     /// Pages with active Kitty placements from the last display pass
@@ -472,6 +488,8 @@ pub struct PdfReaderState {
     pub pending_enhance: Option<PendingEnhance>,
     /// One-shot scroll alignment for a restored Kitty scroll-mode page.
     pub pending_initial_scroll_page: Option<usize>,
+    pub kitty_pan_fraction: Option<f64>,
+    pub pending_zoom_restore: Option<f32>,
 }
 
 impl PdfReaderState {
@@ -491,6 +509,7 @@ impl PdfReaderState {
         supports_comments: bool,
         book_comments: Option<Arc<Mutex<BookComments>>>,
         comments_doc_id: String,
+        settings: RuntimeSettings,
     ) -> Self {
         let zoom_factor = Zoom::clamp_factor(zoom_factor);
         let zoom = if is_kitty {
@@ -504,6 +523,7 @@ impl PdfReaderState {
         };
 
         Self {
+            settings: settings.clone(),
             name,
             doc_title: None,
             page: initial_page,
@@ -533,6 +553,7 @@ impl PdfReaderState {
             comments_enabled,
             invert_images: true,
             themed_rendering: true,
+            show_link_underlines: settings.load().pdf_show_link_underlines,
             zen_mode: false,
             supports_comments,
             book_comments,
@@ -540,6 +561,8 @@ impl PdfReaderState {
             comment_input: CommentInputState::default(),
             highlight_palette_active: false,
             modal_overlay_rect: None,
+            pending_screen_refresh: false,
+            uses_iterm2_protocol: false,
             modal_overlay_sent: None,
             comment_rects: Vec::new(),
             highlight_overlays: Vec::new(),
@@ -557,6 +580,7 @@ impl PdfReaderState {
             last_sent_viewport: None,
             last_nonkitty_cleanup_area: None,
             last_nonkitty_cleanup_zoom: if is_kitty { 1.0 } else { zoom_factor },
+            last_nonkitty_cleanup_page: None,
             last_kitty_cache_window: None,
             kitty_visible_pages: HashSet::new(),
             kitty_delete_range_supported: false,
@@ -568,7 +592,20 @@ impl PdfReaderState {
             synctex_scanner: None,
             pending_enhance: None,
             pending_initial_scroll_page: None,
+            kitty_pan_fraction: None,
+            pending_zoom_restore: None,
         }
+    }
+
+    pub(crate) fn persist_pdf_view(&self, scale: Option<f32>, pan_shift: Option<u16>) {
+        self.settings.update(|settings| {
+            if let Some(scale) = scale {
+                settings.pdf_scale = scale;
+            }
+            if let Some(pan_shift) = pan_shift {
+                settings.pdf_pan_shift = pan_shift;
+            }
+        });
     }
 
     pub fn set_zoom_hud(&mut self, zoom_factor: f32) {
@@ -747,7 +784,7 @@ impl PdfReaderState {
     }
 
     pub fn bg_color(&self) -> Color {
-        theme_background()
+        theme_background_for(self.settings.load().transparent_background)
     }
 
     pub fn fg_color(&self) -> Color {
@@ -762,17 +799,6 @@ impl PdfReaderState {
         self.palette.base_03
     }
 
-    pub fn estimated_page_height_cells(&self) -> u16 {
-        self.rendered
-            .iter()
-            .find_map(|page| {
-                page.img
-                    .as_ref()
-                    .map(|img| img.cell_dimensions().as_tuple().1)
-            })
-            .unwrap_or(self.last_render.img_area_height)
-    }
-
     pub(crate) fn debug_non_kitty_dual_enabled() -> bool {
         std::env::var("BOOKOKRAT_DEBUG_NONKITTY_DUAL")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -784,10 +810,7 @@ impl PdfReaderState {
     }
 
     pub(crate) fn page_matches_dual_scale(&self, page_idx: usize, viewport_width: u16) -> bool {
-        if self.is_kitty
-            || crate::settings::get_pdf_page_layout_mode()
-                != crate::settings::PdfPageLayoutMode::Dual
-        {
+        if self.is_kitty || self.settings.load().pdf_page_layout_mode != PdfPageLayoutMode::Dual {
             return true;
         }
         let Some(info) = self.rendered.get(page_idx) else {
@@ -865,23 +888,32 @@ impl PdfReaderState {
         let left_end = u32::from(left_width);
         let left_inter_start = left_start.max(window_start);
         let left_inter_end = left_end.min(window_end);
-        if left_inter_end <= left_inter_start {
-            return None;
-        }
-        let left_slice = NonKittyDualSlice {
-            page: left_page,
-            screen_start: if overflows {
-                (left_inter_start.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset
-            },
-            screen_end: if overflows {
-                (left_inter_end.saturating_sub(window_start)) as u16
-            } else {
-                fit_x_offset.saturating_add(left_width)
-            },
-            page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
-            width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+        let left_slice = if left_inter_end <= left_inter_start {
+            // Left page panned fully out of the window (right-clamped view):
+            // an empty slice, NOT a bail-out — the right slice still renders.
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: 0,
+                screen_end: 0,
+                page_x_offset: 0,
+                width: 0,
+            }
+        } else {
+            NonKittyDualSlice {
+                page: left_page,
+                screen_start: if overflows {
+                    (left_inter_start.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset
+                },
+                screen_end: if overflows {
+                    (left_inter_end.saturating_sub(window_start)) as u16
+                } else {
+                    fit_x_offset.saturating_add(left_width)
+                },
+                page_x_offset: left_inter_start.saturating_sub(left_start) as u16,
+                width: (left_inter_end.saturating_sub(left_inter_start)) as u16,
+            }
         };
 
         let right_slice = if has_right {
@@ -1009,8 +1041,7 @@ impl PdfReaderState {
         &self,
         viewport: ViewportUpdate,
     ) -> Option<crate::pdf::ConversionCommand> {
-        let dual_mode =
-            crate::settings::get_pdf_page_layout_mode() == crate::settings::PdfPageLayoutMode::Dual;
+        let dual_mode = self.settings.load().pdf_page_layout_mode == PdfPageLayoutMode::Dual;
         if self.is_kitty || !dual_mode {
             return Some(crate::pdf::ConversionCommand::UpdateViewport(viewport));
         }

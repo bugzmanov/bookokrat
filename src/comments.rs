@@ -243,23 +243,6 @@ impl CommentTarget {
         )
     }
 
-    /// Create a Text target for EPUB list item with path
-    pub fn list_item_with_path(
-        node_index: usize,
-        list_path: Vec<usize>,
-        word_range: Option<(usize, usize)>,
-    ) -> Self {
-        let item_index = list_path.last().copied().unwrap_or(0);
-        Self::from_single(
-            node_index,
-            BlockSubtarget::ListItem {
-                item_index,
-                list_path,
-                word_range,
-            },
-        )
-    }
-
     /// Create a Text target for EPUB quote paragraph
     pub fn quote_paragraph(
         node_index: usize,
@@ -1171,22 +1154,6 @@ impl BookComments {
         self.comments.push(comment);
 
         self.sort_comments();
-        self.save_to_disk()
-    }
-
-    pub fn update_comment(
-        &mut self,
-        chapter_href: &str,
-        target: &CommentTarget,
-        new_content: String,
-    ) -> Result<()> {
-        let idx = self
-            .find_comment_index(chapter_href, target)
-            .context("Comment not found")?;
-
-        self.comments[idx].content = new_content;
-        self.comments[idx].updated_at = Utc::now();
-
         self.save_to_disk()
     }
 

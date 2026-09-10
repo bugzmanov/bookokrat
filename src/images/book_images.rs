@@ -123,34 +123,18 @@ impl BookImages {
         }
     }
 
-    /// Load and resize an image for display
-    /// Returns (resized_image, width_cells, height_cells)
-    pub fn load_and_resize_image(
-        &self,
-        image_src: &str,
-        target_height_cells: u16,
-        cell_width: u16,
-        cell_height: u16,
-    ) -> Option<(DynamicImage, u16, u16)> {
-        self.load_and_resize_image_with_context(
-            image_src,
-            target_height_cells,
-            cell_width,
-            cell_height,
-            None,
-        )
-    }
-
-    /// Load and resize an image with chapter context
+    /// Load and resize an image with chapter context.
     pub fn load_and_resize_image_with_context(
         &self,
         image_src: &str,
         target_height_cells: u16,
+        max_width_cells: u16,
         cell_width: u16,
         cell_height: u16,
         chapter_path: Option<&str>,
     ) -> Option<(DynamicImage, u16, u16)> {
         let epub_path = self.current_epub_path.as_ref()?;
+        let max_width_in_pixels = (max_width_cells as u32).saturating_mul(cell_width as u32);
 
         if let Some((svg_data, resources_dir)) =
             self.svg_data_and_resources_dir(epub_path, image_src, chapter_path)
@@ -161,16 +145,20 @@ impl BookImages {
                 let target_height_in_pixels = target_height_cells as u32 * cell_height as u32;
                 let padding = Self::SVG_PADDING_PX;
                 let inner_height = target_height_in_pixels.saturating_sub(padding * 2);
-                if inner_height == 0 {
-                    warn!("SVG target height too small for padding: {image_src}");
+                let inner_max_width = max_width_in_pixels.saturating_sub(padding * 2);
+                if inner_height == 0 || inner_max_width == 0 {
+                    warn!("SVG target size too small for padding: {image_src}");
                     return None;
                 }
 
-                let scale = inner_height as f32 / height as f32;
-                let inner_width = (width as f32 * scale) as u32;
+                let scale = (inner_height as f32 / height as f32)
+                    .min(inner_max_width as f32 / width as f32);
+                let inner_width = ((width as f32 * scale) as u32).max(1);
+                let inner_height = ((height as f32 * scale) as u32).max(1);
                 let new_width = inner_width + padding * 2;
                 let new_height = inner_height + padding * 2;
                 let width_cells = (new_width as f32 / cell_width as f32).ceil() as u16;
+                let height_cells = (new_height as f32 / cell_height as f32).ceil() as u16;
 
                 if let Some(rendered) = self.render_svg_to_image(
                     image_src,
@@ -178,7 +166,7 @@ impl BookImages {
                     resources_dir.as_deref(),
                     Some((new_width, new_height)),
                 ) {
-                    return Some((rendered, width_cells, target_height_cells));
+                    return Some((rendered, width_cells, height_cells.min(target_height_cells)));
                 }
 
                 warn!("Failed to render SVG image: {image_src}");
@@ -191,11 +179,12 @@ impl BookImages {
 
         let (img_width, img_height) = img.dimensions();
 
-        // Calculate target dimensions for scaling
+        // Fit-to-box: scale by the tighter of the height target and the width cap
         let target_height_in_pixels = target_height_cells as u32 * cell_height as u32;
-        let scale = target_height_in_pixels as f32 / img_height as f32;
-        let new_width = (img_width as f32 * scale) as u32;
-        let new_height = target_height_in_pixels;
+        let scale = (target_height_in_pixels as f32 / img_height as f32)
+            .min(max_width_in_pixels as f32 / img_width as f32);
+        let new_width = ((img_width as f32 * scale) as u32).max(1);
+        let new_height = ((img_height as f32 * scale) as u32).max(1);
 
         debug!("Resizing {image_src} from {img_width}x{img_height} to {new_width}x{new_height}");
 
@@ -210,8 +199,13 @@ impl BookImages {
 
         // Calculate width in cells
         let width_cells = (new_width as f32 / cell_width as f32).ceil() as u16;
+        let height_cells = (new_height as f32 / cell_height as f32).ceil() as u16;
 
-        Some((scaled_image, width_cells, target_height_cells))
+        Some((
+            scaled_image,
+            width_cells,
+            height_cells.min(target_height_cells),
+        ))
     }
 
     /// Resize an image to specific dimensions using fast_image_resize

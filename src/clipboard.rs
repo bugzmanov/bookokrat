@@ -6,7 +6,10 @@ use std::sync::OnceLock;
 enum Provider {
     XClip,
     XSel,
+    TermuxClipboard,
+    #[cfg(not(target_os = "android"))]
     Arboard,
+    Noop,
 }
 
 static PROVIDER: OnceLock<Provider> = OnceLock::new();
@@ -39,7 +42,22 @@ fn detect() -> Provider {
         }
     }
 
-    Provider::Arboard
+    // Check for Termux clipboard (available through Termux:API)
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if binary_exists("termux-clipboard-set") {
+            return Provider::TermuxClipboard;
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        Provider::Arboard
+    }
+
+    // No clipboard tool available — clipboard operations will be no-ops
+    #[cfg(target_os = "android")]
+    Provider::Noop
 }
 
 fn run_command(cmd: &str, args: &[&str], text: &str) -> Result<(), String> {
@@ -97,11 +115,17 @@ pub fn copy_to_clipboard(text: &str) -> Result<(), String> {
     match provider {
         Provider::XClip => run_command("xclip", &["-selection", "clipboard"], text),
         Provider::XSel => run_command("xsel", &["-i", "-b"], text),
+        Provider::TermuxClipboard => run_command("termux-clipboard-set", &[], text),
+        #[cfg(not(target_os = "android"))]
         Provider::Arboard => {
             let mut cb = arboard::Clipboard::new()
                 .map_err(|e| format!("Failed to access clipboard: {e}"))?;
             cb.set_text(text)
                 .map_err(|e| format!("Failed to copy to clipboard: {e}"))
+        }
+        Provider::Noop => {
+            log::info!("Clipboard not available — no clipboard tool found");
+            Ok(())
         }
     }
 }

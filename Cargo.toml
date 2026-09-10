@@ -31,6 +31,12 @@ exclude = [
   "bookmarks.json",
 ]
 
+[lints.clippy]
+# The large Err is flume's SendError echoing the unsent frame back; it only
+# materializes on channel disconnect (shutdown), so boxing it would cost the
+# hot path to optimize a path that never runs.
+result_large_err = "allow"
+
 [lib]
 name = "bookokrat"
 path = "src/lib.rs"
@@ -54,10 +60,9 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 textwrap = "0.16"
 better-panic = "0.3"
-human-panic = "2.0"
 libc = "0.2"
 pprof = { version = "0.15", features = ["flamegraph", "protobuf-codec"], optional = true }
-arboard = { version = "3.4", features = ["wayland-data-control"] }
+
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 tempfile = "3.8"
 # Restrict image formats to reduce build time; enable more via features below.
@@ -98,6 +103,9 @@ notify = { version = "8", optional = true }
 
 # DjVu rendering dependencies (optional, enabled with `djvu` feature)
 rdjvu = { package = "djvu", version = "0.1.0", optional = true }
+
+[target.'cfg(not(any(target_os = "android", target_os = "emscripten")))'.dependencies]
+arboard = { version = "3.4", features = ["wayland-data-control"] }
 
 [target.'cfg(not(windows))'.dependencies]
 rustix = { version = "0.38.4", features = ["stdio", "termios", "fs"] }

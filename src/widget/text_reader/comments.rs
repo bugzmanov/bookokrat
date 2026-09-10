@@ -41,14 +41,10 @@ enum CommentScope<'a> {
     Node,
     /// Top-level list items only (legacy list rendering).
     LegacyList,
-    /// A specific list item at the top level.
-    ListItem { item_index: usize },
     /// A specific list item at a nested path.
     ListItemPath(&'a [usize]),
     /// A definition list term/definition.
     DefinitionItem { item_index: usize, is_term: bool },
-    /// A specific paragraph inside a quote block.
-    QuoteParagraph { paragraph_index: usize },
 }
 
 /// Slice-level scope match. Each rendered block asks `does this slice
@@ -63,14 +59,6 @@ fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'
             &slice.subtarget,
             BlockSubtarget::ListItem { list_path, .. } if list_path.is_empty()
         ),
-        CommentScope::ListItem { item_index } => match &slice.subtarget {
-            BlockSubtarget::ListItem {
-                item_index: idx,
-                list_path,
-                ..
-            } => *idx == item_index && list_path.is_empty(),
-            _ => false,
-        },
         CommentScope::ListItemPath(path) => matches!(
             &slice.subtarget,
             BlockSubtarget::ListItem { list_path, .. } if list_path.as_slice() == path
@@ -85,13 +73,6 @@ fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'
                 is_term: term,
                 ..
             } if *idx == item_index && *term == is_term
-        ),
-        CommentScope::QuoteParagraph { paragraph_index } => matches!(
-            &slice.subtarget,
-            BlockSubtarget::QuoteParagraph {
-                paragraph_index: idx,
-                ..
-            } if *idx == paragraph_index
         ),
     }
 }
@@ -277,26 +258,32 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         comments.has_overlapping_annotation(chapter_file, target)
     }
 
-    pub fn add_highlight_from_visual_selection(&mut self, color: HighlightColor) -> bool {
-        if !self.is_visual_mode_active() {
+    pub fn add_highlight_from_selection(&mut self, color: HighlightColor) -> bool {
+        let range = if let Some((start, end)) = self.text_selection.get_selection_range() {
+            Some((start, end))
+        } else if self.is_visual_mode_active() {
+            self.get_visual_selection_range()
+                .map(|(start_line, start_col, end_line, end_col)| {
+                    (
+                        SelectionPoint {
+                            line: start_line,
+                            column: start_col,
+                        },
+                        SelectionPoint {
+                            line: end_line,
+                            column: end_col,
+                        },
+                    )
+                })
+        } else {
+            None
+        };
+        let Some((start, end)) = range else {
             self.set_error_hud("Select text first, then press H and a color");
             return false;
-        }
+        };
 
         let selected_text = self.get_selected_text();
-        let Some((start_line, start_col, end_line, end_col)) = self.get_visual_selection_range()
-        else {
-            self.set_error_hud("No visual selection");
-            return false;
-        };
-        let start = SelectionPoint {
-            line: start_line,
-            column: start_col,
-        };
-        let end = SelectionPoint {
-            line: end_line,
-            column: end_col,
-        };
         let (norm_start, norm_end) = self.normalize_selection_points(&start, &end);
 
         // One unified target: single-block selections produce a 1-slice
@@ -304,26 +291,26 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         // Either way the result is exactly one Comment in storage.
         let Some(target) = self.compute_selection_target(&norm_start, &norm_end) else {
             self.set_error_hud("This selection cannot be highlighted");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         let Some(chapter_file) = self.current_chapter_file.clone() else {
             self.set_error_hud("No chapter loaded");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         let Some(comments_arc) = self.book_comments.as_ref().cloned() else {
             self.set_error_hud("Annotations are unavailable");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         };
 
         if let Ok(mut comments) = comments_arc.lock() {
             if comments.has_overlapping_annotation(&chapter_file, &target) {
                 self.set_error_hud("Selection overlaps an existing annotation");
-                self.exit_visual_mode();
+                self.clear_active_selection();
                 return false;
             }
 
@@ -337,20 +324,27 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             if let Err(e) = comments.add_comment(highlight) {
                 warn!("Failed to add highlight: {e}");
                 self.set_error_hud(format!("Failed to add highlight: {e}"));
-                self.exit_visual_mode();
+                self.clear_active_selection();
                 return false;
             }
         } else {
             self.set_error_hud("Annotations are unavailable");
-            self.exit_visual_mode();
+            self.clear_active_selection();
             return false;
         }
 
         self.rebuild_chapter_comments();
-        self.exit_visual_mode();
+        self.clear_active_selection();
         self.cache_generation += 1;
         self.set_normal_hud(format!("{} highlight", color.label()));
         true
+    }
+
+    fn clear_active_selection(&mut self) {
+        if self.is_visual_mode_active() {
+            self.exit_visual_mode();
+        }
+        self.text_selection.clear_selection();
     }
 
     fn init_comment_textarea(&mut self, target: CommentTarget, start_line: usize, end_line: usize) {
@@ -784,7 +778,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     /// For a range selection this re-uses [`compute_selection_target`] +
     /// [`BookComments::find_overlapping_highlight`] so that detection here can
     /// never disagree with the overlap check inside
-    /// [`add_highlight_from_visual_selection`]. For a bare cursor we fall back
+    /// [`add_highlight_from_selection`]. For a bare cursor we fall back
     /// to the canonical-position scan in [`highlight_hits_in_range`].
     pub fn highlight_for_palette(&self) -> Option<(String, HighlightColor)> {
         let (start_line, end_line, start, end) = self.cursor_selection_range()?;
@@ -1027,16 +1021,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         Ok(true)
     }
 
-    pub fn delete_comment_by_location(&mut self, chapter_href: &str, target: &CommentTarget) {
-        if let Some(comments_arc) = &self.book_comments {
-            if let Ok(mut comments) = comments_arc.lock() {
-                let _ = comments.delete_comment(chapter_href, target);
-            }
-        }
-        self.rebuild_chapter_comments();
-        self.cache_generation += 1;
-    }
-
     pub fn delete_comment_by_id(&mut self, comment_id: &str) {
         if let Some(comments_arc) = &self.book_comments {
             if let Ok(mut comments) = comments_arc.lock() {
@@ -1168,30 +1152,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         )
     }
 
-    pub fn get_annotation_ranges_for_list_item(
-        &self,
-        block_address: Option<&BlockAddress>,
-        item_index: usize,
-    ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::ListItem { item_index },
-            slice_annotation_range,
-        )
-    }
-
-    pub fn get_highlight_ranges_for_list_item(
-        &self,
-        block_address: Option<&BlockAddress>,
-        item_index: usize,
-    ) -> Vec<HighlightRange> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::ListItem { item_index },
-            slice_highlight_range,
-        )
-    }
-
     pub fn get_annotation_ranges_for_list_item_path(
         &self,
         block_address: Option<&BlockAddress>,
@@ -1244,30 +1204,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_index,
                 is_term,
             },
-            slice_highlight_range,
-        )
-    }
-
-    pub fn get_annotation_ranges_for_quote_paragraph(
-        &self,
-        block_address: Option<&BlockAddress>,
-        paragraph_index: usize,
-    ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::QuoteParagraph { paragraph_index },
-            slice_annotation_range,
-        )
-    }
-
-    pub fn get_highlight_ranges_for_quote_paragraph(
-        &self,
-        block_address: Option<&BlockAddress>,
-        paragraph_index: usize,
-    ) -> Vec<HighlightRange> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::QuoteParagraph { paragraph_index },
             slice_highlight_range,
         )
     }

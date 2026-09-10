@@ -15,7 +15,7 @@ use std::sync::{
 
 use fast_image_resize as fir;
 use flume::{Receiver, SendError, Sender};
-use image::{DynamicImage, RgbImage};
+use image::{DynamicImage, RgbImage, RgbaImage};
 use ratatui::layout::Rect;
 use rayon::prelude::*;
 
@@ -28,7 +28,9 @@ use crate::vendored::ratatui_image::{
 use super::kittyv2::ImageId;
 use super::normal_mode::{CursorRect, VisualRect};
 use super::selection::{CommentMarker, CommentOverlay, HighlightOverlay, SelectionRect};
-use super::types::{PageData, VecExt as _, ViewportUpdate};
+use super::types::{
+    LineBounds, LinkRect, PageData, VecExt as _, ViewportUpdate, link_visual_boxes,
+};
 
 type PipelineError = super::request::WorkerFault;
 
@@ -221,6 +223,8 @@ impl ConvertedImage {
 pub struct RenderedFrame {
     pub index: usize,
     pub requested_scale: f32,
+    /// User zoom factor actually achieved by the worker (post max-dimension clamp).
+    pub achieved_scale: f32,
     pub image: ConvertedImage,
 }
 
@@ -272,6 +276,9 @@ struct OverlaySet {
     /// Box-annotation outlines, already expanded into edge bars (page-space pixels),
     /// so plain rect clipping/filling is correct across tiles.
     boxes: Vec<PixelRect>,
+    /// Solid stroke rects forming outline boxes around link clickboxes. These
+    /// are final geometry (the four border strips of each box), drawn directly.
+    link_strokes: Vec<PixelRect>,
     selection: Vec<PixelRect>,
     visual: Vec<PixelRect>,
     cursor: Option<PixelRect>,
@@ -281,6 +288,7 @@ impl OverlaySet {
     fn is_empty(&self) -> bool {
         self.comments.is_empty()
             && self.boxes.is_empty()
+            && self.link_strokes.is_empty()
             && self.highlights.is_empty()
             && self.selection.is_empty()
             && self.visual.is_empty()
@@ -375,6 +383,8 @@ impl OverlaySet {
             comments: clip_comments(&self.comments),
             comments_are_underlines: true, // Tile rendering pre-computes underline positions
             boxes: clip(&self.boxes),
+            // Link strokes are already final geometry, so clip them as plain rects.
+            link_strokes: clip(&self.link_strokes),
             selection: clip(&self.selection),
             visual: clip(&self.visual),
             cursor,
@@ -406,6 +416,8 @@ pub enum ConversionCommand {
     UpdateHighlights(Vec<HighlightOverlay>),
     UpdateCursor(Option<CursorRect>),
     UpdateVisual(Vec<VisualRect>),
+    /// Toggle drawing of link clickbox underlines over all pages.
+    SetShowLinkUnderlines(bool),
     InvalidatePageCache,
     /// Notify that display failed for these pages, allowing retry.
     DisplayFailed(Vec<usize>),
@@ -427,6 +439,7 @@ struct ConverterEngine {
     comment_cache: HashMap<usize, CommentCacheEntry>,
     visual_rects: Vec<VisualRect>,
     cursor_rect: Option<CursorRect>,
+    show_link_underlines: bool,
     viewport: Option<ViewportUpdate>,
     last_viewport_by_page: HashMap<usize, ViewportUpdate>,
     tiled_pages: HashSet<usize>,
@@ -437,8 +450,6 @@ struct ConverterEngine {
 
 #[derive(Clone)]
 struct CommentCacheEntry {
-    #[expect(dead_code)]
-    scale_factor: f32,
     /// Text-anchored comments (drawn as underlines).
     rects: Vec<PixelRect>,
     /// Box annotations, expanded into outline edge bars.
@@ -486,6 +497,7 @@ impl ConverterEngine {
                             sender.send(Ok(RenderedFrame {
                                 index: new_viewport.page,
                                 requested_scale: cached.data.requested_scale,
+                                achieved_scale: cached.data.achieved_scale,
                                 image: img,
                             }))?;
                         }
@@ -536,6 +548,7 @@ impl ConverterEngine {
                     sender.send(Ok(RenderedFrame {
                         index: new_viewport.page,
                         requested_scale: cached.data.requested_scale,
+                        achieved_scale: cached.data.achieved_scale,
                         image: img,
                     }))?;
                 }
@@ -548,7 +561,12 @@ impl ConverterEngine {
         Ok(())
     }
 
-    fn new(picker: Picker, prerender: usize, kitty_shm_support: bool) -> Self {
+    fn new(
+        picker: Picker,
+        prerender: usize,
+        kitty_shm_support: bool,
+        show_link_underlines: bool,
+    ) -> Self {
         Self {
             picker,
             prerender,
@@ -563,6 +581,7 @@ impl ConverterEngine {
             comment_cache: HashMap::new(),
             visual_rects: Vec::new(),
             cursor_rect: None,
+            show_link_underlines,
             viewport: None,
             last_viewport_by_page: HashMap::new(),
             tiled_pages: HashSet::new(),
@@ -624,6 +643,7 @@ impl ConverterEngine {
             return Ok(Some(RenderedFrame {
                 index: page_info.page_num,
                 requested_scale: page_info.requested_scale,
+                achieved_scale: page_info.achieved_scale,
                 image: img,
             }));
         }
@@ -825,6 +845,22 @@ impl ConverterEngine {
                 self.invalidate_tiles_for_changed_pages(&old_visual, &new_visual);
                 self.reconvert_changed_visual(&old_visual, &new_visual, sender)?;
             }
+            ConversionCommand::SetShowLinkUnderlines(show) => {
+                if self.show_link_underlines != show {
+                    self.show_link_underlines = show;
+                    // Re-render every cached page that has link clickboxes so the
+                    // overlay change is reflected without re-rendering the pixmap.
+                    let affected: HashSet<usize> = self
+                        .page_cache
+                        .iter()
+                        .filter_map(|cached| cached.as_ref())
+                        .filter(|cached| !cached.data.link_rects.is_empty())
+                        .map(|cached| cached.data.page_num)
+                        .collect();
+                    self.invalidate_tiles_for_pages(&affected);
+                    self.reconvert_pages(&affected, sender)?;
+                }
+            }
             ConversionCommand::InvalidatePageCache => {
                 for img in &mut self.images {
                     *img = None;
@@ -933,6 +969,7 @@ impl ConverterEngine {
                                     sender.send(Ok(RenderedFrame {
                                         index: *page_num,
                                         requested_scale: cached.data.requested_scale,
+                                        achieved_scale: cached.data.achieved_scale,
                                         image: img,
                                     }))?;
                                 }
@@ -964,6 +1001,7 @@ impl ConverterEngine {
                     sender.send(Ok(RenderedFrame {
                         index: *page_num,
                         requested_scale: cached.data.requested_scale,
+                        achieved_scale: cached.data.achieved_scale,
                         image: img,
                     }))?;
                 }
@@ -973,17 +1011,6 @@ impl ConverterEngine {
             }
         }
         Ok(())
-    }
-
-    #[expect(dead_code)]
-    fn reconvert_changed_pages<T: PageScoped>(
-        &mut self,
-        old: &[T],
-        new: &[T],
-        sender: &Sender<Result<RenderedFrame, PipelineError>>,
-    ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
-        let affected = Self::collect_affected_pages(old, new);
-        self.reconvert_pages(&affected, sender)
     }
 
     fn reconvert_changed_visual(
@@ -1041,6 +1068,7 @@ impl ConverterEngine {
                     sender.send(Ok(RenderedFrame {
                         index: page_num,
                         requested_scale: cached.data.requested_scale,
+                        achieved_scale: cached.data.achieved_scale,
                         image: img,
                     }))?;
                 }
@@ -1129,6 +1157,7 @@ impl ConverterEngine {
                 sender.send(Ok(RenderedFrame {
                     index: page_num,
                     requested_scale: cached.data.requested_scale,
+                    achieved_scale: cached.data.achieved_scale,
                     image: ConvertedImage::TileUpdate { tiles, cell_size },
                 }))?;
             }
@@ -1162,6 +1191,7 @@ impl ConverterEngine {
                                 sender.send(Ok(RenderedFrame {
                                     index: page_num,
                                     requested_scale: cached.data.requested_scale,
+                                    achieved_scale: cached.data.achieved_scale,
                                     image: img,
                                 }))?;
                                 self.tiled_pages.insert(page_num);
@@ -1240,6 +1270,7 @@ impl ConverterEngine {
                     sender.send(Ok(RenderedFrame {
                         index: page_num,
                         requested_scale: cached.data.requested_scale,
+                        achieved_scale: cached.data.achieved_scale,
                         image: img,
                     }))?;
                 }
@@ -1339,6 +1370,7 @@ impl ConverterEngine {
                 sender.send(Ok(RenderedFrame {
                     index: page_num,
                     requested_scale: cached.data.requested_scale,
+                    achieved_scale: cached.data.achieved_scale,
                     image: ConvertedImage::TileUpdate { tiles, cell_size },
                 }))?;
             }
@@ -1391,7 +1423,7 @@ impl ConverterEngine {
     ) -> OverlaySet {
         let mut overlays = OverlaySet::default();
 
-        if let Some(Some(_cached)) = self.page_cache.get(page_num) {
+        if let Some(Some(cached)) = self.page_cache.get(page_num) {
             if let Some(cached_comments) = self.comment_cache.get(&page_num) {
                 log::debug!(
                     "get_page_overlays: page={} comment_rects={}",
@@ -1400,6 +1432,12 @@ impl ConverterEngine {
                 );
                 overlays.comments.clone_from(&cached_comments.rects);
                 overlays.boxes.clone_from(&cached_comments.boxes);
+            }
+            // Link clickboxes and text lines are both stored in pixel space at the
+            // page's render scale, so they map directly onto the cached pixmap.
+            if self.show_link_underlines {
+                overlays.link_strokes =
+                    link_box_stroke_rects(&cached.data.link_rects, &cached.data.line_bounds);
             }
         } else {
             log::debug!("get_page_overlays: page={page_num} - no page cache or no comments");
@@ -1673,19 +1711,32 @@ fn expand_cursor_rect(cursor: &CursorRect, picker: &Picker) -> CursorRect {
     }
 }
 
-fn decode_rgb(pixels: &[u8], width: u32, height: u32) -> Result<RgbImage, PipelineError> {
+fn decode_pixels(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    channels: u8,
+) -> Result<DynamicImage, PipelineError> {
+    let bpp = if channels == 4 { 4u32 } else { 3u32 };
     let expected = width
         .checked_mul(height)
-        .and_then(|v| v.checked_mul(3))
-        .ok_or_else(|| pipeline_error("RGB size overflow"))? as usize;
+        .and_then(|v| v.checked_mul(bpp))
+        .ok_or_else(|| pipeline_error("pixel size overflow"))? as usize;
     if pixels.len() != expected {
         return Err(pipeline_error(format!(
-            "RGB buffer size mismatch: expected {expected}, got {}",
+            "pixel buffer size mismatch: expected {expected}, got {}",
             pixels.len()
         )));
     }
-    RgbImage::from_raw(width, height, pixels.to_vec())
-        .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
+    if bpp == 4 {
+        RgbaImage::from_raw(width, height, pixels.to_vec())
+            .map(DynamicImage::ImageRgba8)
+            .ok_or_else(|| pipeline_error("Can't build RGBA image from raw pixels"))
+    } else {
+        RgbImage::from_raw(width, height, pixels.to_vec())
+            .map(DynamicImage::ImageRgb8)
+            .ok_or_else(|| pipeline_error("Can't build RGB image from raw pixels"))
+    }
 }
 
 #[inline]
@@ -1698,12 +1749,13 @@ fn cached_cell_size(cached: &CachedPage) -> CellSize {
 
 fn take_decoded(cached: &mut CachedPage) -> Result<DynamicImage, PipelineError> {
     if cached.decoded.is_none() {
-        let rgb = decode_rgb(
+        let img = decode_pixels(
             &cached.data.img_data.pixels,
             cached.data.img_data.width_px,
             cached.data.img_data.height_px,
+            cached.data.img_data.channels,
         )?;
-        cached.decoded = Some(DynamicImage::ImageRgb8(rgb));
+        cached.decoded = Some(img);
     }
     Ok(cached.decoded.take().expect("decoded should be present"))
 }
@@ -1726,14 +1778,25 @@ fn crop_to_viewport(
         let crop_height = viewport_px.min(max_height).max(1);
         img = img.crop_imm(0, y_px, img.width(), crop_height);
         if crop_height < viewport_px {
-            let rgb = img.to_rgb8();
-            let bg = rgb.get_pixel(0, 0);
-            let mut padded = image::ImageBuffer::from_pixel(rgb.width(), viewport_px, *bg);
-            let src = rgb.as_raw();
-            let dst = padded.as_mut();
-            let len = src.len().min(dst.len());
-            dst[..len].copy_from_slice(&src[..len]);
-            img = DynamicImage::ImageRgb8(padded);
+            if let DynamicImage::ImageRgba8(rgba) = &img {
+                // Transparent pages pad below the content with transparent pixels.
+                let mut padded =
+                    image::ImageBuffer::from_pixel(rgba.width(), viewport_px, image::Rgba([0; 4]));
+                let src = rgba.as_raw();
+                let dst = padded.as_mut();
+                let len = src.len().min(dst.len());
+                dst[..len].copy_from_slice(&src[..len]);
+                img = DynamicImage::ImageRgba8(padded);
+            } else {
+                let rgb = img.to_rgb8();
+                let bg = rgb.get_pixel(0, 0);
+                let mut padded = image::ImageBuffer::from_pixel(rgb.width(), viewport_px, *bg);
+                let src = rgb.as_raw();
+                let dst = padded.as_mut();
+                let len = src.len().min(dst.len());
+                dst[..len].copy_from_slice(&src[..len]);
+                img = DynamicImage::ImageRgb8(padded);
+            }
         }
     }
 
@@ -1897,13 +1960,13 @@ fn render_page_with_viewport(
     pid: u32,
     kitty_shm_support: bool,
 ) -> Result<ConvertedImage, PipelineError> {
-    let mut img = decode_rgb(
+    let mut dyn_img = decode_pixels(
         &cached.data.img_data.pixels,
         cached.data.img_data.width_px,
         cached.data.img_data.height_px,
+        cached.data.img_data.channels,
     )?;
-    apply_overlays(&mut img, overlays);
-    let mut dyn_img = DynamicImage::ImageRgb8(img);
+    apply_overlays_dynamic(&mut dyn_img, overlays);
 
     let mut area_cell_size = cached_cell_size(cached);
     if let Some(viewport) = viewport {
@@ -2133,37 +2196,45 @@ fn encode_protocol(
 ) -> Result<ConvertedImage, PipelineError> {
     match picker.protocol_type() {
         ProtocolType::Kitty => {
-            let rgb = img.to_rgb8();
-            let width = rgb.width();
-            let height = rgb.height();
-            let data = rgb.into_raw();
+            let is_rgba = matches!(img, DynamicImage::ImageRgba8(_));
+            let (data, width, height) = if is_rgba {
+                // Already straight alpha: the worker unpremultiplies right after
+                // rasterization, which is what Kitty f=32 expects.
+                let rgba = img.into_rgba8();
+                let width = rgba.width();
+                let height = rgba.height();
+                (rgba.into_raw(), width, height)
+            } else {
+                let rgb = img.to_rgb8();
+                let width = rgb.width();
+                let height = rgb.height();
+                (rgb.into_raw(), width, height)
+            };
+            let id = page_image_id(page_num);
             let img = if kitty_shm_support {
                 let shm_name = next_shm_name(pid, page_num);
-                match super::kittyv2::Image::create_shm_from_rgb(
-                    &data,
-                    width,
-                    height,
-                    &shm_name,
-                    page_image_id(page_num),
-                ) {
-                    Ok((shm_img, shm_size)) => {
-                        let _ = shm_size;
-                        shm_img
-                    }
+                let shm_result = if is_rgba {
+                    super::kittyv2::Image::create_shm_from_rgba(&data, width, height, &shm_name, id)
+                } else {
+                    super::kittyv2::Image::create_shm_from_rgb(&data, width, height, &shm_name, id)
+                };
+                match shm_result {
+                    Ok((shm_img, _shm_size)) => shm_img,
                     Err(e) => {
                         log::warn!(
                             "SHM transfer failed for page {page_num}, falling back to direct: {e:?}"
                         );
-                        super::kittyv2::Image::from_rgb_bytes(
-                            data,
-                            width,
-                            height,
-                            page_image_id(page_num),
-                        )
+                        if is_rgba {
+                            super::kittyv2::Image::from_rgba_bytes(data, width, height, id)
+                        } else {
+                            super::kittyv2::Image::from_rgb_bytes(data, width, height, id)
+                        }
                     }
                 }
+            } else if is_rgba {
+                super::kittyv2::Image::from_rgba_bytes(data, width, height, id)
             } else {
-                super::kittyv2::Image::from_rgb_bytes(data, width, height, page_image_id(page_num))
+                super::kittyv2::Image::from_rgb_bytes(data, width, height, id)
             };
 
             Ok(ConvertedImage::Kitty {
@@ -2197,17 +2268,54 @@ fn encode_protocol(
     }
 }
 
+/// Append the four border strips of an outline box to `out`. `stroke` is the
+/// border thickness in pixels.
+fn push_box_strokes(out: &mut Vec<PixelRect>, x0: u32, y0: u32, x1: u32, y1: u32, stroke: u32) {
+    let t = stroke.max(1);
+    let top = y0.saturating_add(t).min(y1);
+    let left = x0.saturating_add(t).min(x1);
+    let bottom = y1.saturating_sub(t).max(y0);
+    let right = x1.saturating_sub(t).max(x0);
+    let edges = [
+        PixelRect::new(x0, y0, x1, top),    // top
+        PixelRect::new(x0, bottom, x1, y1), // bottom
+        PixelRect::new(x0, y0, left, y1),   // left
+        PixelRect::new(right, y0, x1, y1),  // right
+    ];
+    out.extend(edges.into_iter().flatten());
+}
+
+/// Build outline-box stroke rects for link clickboxes from the shared visual-box
+/// geometry (see [`link_visual_boxes`]). For each box we emit the four border
+/// strips, with thickness scaled to the box height. Using the same geometry the
+/// reader hit-tests against keeps the outline and the clickable area identical.
+///
+/// Returned rects are the final stroke geometry (the border strips), drawn
+/// directly.
+fn link_box_stroke_rects(links: &[LinkRect], lines: &[LineBounds]) -> Vec<PixelRect> {
+    let mut out = Vec::new();
+    for link in links {
+        for (x0, y0, x1, y1) in link_visual_boxes(link, lines) {
+            let stroke = ((y1 - y0) as f32 * 0.05).round().max(1.0) as u32;
+            push_box_strokes(&mut out, x0, y0, x1, y1, stroke);
+        }
+    }
+    out
+}
+
 fn apply_overlays(img: &mut RgbImage, overlays: &OverlaySet) {
     apply_highlight_rects(img, &overlays.highlights);
     if overlays.comments_are_underlines {
         // Comments are already in underline coordinates (tile rendering)
-        draw_underline_rects_direct(img, &overlays.comments);
+        draw_underline_rects_direct(img, &overlays.comments, COMMENT_UNDERLINE_RGB);
     } else {
         // Comments are selection rects, calculate underline position
-        apply_underline_rects(img, &overlays.comments, OverlayOp::Comment);
+        apply_underline_rects(img, &overlays.comments, COMMENT_UNDERLINE_RGB);
     }
     // Box outlines are pre-expanded edge bars in the same color as underlines.
-    draw_underline_rects_direct(img, &overlays.boxes);
+    draw_underline_rects_direct(img, &overlays.boxes, COMMENT_UNDERLINE_RGB);
+    // Link strokes are final outline-box geometry — draw directly.
+    draw_underline_rects_direct(img, &overlays.link_strokes, LINK_STROKE_RGB);
     apply_rects_op(img, &overlays.selection, OverlayOp::Selection);
     apply_rects_op(img, &overlays.visual, OverlayOp::Selection);
     if let Some(cursor) = overlays.cursor {
@@ -2259,6 +2367,10 @@ fn apply_overlays_dynamic(img: &mut DynamicImage, overlays: &OverlaySet) {
         apply_overlays(rgb, overlays);
         return;
     }
+    if let DynamicImage::ImageRgba8(rgba) = img {
+        apply_overlays_rgba(rgba, overlays);
+        return;
+    }
 
     let mut rgb = img.to_rgb8();
     apply_overlays(&mut rgb, overlays);
@@ -2292,6 +2404,118 @@ fn box_outline_bars(rect: PixelRect, stroke: u32) -> impl Iterator<Item = PixelR
     .flatten()
 }
 
+/// Underline rect for a comment (purple line drawn just below the text).
+fn comment_underline_rect(rect: PixelRect) -> PixelRect {
+    const UNDERLINE_THICKNESS: u32 = 3;
+    const UNDERLINE_OFFSET: u32 = 2;
+    let y0 = rect.y1.saturating_add(UNDERLINE_OFFSET);
+    PixelRect {
+        x0: rect.x0,
+        y0,
+        x1: rect.x1,
+        y1: y0.saturating_add(UNDERLINE_THICKNESS),
+    }
+}
+
+/// Paint a rect over an RGBA buffer, applying `f` to the RGB channels and
+/// forcing alpha to opaque so overlays stay visible over transparent page areas.
+fn paint_rgba_rect(
+    buf: &mut [u8],
+    width: usize,
+    height: usize,
+    rect: PixelRect,
+    mut f: impl FnMut(&mut u8, &mut u8, &mut u8),
+) {
+    let Some(c) = rect.clamp_to(width as u32, height as u32) else {
+        return;
+    };
+    if c.y1 <= c.y0 || c.x1 <= c.x0 {
+        return;
+    }
+    let stride = width * 4;
+    for y in c.y0..c.y1 {
+        let row = y as usize * stride;
+        for x in c.x0..c.x1 {
+            let p = row + x as usize * 4;
+            if p + 3 >= buf.len() {
+                continue;
+            }
+            let (mut r, mut g, mut b) = (buf[p], buf[p + 1], buf[p + 2]);
+            f(&mut r, &mut g, &mut b);
+            buf[p] = r;
+            buf[p + 1] = g;
+            buf[p + 2] = b;
+            buf[p + 3] = 255;
+        }
+    }
+}
+
+/// Scalar overlay application for RGBA (transparent) pages. Mirrors
+/// `apply_overlays` but writes to 4-channel pixels and keeps overlays opaque.
+fn apply_overlays_rgba(img: &mut RgbaImage, overlays: &OverlaySet) {
+    let width = img.width() as usize;
+    let height = img.height() as usize;
+    let buf = img.as_mut();
+
+    for highlight in &overlays.highlights {
+        let alpha = u16::from(highlight.alpha);
+        let inv_alpha = 255u16.saturating_sub(alpha);
+        let rgb = highlight.rgb;
+        paint_rgba_rect(buf, width, height, highlight.rect, |r, g, b| {
+            *r = blend_channel(*r, rgb.r, alpha, inv_alpha);
+            *g = blend_channel(*g, rgb.g, alpha, inv_alpha);
+            *b = blend_channel(*b, rgb.b, alpha, inv_alpha);
+        });
+    }
+
+    for rect in &overlays.comments {
+        let underline = if overlays.comments_are_underlines {
+            *rect
+        } else {
+            comment_underline_rect(*rect)
+        };
+        paint_rgba_rect(buf, width, height, underline, |r, g, b| {
+            *r = COMMENT_UNDERLINE_RGB.0;
+            *g = COMMENT_UNDERLINE_RGB.1;
+            *b = COMMENT_UNDERLINE_RGB.2;
+        });
+    }
+
+    // Box outlines are final edge bars, just like the RGB rendering path.
+    for rect in &overlays.boxes {
+        paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
+            *r = COMMENT_UNDERLINE_RGB.0;
+            *g = COMMENT_UNDERLINE_RGB.1;
+            *b = COMMENT_UNDERLINE_RGB.2;
+        });
+    }
+
+    // Link strokes are final outline-box geometry — paint them as-is.
+    for rect in &overlays.link_strokes {
+        paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
+            *r = LINK_STROKE_RGB.0;
+            *g = LINK_STROKE_RGB.1;
+            *b = LINK_STROKE_RGB.2;
+        });
+    }
+
+    for rect in overlays.selection.iter().chain(overlays.visual.iter()) {
+        paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
+            *r = r.saturating_add(40);
+            *g = g.saturating_sub(20);
+            *b = b.saturating_sub(60);
+        });
+    }
+
+    if let Some(cursor) = overlays.cursor {
+        paint_rgba_rect(buf, width, height, cursor, |r, g, b| {
+            *r = 255 - *r;
+            *g = 255 - *g;
+            *b = 255 - *b;
+        });
+    }
+}
+
 /// Build the per-page comment overlay cache: underline rects for text comments
 /// and outline edge bars for box annotations, both in page pixels at `scale_factor`.
 /// Returns `None` when the page has no comment overlays.
@@ -2316,15 +2540,14 @@ fn comment_cache_entry(
     if rects.is_empty() && boxes.is_empty() {
         return None;
     }
-    Some(CommentCacheEntry {
-        scale_factor,
-        rects,
-        boxes,
-    })
+    Some(CommentCacheEntry { rects, boxes })
 }
 
 #[derive(Copy, Clone, Debug)]
 enum OverlayOp {
+    // Retained for the SIMD overlay tests; comments are drawn as solid
+    // underlines, not via the tinting SIMD path.
+    #[cfg_attr(not(test), allow(dead_code))]
     Comment,
     Selection,
     Cursor,
@@ -2465,14 +2688,16 @@ fn apply_rects_op(img: &mut RgbImage, rects: &[PixelRect], op: OverlayOp) {
     });
 }
 
+/// Purple underline matching EPUB comments (base_0e from Oceanic Next theme).
+const COMMENT_UNDERLINE_RGB: (u8, u8, u8) = (0xC5, 0x94, 0xC5);
+/// Orange outline for link clickboxes (base_09 from Oceanic Next theme).
+const LINK_STROKE_RGB: (u8, u8, u8) = (0xF9, 0x91, 0x57);
+
 /// Apply overlay operation below each rect (underline effect)
-fn apply_underline_rects(img: &mut RgbImage, rects: &[PixelRect], _op: OverlayOp) {
+fn apply_underline_rects(img: &mut RgbImage, rects: &[PixelRect], color: (u8, u8, u8)) {
     const UNDERLINE_THICKNESS: u32 = 3;
     const UNDERLINE_OFFSET: u32 = 2; // Gap between text bottom and underline
-    // Purple color matching EPUB comments (base_0e from Oceanic Next theme: 0xC594C5)
-    const UNDERLINE_R: u8 = 0xC5; // 197
-    const UNDERLINE_G: u8 = 0x94; // 148
-    const UNDERLINE_B: u8 = 0xC5; // 197
+    let (underline_r, underline_g, underline_b) = color;
 
     let width = img.width() as usize;
     let height = img.height() as usize;
@@ -2498,15 +2723,15 @@ fn apply_underline_rects(img: &mut RgbImage, rects: &[PixelRect], _op: OverlayOp
             continue;
         }
 
-        // Draw solid purple underline matching EPUB comment style
+        // Draw solid underline in the requested color
         for y in clamped.y0..clamped.y1 {
             let row_start = y as usize * stride;
             for x in clamped.x0..clamped.x1 {
                 let px_start = row_start + x as usize * 3;
                 if px_start + 2 < buf.len() {
-                    buf[px_start] = UNDERLINE_R;
-                    buf[px_start + 1] = UNDERLINE_G;
-                    buf[px_start + 2] = UNDERLINE_B;
+                    buf[px_start] = underline_r;
+                    buf[px_start + 1] = underline_g;
+                    buf[px_start + 2] = underline_b;
                 }
             }
         }
@@ -2515,11 +2740,8 @@ fn apply_underline_rects(img: &mut RgbImage, rects: &[PixelRect], _op: OverlayOp
 
 /// Draw underlines directly at rect coordinates (for tile rendering where
 /// underline positions are pre-computed in for_tile).
-fn draw_underline_rects_direct(img: &mut RgbImage, rects: &[PixelRect]) {
-    // Purple color matching EPUB comments (base_0e from Oceanic Next theme)
-    const UNDERLINE_R: u8 = 0xC5; // 197
-    const UNDERLINE_G: u8 = 0x94; // 148
-    const UNDERLINE_B: u8 = 0xC5; // 197
+fn draw_underline_rects_direct(img: &mut RgbImage, rects: &[PixelRect], color: (u8, u8, u8)) {
+    let (underline_r, underline_g, underline_b) = color;
 
     let width = img.width() as usize;
     let height = img.height() as usize;
@@ -2539,9 +2761,9 @@ fn draw_underline_rects_direct(img: &mut RgbImage, rects: &[PixelRect]) {
             for x in clamped.x0..clamped.x1 {
                 let px_start = row_start + x as usize * 3;
                 if px_start + 2 < buf.len() {
-                    buf[px_start] = UNDERLINE_R;
-                    buf[px_start + 1] = UNDERLINE_G;
-                    buf[px_start + 2] = UNDERLINE_B;
+                    buf[px_start] = underline_r;
+                    buf[px_start + 1] = underline_g;
+                    buf[px_start + 2] = underline_b;
                 }
             }
         }
@@ -2554,11 +2776,13 @@ pub fn run_conversion_loop(
     picker: Picker,
     prerender: usize,
     kitty_shm_support: bool,
+    show_link_underlines: bool,
 ) -> Result<(), SendError<Result<RenderedFrame, PipelineError>>> {
     use std::time::{Duration, Instant};
 
     log::info!("Converter using protocol: {:?}", picker.protocol_type());
-    let mut engine = ConverterEngine::new(picker, prerender, kitty_shm_support);
+    let mut engine =
+        ConverterEngine::new(picker, prerender, kitty_shm_support, show_link_underlines);
     let mut iteration = 0;
     let mut has_work = false;
     let mut last_stats_log = Instant::now();
@@ -2629,6 +2853,45 @@ mod tests {
     }
 
     #[test]
+    fn decode_pixels_builds_rgba_when_channels_is_four() {
+        let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80]; // 2 RGBA pixels
+        let img = decode_pixels(&pixels, 2, 1, 4).expect("rgba decode");
+        assert!(matches!(img, DynamicImage::ImageRgba8(_)));
+        assert_eq!(img.width(), 2);
+
+        let rgb = vec![1, 2, 3, 4, 5, 6]; // 2 RGB pixels
+        let img = decode_pixels(&rgb, 2, 1, 3).expect("rgb decode");
+        assert!(matches!(img, DynamicImage::ImageRgb8(_)));
+    }
+
+    #[test]
+    fn decode_pixels_rejects_size_mismatch() {
+        // 4-channel decode needs width*height*4 bytes; give it RGB-sized data.
+        assert!(decode_pixels(&[0; 6], 2, 1, 4).is_err());
+    }
+
+    fn link(x0: u32, y0: u32, x1: u32, y1: u32) -> LinkRect {
+        LinkRect {
+            x0,
+            y0,
+            x1,
+            y1,
+            target: crate::pdf::types::LinkTarget::External { uri: "u".into() },
+        }
+    }
+
+    fn line(x0: f32, y0: f32, x1: f32, y1: f32) -> LineBounds {
+        LineBounds {
+            x0,
+            y0,
+            x1,
+            y1,
+            chars: Vec::new(),
+            block_id: 0,
+        }
+    }
+
+    #[test]
     fn box_comments_render_clipped_outlines_without_tile_seams() {
         let overlay = CommentOverlay {
             rect: SelectionRect {
@@ -2676,6 +2939,64 @@ mod tests {
             }
         });
         assert_comment_pixels(overlay, &expected);
+    }
+
+    #[test]
+    fn box_strokes_form_four_edges() {
+        let mut out = Vec::new();
+        push_box_strokes(&mut out, 10, 20, 110, 50, 2);
+        assert_eq!(out.len(), 4);
+        // top, bottom, left, right
+        assert_eq!(
+            (out[0].x0, out[0].y0, out[0].x1, out[0].y1),
+            (10, 20, 110, 22)
+        );
+        assert_eq!(
+            (out[1].x0, out[1].y0, out[1].x1, out[1].y1),
+            (10, 48, 110, 50)
+        );
+        assert_eq!(
+            (out[2].x0, out[2].y0, out[2].x1, out[2].y1),
+            (10, 20, 12, 50)
+        );
+        assert_eq!(
+            (out[3].x0, out[3].y0, out[3].x1, out[3].y1),
+            (108, 20, 110, 50)
+        );
+    }
+
+    #[test]
+    fn link_box_strokes_clip_overhang_to_text() {
+        // Real data from a wrapped link (page 18 of the LLM book). The second
+        // fragment's annotation box overhangs into the left margin (x0=66 vs
+        // text x0=102) and is taller than the glyphs.
+        let links = vec![link(66, 297, 285, 310)];
+        let lines = vec![line(102.0, 300.9, 474.1, 310.4)];
+
+        let rects = link_box_stroke_rects(&links, &lines);
+        // One box → four border strips.
+        assert_eq!(rects.len(), 4);
+        // The box left edge is clipped to the text start (≈102), not the raw 66.
+        let min_x = rects.iter().map(|r| r.x0).min().unwrap();
+        assert!(min_x >= 100 && min_x < 105, "min_x={min_x}");
+        // The box hugs the glyph box vertically (around line y 300..310).
+        let min_y = rects.iter().map(|r| r.y0).min().unwrap();
+        let max_y = rects.iter().map(|r| r.y1).max().unwrap();
+        assert!(min_y >= 298 && min_y <= 301, "min_y={min_y}");
+        assert!(max_y >= 310 && max_y <= 313, "max_y={max_y}");
+    }
+
+    #[test]
+    fn link_box_falls_back_when_no_text_line() {
+        // A link over a figure (no overlapping text line) gets a box around the
+        // raw clickbox.
+        let links = vec![link(10, 10, 50, 30)];
+        let lines = vec![line(0.0, 100.0, 200.0, 110.0)];
+        let rects = link_box_stroke_rects(&links, &lines);
+        assert_eq!(rects.len(), 4);
+        let min_x = rects.iter().map(|r| r.x0).min().unwrap();
+        let max_x = rects.iter().map(|r| r.x1).max().unwrap();
+        assert_eq!((min_x, max_x), (10, 50));
     }
 
     fn apply_row_scalar(row: &mut [u8], op: OverlayOp) {

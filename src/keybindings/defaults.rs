@@ -44,6 +44,7 @@ pub fn default_keymap() -> Keymap {
     epub_normal_specifics(&mut keymap);
     pdf_specifics(&mut keymap);
     pdf_normal_specifics(&mut keymap);
+    pdf_box_specifics(&mut keymap);
     popup_help_specifics(&mut keymap);
     popup_history_specifics(&mut keymap);
     popup_search_specifics(&mut keymap);
@@ -81,11 +82,11 @@ fn add_normal_layer(ctx: &mut ContextKeymap) {
     bind!(ctx, "l" => Action::MoveRight);
     bind!(ctx, "<Right>" => Action::MoveRight);
     bind!(ctx, "w" => Action::WordForward);
-    bind!(ctx, "W" => Action::WordForward); // #5: uppercase alias
+    bind!(ctx, "W" => Action::BigWordForward);
     bind!(ctx, "b" => Action::WordBackward);
-    bind!(ctx, "B" => Action::WordBackward); // #5: uppercase alias
+    bind!(ctx, "B" => Action::BigWordBackward);
     bind!(ctx, "e" => Action::WordEnd);
-    bind!(ctx, "E" => Action::WordEnd); // #5: uppercase alias
+    bind!(ctx, "E" => Action::BigWordEnd);
     bind!(ctx, "0" => Action::LineStart);
     bind!(ctx, "^" => Action::FirstNonBlank);
     bind!(ctx, "$" => Action::LineEnd);
@@ -127,13 +128,14 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>a" => Action::ToggleCommentsViewer);
     bind!(ctx, "<Space>s" => Action::OpenSettings);
     bind!(ctx, "<Space>z" => Action::ToggleZenMode);
+    bind!(ctx, "<Space>b" => Action::ToggleZenBorder);
     bind!(ctx, "<Space>t" => Action::OpenThemeSelector);
     bind!(ctx, "<Space>w" => Action::TogglePdfWatching);
     bind!(ctx, "<Space>D" => Action::TogglePdfPageLayout);
     bind!(ctx, "<Space>S" => Action::TogglePdfRenderMode);
     bind!(ctx, "<Space>g" => Action::GoToPage);
     bind!(ctx, "<Space>l" => Action::LookupSelection);
-    bind!(ctx, "<Space>b" => Action::AddBoxAnnotation);
+    bind!(ctx, "<Space>B" => Action::AddBoxAnnotation);
     bind!(ctx, "<Space><lt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<C-l>" => Action::ForceRedraw);
@@ -194,6 +196,7 @@ fn content_specifics(keymap: &mut Keymap) {
     bind!(ctx, "v" => Action::EnterVisualMode);
     bind!(ctx, "V" => Action::EnterVisualLineMode);
     bind!(ctx, "y" => Action::StartYank);
+    bind!(ctx, "H" => Action::OpenHighlightPalette);
     bind!(ctx, "q" => Action::Quit);
     bind!(ctx, "<CR>" => Action::FollowLink);
     bind!(ctx, "ss" => Action::ToggleRawHtml);
@@ -225,6 +228,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "i" => Action::ToggleInvertImages);
     bind!(ctx, "I" => Action::TogglePdfTheming);
+    bind!(ctx, "f" => Action::TogglePdfLinkHighlight);
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "x" => Action::DumpDebugState);
     bind!(ctx, "a" => Action::AddComment);
@@ -247,14 +251,36 @@ fn pdf_specifics(keymap: &mut Keymap) {
 
 fn pdf_normal_specifics(keymap: &mut Keymap) {
     let ctx = keymap.context_mut(KeyContext::PdfNormal);
+    bind!(ctx, "a" => Action::AddComment);
+    // `dd` deletes the annotation (comment or highlight) under the cursor.
+    // Mirrors the EpubNormal binding.
+    bind!(ctx, "dd" => Action::DeleteComment);
     bind!(ctx, "c" => Action::CopySelection);
-    bind!(ctx, "d" => Action::AddComment);
     bind!(ctx, "N" => Action::PrevSearchMatch);
     bind!(ctx, "gd" => Action::SynctexInverse); // #2: restore gd
     // Note: 'i' for pending_inner (text objects) is handled in handle_normal_mode_key,
     // not via the keymap, because it enters a pending state that consumes the next char.
     bind!(ctx, "<S-Tab>" => Action::EnterCommentNav);
     bind!(ctx, "<CR>" => Action::FollowLink);
+}
+
+fn pdf_box_specifics(keymap: &mut Keymap) {
+    let ctx = keymap.context_mut(KeyContext::PdfBox);
+    bind!(ctx, "h" => Action::MoveLeft);
+    bind!(ctx, "<Left>" => Action::MoveLeft);
+    bind!(ctx, "H" => Action::MoveLeft);
+    bind!(ctx, "<S-Left>" => Action::MoveLeft);
+    bind!(ctx, "l" => Action::MoveRight);
+    bind!(ctx, "<Right>" => Action::MoveRight);
+    bind!(ctx, "L" => Action::MoveRight);
+    bind!(ctx, "<S-Right>" => Action::MoveRight);
+    bind!(ctx, "J" => Action::MoveDown);
+    bind!(ctx, "<S-Down>" => Action::MoveDown);
+    bind!(ctx, "K" => Action::MoveUp);
+    bind!(ctx, "<S-Up>" => Action::MoveUp);
+    bind!(ctx, "v" => Action::EnterVisualMode);
+    bind!(ctx, "<Space>" => Action::EnterVisualMode);
+    bind!(ctx, "<CR>" => Action::Select);
 }
 
 fn popup_help_specifics(keymap: &mut Keymap) {
@@ -471,21 +497,40 @@ mod tests {
         );
     }
 
-    // #5: uppercase aliases
     #[test]
-    fn uppercase_word_aliases() {
+    fn uppercase_big_word_motions() {
+        let keymap = default_keymap();
+        for ctx in [KeyContext::EpubNormal, KeyContext::PdfNormal] {
+            assert_eq!(
+                lookup(&keymap, ctx, "W"),
+                LookupResult::Found(Action::BigWordForward)
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "B"),
+                LookupResult::Found(Action::BigWordBackward)
+            );
+            assert_eq!(
+                lookup(&keymap, ctx, "E"),
+                LookupResult::Found(Action::BigWordEnd)
+            );
+        }
+    }
+
+    #[test]
+    fn content_highlight_palette_binding() {
         let keymap = default_keymap();
         assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "W"),
-            LookupResult::Found(Action::WordForward)
+            lookup(&keymap, KeyContext::EpubContent, "H"),
+            LookupResult::Found(Action::OpenHighlightPalette)
         );
+    }
+
+    #[test]
+    fn pdf_link_highlight_binding() {
+        let keymap = default_keymap();
         assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "B"),
-            LookupResult::Found(Action::WordBackward)
-        );
-        assert_eq!(
-            lookup(&keymap, KeyContext::EpubNormal, "E"),
-            LookupResult::Found(Action::WordEnd)
+            lookup(&keymap, KeyContext::PdfStandard, "f"),
+            LookupResult::Found(Action::TogglePdfLinkHighlight)
         );
     }
 
@@ -496,6 +541,20 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::PdfNormal, "gd"),
             LookupResult::Found(Action::SynctexInverse)
+        );
+    }
+
+    #[test]
+    fn pdf_normal_dd_delete_annotation() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfNormal, "dd"),
+            LookupResult::Found(Action::DeleteComment)
+        );
+        // Single d must be a prefix, not an action
+        assert_eq!(
+            lookup(&keymap, KeyContext::PdfNormal, "d"),
+            LookupResult::Prefix
         );
     }
 
@@ -554,6 +613,15 @@ mod tests {
         assert_eq!(
             lookup(&keymap, KeyContext::Global, "?"),
             LookupResult::Found(Action::ToggleHelp)
+        );
+    }
+
+    #[test]
+    fn zen_border_toggle_bound() {
+        let keymap = default_keymap();
+        assert_eq!(
+            lookup(&keymap, KeyContext::Global, "<Space>b"),
+            LookupResult::Found(Action::ToggleZenBorder)
         );
     }
 

@@ -13,15 +13,17 @@ pub use types::*;
 
 use crate::comments::{BookComments, Comment};
 use crate::images::background_image_loader::BackgroundImageLoader;
+use crate::images::book_images::BookImages;
 use crate::markdown::Document;
 use crate::markdown_text_reader::text_selection::TextSelection;
 use crate::ratatui_image::{Resize, StatefulImage, ViewportOptions, picker::Picker};
 use crate::search::{SearchMode, SearchState};
+use crate::settings::RuntimeSettings;
 use crate::terminal_overlay;
-use crate::theme::{Base16Palette, theme_background};
+use crate::theme::{Base16Palette, theme_background_for};
 use crate::types::LinkInfo;
 use crate::widget::hud_message::{HudMessage, HudMode};
-use image::{DynamicImage, GenericImageView};
+use image::GenericImageView;
 use log::{info, warn};
 use normal_mode::{CursorPosition, NormalModeState};
 use ratatui::{
@@ -128,6 +130,7 @@ struct CommentTextareaLayout {
 }
 
 pub struct MarkdownTextReader {
+    settings: RuntimeSettings,
     markdown_document: Option<Arc<Document>>,
     rendered_content: RenderedContent,
 
@@ -166,6 +169,12 @@ pub struct MarkdownTextReader {
     last_rendered_image_rects: HashMap<String, Rect>,
     last_overlay_cleanup_key: Option<(usize, u64, u64, Rect)>,
     inline_images_suppressed: bool,
+    image_viewport: Option<(u16, u16)>,
+    image_source: Option<BookImages>,
+
+    pending_image_reload: Option<Instant>,
+    image_scroll_state: ((usize, usize), Instant),
+    image_settle_placed: bool,
     background_loader: BackgroundImageLoader,
 
     // Deferred node index to restore after rendering
@@ -244,14 +253,12 @@ pub struct MarkdownTextReader {
     hud_message: Option<HudMessage>,
 }
 
-impl Default for MarkdownTextReader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl MarkdownTextReader {
-    pub fn new() -> Self {
+    pub(crate) fn theme_background(&self) -> RatatuiColor {
+        theme_background_for(self.settings.load().transparent_background)
+    }
+
+    pub fn new(settings: RuntimeSettings) -> Self {
         let image_picker = match Picker::from_query_stdio() {
             Ok(mut picker) => {
                 use crate::ratatui_image::picker::{Capability, ProtocolType};
@@ -309,16 +316,17 @@ impl MarkdownTextReader {
             }
         };
 
-        Self::with_image_picker(image_picker)
+        Self::with_image_picker(image_picker, settings)
     }
 
     #[cfg(any(test, feature = "test-utils"))]
-    pub fn new_without_image_support() -> Self {
-        Self::with_image_picker(None)
+    pub fn new_without_image_support(settings: RuntimeSettings) -> Self {
+        Self::with_image_picker(None, settings)
     }
 
-    fn with_image_picker(image_picker: Option<Picker>) -> Self {
+    fn with_image_picker(image_picker: Option<Picker>, settings: RuntimeSettings) -> Self {
         Self {
+            settings,
             markdown_document: None,
             rendered_content: RenderedContent {
                 lines: Vec::new(),
@@ -348,6 +356,11 @@ impl MarkdownTextReader {
             last_rendered_image_rects: HashMap::new(),
             last_overlay_cleanup_key: None,
             inline_images_suppressed: false,
+            image_viewport: None,
+            image_source: None,
+            pending_image_reload: None,
+            image_scroll_state: ((0, 0), Instant::now()),
+            image_settle_placed: false,
             background_loader: BackgroundImageLoader::new(),
             pending_node_restore: None,
             pending_node_highlight: None,
@@ -559,9 +572,13 @@ impl MarkdownTextReader {
             return;
         }
 
+        // In zen mode the user can opt to drop the surrounding frame and render
+        // content edge-to-edge.
+        let borderless = zen_mode && self.settings.load().zen_hide_border;
+
         // Base content rectangle inside the border. This is the single-column
         // text area; in dual mode it is split into two side-by-side columns.
-        let base_inner = self.content_inner_rect(area);
+        let base_inner = self.content_inner_rect(area, borderless);
 
         // Two-column "book spread": active whenever the pane is wide enough to
         // give each column a comfortable measure (available in zen and normal
@@ -607,6 +624,9 @@ impl MarkdownTextReader {
                 None,
             )
         };
+
+        self.prepare_images_for_viewport(left_rect.width, left_rect.height);
+        self.update_image_settle_state();
 
         // Re-render when dimensions, focus, or cached content change
         if self.last_width != width
@@ -716,19 +736,24 @@ impl MarkdownTextReader {
             self.hud_message = None;
         }
 
-        let mut block = Block::default()
-            .borders(Borders::ALL)
-            .title(title_text)
-            .title_bottom(progress_title)
-            .border_style(RatatuiStyle::default().fg(border_color));
-        if let Some(mode_title) = mode_title {
-            block = block.title_bottom(mode_title);
-        }
-        if let Some(hud) = self.hud_message.as_ref() {
-            block = block.title_bottom(hud.styled_line(palette));
-        }
+        let mut block = if borderless {
+            Block::default().borders(Borders::NONE)
+        } else {
+            let mut b = Block::default()
+                .borders(Borders::ALL)
+                .title(title_text)
+                .title_bottom(progress_title)
+                .border_style(RatatuiStyle::default().fg(border_color));
+            if let Some(mode_title) = mode_title {
+                b = b.title_bottom(mode_title);
+            }
+            if let Some(hud) = self.hud_message.as_ref() {
+                b = b.title_bottom(hud.styled_line(palette));
+            }
+            b
+        };
 
-        if zen_mode && self.search_state.active {
+        if !borderless && zen_mode && self.search_state.active {
             let search_hint = match self.search_state.mode {
                 SearchMode::InputMode => {
                     let query = &self.search_state.query;
@@ -757,7 +782,7 @@ impl MarkdownTextReader {
         self.last_inner_text_area = Some(left_rect);
         self.dual.right_column = right_rect;
 
-        let image_clear_style = RatatuiStyle::default().bg(theme_background());
+        let image_clear_style = RatatuiStyle::default().bg(self.theme_background());
         let overlay_images_need_clear = self.image_picker.as_ref().is_some_and(|picker| {
             matches!(
                 picker.protocol_type(),
@@ -890,8 +915,12 @@ impl MarkdownTextReader {
 
     /// The content rectangle inside the reader's border (single-column text
     /// area). In dual mode this rect is split into two columns.
-    fn content_inner_rect(&self, area: Rect) -> Rect {
-        let mut inner = Block::default().borders(Borders::ALL).inner(area);
+    fn content_inner_rect(&self, area: Rect, borderless: bool) -> Rect {
+        let mut inner = if borderless {
+            area
+        } else {
+            Block::default().borders(Borders::ALL).inner(area)
+        };
         inner.y = inner.y.saturating_add(1);
         inner.height = inner.height.saturating_sub(1);
         inner.x = inner.x.saturating_add(1);
@@ -1248,7 +1277,7 @@ impl MarkdownTextReader {
                 let page = start / page_height;
                 let rect = if page % 2 == 0 { left_rect } else { right_rect };
                 let page_offset = start % page_height;
-                let image_cells = calculate_image_height_in_cells(image) as usize;
+                let image_cells = embedded_image.height_cells as usize;
                 let page_remaining = page_height.saturating_sub(page_offset);
                 let image_end_vrow = start_vrow + image_cells.min(page_remaining);
                 let viewport_top = self.dual.vtop;
@@ -1284,6 +1313,7 @@ impl MarkdownTextReader {
                 let image_widget = StatefulImage::new().resize(Resize::Viewport(ViewportOptions {
                     y_offset: y_offset_pixels,
                     x_offset: 0,
+                    settled: self.images_render_settled(),
                 }));
                 frame.render_stateful_widget(image_widget, image_area, protocol);
                 current_image_rects.insert(src.clone(), image_area);
@@ -1337,19 +1367,17 @@ impl MarkdownTextReader {
                             .min(area_height - image_screen_start);
 
                         if visible_image_height > 0 {
-                            let image_height_cells = calculate_image_height_in_cells(scaled_image);
-
                             let (render_y, render_height) = if image_top_clipped > 0 {
                                 (
                                     col_rect.y,
-                                    ((image_height_cells as usize)
-                                        .saturating_sub(image_top_clipped))
-                                    .min(area_height) as u16,
+                                    (image_height_cells.saturating_sub(image_top_clipped))
+                                        .min(area_height)
+                                        as u16,
                                 )
                             } else {
                                 (
                                     col_rect.y + image_screen_start as u16,
-                                    (image_height_cells as usize)
+                                    image_height_cells
                                         .min(area_height.saturating_sub(image_screen_start))
                                         as u16,
                                 )
@@ -1383,6 +1411,7 @@ impl MarkdownTextReader {
                             let viewport_options = ViewportOptions {
                                 y_offset: y_offset_pixels,
                                 x_offset: 0, // No horizontal scrolling for now
+                                settled: self.images_render_settled(),
                             };
 
                             let image_widget =
@@ -1420,6 +1449,7 @@ impl MarkdownTextReader {
         col_rect: Rect,
         palette: &Base16Palette,
     ) {
+        let background = self.theme_background();
         let Some(textarea) = self.comment_input.textarea.as_mut() else {
             return;
         };
@@ -1444,8 +1474,7 @@ impl MarkdownTextReader {
                 height: textarea_height,
             };
 
-            let clear_block =
-                Block::default().style(RatatuiStyle::default().bg(theme_background()));
+            let clear_block = Block::default().style(RatatuiStyle::default().bg(background));
             frame.render_widget(clear_block, textarea_rect);
 
             let padded_rect = Rect {
@@ -1462,11 +1491,7 @@ impl MarkdownTextReader {
             // border/content in the wider `textarea_rect` margins is untouched.
             frame.render_widget(Clear, padded_rect);
 
-            textarea.set_style(
-                RatatuiStyle::default()
-                    .fg(palette.base_05)
-                    .bg(theme_background()),
-            );
+            textarea.set_style(RatatuiStyle::default().fg(palette.base_05).bg(background));
             textarea.set_cursor_style(
                 RatatuiStyle::default()
                     .fg(palette.base_00)
@@ -1478,11 +1503,10 @@ impl MarkdownTextReader {
                 Some(CommentEditMode::Editing { .. }) => "Edit Comment (Esc to save)",
                 _ => "Add Comment (Esc to save)",
             };
-            let block = Block::default().borders(Borders::ALL).title(title).style(
-                RatatuiStyle::default()
-                    .fg(palette.base_04)
-                    .bg(theme_background()),
-            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .style(RatatuiStyle::default().fg(palette.base_04).bg(background));
             textarea.set_block(block);
 
             frame.render_widget(&*textarea, padded_rect);
@@ -1703,13 +1727,21 @@ impl MarkdownTextReader {
         content_raw_html: &str,
         chapter_title: Option<String>,
     ) {
-        self.clear_content();
-
         use crate::parsing::html_to_markdown::HtmlToMarkdownConverter;
         let mut converter = HtmlToMarkdownConverter::new();
         let doc = Arc::new(converter.convert(content_raw_html));
 
-        self.markdown_document = Some(doc);
+        self.set_content_from_document(doc, chapter_title);
+    }
+
+    pub(crate) fn set_content_from_document(
+        &mut self,
+        document: Arc<Document>,
+        chapter_title: Option<String>,
+    ) {
+        self.clear_content();
+
+        self.markdown_document = Some(document);
         self.chapter_title = chapter_title;
 
         // Mark cached render as stale so next draw rebuilds it
@@ -1737,6 +1769,8 @@ impl MarkdownTextReader {
         self.last_rendered_image_rects.clear();
         self.last_overlay_cleanup_key = None;
         self.inline_images_suppressed = false;
+        self.image_source = None;
+        self.pending_image_reload = None;
         self.dual.clear();
     }
 
@@ -1838,11 +1872,6 @@ impl MarkdownTextReader {
     }
 }
 
-fn calculate_image_height_in_cells(image: &DynamicImage) -> u16 {
-    let (width, height) = image.dimensions();
-    EmbeddedImage::height_in_cells(width, height)
-}
-
 #[cfg(test)]
 mod underline_gate_tests {
     use super::*;
@@ -1851,7 +1880,9 @@ mod underline_gate_tests {
     #[test]
     fn annotation_underline_color_gated_by_flag() {
         let palette = current_theme();
-        let mut reader = MarkdownTextReader::new_without_image_support();
+        let mut reader = MarkdownTextReader::new_without_image_support(RuntimeSettings::in_memory(
+            crate::settings::Settings::default(),
+        ));
 
         // Default: colored underline enabled (so snapshots/non-Apple terminals
         // keep the purple underline).

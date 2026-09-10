@@ -8,7 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 1. **Testing**: ALWAYS use the existing SVG-based snapshot testing in `tests/svg_snapshots.rs`. NEVER introduce new testing frameworks or approaches.
 1a. **Sandbox-Safe Tests**: All tests must run in sandboxed environments (e.g., Nix builds). This means tests MUST NOT: rely on a writable home directory or system directories (`dirs::data_dir()`, `dirs::cache_dir()`, etc.); make network requests; depend on system fonts, a real TTY, or specific environment variables (`TERM`, `COLORTERM`, `TERM_PROGRAM`); assume standard tools exist in `PATH` beyond what's declared as dependencies. Use `tempfile::TempDir` for any filesystem operations, and inject/mock any external dependencies rather than relying on the host environment.
-2. **Golden Snapshots**: NEVER update golden snapshot files with `SNAPSHOTS=overwrite` unless explicitly requested by the user. This is critical for test integrity.
+2. **Golden Snapshots**: NEVER save, update, or overwrite golden snapshot files unless explicitly requested by the user IN THAT MESSAGE. This applies to BOTH:
+    - **EPUB SVG snapshots** (`tests/snapshots/`): never run `SNAPSHOTS=overwrite`.
+    - **PDF VHS tape goldens** (`vhs_tests/golden/`): never run `--update` or `--accept` (via `run.sh`, `make vhs-update`, `make vhs-accept`, or by copying files into `vhs_tests/golden/` by any other means).
+    This is critical for test integrity. A request to change a tape/test does NOT imply permission to re-bless its goldens — capture the new output, show it to the user, and let THEM accept it. When in doubt, do not write goldens.
 3. **Test Updates**: NEVER update any test files or test expectations unless explicitly requested by the user. This includes unit tests, integration tests, and snapshot tests.
 4. **File Creation**: Prefer editing existing files over creating new ones. Only create new files when absolutely necessary.
 5. **Code Formatting**: NEVER manually reformat code or change indentation/line breaks. ONLY use `cargo fmt` for all formatting. When editing code, preserve the existing formatting exactly and let `cargo fmt` handle any formatting changes.
@@ -1365,6 +1368,8 @@ For most UI testing, use the SVG-based snapshot tests described above.
 
 ### Running VHS Tests
 
+**Golden screenshots live in a SEPARATE repo and are gitignored here.** `vhs_tests/golden/` is a standalone clone of [tests-bookokrat-snapshots](https://github.com/bugzmanov/tests-bookokrat-snapshots) (kept out of the main repo so app clones stay light — PNGs don't delta-compress). On a fresh clone: `git clone https://github.com/bugzmanov/tests-bookokrat-snapshots vhs_tests/golden`. `run.sh` errors with that command if the directory is empty. Re-blessing (`--update`/`--accept`) writes PNGs into that directory; committing and pushing them happens **inside `vhs_tests/golden`** as its own repo (the golden-blessing permission rules apply to that push too).
+
 ```bash
 # Run ALL tapes (full test suite)
 ./vhs_tests/run.sh --terminal kitty
@@ -1443,12 +1448,36 @@ key q
 | Command | Arguments | Description |
 |---------|-----------|-------------|
 | `pdf` | `<path>` | PDF file to test (relative to project root) |
+| `about` | `<text>` | One-line description of the whole tape (shown in the report header) |
+| `desc` | `<text>` | Short caption for the NEXT screenshot: what is done + what to expect (shown under it in the report) |
 | `screenshot` | `<name>` | Capture screenshot with given name |
 | `key` | `<char>` | Send single key press |
 | `ctrl` | `<char>` | Send Ctrl+key combination |
 | `escape` | - | Send Escape key |
 | `return` | - | Send Return/Enter key |
+| `click` | `<col> <row> [button]` | Mouse click at a 1-based cell (button: left/right/middle, default left) |
+| `rclick` / `mclick` | `<col> <row>` | Right / middle click at a cell |
+| `doubleclick` / `tripleclick` | `<col> <row> [button]` | Double/triple click (word/paragraph selection) |
+| `drag` | `<c1> <r1> <c2> <r2> [button]` | Press, drag, release between two cells (text selection) |
+| `scroll` | `up\|down <col> <row> [count]` | Mouse-wheel scroll at a cell |
+| `mousemove` | `<col> <row>` | Move pointer (no button) to a cell |
+| `clickpx` / `rclickpx` / `mclickpx` | `<x> <y> [button]` | Click at device **pixel** (sub-cell precision) |
+| `doubleclickpx` / `tripleclickpx` | `<x> <y> [button]` | Double/triple click at a pixel |
+| `dragpx` | `<x1> <y1> <x2> <y2> [button]` | Drag between two pixels (precise PDF text selection) |
+| `scrollpx` | `up\|down <x> <y> [count]` | Wheel scroll at a pixel |
+| `mousemovepx` | `<x> <y>` | Move pointer to a pixel |
+| `resize` | `<dcols> [drows]` | Resize the terminal OS window by a signed cell delta (Kitty only); exercises the app's SIGWINCH/viewport-change path. Restore the original size before quitting |
 | `wait` | `<ms>` | Wait specified milliseconds (default: 500) |
+
+**Per-terminal conditional lines:** Prefix any tape line with `@kitty ` or `@wezterm ` to run it only under that terminal (e.g. `@kitty clickpx 770 725` / `@wezterm clickpx 786 836`). Use this for terminal-specific coordinates — window geometry differs between terminals, so pixel/cell coordinates measured on one terminal do not map to the same content on another.
+
+**Documenting tapes:** Every tape should start with one `about` line, and every `screenshot` should be preceded by a `desc` line. Keep descriptions SHORT — state what the step does and what to expect (e.g. `desc Zoom out twice. Expect: page smaller, underline still aligned`). These render in the HTML report (`about` in the header, `desc` under each snapshot) so goldens are self-explanatory when reviewing. `desc` applies only to the next screenshot and is cleared after.
+
+**Mouse support (Kitty and WezTerm):** Mouse commands inject the exact SGR mouse escape sequence the terminal would emit straight into the app's pty — via `kitty @ send-text` on Kitty, via `wezterm cli send-text --no-paste` on WezTerm — no OS cursor movement, no Accessibility permission, fully deterministic. Two coordinate forms:
+- **Cell** (default commands): coordinates are **1-based terminal cells** (read off the screenshot grid). For PDF on Kitty/Ghostty the harness auto-detects SGR-pixel mouse mode (`?1016`) and converts the cell to the pixel center of the cell using a one-time per-session calibration (capture pixel size ÷ grid). On WezTerm the app always uses cell coordinates, so cells are sent as-is.
+- **Pixel** (`*px` commands): coordinates are **device pixels** in the same space as the screencapture PNG and the `?1016` wire format. On Kitty this gives sub-cell precision — e.g. precise PDF text selection or link/word hit-testing where the exact pixel within a cell matters; no calibration needed. On WezTerm (no `?1016`) the pixel is converted to its containing cell via calibration, so sub-cell precision is lost — and pixel coordinates tuned on Kitty goldens do NOT map to the same content in a WezTerm window (different geometry).
+
+Mouse commands are implemented for the Kitty and WezTerm harnesses; other terminals log an error.
 
 **IMPORTANT: Wait Times** - Kitty terminal is very fast. Never use wait times longer than 500ms in tape files. Most operations complete in 200-300ms. Only use 500ms for initial app load or page navigation that requires rendering.
 
@@ -1463,12 +1492,13 @@ For PDF documents:
 
 ### Test Reports
 
-When tests fail, an HTML report is generated showing:
-- Side-by-side comparison of expected vs actual screenshots
-- Pass/fail status for each screenshot
-- Missing golden snapshots
+A single aggregate HTML report is generated per run, covering **all** tapes for that terminal. It shows:
+- An overall pass/fail/missing summary and a jump-list index of every tape
+- One collapsible section per tape (the scenario), with its `about` line; tapes with failures are auto-expanded
+- Per screenshot: its `desc` caption, side-by-side Expected/Actual (+ a red diff column on failure), and an "Accept This"/"Accept ALL" button
+- Images are referenced by **relative file path** (not base64), so the report stays small (tens of KB) and loads fast
 
-Reports are saved to: `vhs_tests/output/reports/<terminal>_<tape>_report.html`
+Report path: `vhs_tests/output/reports/<terminal>_report.html` (e.g. `kitty_report.html`).
 
 ### Adding New VHS Tests
 
@@ -1730,3 +1760,5 @@ NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 - Do not put useless comments. Comments should be only for code that does something unusual or tricky
+- The developer actively deletes sloppy comments. If you notice comments were deleted from the working tree, NEVER restore them back
+- Commit messages must be exactly as told. Never reword, "fix", or expand the message the user gave you

@@ -8,8 +8,6 @@ pub struct TestFailure {
     pub expected: String,
     pub actual: String,
     pub line_stats: LineStats,
-    #[allow(dead_code)]
-    pub snapshot_path: String,
 }
 
 pub struct LineStats {
@@ -35,19 +33,6 @@ impl TestReport {
     pub fn add_failure(failure: TestFailure) {
         if let Ok(mut report) = TEST_REPORT.lock() {
             report.failures.push(failure);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn generate_and_open_if_failures() {
-        if let Ok(mut report) = TEST_REPORT.lock() {
-            if !report.failures.is_empty() && !report.browser_opened {
-                report.browser_opened = true;
-                let html = report.generate_html();
-                if let Err(e) = report.save_and_open(html) {
-                    eprintln!("Failed to generate test report: {e}");
-                }
-            }
         }
     }
 

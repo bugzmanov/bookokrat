@@ -226,23 +226,12 @@ pub fn get_theme_index_by_name(name: &str) -> Option<usize> {
     None
 }
 
-/// Set theme by name and save to settings
-pub fn set_theme_by_name(name: &str) -> bool {
-    if let Some(index) = get_theme_index_by_name(name) {
-        CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
-        settings::set_theme_name(name);
-        true
-    } else {
-        false
-    }
-}
-
-/// Set theme by index and save to settings
-pub fn set_theme_by_index_and_save(index: usize) {
+/// Set theme by index and save it into the given settings
+pub fn set_theme_by_index_and_save(index: usize, settings: &settings::RuntimeSettings) {
     if index < theme_count() {
         CURRENT_THEME_INDEX.store(index, Ordering::Relaxed);
         let name = theme_name(index);
-        settings::set_theme_name(&name);
+        settings.update(|settings| settings.theme = name);
     }
 }
 
@@ -252,8 +241,8 @@ pub fn current_theme_name() -> String {
 }
 
 /// Get effective background color (transparent or theme color)
-pub fn theme_background() -> Color {
-    if settings::is_transparent_background() {
+pub fn theme_background_for(transparent: bool) -> Color {
+    if transparent {
         Color::Reset
     } else {
         current_theme().base_00
@@ -434,7 +423,7 @@ static NORD_PALETTE: LazyLock<Base16Palette> = LazyLock::new(|| Base16Palette {
     base_00: smart_color(0x2E3440), // Polar Night darkest
     base_01: smart_color(0x3B4252),
     base_02: smart_color(0x434C5E),
-    base_03: smart_color(0x4C566A), // Polar Night lightest
+    base_03: smart_color(0x686F7A), // Polar Night lightest
     base_04: smart_color(0xD8DEE9), // Snow Storm
     base_05: smart_color(0xE5E9F0),
     base_06: smart_color(0xECEFF4), // Snow Storm brightest

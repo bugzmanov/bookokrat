@@ -37,6 +37,9 @@ pub fn initialize_panic_handler() {
 /// - Showing the cursor
 pub fn restore_terminal() {
     let _ = disable_raw_mode();
+    if crate::inputs::pixel_mouse::is_enabled() {
+        let _ = write!(io::stdout(), "{}", crate::inputs::pixel_mouse::DISABLE_SEQ);
+    }
     let _ = execute!(
         io::stdout(),
         EndSynchronizedUpdate,
@@ -50,6 +53,9 @@ pub fn restore_terminal() {
 
 fn restore_terminal_after_panic() {
     let _ = disable_raw_mode();
+    if crate::inputs::pixel_mouse::is_enabled() {
+        let _ = write!(io::stdout(), "{}", crate::inputs::pixel_mouse::DISABLE_SEQ);
+    }
     let _ = execute!(
         io::stdout(),
         EndSynchronizedUpdate,

@@ -6,8 +6,6 @@ use ratatui::{
 };
 use std::cmp::max;
 
-use crate::types::LinkInfo;
-
 /// Inline style information for table cell rendering
 #[derive(Debug, Clone, Copy, Default)]
 pub struct InlineStyle {
@@ -120,8 +118,6 @@ pub struct Table {
     constraints: Vec<Constraint>,
     config: TableConfig,
     block: Option<Block<'static>>,
-    /// Store link information for click handling
-    links: Vec<LinkInfo>,
     /// Base line number where this table starts (for absolute positioning)
     base_line: usize,
 }
@@ -139,7 +135,6 @@ impl Table {
             constraints: Vec::new(),
             config: TableConfig::default(),
             block: None,
-            links: Vec::new(),
             base_line: 0,
         }
     }
@@ -152,7 +147,6 @@ impl Table {
             constraints: Vec::new(),
             config: TableConfig::default(),
             block: None,
-            links: Vec::new(),
             base_line: 0,
         }
     }
@@ -166,12 +160,6 @@ impl Table {
     /// Set header with colspan support
     pub fn header_with_colspans(mut self, header: Vec<CellData>) -> Self {
         self.header = Some(header);
-        self
-    }
-
-    /// Set rows with colspan support (for use with Table::new)
-    pub fn rows_with_colspans(mut self, rows: Vec<Vec<CellData>>) -> Self {
-        self.rows = rows;
         self
     }
 
@@ -776,11 +764,6 @@ impl Table {
         lines.push(self.render_bottom_border(&widths, bottom_colspans.as_deref()));
 
         lines
-    }
-
-    /// Get all links in this table
-    pub fn get_links(&self) -> &Vec<LinkInfo> {
-        &self.links
     }
 }
 

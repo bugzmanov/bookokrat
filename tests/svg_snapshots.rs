@@ -1,7 +1,7 @@
 use bookokrat::annotations::HighlightColor;
 use bookokrat::comments::{AnnotationBody, Comment, CommentTarget};
 use bookokrat::main_app::{ChapterDirection, FPSCounter, OpenPosition};
-use bookokrat::settings::set_margin;
+use bookokrat::settings::{RuntimeSettings, Settings};
 use bookokrat::simple_fake_books::FakeBookConfig;
 use bookokrat::test_utils::test_helpers::{
     create_test_app_with_custom_fake_books, create_test_terminal,
@@ -19,7 +19,6 @@ use tempfile::TempDir;
 mod snapshot_assertions;
 mod svg_generation;
 mod test_report;
-mod visual_diff;
 use snapshot_assertions::assert_svg_snapshot;
 use svg_generation::terminal_to_svg;
 
@@ -32,19 +31,15 @@ fn ensure_test_report_initialized() {
 }
 
 fn create_test_app_isolated() -> (App, TempDir) {
-    // Reset theme, margin, and justify to defaults to prevent leaking from other tests
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         Some("tests/testdata"),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(Settings::default()),
     );
     // Force graphics support so PDFs show up regardless of sandbox env vars.
     app.book_manager.supports_graphics = true;
@@ -73,6 +68,25 @@ fn selection_for_text(
     }
 
     panic!("could not find selection text: {needle}");
+}
+
+fn screen_position_of(
+    terminal: &ratatui::Terminal<ratatui::backend::TestBackend>,
+    needle: &str,
+) -> (u16, u16) {
+    let buffer = terminal.backend().buffer();
+    for y in 0..buffer.area.height {
+        let mut row = String::new();
+        for x in 0..buffer.area.width {
+            row.push_str(buffer.cell((x, y)).unwrap().symbol());
+        }
+        if let Some(byte_idx) = row.find(needle) {
+            let col = row[..byte_idx].chars().count() as u16;
+            return (col, y);
+        }
+    }
+
+    panic!("could not find text on screen: {needle}");
 }
 
 /// Helper trait for simpler key event handling in tests
@@ -122,7 +136,7 @@ fn create_test_failure_handler(
 ) -> impl FnOnce(String, String, String, usize, usize, usize, Option<usize>) + '_ {
     move |expected,
           actual,
-          snapshot_path,
+          _snapshot_path,
           expected_lines,
           actual_lines,
           diff_count,
@@ -137,7 +151,6 @@ fn create_test_failure_handler(
                 diff_count,
                 first_diff_line,
             },
-            snapshot_path,
         });
     }
 }
@@ -1043,7 +1056,7 @@ fn test_content_scrolling_svg() {
         "test_content_scrolling_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1059,7 +1072,6 @@ fn test_content_scrolling_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1076,14 +1088,12 @@ fn test_content_scrolling_svg() {
 fn test_dual_column_page_grid_svg() {
     ensure_test_report_initialized();
 
-    // Mirror the global resets in `create_test_app_isolated`, but enable the
-    // dual-column page grid *before* constructing the app — the reader reads the
-    // column mode at construction time.
+    // Enable the dual-column page grid in this app's isolated runtime settings.
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Dual);
+    let settings = Settings {
+        epub_column_mode: bookokrat::settings::EpubColumnMode::Dual,
+        ..Settings::default()
+    };
 
     // A single chapter of contiguous, numbered, non-wrapping lines so the
     // two-up layout and the separator are easy to read at a glance.
@@ -1093,12 +1103,13 @@ fn test_dual_column_page_grid_svg() {
         .expect("create numbered epub");
 
     let comments_dir = TempDir::new().expect("temp comments dir");
-    let mut app = App::new_with_config(
+    let mut app = App::new_with_config_and_settings(
         Some(book_dir.path().to_str().unwrap()),
         Some("/dev/null"),
         false,
         Some(comments_dir.path()),
         None,
+        RuntimeSettings::in_memory(settings),
     );
     app.book_manager.supports_graphics = true;
     app.navigation_panel
@@ -1135,9 +1146,6 @@ fn test_dual_column_page_grid_svg() {
         &svg_output,
     )
     .unwrap();
-
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -1180,7 +1188,7 @@ fn test_chapter_title_normal_length_svg() {
         "test_chapter_title_normal_length_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1196,7 +1204,6 @@ fn test_chapter_title_normal_length_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1238,7 +1245,7 @@ fn test_chapter_title_narrow_terminal_svg() {
         "test_chapter_title_narrow_terminal_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1254,7 +1261,6 @@ fn test_chapter_title_narrow_terminal_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1302,7 +1308,7 @@ fn test_mouse_scroll_file_list_svg() {
         "test_mouse_scroll_file_list_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1317,7 +1323,6 @@ fn test_mouse_scroll_file_list_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1368,7 +1373,7 @@ fn test_mouse_scroll_bounds_checking_svg() {
         "test_mouse_scroll_bounds_checking_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1383,7 +1388,6 @@ fn test_mouse_scroll_bounds_checking_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1459,7 +1463,7 @@ fn test_mouse_event_batching_svg() {
         "test_mouse_event_batching_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1474,7 +1478,6 @@ fn test_mouse_event_batching_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1587,7 +1590,7 @@ fn test_horizontal_scroll_handling_svg() {
         "test_horizontal_scroll_handling_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1602,7 +1605,6 @@ fn test_horizontal_scroll_handling_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1684,7 +1686,7 @@ fn test_edge_case_mouse_coordinates_svg() {
         "test_edge_case_mouse_coordinates_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1699,7 +1701,6 @@ fn test_edge_case_mouse_coordinates_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1769,7 +1770,7 @@ fn test_text_selection_svg() {
         "test_text_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1784,7 +1785,6 @@ fn test_text_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1858,7 +1858,7 @@ fn test_text_selection_with_auto_scroll_svg() {
         "test_text_selection_with_auto_scroll_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1873,7 +1873,6 @@ fn test_text_selection_with_auto_scroll_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -1972,7 +1971,7 @@ fn test_continuous_auto_scroll_down_svg() {
         "test_continuous_auto_scroll_down_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -1987,7 +1986,6 @@ fn test_continuous_auto_scroll_down_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2092,7 +2090,7 @@ fn test_continuous_auto_scroll_up_svg() {
         "test_continuous_auto_scroll_up_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2107,7 +2105,6 @@ fn test_continuous_auto_scroll_up_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2217,7 +2214,7 @@ fn test_timer_based_auto_scroll_svg() {
         "test_timer_based_auto_scroll_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2232,7 +2229,6 @@ fn test_timer_based_auto_scroll_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2331,7 +2327,7 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
         "test_auto_scroll_stops_when_cursor_returns_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2346,7 +2342,6 @@ fn test_auto_scroll_stops_when_cursor_returns_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2428,7 +2423,7 @@ fn test_double_click_word_selection_svg() {
         "test_double_click_word_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2443,7 +2438,6 @@ fn test_double_click_word_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2541,7 +2535,7 @@ fn test_triple_click_paragraph_selection_svg() {
         "test_triple_click_paragraph_selection_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2556,7 +2550,6 @@ fn test_triple_click_paragraph_selection_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2627,7 +2620,7 @@ fn test_text_selection_click_on_book_text_bug_svg() {
         "test_text_selection_click_on_book_text_bug_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2642,7 +2635,6 @@ fn test_text_selection_click_on_book_text_bug_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -2695,7 +2687,7 @@ fn test_toc_navigation_bug_svg() {
         "test_toc_navigation_bug_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -2710,7 +2702,6 @@ fn test_toc_navigation_bug_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -3076,7 +3067,7 @@ fn test_book_reading_history_with_many_entries_svg() {
         "test_book_reading_history_with_many_entries_svg",
         |expected,
          actual,
-         snapshot_path,
+         _snapshot_path,
          expected_lines,
          actual_lines,
          diff_count,
@@ -3091,7 +3082,6 @@ fn test_book_reading_history_with_many_entries_svg() {
                     diff_count,
                     first_diff_line,
                 },
-                snapshot_path,
             });
         },
     );
@@ -4405,9 +4395,6 @@ fn test_epub_dual_column_zen_svg() {
     )
     .unwrap();
 
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
-
     assert_svg_snapshot(
         svg_output.clone(),
         std::path::Path::new("tests/snapshots/epub_dual_column_zen.svg"),
@@ -4469,9 +4456,6 @@ fn test_epub_dual_column_comment_input_svg() {
         &svg_output,
     )
     .unwrap();
-
-    // Reset so the global column setting cannot leak into other tests.
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     assert_svg_snapshot(
         svg_output.clone(),
@@ -4681,6 +4665,115 @@ fn test_epub_highlight_palette_modal_svg() {
         std::path::Path::new("tests/snapshots/epub_highlight_palette_modal.svg"),
         "test_epub_highlight_palette_modal_svg",
         create_test_failure_handler("test_epub_highlight_palette_modal_svg"),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_epub_highlight_palette_from_mouse_selection_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let temp_html_path = temp_dir.path().join("highlight_mouse_selection_test.html");
+    let content = r#"<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <title>Highlight Mouse Selection Test</title>
+</head>
+<body>
+    <p>alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron.</p>
+    <p>Second paragraph keeps the modal over real reading content.</p>
+</body>
+</html>
+"#;
+    std::fs::write(&temp_html_path, content).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        None,
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Mouse-select "beta gamma" by dragging across it on the first paragraph.
+    let (start_col, row) = screen_position_of(&terminal, "beta gamma");
+    let end_col = start_col + "beta gamma".chars().count() as u16 - 1;
+    let modifiers = crossterm::event::KeyModifiers::empty();
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: end_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: end_col,
+            row,
+            modifiers,
+        },
+        None,
+    );
+
+    assert!(
+        app.text_reader().has_text_selection(),
+        "mouse drag should produce a text selection"
+    );
+
+    // H must open the highlight palette for a mouse selection, just like it
+    // does for a visual-mode selection in normal mode.
+    app.press_key(crossterm::event::KeyCode::Char('H'));
+
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_epub_highlight_palette_from_mouse_selection.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    assert!(
+        app.is_highlight_palette_active(),
+        "pressing H with a mouse text selection should open the highlight palette"
+    );
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/epub_highlight_palette_from_mouse_selection.svg"),
+        "test_epub_highlight_palette_from_mouse_selection_svg",
+        create_test_failure_handler("test_epub_highlight_palette_from_mouse_selection_svg"),
     );
 }
 
@@ -5956,6 +6049,184 @@ fn test_image_inside_anchor_link_svg() {
     );
 }
 
+#[test]
+#[parallel]
+fn test_image_adaptive_viewport_height_svg() {
+    ensure_test_report_initialized();
+    set_theme_by_index(0);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+
+    // Portrait image with "regular" classification (>=64px sides, aspect <= 3.0,
+    // height >= 150) so its placeholder height adapts to the viewport instead of
+    // using the compact small/wide sizing. Same aspect ratio as the issue #181 cover.
+    // Image metadata only resolves for EPUB books (ImageStorage registers extracted
+    // book dirs), so build a minimal EPUB with the PNG embedded.
+    let mut png_bytes: Vec<u8> = Vec::new();
+    image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(270, 384, |_, _| {
+        image::Rgb([0u8, 128u8, 255u8])
+    }))
+    .write_to(
+        &mut std::io::Cursor::new(&mut png_bytes),
+        image::ImageFormat::Png,
+    )
+    .unwrap();
+
+    let epub_path = temp_dir.path().join("adaptive_image_test.epub");
+    {
+        use std::io::Write;
+        use zip::write::FileOptions;
+
+        let file = std::fs::File::create(&epub_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+
+        zip.start_file(
+            "mimetype",
+            FileOptions::default().compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        zip.write_all(b"application/epub+zip").unwrap();
+
+        zip.start_file("META-INF/container.xml", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    <rootfiles>
+        <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+    </rootfiles>
+</container>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/content.opf", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
+    <metadata>
+        <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Adaptive Image Test</dc:title>
+        <dc:creator xmlns:dc="http://purl.org/dc/elements/1.1/">Test Author</dc:creator>
+        <dc:identifier xmlns:dc="http://purl.org/dc/elements/1.1/" id="BookId">adaptive-image-test</dc:identifier>
+        <dc:language xmlns:dc="http://purl.org/dc/elements/1.1/">en</dc:language>
+    </metadata>
+    <manifest>
+        <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+        <item id="chapter1" href="chapters/chapter1.xhtml" media-type="application/xhtml+xml"/>
+        <item id="cover-image" href="images/portrait_cover.png" media-type="image/png"/>
+    </manifest>
+    <spine toc="ncx">
+        <itemref idref="chapter1"/>
+    </spine>
+</package>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/toc.ncx", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+    <head>
+        <meta name="dtb:uid" content="adaptive-image-test"/>
+        <meta name="dtb:depth" content="1"/>
+    </head>
+    <docTitle><text>Adaptive Image Test</text></docTitle>
+    <navMap>
+        <navPoint id="navpoint1" playOrder="1">
+            <navLabel><text>Chapter 1</text></navLabel>
+            <content src="chapters/chapter1.xhtml"/>
+        </navPoint>
+    </navMap>
+</ncx>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/chapters/chapter1.xhtml", FileOptions::default())
+            .unwrap();
+        zip.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>Chapter 1</title></head>
+<body>
+    <p>Text before the portrait image.</p>
+    <p><img src="../images/portrait_cover.png" alt="Portrait Cover"/></p>
+    <p>Text after the portrait image.</p>
+</body>
+</html>"#,
+        )
+        .unwrap();
+
+        zip.start_file("OEBPS/images/portrait_cover.png", FileOptions::default())
+            .unwrap();
+        zip.write_all(&png_bytes).unwrap();
+
+        zip.finish().unwrap();
+    }
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let image_cache_dir = TempDir::new().expect("Failed to create temp image cache dir");
+    let mut app = App::new_with_config(
+        Some(temp_dir.path().to_str().unwrap()),
+        Some("/dev/null"),
+        false,
+        Some(comments_dir.path()),
+        Some(image_cache_dir.path().to_path_buf()),
+    );
+
+    open_first_book(&mut app);
+    app.focused_panel = FocusedPanel::Main(MainPanel::Content);
+
+    // Before/after a viewport resize with the same App instance: the initial
+    // tall render sizes the placeholder to fill the viewport, and the second
+    // draw at a shorter terminal exercises prepare_images_for_viewport's
+    // height invalidation, shrinking the placeholder to the new viewport.
+    // (On main both draws show the fixed 15-row placeholder.)
+    let mut tall_terminal = create_test_terminal(100, 40);
+    tall_terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let tall_svg = terminal_to_svg(&tall_terminal);
+
+    let mut short_terminal = create_test_terminal(100, 22);
+    short_terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let short_svg = terminal_to_svg(&short_terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_image_adaptive_height_tall_initial.svg",
+        &tall_svg,
+    )
+    .unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_image_adaptive_height_short_after_resize.svg",
+        &short_svg,
+    )
+    .unwrap();
+
+    assert_svg_snapshot(
+        tall_svg.clone(),
+        std::path::Path::new("tests/snapshots/image_adaptive_height_tall_initial.svg"),
+        "test_image_adaptive_viewport_height_svg",
+        create_test_failure_handler("test_image_adaptive_viewport_height_svg"),
+    );
+
+    assert_svg_snapshot(
+        short_svg.clone(),
+        std::path::Path::new("tests/snapshots/image_adaptive_height_short_after_resize.svg"),
+        "test_image_adaptive_viewport_height_svg",
+        create_test_failure_handler("test_image_adaptive_viewport_height_svg"),
+    );
+}
+
 fn count_underlined_chars_in_needle(
     lines: &[bookokrat::markdown_text_reader::RenderedLine],
     needle: &str,
@@ -6418,12 +6689,7 @@ fn test_search_with_justified_text_svg() {
     let temp_dir = tempfile::tempdir().unwrap();
     std::fs::write(temp_dir.path().join("justify_search.html"), content).unwrap();
 
-    // Reset globals to prevent leaking from other tests
     set_theme_by_index(0);
-    set_margin(0);
-    bookokrat::settings::set_justify_text(false);
-    bookokrat::settings::set_nav_panel_width(None);
-    bookokrat::settings::set_epub_column_mode(bookokrat::settings::EpubColumnMode::Single);
 
     let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
     let mut app = App::new_with_config(
@@ -7011,5 +7277,501 @@ fn test_mark_jump_via_popup_svg() {
         std::path::Path::new("tests/snapshots/mark_jump_via_popup.svg"),
         "test_mark_jump_via_popup_svg",
         create_test_failure_handler("test_mark_jump_via_popup_svg"),
+    );
+}
+
+/// Enhance (`e`) above the worker's KITTY_MAX_DIMENSION clamp: the frame comes
+/// back rendered at a lower achieved scale than requested, and the user must
+/// see HUD feedback that the enhancement was capped, with the actual
+/// resolution percentage.
+#[cfg(feature = "pdf")]
+#[test]
+#[parallel]
+fn test_pdf_enhance_capped_hud_svg() {
+    use bookokrat::pdf::CellSize;
+    use bookokrat::table_of_contents::TableOfContents;
+    use bookokrat::widget::pdf_reader::state::PendingEnhance;
+    use bookokrat::widget::pdf_reader::{PdfReaderState, RenderedInfo};
+
+    ensure_test_report_initialized();
+    set_theme_by_index(0);
+    let mut terminal = create_test_terminal(100, 30);
+
+    let palette = bookokrat::theme::current_theme().clone();
+    let mut state = PdfReaderState::new(
+        "clamped.pdf".to_string(),
+        true,  // is_kitty
+        false, // is_iterm
+        0,
+        6.785, // effective zoom well above the render cap
+        0,
+        0,
+        palette.clone(),
+        0,
+        false,
+        false,
+        None,
+        "test-doc".to_string(),
+        RuntimeSettings::in_memory(Settings::default()),
+    );
+
+    // Enhanced frame as the worker returns it for a 612x792pt page in a
+    // ~3000x1650px viewport: requested 6.785 but clamped to achieved 2.579
+    // (raster capped at KITTY_MAX_DIMENSION = 10000px on the long edge).
+    state.rendered.push(RenderedInfo {
+        image_requested_scale: Some(6.785),
+        image_achieved_scale: Some(2.579),
+        requested_scale: Some(6.785),
+        achieved_scale: Some(2.579),
+        scale_factor: Some(12.6046),
+        full_cell_size: Some(CellSize::new(551, 399)),
+        pixel_w: Some(7714),
+        pixel_h: Some(9975),
+        page_px_height: Some(9975.0),
+        ..Default::default()
+    });
+
+    // State captured by enhance_zoom() before the re-render: the old frame was
+    // at fit scale 1.0, display-upscaled to 678%.
+    state.pending_enhance = Some(PendingEnhance {
+        target_page: 0,
+        effective_zoom: 6.785,
+        old_display_factor: 6.785,
+        old_rendered_scale: 1.0,
+        old_scroll_offset: 0,
+        old_viewport_start: 0,
+        old_pan_from_left: 0,
+        old_cell_size: Some(CellSize::new(213, 155)),
+        old_pixel_w: Some(2982),
+        old_pixel_h: Some(3875),
+        old_right_cell_w: None,
+    });
+
+    state.apply_enhance_adjustment(0);
+
+    terminal
+        .draw(|f| {
+            let area = f.area();
+            let mut pending_display = None;
+            let mut bookmarks = bookokrat::bookmarks::Bookmarks::load_or_ephemeral(None);
+            let mut last_save = std::time::Instant::now();
+            let mut toc = TableOfContents::new(RuntimeSettings::in_memory(Settings::default()));
+            state.render_in_area(
+                f,
+                area,
+                true,
+                (14, 25),
+                palette.base_05,
+                palette.base_03,
+                palette.base_00,
+                None,
+                None,
+                &mut pending_display,
+                &mut bookmarks,
+                &mut last_save,
+                &mut toc,
+                0,
+            );
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(&terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(
+        "tests/snapshots/debug_pdf_enhance_capped_hud.svg",
+        &svg_output,
+    )
+    .unwrap();
+
+    // The SVG wraps every character in its own tspan, so strip tags before
+    // checking the visible text.
+    let plain_text: String = {
+        let mut text = String::new();
+        let mut in_tag = false;
+        for ch in svg_output.chars() {
+            match ch {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => text.push(c),
+                _ => {}
+            }
+        }
+        text
+    };
+    assert!(
+        plain_text.contains("Enhanced to max render resolution (258%)"),
+        "capped-enhance HUD message must be visible in the rendered output"
+    );
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new("tests/snapshots/pdf_enhance_capped_hud.svg"),
+        "test_pdf_enhance_capped_hud_svg",
+        create_test_failure_handler("test_pdf_enhance_capped_hud_svg"),
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Book-wide search (Space+F / Space+f), popup rendering coverage:
+// book stats, reading history entries, comments viewer actions,
+// keybinding errors popup, lookup popup.
+// ---------------------------------------------------------------------------
+
+fn create_book_search_test_app() -> (App, bookokrat::test_utils::test_helpers::TempBookManager) {
+    let book_configs = vec![FakeBookConfig {
+        title: "Search Target Book".to_string(),
+        chapter_count: 12,
+        words_per_chapter: 120,
+    }];
+    let (mut app, temp_manager) = create_test_app_with_custom_fake_books(&book_configs);
+    app.press_key(crossterm::event::KeyCode::Enter); // open the only book
+    (app, temp_manager)
+}
+
+fn type_chars(app: &mut App, text: &str) {
+    for ch in text.chars() {
+        app.press_key(crossterm::event::KeyCode::Char(ch));
+    }
+}
+
+fn draw_and_snapshot(
+    terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>,
+    app: &mut App,
+    name: &str,
+    test_name: &'static str,
+) {
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+    let svg_output = terminal_to_svg(terminal);
+
+    std::fs::create_dir_all("tests/snapshots").unwrap();
+    std::fs::write(format!("tests/snapshots/debug_{name}.svg"), &svg_output).unwrap();
+
+    assert_svg_snapshot(
+        svg_output.clone(),
+        std::path::Path::new(&format!("tests/snapshots/{name}.svg")),
+        test_name,
+        create_test_failure_handler(test_name),
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_input_empty_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_input_empty",
+        "test_book_search_input_empty_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_results_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    // Enter executes the search synchronously (bypasses the 200ms debounce)
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_results",
+        "test_book_search_results_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_result_jump_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    app.press_key(crossterm::event::KeyCode::Enter); // execute search, focus results
+    app.press_key(crossterm::event::KeyCode::Char('j')); // select second result
+    app.press_key(crossterm::event::KeyCode::Enter); // jump to it
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_result_jump",
+        "test_book_search_result_jump_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_search_reopen_cached_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _books) = create_book_search_test_app();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('F'));
+    type_chars(&mut app, "tempor");
+    app.press_key(crossterm::event::KeyCode::Enter);
+    app.press_key(crossterm::event::KeyCode::Enter); // jump to first result, popup closes
+
+    // Space+f reopens the search with cached results
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('f'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_search_reopen_cached",
+        "test_book_search_reopen_cached_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_book_stats_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    // Draw once so the app knows the terminal size before computing stats
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "book_stats_popup",
+        "test_book_stats_popup_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_reading_history_navigation_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+
+    let book_configs: Vec<FakeBookConfig> = (0..6)
+        .map(|i| FakeBookConfig {
+            title: format!("History Book {}", i + 1),
+            chapter_count: 5,
+            words_per_chapter: 80,
+        })
+        .collect();
+    let temp_manager =
+        bookokrat::test_utils::test_helpers::TempBookManager::new_with_configs(&book_configs)
+            .expect("Failed to create temp books");
+
+    // Craft a bookmarks file with fixed timestamps so the history rows are
+    // deterministic (update_bookmark() would stamp the current time).
+    let bookmarks_dir = tempfile::tempdir().unwrap();
+    let bookmark_path = bookmarks_dir.path().join("bookmarks.json");
+    let mut books = serde_json::Map::new();
+    for (i, path) in temp_manager.get_book_paths().iter().enumerate() {
+        books.insert(
+            path.clone(),
+            serde_json::json!({
+                "chapter_href": "chapter1.xhtml",
+                "last_read": format!("2024-03-{:02}T12:00:00Z", 10 - i),
+                "chapter_index": 1,
+                "total_chapters": 5,
+                "book_progress": 0.15 * (i as f32 + 1.0),
+                "book_title": format!("History Book {}", i + 1),
+            }),
+        );
+    }
+    let root = serde_json::json!({ "books": books });
+    std::fs::write(&bookmark_path, serde_json::to_string_pretty(&root).unwrap()).unwrap();
+
+    let comments_dir = TempDir::new().expect("Failed to create temp comments dir");
+    let mut app = App::new_with_config(
+        Some(&temp_manager.get_directory()),
+        Some(&bookmark_path.to_string_lossy()),
+        false,
+        Some(comments_dir.path()),
+        None,
+    );
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('h'));
+    // Move the selection to the third entry
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "reading_history_navigation",
+        "test_reading_history_navigation_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_comments_viewer_jump_to_comment_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+
+    // Select the second comment and jump to it in the reader
+    app.press_key(crossterm::event::KeyCode::Char('j'));
+    app.press_key(crossterm::event::KeyCode::Enter);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "comments_viewer_jump_to_comment",
+        "test_comments_viewer_jump_to_comment_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_comments_viewer_delete_comment_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(120, 36);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    seed_sample_comments(&mut app);
+    open_comments_viewer(&mut app);
+
+    // Delete the first comment with dd; the viewer stays open with the rest
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+    app.press_key(crossterm::event::KeyCode::Char('d'));
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "comments_viewer_delete_comment",
+        "test_comments_viewer_delete_comment_svg",
+    );
+}
+
+#[test]
+#[parallel]
+fn test_keybinding_errors_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    app.open_keybinding_errors_popup(vec![
+        bookokrat::keybindings::config::LoadError {
+            line: Some(3),
+            message: "unknown action 'scroll_dwn' for key 'j'".to_string(),
+        },
+        bookokrat::keybindings::config::LoadError {
+            line: Some(17),
+            message: "invalid key notation '<Ctl-x>'".to_string(),
+        },
+        bookokrat::keybindings::config::LoadError {
+            line: None,
+            message: "unknown context 'pddf'".to_string(),
+        },
+    ]);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "keybinding_errors_popup",
+        "test_keybinding_errors_popup_svg",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[serial]
+fn test_lookup_popup_svg() {
+    ensure_test_report_initialized();
+    let mut terminal = create_test_terminal(100, 30);
+    let (mut app, _comments_dir) = create_test_app_isolated();
+
+    open_first_test_book(&mut app);
+    terminal
+        .draw(|f| {
+            let fps = create_test_fps_counter();
+            app.draw(f, &fps)
+        })
+        .unwrap();
+
+    // Select a single line of text with the mouse
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 31,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 60,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+    app.handle_and_drain_mouse_events(
+        MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 60,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::empty(),
+        },
+        None,
+    );
+
+    // The selected text lands inside single quotes of a no-op, so the popup
+    // body only ever shows the fixed printf output.
+    app.update_settings(|settings| {
+        settings.lookup_command = Some(
+            "true '{}' ; printf 'noun: classical placeholder text, in use since the 1500s'"
+                .to_string(),
+        );
+    });
+
+    app.press_key(crossterm::event::KeyCode::Char(' '));
+    app.press_key(crossterm::event::KeyCode::Char('l'));
+
+    app.update_settings(|settings| settings.lookup_command = None);
+
+    draw_and_snapshot(
+        &mut terminal,
+        &mut app,
+        "lookup_popup",
+        "test_lookup_popup_svg",
     );
 }

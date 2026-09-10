@@ -32,6 +32,9 @@ pub struct RenderParams {
     /// Theme colors for tinting
     pub black: i32,
     pub white: i32,
+    /// Render with an alpha channel so undrawn page areas stay transparent
+    /// (Kitty graphics only). Composes with theme tinting.
+    pub transparent: bool,
 }
 
 /// Selection bounds for text extraction (pixel coordinates)

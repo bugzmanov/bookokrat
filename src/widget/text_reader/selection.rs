@@ -250,28 +250,6 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         crate::clipboard::copy_to_clipboard(&text)
     }
 
-    //for debuggin purposes
-    pub fn copy_raw_text_lines_to_clipboard(&mut self) -> Result<(), String> {
-        if self.raw_text_lines.is_empty() {
-            return Err("No content to copy".to_string());
-        }
-
-        let mut debug_output = String::new();
-        debug_output.push_str(&format!(
-            "=== raw_text_lines debug (total {} lines) ===\n",
-            self.raw_text_lines.len()
-        ));
-
-        for (idx, line) in self.raw_text_lines.iter().enumerate() {
-            debug_output.push_str(&format!("{idx:4}: {line}\n"));
-        }
-
-        self.last_copied_text = Some(debug_output.clone());
-        crate::clipboard::copy_to_clipboard(&debug_output)?;
-
-        Ok(())
-    }
-
     pub fn get_last_copied_text(&self) -> Option<String> {
         self.last_copied_text.clone()
     }

@@ -16,8 +16,6 @@ pub struct PageNumberTracker {
 #[derive(Clone, Copy)]
 struct PageNumberSample {
     page_idx: usize,
-    #[expect(dead_code)]
-    printed: i32,
     offset: i32,
 }
 
@@ -56,11 +54,7 @@ impl PageNumberTracker {
         };
 
         let offset = printed - (page_idx as i32 + 1);
-        self.samples.push(PageNumberSample {
-            page_idx,
-            printed,
-            offset,
-        });
+        self.samples.push(PageNumberSample { page_idx, offset });
 
         self.update_offset();
     }
@@ -80,11 +74,7 @@ impl PageNumberTracker {
         }
 
         let offset = printed - (page_idx as i32 + 1);
-        self.samples.push(PageNumberSample {
-            page_idx,
-            printed,
-            offset,
-        });
+        self.samples.push(PageNumberSample { page_idx, offset });
 
         self.update_offset();
     }

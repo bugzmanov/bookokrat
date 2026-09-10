@@ -2,7 +2,7 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, RwLock};
+use std::sync::{Arc, LazyLock, RwLock, RwLockWriteGuard};
 
 pub const CURRENT_VERSION: u32 = 3;
 const SETTINGS_FILENAME: &str = "config.yaml";
@@ -120,6 +120,15 @@ impl EpubColumnMode {
     }
 }
 
+/// EPUB inline image sizing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EpubImageSize {
+    #[default]
+    Adaptive,
+    Compact,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_version")]
@@ -143,6 +152,9 @@ pub struct Settings {
     #[serde(default)]
     pub pdf_render_mode: PdfRenderMode,
 
+    #[serde(default)]
+    pub pdf_show_link_underlines: bool,
+
     #[serde(default = "default_true")]
     pub pdf_enabled: bool,
 
@@ -151,6 +163,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub epub_column_mode: EpubColumnMode,
+
+    #[serde(default)]
+    pub epub_image_size: EpubImageSize,
 
     /// True if user has seen/configured PDF settings (used for migration prompt)
     #[serde(default)]
@@ -164,6 +179,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub invert_scroll_direction: bool,
+
+    #[serde(default)]
+    pub zen_hide_border: bool,
 
     #[serde(default)]
     pub book_sort_order: BookSortOrder,
@@ -209,13 +227,16 @@ impl Default for Settings {
             pdf_scale: default_pdf_scale(),
             pdf_pan_shift: 0,
             pdf_render_mode: PdfRenderMode::default(),
+            pdf_show_link_underlines: false,
             pdf_enabled: true,
             pdf_page_layout_mode: PdfPageLayoutMode::default(),
             epub_column_mode: EpubColumnMode::default(),
+            epub_image_size: EpubImageSize::default(),
             pdf_settings_configured: true, // New installs are considered configured
             custom_themes: Vec::new(),
             justify_text: false,
             invert_scroll_direction: false,
+            zen_hide_border: false,
             book_sort_order: BookSortOrder::default(),
             lookup_command: None,
             lookup_display: LookupDisplay::default(),
@@ -225,7 +246,123 @@ impl Default for Settings {
     }
 }
 
-static SETTINGS: LazyLock<RwLock<Settings>> = LazyLock::new(|| RwLock::new(Settings::default()));
+trait SettingsPersistence: Send + Sync {
+    fn persist(&self, settings: &Settings);
+}
+
+struct FileSettingsPersistence;
+
+impl SettingsPersistence for FileSettingsPersistence {
+    fn persist(&self, settings: &Settings) {
+        let path = find_existing_config().or_else(preferred_config_path);
+        let Some(path) = path else {
+            warn!("Could not determine config directory, cannot save settings");
+            return;
+        };
+        save_settings_to_file(settings, &path);
+    }
+}
+
+struct InMemorySettingsPersistence;
+
+impl SettingsPersistence for InMemorySettingsPersistence {
+    fn persist(&self, _settings: &Settings) {}
+}
+
+struct RuntimeSettingsInner {
+    current: RwLock<Arc<Settings>>,
+    persistence: Arc<dyn SettingsPersistence>,
+}
+
+/// Settings state for one running application instance.
+///
+/// `load()` hands out a coherent immutable snapshot; updates swap in a new
+/// snapshot and persist that exact result through the configured adapter
+/// before returning.
+#[derive(Clone)]
+pub struct RuntimeSettings {
+    inner: Arc<RuntimeSettingsInner>,
+}
+
+impl RuntimeSettings {
+    fn with_persistence(initial: Settings, persistence: Arc<dyn SettingsPersistence>) -> Self {
+        Self {
+            inner: Arc::new(RuntimeSettingsInner {
+                current: RwLock::new(Arc::new(initial)),
+                persistence,
+            }),
+        }
+    }
+
+    fn file_backed(initial: Settings) -> Self {
+        Self::with_persistence(initial, Arc::new(FileSettingsPersistence))
+    }
+
+    /// Create isolated runtime settings that never touch the filesystem.
+    pub fn in_memory(initial: Settings) -> Self {
+        Self::with_persistence(initial, Arc::new(InMemorySettingsPersistence))
+    }
+
+    /// Return the file-backed process runtime used by the command-line
+    /// application and the theme bootstrap.
+    pub fn global() -> Self {
+        SETTINGS.clone()
+    }
+
+    /// Current coherent settings snapshot. Read fields off it directly; hold
+    /// it in a local when reading more than one field.
+    pub fn load(&self) -> Arc<Settings> {
+        match self.inner.current.read() {
+            Ok(current) => current.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+
+    /// Apply and persist one settings transaction.
+    ///
+    /// `edit` runs on a private copy with no lock held, so it may call
+    /// `load()` and sees the pre-edit snapshot. The write lock is taken only
+    /// to swap the finished snapshot in; the persistence adapter runs after it
+    /// is released. Updates are serialized by the main thread. A nested or
+    /// concurrent update would lose one edit, and debug builds assert on that
+    /// instead of persisting the loser silently.
+    pub fn update(&self, edit: impl FnOnce(&mut Settings)) {
+        let base = self.load();
+        let mut next = (*base).clone();
+        edit(&mut next);
+        let next = Arc::new(next);
+        {
+            let mut current = self
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            debug_assert!(
+                Arc::ptr_eq(&*current, &base),
+                "nested or concurrent RuntimeSettings::update would lose an edit"
+            );
+            *current = Arc::clone(&next);
+        }
+        self.inner.persistence.persist(&next);
+    }
+
+    pub fn fix_incompatible_pdf_settings(&self, supports_scroll_mode: bool) {
+        if !supports_scroll_mode && self.load().pdf_render_mode == PdfRenderMode::Scroll {
+            self.update(|settings| settings.pdf_render_mode = PdfRenderMode::Page);
+        }
+    }
+
+    fn replace_without_persisting(&self, settings: Settings) {
+        *self
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(settings);
+    }
+
+    fn write(&self) -> std::sync::LockResult<RwLockWriteGuard<'_, Arc<Settings>>> {
+        self.inner.current.write()
+    }
+}
+
+static SETTINGS: LazyLock<RuntimeSettings> =
+    LazyLock::new(|| RuntimeSettings::file_backed(Settings::default()));
 
 /// Canonical config directory for the app. XDG-style (`~/.config/bookokrat/`)
 /// on macOS and Linux; `%APPDATA%\bookokrat\` on Windows (via `dirs`).
@@ -291,13 +428,13 @@ pub fn load_settings() {
             return;
         };
         info!("Settings file not found, creating with defaults at {path:?}");
-        if let Ok(mut settings) = SETTINGS.write() {
-            let caps = crate::terminal::detect_terminal_with_probe();
-            if caps.pdf.supports_scroll_mode {
-                settings.pdf_render_mode = PdfRenderMode::Scroll;
-            }
-            save_settings_to_file(&settings, &path);
+        let caps = crate::terminal::detect_terminal_with_probe();
+        let mut settings = Settings::default();
+        if caps.pdf.supports_scroll_mode {
+            settings.pdf_render_mode = PdfRenderMode::Scroll;
         }
+        save_settings_to_file(&settings, &path);
+        SETTINGS.replace_without_persisting(settings);
     }
 }
 
@@ -326,9 +463,7 @@ fn load_settings_from_path(path: &PathBuf) -> Result<(), (PathBuf, String)> {
         }
     }
 
-    if let Ok(mut global) = SETTINGS.write() {
-        *global = settings;
-    }
+    SETTINGS.replace_without_persisting(settings);
     Ok(())
 }
 
@@ -359,18 +494,6 @@ fn migrate_settings(settings: &mut Settings, file_content: &str) -> String {
 
     settings.version = CURRENT_VERSION;
     content
-}
-
-pub fn save_settings() {
-    let path = find_existing_config().or_else(preferred_config_path);
-    let Some(path) = path else {
-        warn!("Could not determine config directory, cannot save settings");
-        return;
-    };
-
-    if let Ok(settings) = SETTINGS.read() {
-        save_settings_to_file(&settings, &path);
-    }
 }
 
 fn settings_backup_path(path: &Path) -> PathBuf {
@@ -433,8 +556,8 @@ fn save_settings_to_file(settings: &Settings, path: &PathBuf) {
     }
 
     // Atomic write: write to a temp file in the same directory, then rename.
-    // This prevents concurrent save_settings() calls from reading a
-    // half-written file and regenerating from defaults (wiping user config).
+    // This prevents concurrent persists from reading a half-written file and
+    // regenerating from defaults (wiping user config).
     let parent = path.parent().unwrap_or(Path::new("."));
     match tempfile::NamedTempFile::new_in(parent) {
         Ok(mut tmp) => {
@@ -546,6 +669,17 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
                 EpubColumnMode::Dual => "dual".into(),
             },
         ),
+        (
+            "epub_image_size".into(),
+            match settings.epub_image_size {
+                EpubImageSize::Adaptive => "adaptive".into(),
+                EpubImageSize::Compact => "compact".into(),
+            },
+        ),
+        (
+            "pdf_show_link_underlines".into(),
+            format!("{}", settings.pdf_show_link_underlines),
+        ),
         ("pdf_enabled".into(), format!("{}", settings.pdf_enabled)),
         (
             "pdf_settings_configured".into(),
@@ -555,6 +689,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
         (
             "invert_scroll_direction".into(),
             format!("{}", settings.invert_scroll_direction),
+        ),
+        (
+            "zen_hide_border".into(),
+            format!("{}", settings.zen_hide_border),
         ),
         (
             "book_sort_order".into(),
@@ -613,6 +751,10 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         PdfRenderMode::Scroll => "scroll",
     };
     content.push_str(&format!("pdf_render_mode: {}\n", mode_str));
+    content.push_str(&format!(
+        "pdf_show_link_underlines: {}\n",
+        settings.pdf_show_link_underlines
+    ));
     let layout_mode_str = match settings.pdf_page_layout_mode {
         PdfPageLayoutMode::Single => "single",
         PdfPageLayoutMode::Dual => "dual",
@@ -623,6 +765,11 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         EpubColumnMode::Dual => "dual",
     };
     content.push_str(&format!("epub_column_mode: {}\n", epub_column_str));
+    let epub_image_str = match settings.epub_image_size {
+        EpubImageSize::Adaptive => "adaptive",
+        EpubImageSize::Compact => "compact",
+    };
+    content.push_str(&format!("epub_image_size: {}\n", epub_image_str));
     content.push_str(&format!("pdf_enabled: {}\n", settings.pdf_enabled));
     content.push_str(&format!(
         "pdf_settings_configured: {}\n",
@@ -637,6 +784,7 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         "invert_scroll_direction: {}\n",
         settings.invert_scroll_direction
     ));
+    content.push_str(&format!("zen_hide_border: {}\n", settings.zen_hide_border));
     content.push_str(&format!("book_sort_order: {}\n", sort_str));
     if let Some(w) = settings.nav_panel_width {
         content.push_str(&format!("nav_panel_width: {}\n", w));
@@ -753,263 +901,103 @@ const LOOKUP_COMMAND_TEMPLATE: &str = r#"# =====================================
 
 "#;
 
-// Public API for accessing/modifying settings
+// Theme bootstrap reads the process-global settings: themes are registered
+// once at startup, before any App (and its RuntimeSettings) exists.
 
 pub fn get_theme_name() -> String {
-    SETTINGS
-        .read()
-        .map(|s| s.theme.clone())
-        .unwrap_or_else(|_| default_theme())
-}
-
-pub fn set_theme_name(name: &str) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.theme = name.to_string();
-    }
-    save_settings();
-}
-
-pub fn get_margin() -> u16 {
-    SETTINGS.read().map(|s| s.margin).unwrap_or(0)
-}
-
-pub fn set_margin(margin: u16) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.margin = margin;
-    }
-    save_settings();
-}
-
-pub fn is_transparent_background() -> bool {
-    SETTINGS
-        .read()
-        .map(|s| s.transparent_background)
-        .unwrap_or(false)
-}
-
-pub fn set_transparent_background(transparent: bool) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.transparent_background = transparent;
-    }
-    save_settings();
+    SETTINGS.load().theme.clone()
 }
 
 pub fn get_custom_themes() -> Vec<YamlTheme> {
-    SETTINGS
-        .read()
-        .map(|s| s.custom_themes.clone())
-        .unwrap_or_default()
-}
-
-pub fn get_pdf_scale() -> f32 {
-    SETTINGS
-        .read()
-        .map(|s| s.pdf_scale)
-        .unwrap_or_else(|_| default_pdf_scale())
-}
-
-pub fn set_pdf_scale(scale: f32) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_scale = scale;
-    }
-    save_settings();
-}
-
-pub fn get_pdf_pan_shift() -> u16 {
-    SETTINGS.read().map(|s| s.pdf_pan_shift).unwrap_or(0)
-}
-
-pub fn set_pdf_pan_shift(pan_shift: u16) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_pan_shift = pan_shift;
-    }
-    save_settings();
-}
-
-pub fn get_pdf_render_mode() -> PdfRenderMode {
-    SETTINGS
-        .read()
-        .map(|s| s.pdf_render_mode)
-        .unwrap_or_default()
-}
-
-pub fn set_pdf_render_mode(mode: PdfRenderMode) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_render_mode = mode;
-    }
-    save_settings();
-}
-
-pub fn get_pdf_page_layout_mode() -> PdfPageLayoutMode {
-    SETTINGS
-        .read()
-        .map(|s| s.pdf_page_layout_mode)
-        .unwrap_or_default()
-}
-
-pub fn set_pdf_page_layout_mode(mode: PdfPageLayoutMode) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_page_layout_mode = mode;
-    }
-    save_settings();
-}
-
-pub fn get_epub_column_mode() -> EpubColumnMode {
-    SETTINGS
-        .read()
-        .map(|s| s.epub_column_mode)
-        .unwrap_or_default()
-}
-
-pub fn set_epub_column_mode(mode: EpubColumnMode) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.epub_column_mode = mode;
-    }
-    save_settings();
-}
-
-pub fn is_pdf_enabled() -> bool {
-    SETTINGS.read().map(|s| s.pdf_enabled).unwrap_or(true)
-}
-
-pub fn set_pdf_enabled(enabled: bool) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_enabled = enabled;
-    }
-    save_settings();
-}
-
-pub fn is_pdf_settings_configured() -> bool {
-    SETTINGS
-        .read()
-        .map(|s| s.pdf_settings_configured)
-        .unwrap_or(true)
-}
-
-pub fn set_pdf_settings_configured(configured: bool) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.pdf_settings_configured = configured;
-    }
-    save_settings();
-}
-
-pub fn is_justify_text() -> bool {
-    SETTINGS.read().map(|s| s.justify_text).unwrap_or(false)
-}
-
-pub fn set_justify_text(justify: bool) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.justify_text = justify;
-    }
-    save_settings();
-}
-
-pub fn is_invert_scroll_direction() -> bool {
-    SETTINGS
-        .read()
-        .map(|s| s.invert_scroll_direction)
-        .unwrap_or(false)
-}
-
-pub fn set_invert_scroll_direction(invert: bool) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.invert_scroll_direction = invert;
-    }
-    save_settings();
-}
-
-pub fn get_book_sort_order() -> BookSortOrder {
-    SETTINGS
-        .read()
-        .map(|s| s.book_sort_order)
-        .unwrap_or_default()
-}
-
-pub fn set_book_sort_order(order: BookSortOrder) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.book_sort_order = order;
-    }
-    save_settings();
-}
-
-pub fn get_lookup_command() -> Option<String> {
-    SETTINGS.read().ok().and_then(|s| s.lookup_command.clone())
-}
-
-pub fn get_lookup_display() -> LookupDisplay {
-    SETTINGS
-        .read()
-        .map(|s| s.lookup_display)
-        .unwrap_or_default()
-}
-
-pub fn get_nav_panel_width() -> Option<u16> {
-    SETTINGS.read().ok().and_then(|s| s.nav_panel_width)
-}
-
-pub fn set_nav_panel_width(width: Option<u16>) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.nav_panel_width = width;
-    }
-    save_settings();
-}
-
-pub fn get_synctex_editor() -> Option<String> {
-    SETTINGS.read().ok().and_then(|s| s.synctex_editor.clone())
-}
-
-pub fn set_lookup_command(cmd: Option<String>) {
-    if let Ok(mut s) = SETTINGS.write() {
-        s.lookup_command = cmd;
-    }
-    save_settings();
-}
-
-pub fn set_lookup_display(mode: LookupDisplay) {
-    if let Ok(mut s) = SETTINGS.write() {
-        s.lookup_display = mode;
-    }
-    save_settings();
-}
-
-pub fn set_synctex_editor(cmd: Option<String>) {
-    if let Ok(mut s) = SETTINGS.write() {
-        s.synctex_editor = cmd;
-    }
-    save_settings();
-}
-
-pub fn set_integrations(
-    lookup_command: Option<String>,
-    lookup_display: LookupDisplay,
-    synctex_editor: Option<String>,
-) {
-    if let Ok(mut settings) = SETTINGS.write() {
-        settings.lookup_command = lookup_command;
-        settings.lookup_display = lookup_display;
-        settings.synctex_editor = synctex_editor;
-    }
-    save_settings();
-}
-
-/// Called on app startup to fix incompatible settings when switching terminals
-/// (e.g., from a Kitty-protocol terminal to one without Kitty graphics)
-pub fn fix_incompatible_pdf_settings() {
-    let caps = crate::terminal::detect_terminal_with_probe();
-    let current_mode = get_pdf_render_mode();
-
-    // If user switched away from Kitty protocol with Scroll mode selected, silently fix it.
-    if !caps.pdf.supports_scroll_mode && current_mode == PdfRenderMode::Scroll {
-        if let Ok(mut settings) = SETTINGS.write() {
-            settings.pdf_render_mode = PdfRenderMode::Page;
-        }
-        save_settings();
-    }
+    SETTINGS.load().custom_themes.clone()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Default)]
+    struct RecordingPersistence {
+        writes: Mutex<Vec<Settings>>,
+    }
+
+    impl SettingsPersistence for RecordingPersistence {
+        fn persist(&self, settings: &Settings) {
+            self.writes.lock().unwrap().push(settings.clone());
+        }
+    }
+
+    #[test]
+    fn in_memory_runtime_settings_are_isolated() {
+        let first = RuntimeSettings::in_memory(Settings::default());
+        let second = RuntimeSettings::in_memory(Settings::default());
+
+        first.update(|settings| {
+            settings.margin = 7;
+            settings.justify_text = true;
+        });
+
+        assert_eq!(first.load().margin, 7);
+        assert!(first.load().justify_text);
+        assert_eq!(second.load().margin, 0);
+        assert!(!second.load().justify_text);
+    }
+
+    #[test]
+    fn runtime_update_persists_one_coherent_snapshot() {
+        let persistence = Arc::new(RecordingPersistence::default());
+        let runtime = RuntimeSettings::with_persistence(Settings::default(), persistence.clone());
+
+        runtime.update(|settings| {
+            settings.pdf_scale = 1.75;
+            settings.pdf_pan_shift = 12;
+        });
+
+        let writes = persistence.writes.lock().unwrap();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].pdf_scale, 1.75);
+        assert_eq!(writes[0].pdf_pan_shift, 12);
+    }
+
+    #[test]
+    fn update_edit_may_read_the_current_snapshot() {
+        let runtime = RuntimeSettings::in_memory(Settings {
+            margin: 3,
+            ..Settings::default()
+        });
+
+        runtime.update(|settings| settings.margin = runtime.load().margin + 1);
+
+        assert_eq!(runtime.load().margin, 4);
+    }
+
+    #[test]
+    fn persistence_adapter_observes_the_committed_snapshot() {
+        struct ReadBackPersistence {
+            runtime: OnceLock<RuntimeSettings>,
+            observed: Mutex<Vec<u16>>,
+        }
+
+        impl SettingsPersistence for ReadBackPersistence {
+            fn persist(&self, settings: &Settings) {
+                let runtime = self.runtime.get().expect("runtime registered");
+                assert_eq!(runtime.load().margin, settings.margin);
+                self.observed.lock().unwrap().push(settings.margin);
+            }
+        }
+
+        let persistence = Arc::new(ReadBackPersistence {
+            runtime: OnceLock::new(),
+            observed: Mutex::new(Vec::new()),
+        });
+        let runtime = RuntimeSettings::with_persistence(Settings::default(), persistence.clone());
+        assert!(persistence.runtime.set(runtime.clone()).is_ok());
+
+        runtime.update(|settings| settings.margin = 9);
+
+        assert_eq!(*persistence.observed.lock().unwrap(), vec![9]);
+    }
 
     #[test]
     fn targeted_update_preserves_user_managed_sections() {

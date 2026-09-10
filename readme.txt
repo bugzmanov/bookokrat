@@ -69,6 +69,7 @@ at the bottom of this document for the syntax.
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  q             Quit application                                             │
 │  Space+z       Toggle zen mode (configurable, see Settings)                 │
+│  Space+b       Toggle zen-mode border/frame                                 │
 │  Tab           Switch focus between library and reader                      │
 │  Esc           Clear selection, exit search, dismiss popups                 │
 │  ?             Toggle this help screen                                      │
@@ -133,6 +134,7 @@ at the bottom of this document for the syntax.
 │                (saved per book).                                            │
 │                Themed style is the default.                                 │
 │                In original rendering mode, i has no visual effect.          │
+│  f (PDF)       Toggle hyperlink highlighting                                │
 │  n             Toggle normal mode                                           │
 │  gd (PDF)      SyncTeX inverse search: jump to LaTeX source at cursor       │
 │  Ctrl+click    SyncTeX inverse search at click position (PDF)               │
@@ -281,7 +283,8 @@ Add notes directly to your books:
 
 PDF box annotations:
 
-  Press b in standard PDF mode, or Space+b in normal mode, to begin.
+  Press b in standard PDF mode, or Space+B in normal mode, to begin.
+  Drawing-mode bindings are configurable in the pdf_box keybinding context.
   Move with hjkl/arrows, set a corner with v/Space, then move and press Enter.
   Alternatively, left-drag a box after entering drawing mode.
   Type a comment and press Esc to save. Esc while drawing cancels the box.
