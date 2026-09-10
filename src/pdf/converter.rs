@@ -27,7 +27,7 @@ use crate::vendored::ratatui_image::{
 
 use super::kittyv2::ImageId;
 use super::normal_mode::{CursorRect, VisualRect};
-use super::selection::{HighlightOverlay, SelectionRect};
+use super::selection::{CommentMarker, CommentOverlay, HighlightOverlay, SelectionRect};
 use super::types::{
     LineBounds, LinkRect, PageData, VecExt as _, ViewportUpdate, link_visual_boxes,
 };
@@ -273,6 +273,9 @@ struct OverlaySet {
     /// When true, `comments` contains pre-computed underline coordinates (for tile rendering).
     /// When false, `comments` contains selection rects and underline position is calculated.
     comments_are_underlines: bool,
+    /// Box-annotation outlines, already expanded into edge bars (page-space pixels),
+    /// so plain rect clipping/filling is correct across tiles.
+    boxes: Vec<PixelRect>,
     /// Solid stroke rects forming outline boxes around link clickboxes. These
     /// are final geometry (the four border strips of each box), drawn directly.
     link_strokes: Vec<PixelRect>,
@@ -284,6 +287,7 @@ struct OverlaySet {
 impl OverlaySet {
     fn is_empty(&self) -> bool {
         self.comments.is_empty()
+            && self.boxes.is_empty()
             && self.link_strokes.is_empty()
             && self.highlights.is_empty()
             && self.selection.is_empty()
@@ -378,6 +382,7 @@ impl OverlaySet {
             highlights: clip_highlights(&self.highlights),
             comments: clip_comments(&self.comments),
             comments_are_underlines: true, // Tile rendering pre-computes underline positions
+            boxes: clip(&self.boxes),
             // Link strokes are already final geometry, so clip them as plain rects.
             link_strokes: clip(&self.link_strokes),
             selection: clip(&self.selection),
@@ -407,7 +412,7 @@ pub enum ConversionCommand {
     UpdateViewport(ViewportUpdate),
     UpdateDualViewport(Vec<ViewportUpdate>),
     UpdateSelection(Vec<SelectionRect>),
-    UpdateComments(Vec<SelectionRect>),
+    UpdateComments(Vec<CommentOverlay>),
     UpdateHighlights(Vec<HighlightOverlay>),
     UpdateCursor(Option<CursorRect>),
     UpdateVisual(Vec<VisualRect>),
@@ -429,7 +434,7 @@ struct ConverterEngine {
     images: Vec<Option<Arc<PageData>>>,
     page_cache: Vec<Option<CachedPage>>,
     selection_rects: Vec<SelectionRect>,
-    comment_rects: Vec<SelectionRect>,
+    comment_rects: Vec<CommentOverlay>,
     highlight_overlays: Vec<HighlightOverlay>,
     comment_cache: HashMap<usize, CommentCacheEntry>,
     visual_rects: Vec<VisualRect>,
@@ -445,7 +450,10 @@ struct ConverterEngine {
 
 #[derive(Clone)]
 struct CommentCacheEntry {
+    /// Text-anchored comments (drawn as underlines).
     rects: Vec<PixelRect>,
+    /// Box annotations, expanded into outline edge bars.
+    boxes: Vec<PixelRect>,
 }
 
 impl ConverterEngine {
@@ -808,11 +816,11 @@ impl ConverterEngine {
                 self.invalidate_tiles_for_pages(&affected);
                 self.reconvert_pages(&affected, sender)?;
             }
-            ConversionCommand::UpdateComments(new_rects) => {
-                log::trace!("UpdateComments received: {} rects", new_rects.len());
-                let old_rects = std::mem::take(&mut self.comment_rects);
-                let affected = Self::collect_affected_pages(&old_rects, &new_rects);
-                self.comment_rects = new_rects;
+            ConversionCommand::UpdateComments(new_overlays) => {
+                log::trace!("UpdateComments received: {} rects", new_overlays.len());
+                let old_overlays = std::mem::take(&mut self.comment_rects);
+                let affected = Self::collect_affected_pages(&old_overlays, &new_overlays);
+                self.comment_rects = new_overlays;
                 self.comment_cache = self.build_comment_cache(&self.comment_rects);
                 self.invalidate_tiles_for_pages(&affected);
                 self.reconvert_pages(&affected, sender)?;
@@ -1423,6 +1431,7 @@ impl ConverterEngine {
                     cached_comments.rects.len()
                 );
                 overlays.comments.clone_from(&cached_comments.rects);
+                overlays.boxes.clone_from(&cached_comments.boxes);
             }
             // Link clickboxes and text lines are both stored in pixel space at the
             // page's render scale, so they map directly onto the cached pixmap.
@@ -1497,29 +1506,35 @@ impl ConverterEngine {
         overlays
     }
 
-    fn build_comment_cache(&self, rects: &[SelectionRect]) -> HashMap<usize, CommentCacheEntry> {
+    fn build_comment_cache(
+        &self,
+        overlays: &[CommentOverlay],
+    ) -> HashMap<usize, CommentCacheEntry> {
         let mut cache: HashMap<usize, CommentCacheEntry> = HashMap::new();
-        for rect in rects {
-            let Some(Some(cached)) = self.page_cache.get(rect.page) else {
-                continue;
-            };
-            let rects_px = comment_rects_for_page(rects, rect.page, cached.data.scale_factor);
-            if rects_px.is_empty() {
+        for overlay in overlays {
+            let page = overlay.rect.page;
+            if cache.contains_key(&page) {
                 continue;
             }
-            cache.insert(rect.page, CommentCacheEntry { rects: rects_px });
+            let Some(Some(cached)) = self.page_cache.get(page) else {
+                continue;
+            };
+            if let Some(entry) = comment_cache_entry(overlays, page, cached.data.scale_factor) {
+                cache.insert(page, entry);
+            }
         }
         cache
     }
 
     fn update_comment_cache_for_page(&mut self, page_num: usize, scale_factor: f32) {
-        let rects_px = comment_rects_for_page(&self.comment_rects, page_num, scale_factor);
-        if rects_px.is_empty() {
-            self.comment_cache.remove(&page_num);
-            return;
+        match comment_cache_entry(&self.comment_rects, page_num, scale_factor) {
+            Some(entry) => {
+                self.comment_cache.insert(page_num, entry);
+            }
+            None => {
+                self.comment_cache.remove(&page_num);
+            }
         }
-        self.comment_cache
-            .insert(page_num, CommentCacheEntry { rects: rects_px });
     }
 
     /// Clear decoded images for pages far from the current page to save memory.
@@ -1668,6 +1683,12 @@ impl PageScoped for SelectionRect {
 }
 
 impl PageScoped for HighlightOverlay {
+    fn page(&self) -> usize {
+        self.rect.page
+    }
+}
+
+impl PageScoped for CommentOverlay {
     fn page(&self) -> usize {
         self.rect.page
     }
@@ -2291,6 +2312,8 @@ fn apply_overlays(img: &mut RgbImage, overlays: &OverlaySet) {
         // Comments are selection rects, calculate underline position
         apply_underline_rects(img, &overlays.comments, COMMENT_UNDERLINE_RGB);
     }
+    // Box outlines are pre-expanded edge bars in the same color as underlines.
+    draw_underline_rects_direct(img, &overlays.boxes, COMMENT_UNDERLINE_RGB);
     // Link strokes are final outline-box geometry — draw directly.
     draw_underline_rects_direct(img, &overlays.link_strokes, LINK_STROKE_RGB);
     apply_rects_op(img, &overlays.selection, OverlayOp::Selection);
@@ -2352,6 +2375,33 @@ fn apply_overlays_dynamic(img: &mut DynamicImage, overlays: &OverlaySet) {
     let mut rgb = img.to_rgb8();
     apply_overlays(&mut rgb, overlays);
     *img = DynamicImage::ImageRgb8(rgb);
+}
+
+fn scale_rect(rect: &SelectionRect, scale: f64) -> Option<PixelRect> {
+    PixelRect::new(
+        (f64::from(rect.topleft_x) * scale).round() as u32,
+        (f64::from(rect.topleft_y) * scale).round() as u32,
+        (f64::from(rect.bottomright_x) * scale).round() as u32,
+        (f64::from(rect.bottomright_y) * scale).round() as u32,
+    )
+}
+
+/// Outline stroke width for box annotations, in page pixels at `scale`.
+fn box_stroke_px(scale: f64) -> u32 {
+    ((2.0 * scale).round() as u32).clamp(2, 6)
+}
+
+/// Expand a box rect into its four edge bars (top, bottom, left, right).
+fn box_outline_bars(rect: PixelRect, stroke: u32) -> impl Iterator<Item = PixelRect> {
+    let PixelRect { x0, y0, x1, y1 } = rect;
+    [
+        PixelRect::new(x0, y0, x1, y0.saturating_add(stroke).min(y1)),
+        PixelRect::new(x0, y1.saturating_sub(stroke).max(y0), x1, y1),
+        PixelRect::new(x0, y0, x0.saturating_add(stroke).min(x1), y1),
+        PixelRect::new(x1.saturating_sub(stroke).max(x0), y0, x1, y1),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 /// Underline rect for a comment (purple line drawn just below the text).
@@ -2431,6 +2481,15 @@ fn apply_overlays_rgba(img: &mut RgbaImage, overlays: &OverlaySet) {
         });
     }
 
+    // Box outlines are final edge bars, just like the RGB rendering path.
+    for rect in &overlays.boxes {
+        paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
+            *r = COMMENT_UNDERLINE_RGB.0;
+            *g = COMMENT_UNDERLINE_RGB.1;
+            *b = COMMENT_UNDERLINE_RGB.2;
+        });
+    }
+
     // Link strokes are final outline-box geometry — paint them as-is.
     for rect in &overlays.link_strokes {
         paint_rgba_rect(buf, width, height, *rect, |r, g, b| {
@@ -2457,23 +2516,31 @@ fn apply_overlays_rgba(img: &mut RgbaImage, overlays: &OverlaySet) {
     }
 }
 
-fn comment_rects_for_page(
-    rects: &[SelectionRect],
+/// Build the per-page comment overlay cache: underline rects for text comments
+/// and outline edge bars for box annotations, both in page pixels at `scale_factor`.
+/// Returns `None` when the page has no comment overlays.
+fn comment_cache_entry(
+    overlays: &[CommentOverlay],
     page_num: usize,
     scale_factor: f32,
-) -> Vec<PixelRect> {
+) -> Option<CommentCacheEntry> {
     let scale = f64::from(scale_factor);
-    rects
-        .iter()
-        .filter(|rect| rect.page == page_num)
-        .filter_map(|rect| {
-            let topleft_x = (f64::from(rect.topleft_x) * scale).round() as u32;
-            let topleft_y = (f64::from(rect.topleft_y) * scale).round() as u32;
-            let bottomright_x = (f64::from(rect.bottomright_x) * scale).round() as u32;
-            let bottomright_y = (f64::from(rect.bottomright_y) * scale).round() as u32;
-            PixelRect::new(topleft_x, topleft_y, bottomright_x, bottomright_y)
-        })
-        .collect()
+    let stroke = box_stroke_px(scale);
+    let mut rects = Vec::new();
+    let mut boxes = Vec::new();
+    for overlay in overlays.iter().filter(|o| o.rect.page == page_num) {
+        let Some(px) = scale_rect(&overlay.rect, scale) else {
+            continue;
+        };
+        match overlay.marker {
+            CommentMarker::Underline => rects.push(px),
+            CommentMarker::Box => boxes.extend(box_outline_bars(px, stroke)),
+        }
+    }
+    if rects.is_empty() && boxes.is_empty() {
+        return None;
+    }
+    Some(CommentCacheEntry { rects, boxes })
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -2760,6 +2827,31 @@ pub fn run_conversion_loop(
 mod tests {
     use super::*;
 
+    fn assert_comment_pixels(overlay: CommentOverlay, expected: &RgbImage) {
+        let cache = comment_cache_entry(&[overlay], 0, 1.0).unwrap();
+        let overlays = OverlaySet {
+            comments: cache.rects,
+            boxes: cache.boxes,
+            ..OverlaySet::default()
+        };
+        let background = image::Rgb([255, 255, 255]);
+        let mut page = RgbImage::from_pixel(expected.width(), expected.height(), background);
+        apply_overlays(&mut page, &overlays);
+        assert_eq!(&page, expected, "full-page comment pixels");
+
+        for tile_y in (0..expected.height()).step_by(8) {
+            for tile_x in (0..expected.width()).step_by(8) {
+                let width = 8.min(expected.width() - tile_x);
+                let height = 8.min(expected.height() - tile_y);
+                let mut tile = RgbImage::from_pixel(width, height, background);
+                apply_overlays(&mut tile, &overlays.for_tile(tile_x, width, tile_y, height));
+                let expected_tile =
+                    image::imageops::crop_imm(expected, tile_x, tile_y, width, height).to_image();
+                assert_eq!(tile, expected_tile, "comment tile at ({tile_x}, {tile_y})");
+            }
+        }
+    }
+
     #[test]
     fn decode_pixels_builds_rgba_when_channels_is_four() {
         let pixels = vec![10, 20, 30, 40, 50, 60, 70, 80]; // 2 RGBA pixels
@@ -2797,6 +2889,56 @@ mod tests {
             chars: Vec::new(),
             block_id: 0,
         }
+    }
+
+    #[test]
+    fn box_comments_render_clipped_outlines_without_tile_seams() {
+        let overlay = CommentOverlay {
+            rect: SelectionRect {
+                page: 0,
+                topleft_x: 7,
+                topleft_y: 7,
+                bottomright_x: 19,
+                bottomright_y: 19,
+            },
+            marker: CommentMarker::Box,
+        };
+        // The top and left strokes straddle tile boundaries at pixel 8.
+        // Tile boundaries through the interior must not acquire new borders.
+        let expected = RgbImage::from_fn(24, 24, |x, y| {
+            let inside = (7..19).contains(&x) && (7..19).contains(&y);
+            let edge = !(9..17).contains(&x) || !(9..17).contains(&y);
+            if inside && edge {
+                image::Rgb([0xC5, 0x94, 0xC5])
+            } else {
+                image::Rgb([255, 255, 255])
+            }
+        });
+        assert_comment_pixels(overlay, &expected);
+    }
+
+    #[test]
+    fn text_comments_preserve_underlines_across_tile_boundaries() {
+        let overlay = CommentOverlay {
+            rect: SelectionRect {
+                page: 0,
+                topleft_x: 7,
+                topleft_y: 3,
+                bottomright_x: 19,
+                bottomright_y: 5,
+            },
+            marker: CommentMarker::Underline,
+        };
+        // The underline begins two pixels below the text and continues into
+        // the next tile even though the text rect does not intersect that tile.
+        let expected = RgbImage::from_fn(24, 16, |x, y| {
+            if (7..19).contains(&x) && (7..10).contains(&y) {
+                image::Rgb([0xC5, 0x94, 0xC5])
+            } else {
+                image::Rgb([255, 255, 255])
+            }
+        });
+        assert_comment_pixels(overlay, &expected);
     }
 
     #[test]

@@ -194,6 +194,10 @@ pub enum CommentTarget {
     Pdf {
         page: usize,
         rects: Vec<PdfSelectionRect>,
+        /// True when the rect was drawn by the user as a region (box
+        /// annotation) rather than derived from a text selection. Region
+        /// comments render as an outline instead of an underline.
+        region: bool,
     },
 }
 
@@ -281,9 +285,27 @@ impl CommentTarget {
         Self::from_single_at(block, BlockSubtarget::CodeLines { line_range })
     }
 
-    /// Create a Pdf target for PDF selection
+    /// Create a Pdf target for PDF text selection
     pub fn pdf(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
-        Self::Pdf { page, rects }
+        Self::Pdf {
+            page,
+            rects,
+            region: false,
+        }
+    }
+
+    /// Create a Pdf target for a user-drawn region (box annotation)
+    pub fn pdf_region(page: usize, rects: Vec<PdfSelectionRect>) -> Self {
+        Self::Pdf {
+            page,
+            rects,
+            region: true,
+        }
+    }
+
+    /// True for PDF region (box) targets
+    pub fn is_region(&self) -> bool {
+        matches!(self, Self::Pdf { region: true, .. })
     }
 
     /// All slices for a Text target. Empty slice for Pdf.
@@ -371,7 +393,7 @@ impl CommentTarget {
                 .first_slice()
                 .map(|s| s.subtarget.secondary_sort_key())
                 .unwrap_or((0, 0)),
-            Self::Pdf { page, rects } => {
+            Self::Pdf { page, rects, .. } => {
                 let y = rects.first().map(|r| r.topleft_y as usize).unwrap_or(0);
                 (*page, y)
             }
@@ -480,6 +502,8 @@ struct CommentPdfSerde {
     pub target_type: String, // "pdf"
     pub page: usize,
     pub rects: Vec<PdfSelectionRect>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub region: bool,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub content: String,
     pub updated_at: DateTime<Utc>,
@@ -664,6 +688,7 @@ impl From<CommentPdfSerde> for Comment {
             target: CommentTarget::Pdf {
                 page: pdf.page,
                 rects: pdf.rects,
+                region: pdf.region,
             },
             content: pdf.content,
             body: body_from_serde(&pdf.annotation_type, pdf.color),
@@ -732,7 +757,11 @@ impl Serialize for Comment {
                     serde.serialize(serializer)
                 }
             }
-            CommentTarget::Pdf { page, rects } => {
+            CommentTarget::Pdf {
+                page,
+                rects,
+                region,
+            } => {
                 let serde = CommentPdfSerde {
                     id: Some(self.id.clone()),
                     chapter_href: self.chapter_href.clone(),
@@ -741,6 +770,7 @@ impl Serialize for Comment {
                     target_type: "pdf".to_string(),
                     page: *page,
                     rects: rects.clone(),
+                    region: *region,
                     content: self.content.clone(),
                     updated_at: self.updated_at,
                     quoted_text: self.quoted_text.clone(),
@@ -901,12 +931,23 @@ impl CommentTarget {
                     .iter()
                     .any(|a| b_slices.iter().any(|b| slices_overlap(a, b)))
             }
-            (CommentTarget::Pdf { rects: a, .. }, CommentTarget::Pdf { rects: b, .. }) => {
-                a.iter().any(|left| {
-                    b.iter()
-                        .any(|right| left.page == right.page && pdf_rects_overlap(left, right))
-                })
-            }
+            // A drawn region may legitimately enclose text anchors (and vice
+            // versa); only same-kind PDF anchors conflict.
+            (
+                CommentTarget::Pdf {
+                    rects: a,
+                    region: a_region,
+                    ..
+                },
+                CommentTarget::Pdf {
+                    rects: b,
+                    region: b_region,
+                    ..
+                },
+            ) if a_region == b_region => a.iter().any(|left| {
+                b.iter()
+                    .any(|right| left.page == right.page && pdf_rects_overlap(left, right))
+            }),
             _ => false,
         }
     }
@@ -1596,6 +1637,128 @@ mod tests {
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].id, comment.id);
         assert_eq!(parsed[0].target, comment.target);
+    }
+
+    #[test]
+    fn test_legacy_pdf_missing_region_remains_text_after_serialization() {
+        let legacy_yaml = r#"
+id: legacy-pdf
+chapter_href: document.pdf
+target_type: pdf
+page: 2
+rects:
+  - page: 2
+    topleft_x: 10
+    topleft_y: 20
+    bottomright_x: 110
+    bottomright_y: 40
+content: legacy note
+quoted_text: selected text
+updated_at: "2024-01-01T12:00:00Z"
+"#;
+        let parsed: Comment = serde_yaml::from_str(legacy_yaml).unwrap();
+        assert_eq!(
+            parsed.target,
+            CommentTarget::pdf(
+                2,
+                vec![PdfSelectionRect {
+                    page: 2,
+                    topleft_x: 10,
+                    topleft_y: 20,
+                    bottomright_x: 110,
+                    bottomright_y: 40,
+                }],
+            )
+        );
+
+        let yaml = serde_yaml::to_string(&parsed).unwrap();
+        let serialized: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert!(serialized.get("region").is_none());
+        let reloaded: Comment = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(reloaded, parsed);
+    }
+
+    #[test]
+    fn test_pdf_box_persistence_preserves_target_and_quoted_text() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let comment = Comment::with_quoted_text(
+            "document.pdf".to_string(),
+            CommentTarget::pdf_region(
+                4,
+                vec![PdfSelectionRect {
+                    page: 4,
+                    topleft_x: 15,
+                    topleft_y: 25,
+                    bottomright_x: 215,
+                    bottomright_y: 125,
+                }],
+            ),
+            "Explain this diagram".to_string(),
+            Utc::now(),
+            Some("Figure 2: \"Quoted label\"\nSecond line".to_string()),
+        );
+        {
+            let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+            book_comments.add_comment(comment.clone()).unwrap();
+        }
+
+        let reloaded = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        assert_eq!(
+            reloaded.get_page_comments("document.pdf", 4),
+            vec![&comment]
+        );
+        assert_eq!(reloaded.get_comment_by_id(&comment.id), Some(&comment));
+    }
+
+    #[test]
+    fn test_pdf_text_and_box_anchors_coexist_at_same_coordinates() {
+        let (_temp_dir, book_path, comments_dir) = create_test_env();
+        let mut book_comments = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        let rect = PdfSelectionRect {
+            page: 1,
+            topleft_x: 10,
+            topleft_y: 20,
+            bottomright_x: 110,
+            bottomright_y: 40,
+        };
+        let text_target = CommentTarget::pdf(1, vec![rect.clone()]);
+        let box_target = CommentTarget::pdf_region(1, vec![rect]);
+        let text_comment = Comment::new(
+            "document.pdf".to_string(),
+            text_target.clone(),
+            "Text note".to_string(),
+            Utc::now(),
+        );
+        let box_comment = Comment::new(
+            "document.pdf".to_string(),
+            box_target.clone(),
+            "Box note".to_string(),
+            Utc::now(),
+        );
+
+        book_comments.add_comment(text_comment.clone()).unwrap();
+        assert!(book_comments.has_overlapping_annotation("document.pdf", &text_target));
+        assert!(!book_comments.has_overlapping_annotation("document.pdf", &box_target));
+        book_comments.add_comment(box_comment.clone()).unwrap();
+        book_comments
+            .delete_comment("document.pdf", &text_target)
+            .unwrap();
+        assert_eq!(
+            book_comments.get_page_comments("document.pdf", 1),
+            vec![&box_comment]
+        );
+        assert!(book_comments.has_overlapping_annotation("document.pdf", &box_target));
+        assert!(!book_comments.has_overlapping_annotation("document.pdf", &text_target));
+
+        book_comments.add_comment(text_comment.clone()).unwrap();
+        book_comments
+            .delete_comment("document.pdf", &box_target)
+            .unwrap();
+        let reloaded = BookComments::new(&book_path, Some(&comments_dir)).unwrap();
+        assert_eq!(
+            reloaded.get_page_comments("document.pdf", 1),
+            vec![&text_comment]
+        );
     }
 
     #[test]

@@ -36,7 +36,8 @@ pub use request::{
     PageSelectionBounds, RenderParams, RenderRequest, RenderResponse, RequestId, WorkerFault,
 };
 pub use selection::{
-    ExtractionRequest, HighlightOverlay, SelectionPoint, SelectionRect, TextSelection,
+    CommentMarker, CommentOverlay, ExtractionRequest, HighlightOverlay, SelectionPoint,
+    SelectionRect, TextSelection,
 };
 pub use service::{DocumentInfo, RenderService};
 pub use state::{Command, Effect, RenderState};

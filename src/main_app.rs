@@ -5267,6 +5267,15 @@ impl App {
                 }
                 true
             }
+            Action::AddBoxAnnotation => {
+                #[cfg(feature = "pdf")]
+                if self.is_pdf_mode() {
+                    if let Some(pdf_reader) = &mut self.pdf_reader {
+                        pdf_reader.start_box_annotation();
+                    }
+                }
+                true
+            }
             Action::TogglePdfRenderMode => {
                 #[cfg(feature = "pdf")]
                 if self.is_pdf_mode() {
@@ -6914,6 +6923,10 @@ impl App {
     }
 
     pub fn handle_resize(&mut self) {
+        #[cfg(feature = "pdf")]
+        if let Some(reader) = self.pdf_reader.as_mut() {
+            reader.cancel_pointer_interaction();
+        }
         // Cell pixel size can change on font-size changes; keep pixel-mouse
         // conversion accurate using the renderer's authoritative cell size
         // (window_size() can round/include padding). No-op when disabled.
@@ -8239,6 +8252,9 @@ where
                                     || mouse_event.column == border)
                         };
                         if app.resizing_nav_panel || on_border {
+                            if let Some(reader) = app.pdf_reader.as_mut() {
+                                reader.cancel_pointer_interaction();
+                            }
                             app.handle_non_scroll_mouse_event(*mouse_event);
                         } else if app.should_route_pdf_mouse_to_ui(mouse_event) {
                             match mouse_event.kind {

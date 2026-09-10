@@ -16,8 +16,8 @@ use crate::inputs::{KeySeq, MouseTracker};
 use crate::jump_list::JumpList;
 use crate::notification::NotificationManager;
 use crate::pdf::{
-    CursorRect, ExtractionRequest, HighlightOverlay, NormalModeState, PageNumberTracker,
-    SelectionRect, TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
+    CommentOverlay, CursorRect, ExtractionRequest, HighlightOverlay, NormalModeState,
+    PageNumberTracker, SelectionRect, TextSelection, TocEntry, ViewportUpdate, VisualRect, Zoom,
 };
 use crate::settings::{PdfPageLayoutMode, RuntimeSettings};
 use crate::theme::{Base16Palette, theme_background_for};
@@ -82,8 +82,45 @@ pub struct CommentInputState {
     pub quoted_text: Option<String>,
     /// Read-only preview mode used for comment navigation.
     pub read_only: bool,
+    /// Transient mouse preview, dismissed when the pointer leaves its region.
+    pub hover_preview: bool,
     /// Screen-space cursor position (col, row) computed during rendering.
     pub computed_cursor_pos: Option<(u16, u16)>,
+}
+
+/// Interactive box-annotation drawing state (terminal cell coordinates).
+#[derive(Clone, Copy, Debug)]
+pub struct BoxDrawState {
+    /// Free cursor moved with hjkl / arrows / mouse.
+    pub cursor: (u16, u16),
+    /// First corner once dropped (`v`, Space, or mouse press). `None` while positioning.
+    pub anchor: Option<(u16, u16)>,
+    /// True while a mouse drag is defining the box.
+    pub dragging: bool,
+}
+
+impl BoxDrawState {
+    pub fn clamp_cursor(&mut self, area: Rect) {
+        self.cursor.0 = self
+            .cursor
+            .0
+            .clamp(area.x, area.right().saturating_sub(1).max(area.x));
+        self.cursor.1 = self
+            .cursor
+            .1
+            .clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
+    }
+
+    /// Cell rectangle spanned by anchor..=cursor, or a 1x1 rect at the cursor.
+    pub fn cell_rect(&self) -> Rect {
+        let (cx, cy) = self.cursor;
+        let (ax, ay) = self.anchor.unwrap_or(self.cursor);
+        let x0 = ax.min(cx);
+        let y0 = ay.min(cy);
+        let x1 = ax.max(cx);
+        let y1 = ay.max(cy);
+        Rect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    }
 }
 
 /// A search match on a visible page (may span left/right page in dual mode)
@@ -198,6 +235,7 @@ impl CommentInputState {
         self.target = None;
         self.quoted_text = None;
         self.read_only = false;
+        self.hover_preview = false;
         self.computed_cursor_pos = None;
     }
 
@@ -230,12 +268,12 @@ pub enum InputAction {
     ToggleProfiling,
     SelectionChanged(Vec<SelectionRect>),
     CommentSaved {
-        rects: Vec<SelectionRect>,
+        rects: Vec<CommentOverlay>,
         cursor_rect: Option<CursorRect>,
     },
     HighlightSaved(Vec<HighlightOverlay>),
     CommentDeleted {
-        rects: Vec<SelectionRect>,
+        rects: Vec<CommentOverlay>,
         selection_rects: Vec<SelectionRect>,
     },
     CopySelection(ExtractionRequest),
@@ -398,8 +436,8 @@ pub struct PdfReaderState {
     /// Last overlay rect that was actually transmitted to Kitty, used to avoid
     /// redundant delete+retransmit cycles that cause blinking.
     pub modal_overlay_sent: Option<(u16, u16, u16, u16)>,
-    /// Comment selection rectangles for overlay rendering
-    pub comment_rects: Vec<SelectionRect>,
+    /// Comment anchors (underline or box) for overlay rendering
+    pub comment_rects: Vec<CommentOverlay>,
     /// Highlight rectangles for overlay rendering
     pub highlight_overlays: Vec<HighlightOverlay>,
     /// Whether comment navigation is active
@@ -412,6 +450,10 @@ pub struct PdfReaderState {
     pub go_to_page_mode: PageJumpMode,
     /// Error message for go to page
     pub go_to_page_error: Option<String>,
+    /// Active box-annotation drawing, if any
+    pub box_draw: Option<BoxDrawState>,
+    /// Press on a box, deferred until release distinguishes a click from selection.
+    pub pending_box_click: Option<crate::pdf::SelectionPoint>,
     /// Currently focused panel
     pub focused_panel: FocusedPanel,
     /// Notification manager
@@ -527,6 +569,8 @@ impl PdfReaderState {
             comment_nav_active: false,
             comment_nav_page: 0,
             comment_nav_index: 0,
+            box_draw: None,
+            pending_box_click: None,
             go_to_page_mode: PageJumpMode::Pdf,
             go_to_page_error: None,
             focused_panel: FocusedPanel::default(),
