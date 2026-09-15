@@ -20,7 +20,8 @@ pub use crate::pdf::{
 
 pub use crate::comments::{BookComments, Comment, CommentTarget, PdfSelectionRect};
 pub(crate) use navigation::{
-    InputOutcome, apply_theme_to_pdf_reader, navigate_pdf_to_page, should_route_mouse_to_ui,
+    InputOutcome, apply_theme_to_pdf_reader, get_pdf_chapter_title, navigate_pdf_to_page,
+    should_route_mouse_to_ui,
 };
 pub use region::{DimOverlay, ImageRegion, TextRegion};
 pub(crate) use rendering::{

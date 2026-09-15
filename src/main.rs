@@ -169,6 +169,9 @@ fn main() -> Result<()> {
             cli::Command::Extract { file, output } => {
                 return extract::cmd_extract(file, output);
             }
+            cli::Command::Mcp => {
+                return bookokrat::mcp::run_mcp_server();
+            }
         }
     }
 
@@ -453,6 +456,8 @@ fn main() -> Result<()> {
             std::process::exit(1);
         }
     }
+    #[cfg(unix)]
+    app.start_mcp_listener();
     #[cfg(feature = "pdf")]
     let mut event_source = UnifiedEventSource::new();
     #[cfg(not(feature = "pdf"))]

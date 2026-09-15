@@ -11,6 +11,12 @@ use crate::images::image_storage::ImageStorage;
 use crate::inputs::{ClickType, KeySeq, MouseTracker, map_keys_to_input};
 use crate::jump_list::{JumpList, JumpLocation};
 use crate::markdown_text_reader::MarkdownTextReader;
+#[cfg(unix)]
+use crate::mcp::extract::{epub_chapter_text, epub_page_text, pdf_neighbor_window, snapshot_key};
+#[cfg(unix)]
+use crate::mcp::protocol::{ReaderSnapshot, SnapshotFormat};
+#[cfg(unix)]
+use crate::mcp::reader_listener::McpReaderListener;
 use crate::navigation_panel::{CurrentBookInfo, NavigationPanel, TableOfContents};
 use crate::notification::NotificationManager;
 use crate::parsing::html_to_markdown::extract_chapter_title;
@@ -36,6 +42,8 @@ use crate::widget::marks_popup::{MarkScopeKey, MarksPopup, MarksPopupAction};
 use crate::widget::popup::Popup;
 use image::GenericImageView;
 use log::warn;
+#[cfg(unix)]
+use std::sync::RwLock;
 
 // Settings popup (used for themes in all modes)
 use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
@@ -337,6 +345,19 @@ pub struct App {
     synctex_rx: Option<flume::Receiver<crate::pdf::synctex::SyncTexCommand>>,
     #[cfg(feature = "pdf")]
     pending_synctex_forward: Option<PendingSyncTexForward>,
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    // Held alive for its Drop cleanup (stops listener thread, removes socket)
+    reader_snapshot: Arc<RwLock<Option<ReaderSnapshot>>>,
+    #[cfg(unix)]
+    #[allow(dead_code)]
+    // Held alive for its Drop cleanup (stops listener thread, removes socket)
+    mcp_listener: Option<McpReaderListener>,
+    /// Last snapshot key we published, so we only rebuild text on a real change
+    /// (position OR render-generation). Tracked here because `ReaderSnapshot`
+    /// is the protocol type and doesn't carry the generation.
+    #[cfg(unix)]
+    last_snapshot_key: Option<crate::mcp::extract::SnapshotKey>,
     pending_mark_op: Option<PendingMarkOp>,
     global_marks: crate::marks::GlobalMarks,
     last_terminal_title: Option<String>,
@@ -799,6 +820,12 @@ impl App {
             synctex_rx: None,
             #[cfg(feature = "pdf")]
             pending_synctex_forward: None,
+            #[cfg(unix)]
+            reader_snapshot: Arc::new(RwLock::new(None)),
+            #[cfg(unix)]
+            mcp_listener: None,
+            #[cfg(unix)]
+            last_snapshot_key: None,
             pending_mark_op: None,
             global_marks: load_app_global_marks(),
             last_terminal_title: None,
@@ -7447,6 +7474,158 @@ impl App {
         false
     }
 
+    /// Bind the MCP reader-bridge socket. Call once after `App` construction.
+    /// Failure (e.g. another instance already bound) logs a warning and the
+    /// TUI continues without the agent bridge.
+    #[cfg(unix)]
+    pub fn start_mcp_listener(&mut self) {
+        let path = crate::mcp::mcp_socket_path();
+        match McpReaderListener::start(path.clone(), self.reader_snapshot.clone()) {
+            Ok(listener) => {
+                self.mcp_listener = Some(listener);
+                log::info!("MCP socket: {}", path.display());
+            }
+            Err(e) => log::warn!("MCP listener not started (another instance?): {e}"),
+        }
+    }
+
+    /// Rebuild the reader snapshot when the on-screen page/chapter moves or the
+    /// rendered content changes. Cheap key-compare first; the text is only
+    /// (re)built on a real change. Must run AFTER `draw()` so `rendered_lines()`
+    /// reflects the frame we just painted.
+    #[cfg(unix)]
+    fn update_reader_snapshot(&mut self) {
+        let (key, snap) = self.build_reader_snapshot();
+        if self.last_snapshot_key.as_ref() == Some(&key) {
+            return; // position + render-generation unchanged
+        }
+        self.last_snapshot_key = Some(key);
+        if let Ok(mut g) = self.reader_snapshot.write() {
+            *g = snap;
+        }
+    }
+
+    /// Derive the current snapshot + its cheap state key from live reader state.
+    /// No book open → `(dummy key, None)`.
+    #[cfg(unix)]
+    fn build_reader_snapshot(&self) -> (crate::mcp::extract::SnapshotKey, Option<ReaderSnapshot>) {
+        if let Some(book) = self.current_book.as_ref() {
+            let chapter_index = book.current_chapter();
+            let total_chapters = book.total_chapters();
+            let chapter_title = self
+                .text_reader
+                .chapter_title()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("Chapter {}", chapter_index + 1));
+            let book_title = Self::extract_book_title(&book.file);
+            let lines = self.text_reader.rendered_lines();
+            let scroll_offset = self.text_reader.get_scroll_offset();
+            let height = self.text_reader.get_visible_height();
+            let screen_index = if height > 0 {
+                Some(scroll_offset / height)
+            } else {
+                Some(0)
+            };
+            let page_text = epub_page_text(lines, scroll_offset, height);
+            let chapter_text = epub_chapter_text(lines);
+            let snap = ReaderSnapshot {
+                format: SnapshotFormat::Epub,
+                book_path: PathBuf::from(&book.file),
+                book_title,
+                chapter_title,
+                chapter_index,
+                page_number: None,
+                screen_index,
+                total_chapters,
+                total_pages: None,
+                page_text,
+                chapter_text,
+            };
+            (
+                snapshot_key(
+                    SnapshotFormat::Epub,
+                    chapter_index,
+                    None,
+                    screen_index,
+                    self.text_reader.render_generation(),
+                ),
+                Some(snap),
+            )
+        } else {
+            #[cfg(feature = "pdf")]
+            if let Some(reader) = self.pdf_reader.as_ref() {
+                return self.build_pdf_reader_snapshot(reader);
+            }
+            // No book open.
+            (snapshot_key(SnapshotFormat::Epub, 0, None, None, 0), None)
+        }
+    }
+
+    #[cfg(all(unix, feature = "pdf"))]
+    fn build_pdf_reader_snapshot(
+        &self,
+        reader: &PdfReaderState,
+    ) -> (crate::mcp::extract::SnapshotKey, Option<ReaderSnapshot>) {
+        // ponytail: synchronous mupdf open on page-change blocks the loop briefly.
+        // Upgrade path: route through the existing service.extract_text() async
+        // channel (like Space+c does) if this shows up in profiling.
+        use mupdf::{Document, TextPageFlags};
+        let page = reader.page; // 0-based
+        let Some(doc_path) = self.pdf_document_path.as_ref() else {
+            return (
+                snapshot_key(SnapshotFormat::Pdf, page, Some(page + 1), None, 0),
+                None,
+            );
+        };
+        let book_title = Self::extract_book_title(&doc_path.to_string_lossy());
+        let chapter_title =
+            crate::widget::pdf_reader::get_pdf_chapter_title(&reader.toc_entries, page)
+                .unwrap_or_else(|| format!("Page {}", page + 1));
+        let (total, page_text, chapter_text) =
+            match Document::open(doc_path.to_string_lossy().as_ref()) {
+                Ok(doc) => {
+                    let total = doc.page_count().unwrap_or(0) as usize;
+                    let window = pdf_neighbor_window(page, total, 2);
+                    let mut page_texts = Vec::new();
+                    let mut page_text = String::new();
+                    for p in window {
+                        if let Ok(p_page) = doc.load_page(p as i32) {
+                            if let Ok(tp) = p_page.to_text_page(TextPageFlags::empty()) {
+                                if let Ok(text) = tp.to_text() {
+                                    if p == page {
+                                        page_text = text.clone();
+                                    }
+                                    page_texts.push(text);
+                                }
+                            }
+                        }
+                    }
+                    (total, page_text, page_texts.join("\n\n"))
+                }
+                Err(e) => {
+                    log::warn!("mcp: failed to open pdf for snapshot: {e}");
+                    (0, String::new(), String::new())
+                }
+            };
+        let snap = ReaderSnapshot {
+            format: SnapshotFormat::Pdf,
+            book_path: doc_path.clone(),
+            book_title,
+            chapter_title,
+            chapter_index: page,
+            page_number: Some(page + 1),
+            screen_index: None,
+            total_chapters: total,
+            total_pages: Some(total),
+            page_text,
+            chapter_text,
+        };
+        (
+            snapshot_key(SnapshotFormat::Pdf, page, Some(page + 1), None, 0),
+            Some(snap),
+        )
+    }
+
     /// Poll the synctex channel for commands from editors. Returns true if a command was processed.
     #[cfg(feature = "pdf")]
     fn poll_synctex_commands(&mut self) -> bool {
@@ -8495,6 +8674,11 @@ where
                 app.handle_kitty_eviction_responses(event_source);
             }
             let _ = execute!(stdout(), EndSynchronizedUpdate);
+            // Rebuild the reader snapshot AFTER drawing: `rendered_lines()` is
+            // only populated inside `draw()` (lazy render on cache-generation
+            // bump). Reading before draw yields empty/stale text.
+            #[cfg(unix)]
+            app.update_reader_snapshot();
         }
 
         // If no events were processed, wait a bit to avoid busy-waiting

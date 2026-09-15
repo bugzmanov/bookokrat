@@ -139,6 +139,34 @@ bookokrat --synctex-forward LINE:COLUMN:FILE path/to/document.pdf
 
 The `synctex_editor` setting can also be configured in the Settings popup (`Space+s`), under the Integrations tab.
 
+## MCP Server (AI Agent Integration)
+
+Bookokrat can expose what you're currently reading to an AI agent (e.g. Claude) via the [Model Context Protocol](https://modelcontextprotocol.io). Ask your agent to "explain this page" while you read – it fetches the live ttext from bookokrat.
+
+The running TUI publishes a reader snapshot on a Unix socket; the `bookokrat mcp` subcommand is a stdio MCP server that bridges agent tool calls to it. Start bookokrat with a book open, then register the server with your agent (e.g. `~/.config/mcp/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "bookokrat": {
+      "command": "bookokrat",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Two tools are awailable:
+
+| **Tool**              | **EPUB**                  | **PDF**                    |
+| --------------------- | ------------------------- | -------------------------- |
+| `get_current_page`    | current screenful of text | current page text          |
+| `get_current_chapter` | while current chapter     | current page ± 2 neighbors |
+
+Responses include book/chapter metadata (title, path, position) alongside the text.
+
+Note: Unix-only (macOS, Linux, WSL); uses the same socket transport as SyncTeX forward search.
+
 ## Documentation
 
 - Full usage and keyboard reference: [`readme.txt`](readme.txt)

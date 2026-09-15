@@ -81,4 +81,8 @@ pub enum Command {
         #[arg(long, short = 'o')]
         output: String,
     },
+
+    /// Run as a stdio JSON-RPC 2.0 MCP server exposing the live reader.
+    /// Expects a bookokrat TUI instance to already be running with a book open.
+    Mcp,
 }

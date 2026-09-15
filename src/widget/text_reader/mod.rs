@@ -1748,6 +1748,22 @@ impl MarkdownTextReader {
         self.cache_generation += 1;
     }
 
+    /// The current chapter's rendered lines (plain text in `raw_text`).
+    pub fn rendered_lines(&self) -> &[RenderedLine] {
+        self.rendered_content.lines.as_slice()
+    }
+
+    /// The title of the currently loaded chapter, if any.
+    pub fn chapter_title(&self) -> Option<&str> {
+        self.chapter_title.as_deref()
+    }
+
+    /// The render cache generation. Bumps on any content change at the current
+    /// position (chapter load, comment edit, raw-HTML toggle, image settle).
+    pub fn render_generation(&self) -> u64 {
+        self.cache_generation
+    }
+
     pub fn clear_content(&mut self) {
         self.scroll_offset = 0;
         self.text_selection.clear_selection();
