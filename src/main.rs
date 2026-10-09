@@ -198,11 +198,9 @@ fn main() -> Result<()> {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
-    // A piped document is copied to a temp file before anything else touches
-    // stdin. It has no real location, so it doesn't pick the library either.
+    // A piped document is read from its own library, not from where it came from.
     let piped = args.file.as_deref().is_some_and(piped_input::is_stream_arg);
-    let file = args.file.as_deref().map(resolve_input_path);
-    let library_file = if piped { None } else { file.as_deref() };
+    let library_file = if piped { None } else { args.file.as_deref() };
 
     // Layer user's keybindings.toml overrides on top of the built-in defaults.
     // Tests deliberately skip this so they stay hermetic with respect to
@@ -255,6 +253,9 @@ fn main() -> Result<()> {
         env!("CARGO_PKG_VERSION"),
         std::process::id()
     );
+
+    // A piped document is copied into the cache before anything else touches stdin.
+    let file = args.file.as_deref().map(resolve_input_path);
 
     // Validate file argument before entering TUI
     if let Some(ref path) = file {
@@ -418,10 +419,7 @@ fn main() -> Result<()> {
     } else {
         (Some("bookmarks.json".to_string()), None)
     };
-    // Piped books are all named "stdin.*", so their images must not share the library cache.
-    let image_cache_dir = piped_input::temp_dir()
-        .map(|dir| dir.join("images"))
-        .or_else(|| lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone()));
+    let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
     let mut app = App::new_with_background_library_scan(
         book_directory,
         bookmark_file.as_deref(),
@@ -464,10 +462,19 @@ fn main() -> Result<()> {
         } else {
             None
         };
-        let opened = if piped {
-            app.open_ephemeral_book_for_reading(path, position)
-        } else {
-            app.open_book_for_reading_by_path(path, position)
+        let piped_library = Path::new(path)
+            .parent()
+            .filter(|_| piped && !args.test_mode)
+            .and_then(|dir| match library::resolve_library_paths(dir) {
+                Ok(paths) => Some(paths.bookmarks_file.to_string_lossy().into_owned()),
+                Err(e) => {
+                    warn!("Failed to resolve the piped documents library: {e}");
+                    None
+                }
+            });
+        let opened = match piped_library {
+            Some(bookmarks) => app.open_book_for_reading_in_library(path, &bookmarks, position),
+            None => app.open_book_for_reading_by_path(path, position),
         };
         if let Err(err) = opened {
             error!("Failed to open requested book: {err}");

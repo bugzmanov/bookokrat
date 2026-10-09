@@ -1,22 +1,29 @@
 //! Documents given as `-` (stdin) or as a pipe path such as `<(curl …)`.
 //!
 //! Readers need a seekable file whose extension names the format (MuPDF
-//! workers and the EPUB loader all reopen the document by path), so the
-//! stream is copied into a private temp directory that is removed at exit.
+//! workers and the EPUB loader reopen the document by path), so the stream is
+//! copied into the cache and named after a hash of its content. Piping the
+//! same bytes again yields the same path, so the reading position, comments
+//! and highlights saved for that path come back like for any other book.
 
-use std::fs::File;
+use std::fs::{self, File, FileTimes};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, anyhow, bail};
 use bookokrat::book_manager::BookManager;
+use log::warn;
 
 /// Enough for every signature `BookManager::sniff_format` looks at.
 #[cfg_attr(not(unix), allow(dead_code))]
 const SNIFF_LEN: u64 = 4096;
-
+/// Copies not opened for this long are deleted.
 #[cfg(unix)]
-static TEMP_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+const MAX_UNUSED: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// Beyond this total size, the least recently opened copies are deleted.
+#[cfg(unix)]
+const MAX_TOTAL_BYTES: u64 = 1 << 30;
 
 /// True for `-` and for paths that are pipes rather than regular files.
 pub fn is_stream_arg(arg: &str) -> bool {
@@ -36,17 +43,7 @@ pub fn describe(arg: &str) -> &str {
     if arg == "-" { "stdin" } else { arg }
 }
 
-/// Directory holding the copied document, once `materialize` has run.
-pub fn temp_dir() -> Option<&'static Path> {
-    #[cfg(unix)]
-    {
-        TEMP_DIR.get().map(PathBuf::as_path)
-    }
-    #[cfg(not(unix))]
-    None
-}
-
-/// Copy the stream named by `arg` into the temp directory and return the copy's path.
+/// Copy the stream named by `arg` into the piped documents cache and return the copy's path.
 #[cfg(unix)]
 pub fn materialize(arg: &str) -> Result<PathBuf> {
     use std::io::IsTerminal;
@@ -59,7 +56,10 @@ pub fn materialize(arg: &str) -> Result<PathBuf> {
     } else {
         Box::new(File::open(arg)?)
     };
-    copy_to_dir(reader, create_temp_dir()?)
+    let dir = bookokrat::library::piped_documents_dir()?;
+    let path = copy_to_dir(reader, &dir)?;
+    evict_copies(&dir, &path, SystemTime::now(), MAX_UNUSED, MAX_TOTAL_BYTES);
+    Ok(path)
 }
 
 #[cfg(not(unix))]
@@ -67,63 +67,24 @@ pub fn materialize(_arg: &str) -> Result<PathBuf> {
     bail!("reading documents from stdin or pipes is not supported on this platform")
 }
 
-#[cfg(unix)]
-fn create_temp_dir() -> Result<&'static Path> {
-    extern "C" fn remove_temp_dir() {
-        if let Some(dir) = TEMP_DIR.get() {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-
-    if let Some(dir) = TEMP_DIR.get() {
-        return Ok(dir);
-    }
-    let tmp = std::env::temp_dir();
-    remove_orphaned_temp_dirs(&tmp);
-    let dir = tempfile::Builder::new()
-        .prefix(&format!("{TEMP_DIR_PREFIX}{}-", std::process::id()))
-        .tempdir_in(&tmp)
-        .context("failed to create temp directory")?
-        .keep();
-    let dir = TEMP_DIR.get_or_init(|| dir);
-    // atexit also covers the many `std::process::exit` paths, which skip destructors.
-    // SAFETY: registering a plain extern "C" fn with no captured state.
-    unsafe {
-        libc::atexit(remove_temp_dir);
-    }
-    Ok(dir)
+struct HashingWriter<W> {
+    inner: W,
+    hasher: md5::Context,
 }
 
-#[cfg(unix)]
-const TEMP_DIR_PREFIX: &str = "bookokrat-stdin-";
+impl<W: Write> Write for HashingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buf)?;
+        self.hasher.consume(&buf[..written]);
+        Ok(written)
+    }
 
-/// Remove copies left by sessions killed by a signal (e.g. a closed terminal
-/// window), which never reach atexit. Directory names carry the owner's pid.
-#[cfg(unix)]
-fn remove_orphaned_temp_dirs(tmp: &Path) {
-    let Ok(entries) = std::fs::read_dir(tmp) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let pid = name
-            .to_str()
-            .and_then(|n| n.strip_prefix(TEMP_DIR_PREFIX))
-            .and_then(|rest| rest.split('-').next())
-            .and_then(|pid| pid.parse::<libc::pid_t>().ok());
-        if pid.is_some_and(|pid| !process_exists(pid)) {
-            let _ = std::fs::remove_dir_all(entry.path());
-        }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
     }
 }
 
-#[cfg(unix)]
-fn process_exists(pid: libc::pid_t) -> bool {
-    // SAFETY: signal 0 performs only the existence and permission check.
-    let sent = unsafe { libc::kill(pid, 0) } == 0;
-    sent || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
+/// Write `reader` to `dir/stdin-<hash>.<ext>`, reusing an identical earlier copy.
 #[cfg_attr(not(unix), allow(dead_code))]
 fn copy_to_dir(mut reader: impl Read, dir: &Path) -> Result<PathBuf> {
     let mut head = Vec::new();
@@ -134,11 +95,73 @@ fn copy_to_dir(mut reader: impl Read, dir: &Path) -> Result<PathBuf> {
     let format =
         BookManager::sniff_format(&head).ok_or_else(|| anyhow!("unrecognized document format"))?;
 
-    let path = dir.join(format!("stdin.{}", format.extension()));
-    let mut file = File::create(&path).with_context(|| format!("failed to create {path:?}"))?;
-    file.write_all(&head)?;
-    io::copy(&mut reader, &mut file)?;
+    let partial = tempfile::Builder::new()
+        .prefix(".partial-")
+        .tempfile_in(dir)
+        .with_context(|| format!("failed to create a file in {dir:?}"))?;
+    let mut writer = HashingWriter {
+        inner: partial,
+        hasher: md5::Context::new(),
+    };
+    writer.write_all(&head)?;
+    io::copy(&mut reader, &mut writer)?;
+    let digest = format!("{:x}", writer.hasher.compute());
+
+    let path = dir.join(format!("stdin-{}.{}", &digest[..16], format.extension()));
+    // An existing copy has the same content and may be open in another session.
+    if !path.exists() {
+        writer
+            .inner
+            .persist(&path)
+            .map_err(|e| e.error)
+            .with_context(|| format!("failed to save {path:?}"))?;
+    }
+    if let Err(e) = mark_used(&path) {
+        warn!("Failed to update access time of {path:?}: {e}");
+    }
     Ok(path)
+}
+
+/// Record the open in the access time. The modified time has to keep meaning
+/// "content written": the EPUB image cache is invalidated by a newer one.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn mark_used(path: &Path) -> io::Result<()> {
+    File::options()
+        .write(true)
+        .open(path)?
+        .set_times(FileTimes::new().set_accessed(SystemTime::now()))
+}
+
+/// Delete copies (and leftover partial ones) not used within `max_unused`, then
+/// the least recently used until the rest fit in `max_total` bytes. `keep`, the
+/// copy being opened, is never deleted.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn evict_copies(dir: &Path, keep: &Path, now: SystemTime, max_unused: Duration, max_total: u64) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut total = fs::metadata(keep).map_or(0, |m| m.len());
+    let mut others: Vec<(SystemTime, u64, PathBuf)> = entries
+        .flatten()
+        .filter(|entry| entry.path() != keep)
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok().filter(|m| m.is_file())?;
+            let used = meta.accessed().ok().max(meta.modified().ok())?;
+            Some((used, meta.len(), entry.path()))
+        })
+        .collect();
+    others.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (used, len, path) in others {
+        let stale = now.duration_since(used).is_ok_and(|age| age > max_unused);
+        if stale || total + len > max_total {
+            if let Err(e) = fs::remove_file(&path) {
+                warn!("Failed to remove piped document copy {path:?}: {e}");
+            }
+        } else {
+            total += len;
+        }
+    }
 }
 
 /// Point fd 0 back at the terminal when it is a pipe or a file.
@@ -190,16 +213,40 @@ mod tests {
     use std::io::Cursor;
     use tempfile::TempDir;
 
-    #[test]
-    fn copies_whole_stream_and_names_file_by_format() {
-        let dir = TempDir::new().unwrap();
+    fn epub_bytes(seed: u32) -> Vec<u8> {
         let mut data = b"PK\x03\x04".to_vec();
-        data.extend((0..20_000u32).map(|i| (i % 251) as u8));
+        data.extend((0..20_000u32).map(|i| ((i + seed) % 251) as u8));
+        data
+    }
+
+    fn file_count(dir: &Path) -> usize {
+        fs::read_dir(dir).unwrap().count()
+    }
+
+    #[test]
+    fn names_copy_by_content_hash_and_format() {
+        let dir = TempDir::new().unwrap();
+        let data = epub_bytes(0);
 
         let path = copy_to_dir(Cursor::new(data.clone()), dir.path()).unwrap();
 
-        assert_eq!(path, dir.path().join("stdin.epub"));
-        assert_eq!(std::fs::read(&path).unwrap(), data);
+        let hash = format!("{:x}", md5::compute(&data));
+        assert_eq!(path, dir.path().join(format!("stdin-{}.epub", &hash[..16])));
+        assert_eq!(fs::read(&path).unwrap(), data);
+        assert_eq!(file_count(dir.path()), 1, "no partial file left behind");
+    }
+
+    #[test]
+    fn same_content_reuses_the_copy() {
+        let dir = TempDir::new().unwrap();
+
+        let first = copy_to_dir(Cursor::new(epub_bytes(0)), dir.path()).unwrap();
+        let again = copy_to_dir(Cursor::new(epub_bytes(0)), dir.path()).unwrap();
+        let other = copy_to_dir(Cursor::new(epub_bytes(1)), dir.path()).unwrap();
+
+        assert_eq!(first, again);
+        assert_ne!(first, other);
+        assert_eq!(file_count(dir.path()), 2);
     }
 
     #[test]
@@ -209,28 +256,36 @@ mod tests {
         assert_eq!(empty.to_string(), "no data received");
         let unknown = copy_to_dir(Cursor::new(b"hello".to_vec()), dir.path()).unwrap_err();
         assert_eq!(unknown.to_string(), "unrecognized document format");
-        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+        assert_eq!(file_count(dir.path()), 0);
     }
 
-    #[cfg(unix)]
     #[test]
-    fn removes_only_temp_dirs_of_dead_processes() {
-        let tmp = TempDir::new().unwrap();
-        // Above every platform's pid limit, so never a live process.
-        let dead = tmp.path().join(format!("{TEMP_DIR_PREFIX}99999999-aB3x"));
-        let alive = tmp
-            .path()
-            .join(format!("{TEMP_DIR_PREFIX}{}-Qz9k", std::process::id()));
-        let unrelated = tmp.path().join(format!("{TEMP_DIR_PREFIX}notapid"));
-        for dir in [&dead, &alive, &unrelated] {
-            std::fs::create_dir(dir).unwrap();
-            std::fs::write(dir.join("stdin.pdf"), b"%PDF-").unwrap();
-        }
+    fn evicts_unused_then_least_recently_used_copies() {
+        let dir = TempDir::new().unwrap();
+        let now = SystemTime::now();
+        let day = Duration::from_secs(24 * 60 * 60);
+        let copy = |name: &str, used_days_ago: u32| {
+            let path = dir.path().join(name);
+            fs::write(&path, vec![0u8; 300]).unwrap();
+            let used = now - day * used_days_ago;
+            File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_times(FileTimes::new().set_accessed(used).set_modified(used))
+                .unwrap();
+            path
+        };
+        let stale = copy("stdin-stale.pdf", 40);
+        let older = copy("stdin-older.pdf", 2);
+        let recent = copy("stdin-recent.pdf", 1);
+        let opened = copy("stdin-opened.pdf", 50);
 
-        remove_orphaned_temp_dirs(tmp.path());
+        evict_copies(dir.path(), &opened, now, day * 30, 700);
 
-        assert!(!dead.exists());
-        assert!(alive.exists());
-        assert!(unrelated.exists());
+        assert!(opened.exists(), "the copy being opened is kept");
+        assert!(recent.exists());
+        assert!(!older.exists(), "over the size limit");
+        assert!(!stale.exists(), "unused for too long");
     }
 }
