@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use epub::doc::EpubDoc;
 
+use crate::dialog_anchor_migration::DialogAnchorMap;
 use crate::markdown::{Block, Document, Inline, TableCellContent, Text, TextOrInline};
 use crate::parsing::html_to_markdown::{HtmlToMarkdownConverter, extract_chapter_title};
 use crate::search_engine::SearchLine;
@@ -22,6 +23,8 @@ pub(crate) struct EpubAnalysis {
     pub node_counts: Vec<usize>,
     pub total_nodes: usize,
     pub initial_chapter: Option<AnalyzedChapter>,
+    /// One entry per chapter; `None` when the chapter couldn't be read.
+    pub dialog_anchor_maps: Vec<Option<DialogAnchorMap>>,
 }
 
 pub(crate) fn analyze_epub(
@@ -33,21 +36,25 @@ pub(crate) fn analyze_epub(
     let mut converter = HtmlToMarkdownConverter::new();
     let mut search_sections = Vec::with_capacity(chapter_count);
     let mut node_counts = Vec::with_capacity(chapter_count);
+    let mut dialog_anchor_maps = Vec::with_capacity(chapter_count);
     let mut retained = None;
 
     for chapter_index in 0..chapter_count {
         if !doc.set_current_chapter(chapter_index) {
             node_counts.push(0);
+            dialog_anchor_maps.push(None);
             continue;
         }
 
         let Some((raw_html, _mime)) = doc.get_current_str() else {
             node_counts.push(0);
+            dialog_anchor_maps.push(None);
             continue;
         };
 
         let title = extract_chapter_title(&raw_html);
         let document = Arc::new(converter.convert(&raw_html));
+        dialog_anchor_maps.push(Some(DialogAnchorMap::new(&document)));
         let node_count = if is_non_content_chapter(title.as_deref(), &raw_html) {
             0
         } else {
@@ -79,6 +86,7 @@ pub(crate) fn analyze_epub(
         node_counts,
         total_nodes,
         initial_chapter: retained,
+        dialog_anchor_maps,
     }
 }
 

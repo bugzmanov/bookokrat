@@ -1,8 +1,9 @@
 use crate::annotations::HighlightColor;
+use crate::dialog_anchor_migration::CURRENT_ANCHOR_LAYOUT;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -1050,7 +1051,12 @@ pub struct BookComments {
     /// so a save round-trip doesn't destroy comments written by a newer app
     /// version. Appended after the parseable entries on save.
     unparseable_entries: Vec<serde_yaml::Value>,
+    /// Text comments loaded without `anchor_layout`: still positioned for the
+    /// merged-dialog layout until `migrate_legacy_layout` moves them.
+    legacy_layout_ids: HashSet<String>,
 }
+
+const ANCHOR_LAYOUT_KEY: &str = "anchor_layout";
 
 impl BookComments {
     pub fn new(book_path: &Path, comments_dir: Option<&Path>) -> Result<Self> {
@@ -1077,15 +1083,21 @@ impl BookComments {
             comments_by_location: HashMap::new(),
             comments_by_id: HashMap::new(),
             unparseable_entries: Vec::new(),
+            legacy_layout_ids: HashSet::new(),
         }
     }
 
     fn new_with_path(file_path: PathBuf) -> Result<Self> {
-        let (comments, unparseable_entries) = if file_path.exists() {
+        let (comments, unparseable_entries, current_layout_ids) = if file_path.exists() {
             Self::load_from_file(&file_path)?
         } else {
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), HashSet::new())
         };
+        let legacy_layout_ids = comments
+            .iter()
+            .filter(|c| c.is_text() && !current_layout_ids.contains(&c.id))
+            .map(|c| c.id.clone())
+            .collect();
 
         let mut book_comments = Self {
             file_path,
@@ -1093,6 +1105,7 @@ impl BookComments {
             comments_by_location: HashMap::new(),
             comments_by_id: HashMap::new(),
             unparseable_entries,
+            legacy_layout_ids,
         };
 
         for comment in comments {
@@ -1248,6 +1261,43 @@ impl BookComments {
         out
     }
 
+    pub fn has_legacy_layout_comments(&self) -> bool {
+        !self.legacy_layout_ids.is_empty()
+    }
+
+    /// Moves comments still positioned for the merged-dialog layout. `remap`
+    /// receives a comment's chapter and target and returns the new target, or
+    /// `None` when that chapter can't be read; those comments are left for a
+    /// later attempt. Every remapped comment is stamped as migrated on disk,
+    /// so it is never remapped again. Returns how many comments moved.
+    pub fn migrate_legacy_layout(
+        &mut self,
+        remap: impl Fn(&str, &CommentTarget) -> Option<CommentTarget>,
+    ) -> Result<usize> {
+        let mut moved = 0;
+        let mut migrated = 0;
+        for comment in self.comments.iter_mut() {
+            if !self.legacy_layout_ids.contains(&comment.id) {
+                continue;
+            }
+            let Some(target) = remap(&comment.chapter_href, &comment.target) else {
+                continue;
+            };
+            if target != comment.target {
+                comment.target = target;
+                moved += 1;
+            }
+            self.legacy_layout_ids.remove(&comment.id);
+            migrated += 1;
+        }
+
+        if migrated > 0 {
+            self.sort_comments();
+            self.save_to_disk()?;
+        }
+        Ok(moved)
+    }
+
     pub fn get_all_comments(&self) -> &[Comment] {
         &self.comments
     }
@@ -1320,11 +1370,15 @@ impl BookComments {
     /// entries are kept in raw form so `save_to_disk` can write them back —
     /// otherwise an older app version round-tripping a newer file would
     /// silently destroy comments it didn't recognise.
-    fn load_from_file(file_path: &Path) -> Result<(Vec<Comment>, Vec<serde_yaml::Value>)> {
+    /// Returns the parsed comments, the entries that couldn't be parsed, and
+    /// the ids of entries stamped with the current `anchor_layout`.
+    fn load_from_file(
+        file_path: &Path,
+    ) -> Result<(Vec<Comment>, Vec<serde_yaml::Value>, HashSet<String>)> {
         let content = fs::read_to_string(file_path).context("Failed to read comments file")?;
 
         if content.trim().is_empty() {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), HashSet::new()));
         }
 
         let raw: Vec<serde_yaml::Value> =
@@ -1332,6 +1386,7 @@ impl BookComments {
 
         let mut items: Vec<(Comment, Option<String>)> = Vec::with_capacity(raw.len());
         let mut unparseable: Vec<serde_yaml::Value> = Vec::new();
+        let mut current_layout_ids = HashSet::new();
         for (idx, value) in raw.into_iter().enumerate() {
             // `group_id` only exists in legacy single-slice YAML. Pull it
             // out of the raw Value here so we can feed it to the merge pass
@@ -1346,8 +1401,17 @@ impl BookComments {
                     .and_then(|v| v.as_str())
                     .map(String::from)
             });
+            let current_layout = value
+                .get(ANCHOR_LAYOUT_KEY)
+                .and_then(|v| v.as_u64())
+                .is_some_and(|layout| layout >= u64::from(CURRENT_ANCHOR_LAYOUT));
             match serde_yaml::from_value::<Comment>(value.clone()) {
-                Ok(comment) => items.push((comment, group_id)),
+                Ok(comment) => {
+                    if current_layout {
+                        current_layout_ids.insert(comment.id.clone());
+                    }
+                    items.push((comment, group_id));
+                }
                 Err(e) => {
                     log::warn!(
                         "Preserving unparseable comment at index {idx} in {} across save round-trip: {e}",
@@ -1361,7 +1425,7 @@ impl BookComments {
         // by a shared `group_id`. The new model represents them as one
         // multi-slice Comment, so we eagerly merge them here.
         let comments = merge_legacy_groups(items);
-        Ok((comments, unparseable))
+        Ok((comments, unparseable, current_layout_ids))
     }
 
     fn save_to_disk(&self) -> Result<()> {
@@ -1377,7 +1441,17 @@ impl BookComments {
         let mut all: Vec<serde_yaml::Value> =
             Vec::with_capacity(self.comments.len() + self.unparseable_entries.len());
         for comment in &self.comments {
-            all.push(serde_yaml::to_value(comment).context("Failed to serialize a comment")?);
+            let mut value =
+                serde_yaml::to_value(comment).context("Failed to serialize a comment")?;
+            if comment.is_text() && !self.legacy_layout_ids.contains(&comment.id) {
+                if let Some(mapping) = value.as_mapping_mut() {
+                    mapping.insert(
+                        ANCHOR_LAYOUT_KEY.into(),
+                        u64::from(CURRENT_ANCHOR_LAYOUT).into(),
+                    );
+                }
+            }
+            all.push(value);
         }
         all.extend(self.unparseable_entries.iter().cloned());
 

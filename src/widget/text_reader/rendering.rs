@@ -416,6 +416,50 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    /// Canonical length of a paragraph's content, matching the offsets
+    /// `render_paragraph` assigns: images are rendered as separate blocks and
+    /// contribute nothing.
+    pub(crate) fn paragraph_canonical_len(content: &MarkdownText) -> usize {
+        content
+            .iter()
+            .map(|item| match item {
+                TextOrInline::Inline(Inline::Image { .. }) => 0,
+                TextOrInline::Inline(Inline::Link { text, .. })
+                    if Self::extract_image_from_text(text).is_some() =>
+                {
+                    0
+                }
+                _ => Self::text_or_inline_canonical_len(item),
+            })
+            .sum()
+    }
+
+    /// Canonical positions of the line breaks in a paragraph's content.
+    pub(crate) fn paragraph_line_break_positions(content: &MarkdownText) -> Vec<usize> {
+        let mut positions = Vec::new();
+        let mut offset = 0;
+        for item in content.iter() {
+            let text = match item {
+                TextOrInline::Text(t) => t.content.clone(),
+                TextOrInline::Inline(Inline::Link { text, .. })
+                    if Self::extract_image_from_text(text).is_none() =>
+                {
+                    Self::text_to_string(text)
+                }
+                TextOrInline::Inline(Inline::LineBreak) => "\n".to_string(),
+                TextOrInline::Inline(Inline::SoftBreak) => " ".to_string(),
+                TextOrInline::Inline(_) => continue,
+            };
+            for ch in text.chars() {
+                if ch == '\n' {
+                    positions.push(offset);
+                }
+                offset += 1;
+            }
+        }
+        positions
+    }
+
     /// Convert MarkdownText to structured inline spans
     pub fn text_to_inline_spans(text: &MarkdownText) -> Vec<crate::table::InlineSpan> {
         let mut result = Vec::new();
@@ -4269,6 +4313,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 while plain_idx < plain_chars.len() && plain_chars[plain_idx] == ' ' {
                     plain_idx += 1;
                 }
+                // A hard line break ends the previous line and occupies one
+                // canonical character, just as highlight ranges count it.
+                if plain_chars.get(plain_idx) == Some(&'\n') {
+                    plain_idx += 1;
+                }
             }
 
             let mut line_spans = Vec::new();
@@ -5018,5 +5067,59 @@ beta beta beta beta beta</pre>"#;
             &rendered_text,
             &expected,
         );
+    }
+
+    /// Every wrapped line's `canonical_content_start` must point at that
+    /// line's own text in the paragraph, counting line breaks the way
+    /// highlight ranges do.
+    #[test]
+    fn line_starts_point_at_their_text_across_line_breaks() {
+        use crate::markdown::Block;
+        use crate::markdown_text_reader::MarkdownTextReader;
+
+        let cases = [
+            "<p>The woods are lovely, dark and deep,<br/>But I have promises to keep,<br/>And miles to go before I sleep.</p>",
+            "<p>Short.<br/>A long line after the break that wraps onto several more lines at narrow widths, again and again.</p>",
+            "<p>A long first line that wraps before the break even happens, at narrow widths.<br/>Then more.</p>",
+            "<p>Two breaks in a row.<br/><br/>After the empty line.</p>",
+            "<p><br/>Starts with a break.</p>",
+            "<p>Ends with a break.<br/></p>",
+            "<p>Spaces before the break   <br/>   and after it.</p>",
+            "<p>Mixed <em>emphasis</em> and <a href=\"#x\">a link</a><br/>then <strong>bold</strong> text.</p>",
+            "<p>—De esa manera, ¿verdad?<br/>—Es tan verdad, señor —dijo Sansón—, que tengo para mí que hoy están impresos.</p>",
+        ];
+        for html in cases {
+            let doc = HtmlToMarkdownConverter::new().convert(html);
+            let Block::Paragraph { content } = &doc.blocks[0].block else {
+                panic!("expected a paragraph: {html}");
+            };
+            let canonical: Vec<char> = MarkdownTextReader::text_to_string(content)
+                .chars()
+                .collect();
+            for width in [12, 23, 40, 200] {
+                let mut reader =
+                    MarkdownTextReader::new(crate::settings::RuntimeSettings::in_memory(
+                        crate::settings::Settings::default(),
+                    ));
+                let rendered =
+                    reader.render_document_to_lines(&doc, width, theme::current_theme(), true);
+                for line in rendered.lines.iter().filter(|l| l.node_index == Some(0)) {
+                    let Some(start) = line.canonical_content_start else {
+                        continue;
+                    };
+                    let text: String = line
+                        .raw_text
+                        .chars()
+                        .skip(line.content_column_start)
+                        .collect();
+                    let at_start: String = canonical
+                        .iter()
+                        .skip(start)
+                        .take(text.chars().count())
+                        .collect();
+                    assert_eq!(at_start, text, "{html} at width {width}");
+                }
+            }
+        }
     }
 }

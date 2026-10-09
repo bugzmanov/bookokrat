@@ -444,9 +444,6 @@ impl HtmlToMarkdownConverter {
 
         let mut document = Document::new();
         self.visit_node(&dom.document, &mut document);
-
-        self.group_dialog_paragraphs(&mut document);
-
         document
     }
 
@@ -2974,90 +2971,6 @@ impl HtmlToMarkdownConverter {
             text.push(item);
         }
     }
-
-    /// Groups consecutive dialog paragraphs into single paragraphs with line breaks.
-    fn group_dialog_paragraphs(&self, document: &mut Document) {
-        let mut i = 0;
-
-        while i < document.blocks.len() {
-            if let Block::Paragraph { content } = &document.blocks[i].block {
-                if Self::is_dialog_content(content) {
-                    let mut dialog_contents = vec![content.clone()];
-                    let mut j = i + 1;
-
-                    while j < document.blocks.len() {
-                        if let Block::Paragraph { content } = &document.blocks[j].block {
-                            if Self::is_dialog_content(content) {
-                                dialog_contents.push(content.clone());
-                                j += 1;
-                            } else {
-                                break;
-                            }
-                        } else {
-                            break;
-                        }
-                    }
-
-                    if dialog_contents.len() > 1 {
-                        let merged_content = self.merge_dialog_group(&dialog_contents);
-                        if let Block::Paragraph { content } = &mut document.blocks[i].block {
-                            *content = merged_content;
-                        }
-
-                        document.blocks.drain(i + 1..j);
-                    }
-                }
-            }
-
-            i += 1;
-        }
-    }
-
-    /// Check if a Text content represents dialog (contains dialog lines)
-    fn is_dialog_content(content: &Text) -> bool {
-        for item in content.clone().into_iter() {
-            match item {
-                TextOrInline::Text(text_node) => {
-                    let trimmed = text_node.content.trim_start();
-                    if !trimmed.is_empty() {
-                        return trimmed.starts_with('-')
-                            || trimmed.starts_with('–')
-                            || trimmed.starts_with('—')
-                            || trimmed.starts_with('\u{2010}')
-                            || trimmed.starts_with('\u{2011}')
-                            || trimmed.starts_with('\u{2012}')
-                            || trimmed.starts_with('\u{2013}')
-                            || trimmed.starts_with('\u{2014}');
-                    }
-                }
-                TextOrInline::Inline(Inline::Link { text, .. }) => {
-                    if Self::is_dialog_content(&text) {
-                        return true;
-                    }
-                }
-                _ => {
-                    // Skip images, line breaks, etc. and continue looking
-                }
-            }
-        }
-        false
-    }
-
-    fn merge_dialog_group(&self, dialog_group: &[Text]) -> Text {
-        let mut merged = Text::default();
-
-        for (i, dialog_text) in dialog_group.iter().enumerate() {
-            for item in dialog_text.clone().into_iter() {
-                merged.push(item);
-            }
-
-            if i < dialog_group.len() - 1 {
-                merged.push_inline(Inline::LineBreak);
-            }
-        }
-
-        merged
-    }
 }
 
 impl Default for HtmlToMarkdownConverter {
@@ -3458,7 +3371,7 @@ Paragraph after heading.
     }
 
     #[test]
-    fn test_dialog_grouping_with_markdown_rendering() {
+    fn test_dialog_lines_stay_separate_paragraphs() {
         let mut converter = HtmlToMarkdownConverter::new();
         let renderer = crate::parsing::markdown_renderer::MarkdownRenderer::new();
 
@@ -3471,39 +3384,27 @@ Paragraph after heading.
         "#;
 
         let doc = converter.convert(html);
-        let rendered = renderer.render(&doc);
+        assert_eq!(doc.blocks.len(), 5);
+        assert!(
+            doc.blocks
+                .iter()
+                .all(|node| matches!(node.block, Block::Paragraph { .. }))
+        );
 
-        // Should have 3 paragraphs in the final output
+        let rendered = renderer.render(&doc);
         let paragraphs: Vec<&str> = rendered
             .split("\n\n")
             .filter(|p| !p.trim().is_empty())
             .collect();
         assert_eq!(
-            paragraphs.len(),
-            3,
-            "Should have exactly 3 paragraphs in rendered output"
-        );
-
-        // Check that the second paragraph contains grouped dialog with line breaks
-        let dialog_paragraph = paragraphs[1];
-        assert!(
-            dialog_paragraph.contains("— А кем работаешь?"),
-            "Dialog paragraph should contain first dialog line"
-        );
-        assert!(
-            dialog_paragraph.contains("— Я аналитик"),
-            "Dialog paragraph should contain second dialog line"
-        );
-        assert!(
-            dialog_paragraph.contains("— Пирамиды"),
-            "Dialog paragraph should contain third dialog line"
-        );
-
-        // Should contain line break markers from markdown rendering
-        let line_breaks_count = dialog_paragraph.matches("  \n").count();
-        assert!(
-            line_breaks_count >= 2,
-            "Dialog paragraph should contain line break markers between dialog lines"
+            paragraphs,
+            vec![
+                "Вот пример из жизни. Молодой человек знакомится с родителями невесты.",
+                "— А кем работаешь?",
+                "— Я аналитик, работаю на рынке ценных бумаг.",
+                "— Пирамиды, что ли? Ваучеры?",
+                "Видя, что тесть не понимает, молодой человек меняет тактику:",
+            ]
         );
     }
 
