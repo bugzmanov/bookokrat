@@ -720,8 +720,48 @@ impl BookManager {
         }
     }
 
+    /// Detect format from leading bytes, for input without a file name (stdin, pipes)
+    pub fn sniff_format(head: &[u8]) -> Option<BookFormat> {
+        // PDF allows junk before the header; readers accept it within the first 1024 bytes.
+        let is_pdf = head[..head.len().min(1024)]
+            .windows(5)
+            .any(|w| w == b"%PDF-");
+        let is_djvu = head.starts_with(b"AT&TFORM");
+        if is_pdf || is_djvu {
+            #[cfg(feature = "pdf")]
+            return Some(if is_pdf {
+                BookFormat::Pdf
+            } else {
+                BookFormat::Djvu
+            });
+            #[cfg(not(feature = "pdf"))]
+            return None;
+        }
+        if head.starts_with(b"PK\x03\x04") {
+            return Some(BookFormat::Epub);
+        }
+        let text = String::from_utf8_lossy(head).to_ascii_lowercase();
+        if text.contains("<html") || text.contains("<!doctype html") {
+            return Some(BookFormat::Html);
+        }
+        None
+    }
+
     pub fn is_html_file(&self, path: &str) -> bool {
         Self::detect_format(path) == Some(BookFormat::Html)
+    }
+}
+
+impl BookFormat {
+    pub fn extension(self) -> &'static str {
+        match self {
+            BookFormat::Epub => "epub",
+            BookFormat::Html => "html",
+            #[cfg(feature = "pdf")]
+            BookFormat::Pdf => "pdf",
+            #[cfg(feature = "pdf")]
+            BookFormat::Djvu => "djvu",
+        }
     }
 }
 
@@ -737,6 +777,57 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(path, contents.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn sniff_format_detects_epub_and_html() {
+        assert_eq!(
+            BookManager::sniff_format(b"PK\x03\x04\x14\x00\x00\x00mimetypeapplication/epub+zip"),
+            Some(BookFormat::Epub)
+        );
+        assert_eq!(
+            BookManager::sniff_format(b"\xEF\xBB\xBF<!DOCTYPE html>\n<p>hi</p>"),
+            Some(BookFormat::Html)
+        );
+        assert_eq!(
+            BookManager::sniff_format(b"<?xml version=\"1.0\"?>\n<HTML><body/></HTML>"),
+            Some(BookFormat::Html)
+        );
+        assert_eq!(BookManager::sniff_format(b"just some text"), None);
+        assert_eq!(BookManager::sniff_format(b""), None);
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn sniff_format_detects_pdf_and_djvu() {
+        assert_eq!(
+            BookManager::sniff_format(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3"),
+            Some(BookFormat::Pdf)
+        );
+        let mut leading_junk = vec![b' '; 500];
+        leading_junk.extend_from_slice(b"%PDF-1.4");
+        assert_eq!(
+            BookManager::sniff_format(&leading_junk),
+            Some(BookFormat::Pdf)
+        );
+        let mut too_late = vec![b' '; 1024];
+        too_late.extend_from_slice(b"%PDF-1.4");
+        assert_eq!(BookManager::sniff_format(&too_late), None);
+        assert_eq!(
+            BookManager::sniff_format(b"AT&TFORM\x00\x00\x00\x00DJVU"),
+            Some(BookFormat::Djvu)
+        );
+    }
+
+    #[test]
+    fn extension_round_trips_through_detect_format() {
+        let mut formats = vec![BookFormat::Epub, BookFormat::Html];
+        #[cfg(feature = "pdf")]
+        formats.extend([BookFormat::Pdf, BookFormat::Djvu]);
+        for format in formats {
+            let name = format!("stdin.{}", format.extension());
+            assert_eq!(BookManager::detect_format(&name), Some(format));
+        }
     }
 
     #[cfg(feature = "pdf")]

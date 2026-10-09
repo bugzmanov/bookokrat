@@ -13,6 +13,7 @@ use simplelog::{LevelFilter, WriteLogger};
 
 mod cli;
 mod extract;
+mod piped_input;
 mod print;
 
 // Use modules from the library crate
@@ -79,6 +80,23 @@ fn build_config_migrations() -> Vec<Box<dyn Migration>> {
     // stub via `write_template_if_missing()`.
 
     out
+}
+
+/// Path to open for a FILE argument: itself, or a temp copy when it is stdin or a pipe.
+fn resolve_input_path(arg: &str) -> String {
+    if !piped_input::is_stream_arg(arg) {
+        return arg.to_string();
+    }
+    match piped_input::materialize(arg) {
+        Ok(path) => path.to_string_lossy().into_owned(),
+        Err(e) => {
+            eprintln!(
+                "Error: failed to read document from {}: {e:#}",
+                piped_input::describe(arg)
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Read a y/n answer from stdin. Anything other than "y"/"yes" (case-insensitive) counts as no.
@@ -164,10 +182,12 @@ fn main() -> Result<()> {
                 chapter,
                 pages,
             } => {
-                return print::cmd_print(file, *toc, *info, *chapter, *pages);
+                let file = resolve_input_path(file);
+                return print::cmd_print(&file, *toc, *info, *chapter, *pages);
             }
             cli::Command::Extract { file, output } => {
-                return extract::cmd_extract(file, output);
+                let file = resolve_input_path(file);
+                return extract::cmd_extract(&file, output);
             }
         }
     }
@@ -178,6 +198,12 @@ fn main() -> Result<()> {
         return handle_synctex_forward(fwd, args.file.as_deref());
     }
 
+    // A piped document is copied to a temp file before anything else touches
+    // stdin. It has no real location, so it doesn't pick the library either.
+    let piped = args.file.as_deref().is_some_and(piped_input::is_stream_arg);
+    let file = args.file.as_deref().map(resolve_input_path);
+    let library_file = if piped { None } else { file.as_deref() };
+
     // Layer user's keybindings.toml overrides on top of the built-in defaults.
     // Tests deliberately skip this so they stay hermetic with respect to
     // `~/.config/bookokrat/`. Any issues are surfaced to the app below so it
@@ -185,9 +211,7 @@ fn main() -> Result<()> {
     let keybinding_load_errors = bookokrat::keybindings::reload_keymap();
 
     // Resolve library directory from file argument or CWD
-    let library_dir = args
-        .file
-        .as_deref()
+    let library_dir = library_file
         .and_then(|p| Path::new(p).parent())
         .filter(|p| !p.as_os_str().is_empty())
         .map(|p| p.to_path_buf())
@@ -233,7 +257,7 @@ fn main() -> Result<()> {
     );
 
     // Validate file argument before entering TUI
-    if let Some(ref path) = args.file {
+    if let Some(ref path) = file {
         if !Path::new(path).exists() {
             eprintln!("Error: file not found: {path}");
             std::process::exit(1);
@@ -242,6 +266,13 @@ fn main() -> Result<()> {
             eprintln!("Error: unsupported file format: {path}");
             std::process::exit(1);
         }
+    }
+
+    // Must come before the migration prompt and terminal probes, which read stdin.
+    #[cfg(unix)]
+    if let Err(e) = piped_input::reattach_stdin_to_tty() {
+        eprintln!("Error: {e:#}");
+        std::process::exit(1);
     }
 
     info!("Starting Bookokrat EPUB reader");
@@ -363,9 +394,7 @@ fn main() -> Result<()> {
     };
 
     // Create app and run it
-    let book_directory = args
-        .file
-        .as_deref()
+    let book_directory = library_file
         .and_then(|path| Path::new(path).parent())
         .and_then(|parent| {
             if parent.as_os_str().is_empty() {
@@ -378,7 +407,7 @@ fn main() -> Result<()> {
 
     // In test mode: no auto-load, ephemeral bookmarks
     let auto_load_recent =
-        should_auto_load_recent(args.file.as_deref(), args.test_mode, args.continue_reading);
+        should_auto_load_recent(file.as_deref(), args.test_mode, args.continue_reading);
     let (bookmark_file, comments_dir) = if args.test_mode {
         (None, None)
     } else if let Ok(ref paths) = lib_paths {
@@ -389,7 +418,10 @@ fn main() -> Result<()> {
     } else {
         (Some("bookmarks.json".to_string()), None)
     };
-    let image_cache_dir = lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone());
+    // Piped books are all named "stdin.*", so their images must not share the library cache.
+    let image_cache_dir = piped_input::temp_dir()
+        .map(|dir| dir.join("images"))
+        .or_else(|| lib_paths.as_ref().ok().map(|p| p.image_cache_dir.clone()));
     let mut app = App::new_with_background_library_scan(
         book_directory,
         bookmark_file.as_deref(),
@@ -416,7 +448,7 @@ fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-    } else if let Some(path) = args.file.as_deref() {
+    } else if let Some(path) = file.as_deref() {
         let position = if let Some(ch) = args.chapter {
             if ch == 0 {
                 eprintln!("Error: chapter number must be 1 or greater");
@@ -432,10 +464,16 @@ fn main() -> Result<()> {
         } else {
             None
         };
-        if let Err(err) = app.open_book_for_reading_by_path(path, position) {
+        let opened = if piped {
+            app.open_ephemeral_book_for_reading(path, position)
+        } else {
+            app.open_book_for_reading_by_path(path, position)
+        };
+        if let Err(err) = opened {
             error!("Failed to open requested book: {err}");
             panic_handler::restore_terminal();
-            eprintln!("Error: failed to open {path}: {err}");
+            let shown = args.file.as_deref().map_or(path, piped_input::describe);
+            eprintln!("Error: failed to open {shown}: {err}");
             std::process::exit(1);
         }
     }

@@ -44,6 +44,8 @@ use crate::widget::settings_popup::{SettingsAction, SettingsPopup, SettingsTab};
 pub struct LibraryContext {
     bookmarks: Bookmarks,
     comments_dir: Option<PathBuf>,
+    /// Book has no stable path (read from stdin): nothing about it is persisted.
+    ephemeral: bool,
 }
 
 impl LibraryContext {
@@ -51,6 +53,15 @@ impl LibraryContext {
         Self {
             bookmarks,
             comments_dir,
+            ephemeral: false,
+        }
+    }
+
+    fn ephemeral() -> Self {
+        Self {
+            bookmarks: Bookmarks::ephemeral(),
+            comments_dir: None,
+            ephemeral: true,
         }
     }
 
@@ -1029,6 +1040,20 @@ impl App {
         self.open_book_for_reading_with_context(path, None, position)
     }
 
+    /// Open a temporary copy of a piped document without recording anything about it.
+    pub fn open_ephemeral_book_for_reading(
+        &mut self,
+        path: &str,
+        position: Option<OpenPosition>,
+    ) -> Result<()> {
+        self.open_book_for_reading_with_context(path, Some(LibraryContext::ephemeral()), position)?;
+        // Don't cover a warning raised while opening (e.g. PDF unsupported in this terminal).
+        if self.notifications.current().is_none() {
+            self.show_info("stdin: progress and notes won't be saved");
+        }
+        Ok(())
+    }
+
     pub fn open_book_for_reading_with_source_bookmarks(
         &mut self,
         path: &str,
@@ -1249,7 +1274,7 @@ impl App {
         }
 
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state
-        let mut comments = if ignore_bookmarks {
+        let mut comments = if ignore_bookmarks || self.current_book_context().ephemeral {
             BookComments::new_empty()
         } else {
             match BookComments::new(&path_buf, self.current_book_comments_dir()) {
@@ -1561,7 +1586,7 @@ impl App {
         // comments_enabled controls sidebar UI and interactions (zen mode only).
         // In test mode (ignore_bookmarks=true), use empty comments to avoid loading persistent state.
         let (comments_enabled, book_comments) = if supports_comments {
-            let comments = if ignore_bookmarks {
+            let comments = if ignore_bookmarks || self.current_book_context().ephemeral {
                 crate::comments::BookComments::new_empty()
             } else {
                 match crate::comments::BookComments::new(
@@ -3665,6 +3690,9 @@ impl App {
                 } else {
                     self.show_warning(format!("Could not set mark '{c}': no bookmark entry."));
                 }
+            }
+            crate::marks::MarkScope::Global(_) if self.current_book_context().ephemeral => {
+                self.show_warning("Global marks are not available for documents read from stdin.");
             }
             crate::marks::MarkScope::Global(c) => {
                 self.global_marks.set(c, loc);
