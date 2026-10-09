@@ -588,14 +588,15 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
+        let settings = Self::default_runtime_settings();
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
             bookmark_file,
             auto_load_recent,
             Box::new(system_executor),
             comments_dir,
             image_cache_dir,
-            Self::default_runtime_settings(),
+            settings,
         )
     }
 
@@ -606,14 +607,15 @@ impl App {
         comments_dir: Option<&Path>,
         image_cache_dir: Option<PathBuf>,
     ) -> Self {
+        let settings = Self::default_runtime_settings();
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
             bookmark_file,
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
             comments_dir,
             image_cache_dir,
-            Self::default_runtime_settings(),
+            settings,
         )
     }
 
@@ -628,7 +630,31 @@ impl App {
         settings: settings::RuntimeSettings,
     ) -> Self {
         Self::new_with_config_and_executor(
-            book_directory,
+            BookManager::new_with_directory(book_directory.unwrap_or("."), settings.clone()),
+            bookmark_file,
+            auto_load_recent,
+            Box::new(RealSystemCommandExecutor),
+            comments_dir,
+            image_cache_dir,
+            settings,
+        )
+    }
+
+    /// Like `new_with_config_and_settings`, but scans the library on a
+    /// background thread so a large library doesn't delay startup.
+    pub fn new_with_background_library_scan(
+        book_directory: Option<&str>,
+        bookmark_file: Option<&str>,
+        auto_load_recent: bool,
+        comments_dir: Option<&Path>,
+        image_cache_dir: Option<PathBuf>,
+        settings: settings::RuntimeSettings,
+    ) -> Self {
+        Self::new_with_config_and_executor(
+            BookManager::new_with_directory_in_background(
+                book_directory.unwrap_or("."),
+                settings.clone(),
+            ),
             bookmark_file,
             auto_load_recent,
             Box::new(RealSystemCommandExecutor),
@@ -639,7 +665,7 @@ impl App {
     }
 
     fn new_with_config_and_executor(
-        book_directory: Option<&str>,
+        book_manager: BookManager,
         bookmark_file: Option<&str>,
         auto_load_recent: bool,
         system_executor: Box<dyn SystemCommandExecutor>,
@@ -647,11 +673,6 @@ impl App {
         image_cache_dir: Option<PathBuf>,
         settings: settings::RuntimeSettings,
     ) -> Self {
-        let book_manager = match book_directory {
-            Some(dir) => BookManager::new_with_directory(dir, settings.clone()),
-            None => BookManager::new_with_directory(".", settings.clone()),
-        };
-
         #[cfg(feature = "pdf")]
         let (book_manager, startup_caps) = {
             let startup_caps = crate::terminal::detect_terminal_with_probe();
@@ -2079,10 +2100,10 @@ impl App {
                 self.reading_history = None;
             }
             ReadingHistoryAction::OpenBook { path } => {
-                if let Some(book_index) = self.book_manager.find_book_index_by_path(&path) {
+                if self.book_manager.contains_book(&path) {
                     self.set_main_panel_focus(MainPanel::Content);
                     self.reading_history = None;
-                    let _ = self.open_book_for_reading(book_index);
+                    let _ = self.open_book_for_reading_by_path(&path, None);
                 }
             }
             ReadingHistoryAction::OpenBookAbsolute {
@@ -4087,19 +4108,7 @@ impl App {
                 };
                 self.settings
                     .update(|settings| settings.book_sort_order = new_order);
-                let current_path = self.navigation_panel.current_book_path.clone();
-                self.navigation_panel
-                    .book_list
-                    .set_books(self.book_manager.get_books());
-                if let Some(ref path) = current_path {
-                    if let Some(idx) = self
-                        .navigation_panel
-                        .book_list
-                        .find_book_index_by_path(path)
-                    {
-                        self.navigation_panel.book_list.set_selection_to_index(idx);
-                    }
-                }
+                self.reload_book_list();
                 let label = match new_order {
                     BookSortOrder::ByName => "by name",
                     BookSortOrder::ByType => "by type",
@@ -7524,6 +7533,35 @@ impl App {
         false
     }
 
+    /// Reloads the book list from the book manager, keeping the open book selected.
+    fn reload_book_list(&mut self) {
+        self.navigation_panel
+            .book_list
+            .set_books(self.book_manager.get_books());
+        if let Some(ref path) = self.navigation_panel.current_book_path
+            && let Some(idx) = self
+                .navigation_panel
+                .book_list
+                .find_book_index_by_path(path)
+        {
+            self.navigation_panel.book_list.set_selection_to_index(idx);
+        }
+    }
+
+    fn poll_library_scan(&mut self) -> bool {
+        let Some(result) = self.book_manager.poll_scan() else {
+            return false;
+        };
+        match result {
+            Ok(()) => self.reload_book_list(),
+            Err(e) => {
+                error!("Library scan failed: {e}");
+                self.show_error(format!("Failed to scan library: {e}"));
+            }
+        }
+        true
+    }
+
     /// Poll the synctex channel for commands from editors. Returns true if a command was processed.
     #[cfg(feature = "pdf")]
     fn poll_synctex_commands(&mut self) -> bool {
@@ -8499,6 +8537,9 @@ where
             #[cfg(feature = "pdf")]
             let pdf_mark_jump_expired = app.tick_pdf_mark_jump_highlight();
             let pdf_renders_ready = app.poll_pdf_renders();
+            if app.poll_library_scan() {
+                needs_redraw = true;
+            }
             if images_loaded {
                 needs_redraw = true;
                 debug!("Images loaded, forcing redraw");

@@ -2,8 +2,9 @@ use crate::parsing::html_to_markdown::{HtmlTitlePreference, extract_html_title};
 use crate::settings::{BookSortOrder, RuntimeSettings};
 use epub::doc::EpubDoc;
 use log::{error, info};
-use std::io::BufReader;
+use std::io::{self, BufReader};
 use std::path::Path;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use walkdir::WalkDir;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -17,6 +18,7 @@ pub struct BookManager {
     scan_directory: String,
     pub(crate) settings: RuntimeSettings,
     pub library_mode: LibraryMode,
+    pending_scan: Option<Receiver<io::Result<Vec<BookInfo>>>>,
     #[cfg(feature = "pdf")]
     pub supports_graphics: bool,
 }
@@ -41,6 +43,36 @@ pub struct BookInfo {
 
 impl BookManager {
     pub fn new_with_directory(directory: &str, settings: RuntimeSettings) -> Self {
+        let mut manager = Self::without_books(directory, settings);
+        manager.books =
+            Self::scan(&manager.scan_directory, manager.library_mode).unwrap_or_default();
+        manager
+    }
+
+    /// Like `new_with_directory`, but scans on a background thread so a large
+    /// library doesn't delay startup. `poll_scan` applies the result.
+    pub fn new_with_directory_in_background(directory: &str, settings: RuntimeSettings) -> Self {
+        let mut manager = Self::without_books(directory, settings);
+        let (tx, rx) = mpsc::channel();
+        let scan_directory = manager.scan_directory.clone();
+        let library_mode = manager.library_mode;
+        let spawned = std::thread::Builder::new()
+            .name("library-scan".to_string())
+            .spawn(move || {
+                let _ = tx.send(Self::scan(&scan_directory, library_mode));
+            });
+        match spawned {
+            Ok(_) => manager.pending_scan = Some(rx),
+            Err(e) => {
+                error!("Failed to spawn library scan thread, scanning synchronously: {e}");
+                manager.books =
+                    Self::scan(&manager.scan_directory, manager.library_mode).unwrap_or_default();
+            }
+        }
+        manager
+    }
+
+    fn without_books(directory: &str, settings: RuntimeSettings) -> Self {
         let scan_directory = directory.to_string();
         let library_mode = if Self::is_calibre_library(&scan_directory) {
             info!("Detected Calibre library at {scan_directory}");
@@ -48,24 +80,45 @@ impl BookManager {
         } else {
             LibraryMode::Standard
         };
+        Self {
+            books: Vec::new(),
+            scan_directory,
+            settings,
+            library_mode,
+            pending_scan: None,
+            #[cfg(feature = "pdf")]
+            supports_graphics: false,
+        }
+    }
 
+    fn scan(dir: &str, library_mode: LibraryMode) -> io::Result<Vec<BookInfo>> {
         let mut books = match library_mode {
-            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&scan_directory),
-            LibraryMode::Standard => Self::discover_books_in_dir(&scan_directory),
+            LibraryMode::Calibre => Self::discover_books_in_calibre_library(dir),
+            LibraryMode::Standard => Self::discover_books_in_dir(dir)?,
         };
         books.sort_by(|a, b| {
             a.display_name
                 .to_lowercase()
                 .cmp(&b.display_name.to_lowercase())
         });
-        Self {
-            books,
-            scan_directory,
-            settings,
-            library_mode,
-            #[cfg(feature = "pdf")]
-            supports_graphics: false,
-        }
+        Ok(books)
+    }
+
+    pub fn is_scanning(&self) -> bool {
+        self.pending_scan.is_some()
+    }
+
+    /// Applies a finished background scan. Returns `None` while no result is available.
+    pub fn poll_scan(&mut self) -> Option<io::Result<()>> {
+        let result = match self.pending_scan.as_ref()?.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return None,
+            Err(TryRecvError::Disconnected) => Err(io::Error::other(
+                "library scan thread exited without a result",
+            )),
+        };
+        self.pending_scan = None;
+        Some(result.map(|books| self.books = books))
     }
 
     fn is_calibre_library(dir: &str) -> bool {
@@ -76,26 +129,15 @@ impl BookManager {
         self.library_mode == LibraryMode::Calibre
     }
 
-    fn discover_books_in_dir(dir: &str) -> Vec<BookInfo> {
-        std::fs::read_dir(dir)
-            .unwrap_or_else(|e| {
-                error!("Failed to read directory {dir}: {e}");
-                panic!("Failed to read directory {dir}: {e}");
-            })
+    fn discover_books_in_dir(dir: &str) -> io::Result<Vec<BookInfo>> {
+        let entries = std::fs::read_dir(dir).inspect_err(|e| {
+            error!("Failed to read directory {dir}: {e}");
+        })?;
+        Ok(entries
             .filter_map(|entry| {
-                let entry = entry.ok()?;
-                let path = entry.path();
-                let extension = path.extension()?.to_str()?.to_lowercase();
-                let format = match extension.as_str() {
-                    "epub" => Some(BookFormat::Epub),
-                    "html" | "htm" => Some(BookFormat::Html),
-                    #[cfg(feature = "pdf")]
-                    "pdf" => Some(BookFormat::Pdf),
-                    #[cfg(feature = "pdf")]
-                    "djvu" | "djv" => Some(BookFormat::Djvu),
-                    _ => None,
-                }?;
+                let path = entry.ok()?.path();
                 let path_str = path.to_str()?.to_string();
+                let format = Self::detect_format(&path_str)?;
                 let display_name = Self::extract_display_name(&path_str);
                 Some(BookInfo {
                     path: path_str,
@@ -103,7 +145,11 @@ impl BookManager {
                     format,
                 })
             })
-            .collect()
+            .collect())
+    }
+
+    fn calibre_book_format(path: &str) -> Option<BookFormat> {
+        Self::detect_format(path).filter(|format| *format != BookFormat::Html)
     }
 
     fn discover_books_in_calibre_library(dir: &str) -> Vec<BookInfo> {
@@ -139,16 +185,7 @@ impl BookManager {
                 None => continue,
             };
 
-            let format = match Self::detect_format(&path_str) {
-                Some(BookFormat::Epub) => Some(BookFormat::Epub),
-                #[cfg(feature = "pdf")]
-                Some(BookFormat::Pdf) => Some(BookFormat::Pdf),
-                #[cfg(feature = "pdf")]
-                Some(BookFormat::Djvu) => Some(BookFormat::Djvu),
-                _ => None,
-            };
-
-            let Some(format) = format else {
+            let Some(format) = Self::calibre_book_format(&path_str) else {
                 continue;
             };
 
@@ -551,15 +588,11 @@ impl BookManager {
     }
 
     pub fn refresh_books(&mut self) {
-        self.books = match self.library_mode {
-            LibraryMode::Calibre => Self::discover_books_in_calibre_library(&self.scan_directory),
-            LibraryMode::Standard => Self::discover_books_in_dir(&self.scan_directory),
-        };
-        self.books.sort_by(|a, b| {
-            a.display_name
-                .to_lowercase()
-                .cmp(&b.display_name.to_lowercase())
-        });
+        // A synchronous rescan supersedes a background scan still in flight.
+        self.pending_scan = None;
+        if let Ok(books) = Self::scan(&self.scan_directory, self.library_mode) {
+            self.books = books;
+        }
     }
 
     /// Refresh and get filtered books list
@@ -620,8 +653,33 @@ impl BookManager {
         self.books.iter().position(|book| book.path == path)
     }
 
+    /// Whether the library lists `path`. While a background scan is running,
+    /// the scan's own rules are applied to `path` instead of waiting for it.
     pub fn contains_book(&self, path: &str) -> bool {
-        self.books.iter().any(|book| book.path == path)
+        if !self.is_scanning() {
+            return self.books.iter().any(|book| book.path == path);
+        }
+        let scan_dir = Path::new(&self.scan_directory);
+        let candidate = Path::new(path);
+        match self.library_mode {
+            LibraryMode::Standard => {
+                Self::detect_format(path).is_some()
+                    && candidate
+                        .file_name()
+                        .is_some_and(|name| scan_dir.join(name).to_str() == Some(path))
+                    && candidate.symlink_metadata().is_ok()
+            }
+            LibraryMode::Calibre => {
+                Self::calibre_book_format(path).is_some()
+                    && candidate.strip_prefix(scan_dir).is_ok_and(|relative| {
+                        (1..=3).contains(&relative.components().count())
+                            && scan_dir.join(relative).to_str() == Some(path)
+                    })
+                    && candidate
+                        .symlink_metadata()
+                        .is_ok_and(|metadata| metadata.is_file())
+            }
+        }
     }
 
     /// Detect format from file extension (for files not in the managed list)

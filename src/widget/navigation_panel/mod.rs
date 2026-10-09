@@ -236,6 +236,7 @@ impl NavigationPanel {
                     palette,
                     self.current_book_path.as_deref(),
                     book_manager.is_calibre_mode(),
+                    book_manager.is_scanning(),
                 );
             }
             NavigationMode::TableOfContents => {
