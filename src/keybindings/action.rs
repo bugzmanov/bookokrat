@@ -68,6 +68,7 @@ pub enum Action {
     CopyChapterText,
     CopyTocItem,
     LookupSelection,
+    PeekAnnotation,
     FollowLink,
 
     // === Vim normal mode ===
@@ -104,6 +105,7 @@ pub enum Action {
     ToggleProfiling,
     ToggleRawHtml,
     ToggleJustifyText,
+    ToggleInlineAnnotations,
     ToggleZenBorder,
     IncreaseMargin,
     DecreaseMargin,
@@ -213,6 +215,7 @@ impl Action {
         Action::CopyChapterText,
         Action::CopyTocItem,
         Action::LookupSelection,
+        Action::PeekAnnotation,
         Action::FollowLink,
         Action::ToggleNormalMode,
         Action::EnterVisualMode,
@@ -241,6 +244,7 @@ impl Action {
         Action::ToggleProfiling,
         Action::ToggleRawHtml,
         Action::ToggleJustifyText,
+        Action::ToggleInlineAnnotations,
         Action::ToggleZenBorder,
         Action::IncreaseMargin,
         Action::DecreaseMargin,
@@ -351,6 +355,7 @@ impl Action {
             CopyChapterText => "Copy chapter text (EPUB) / page text (PDF)",
             CopyTocItem => "Copy the selected TOC entry (PDF)",
             LookupSelection => "Run the configured lookup command on the selection",
+            PeekAnnotation => "Peek at the annotation under the cursor (EPUB)",
             FollowLink => "Follow the link under the cursor",
 
             // Vim normal mode
@@ -387,6 +392,7 @@ impl Action {
             ToggleProfiling => "Toggle the performance profiler overlay",
             ToggleRawHtml => "Toggle raw HTML view (EPUB)",
             ToggleJustifyText => "Toggle justified text rendering (EPUB)",
+            ToggleInlineAnnotations => "Show or hide inline annotations for this session (EPUB)",
             ToggleZenBorder => "Toggle the border/frame in zen mode",
             IncreaseMargin => "Increase content margin",
             DecreaseMargin => "Decrease content margin",
@@ -502,7 +508,7 @@ mod tests {
                 ShrinkNavPanel | ExpandNavPanel | ResetNavPanelWidth => a,
                 AddComment | OpenHighlightPalette | DeleteComment => a,
                 CopySelection | CopyChapterText | CopyTocItem => a,
-                LookupSelection | FollowLink => a,
+                LookupSelection | PeekAnnotation | FollowLink => a,
                 ToggleNormalMode | EnterVisualMode | EnterVisualLineMode | StartYank => a,
                 FindForward | FindBackward | TillForward | TillBackward | RepeatFind
                 | RepeatFindReverse => a,
@@ -510,8 +516,13 @@ mod tests {
                 | BigWordEnd | LineStart | LineEnd | FirstNonBlank => a,
                 JumpForward | JumpBackward => a,
                 SetMark | GotoMark | ToggleMarksList => a,
-                ToggleProfiling | ToggleRawHtml | ToggleJustifyText | ToggleZenBorder
-                | IncreaseMargin | DecreaseMargin => a,
+                ToggleProfiling
+                | ToggleRawHtml
+                | ToggleJustifyText
+                | ToggleZenBorder
+                | ToggleInlineAnnotations
+                | IncreaseMargin
+                | DecreaseMargin => a,
                 ZoomIn | ZoomOut | ZoomReset | ZoomFitWidth | ZoomEnhance | PanLeft | PanRight => a,
                 GoToPage | ToggleInvertImages | TogglePdfTheming | TogglePdfWatching => a,
                 TogglePdfPageLayout | TogglePdfRenderMode | TogglePdfLinkHighlight => a,

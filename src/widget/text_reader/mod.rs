@@ -236,6 +236,9 @@ pub struct MarkdownTextReader {
 
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
+    show_inline_annotations: bool,
+    annotation_peek: Option<String>,
+    pending_annotation_layout: Option<comments::AnnotationLayoutAnchor>,
 
     /// Whether the terminal understands the colored-underline SGR. When false
     /// (Apple Terminal), annotation underlines drop the color and render as a
@@ -325,6 +328,7 @@ impl MarkdownTextReader {
     }
 
     fn with_image_picker(image_picker: Option<Picker>, settings: RuntimeSettings) -> Self {
+        let show_inline_annotations = settings.load().show_inline_annotations;
         Self {
             settings,
             markdown_document: None,
@@ -383,6 +387,9 @@ impl MarkdownTextReader {
             chapter_title: None,
             content_margin: 0,
             justify_text: false,
+            show_inline_annotations,
+            annotation_peek: None,
+            pending_annotation_layout: None,
             underline_color_enabled: true,
             dual: DualState::default(),
             normal_mode: NormalModeState::new(),
@@ -639,6 +646,7 @@ impl MarkdownTextReader {
                 self.total_wrapped_lines = self.rendered_content.total_height;
                 self.last_width = width;
                 self.last_focus_state = is_focused;
+                self.restore_annotation_layout();
 
                 if let Some((node_index, char_offset)) = self.pending_node_restore.take() {
                     match char_offset {
@@ -840,6 +848,9 @@ impl MarkdownTextReader {
             .block(block.clone())
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, area);
+
+        self.validate_annotation_peek();
+        let suppress_images = suppress_images || self.annotation_peek.is_some();
 
         // Clear overlay images when suppressing (e.g., popup is shown).
         if suppress_images {
@@ -1749,6 +1760,8 @@ impl MarkdownTextReader {
     }
 
     pub fn clear_content(&mut self) {
+        self.annotation_peek = None;
+        self.pending_annotation_layout = None;
         self.scroll_offset = 0;
         self.text_selection.clear_selection();
 
@@ -1781,6 +1794,7 @@ impl MarkdownTextReader {
     }
 
     pub fn toggle_raw_html(&mut self) {
+        self.annotation_peek = None;
         self.show_raw_html = !self.show_raw_html;
         self.scroll_offset = 0;
         self.text_selection.clear_selection();

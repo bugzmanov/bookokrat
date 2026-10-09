@@ -86,6 +86,8 @@ at the bottom of this document for the syntax.
 │  Space+S       Toggle scroll / page render mode (PDF, Kitty only)           │
 │  Space+g       Jump to page number (PDF)                                    │
 │  Space+a       Open comments/annotations viewer                             │
+│  Space+i       Show / hide inline annotation bodies (EPUB, session only)    │
+│  Space+k       Peek at annotation under cursor (EPUB); Esc closes          │
 │  < / >         Shrink / grow sidebar panel width                            │
 │  Space+< / >   Reset sidebar panel width to default                         │
 │  Ctrl+l        Force full screen redraw                                     │

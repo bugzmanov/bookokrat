@@ -10,6 +10,89 @@ use ratatui::text::Span;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
+enum ContentAnchor {
+    Text {
+        segment: AnnotatableSegment,
+        offset: usize,
+    },
+    Code {
+        block: BlockAddress,
+        line: usize,
+        wrap: usize,
+        column: usize,
+    },
+}
+
+pub(super) struct AnnotationLayoutAnchor {
+    top: Option<ContentAnchor>,
+    cursor: Option<ContentAnchor>,
+    visual: Option<ContentAnchor>,
+    mouse_start: Option<ContentAnchor>,
+    mouse_end: Option<ContentAnchor>,
+}
+
+fn segment_target(
+    segment: &AnnotatableSegment,
+    word_range: Option<(usize, usize)>,
+) -> CommentTarget {
+    use crate::comments::{BlockSubtarget, TextSlice};
+    let subtarget = match &segment.target {
+        AnnotatableTarget::Paragraph => BlockSubtarget::Paragraph { word_range },
+        AnnotatableTarget::ListItem {
+            item_index,
+            list_path,
+        } => BlockSubtarget::ListItem {
+            item_index: *item_index,
+            list_path: list_path.clone(),
+            word_range,
+        },
+        AnnotatableTarget::QuoteParagraph { paragraph_index } => BlockSubtarget::QuoteParagraph {
+            paragraph_index: *paragraph_index,
+            word_range,
+        },
+        AnnotatableTarget::DefinitionItem {
+            item_index,
+            is_term,
+        } => BlockSubtarget::DefinitionItem {
+            item_index: *item_index,
+            is_term: *is_term,
+            word_range,
+        },
+    };
+    CommentTarget::from_slices(vec![TextSlice::new_at(segment.block.clone(), subtarget)])
+}
+
+fn canonical_column(line: &RenderedLine, column: usize) -> Option<usize> {
+    let start = line.canonical_content_start?;
+    let relative = column.saturating_sub(line.content_column_start);
+    let relative = line.justify_map.as_ref().map_or(relative, |map| {
+        map.get(relative)
+            .copied()
+            .map(usize::from)
+            .unwrap_or_else(|| map.last().map_or(0, |n| usize::from(*n) + 1))
+    });
+    Some(start + relative.min(canonical_content_len(line, line.content_column_start)))
+}
+
+fn line_target(line: &RenderedLine) -> Option<CommentTarget> {
+    if let Some(code) = &line.code_line {
+        return Some(CommentTarget::code_block_at(
+            code.block.clone(),
+            (code.line_index, code.line_index),
+        ));
+    }
+    let segment = line.annotatable_segment.as_ref()?;
+    let start = line.canonical_content_start?;
+    Some(segment_target(
+        segment,
+        Some((
+            start,
+            start + canonical_content_len(line, line.content_column_start),
+        )),
+    ))
+}
+
+#[derive(Clone)]
 struct CommentSelection {
     comment_id: String,
 }
@@ -80,11 +163,15 @@ fn slice_matches_scope(slice: &crate::comments::TextSlice, scope: CommentScope<'
 fn slice_annotation_range(
     c: &Comment,
     slice: &crate::comments::TextSlice,
+    mark_whole_block: bool,
 ) -> Option<(usize, usize)> {
     if !c.is_comment() {
         return None;
     }
-    slice.subtarget.word_range()
+    slice
+        .subtarget
+        .word_range()
+        .or_else(|| mark_whole_block.then_some((0, usize::MAX)))
 }
 
 fn slice_highlight_range(
@@ -102,6 +189,337 @@ fn slice_highlight_range(
 }
 
 impl crate::markdown_text_reader::MarkdownTextReader {
+    pub fn show_inline_annotations(&self) -> bool {
+        self.show_inline_annotations
+    }
+
+    pub fn toggle_inline_annotations(&mut self) -> bool {
+        // Preserve source positions: hiding bodies changes every later buffer line.
+        if self.pending_annotation_layout.is_none() {
+            self.pending_annotation_layout = Some(AnnotationLayoutAnchor {
+                top: (self.scroll_offset..self.rendered_content.lines.len())
+                    .find_map(|line| self.content_anchor(line, 0)),
+                cursor: self
+                    .content_anchor(self.normal_mode.cursor.line, self.normal_mode.cursor.column),
+                visual: self
+                    .normal_mode
+                    .visual_anchor
+                    .as_ref()
+                    .and_then(|p| self.content_anchor(p.line, p.column)),
+                mouse_start: self
+                    .text_selection
+                    .start
+                    .as_ref()
+                    .and_then(|p| self.content_anchor(p.line, p.column)),
+                mouse_end: self
+                    .text_selection
+                    .end
+                    .as_ref()
+                    .and_then(|p| self.content_anchor(p.line, p.column)),
+            });
+        }
+        self.annotation_peek = None;
+        self.show_inline_annotations = !self.show_inline_annotations;
+        self.cache_generation += 1;
+        self.show_inline_annotations
+    }
+
+    fn content_anchor(&self, index: usize, column: usize) -> Option<ContentAnchor> {
+        let line = self.rendered_content.lines.get(index)?;
+        if let Some(segment) = &line.annotatable_segment {
+            return Some(ContentAnchor::Text {
+                segment: segment.clone(),
+                offset: canonical_column(line, column)?,
+            });
+        }
+        if let Some(code) = &line.code_line {
+            let wrap = self.rendered_content.lines[..index]
+                .iter()
+                .rev()
+                .take_while(|l| {
+                    l.code_line
+                        .as_ref()
+                        .is_some_and(|c| c.block == code.block && c.line_index == code.line_index)
+                })
+                .count();
+            return Some(ContentAnchor::Code {
+                block: code.block.clone(),
+                line: code.line_index,
+                wrap,
+                column,
+            });
+        }
+        if let LineType::Comment { target, .. } = &line.line_type {
+            let (first, _) = self.source_lines_for_target(target)?;
+            let source = &self.rendered_content.lines[first];
+            if let Some(segment) = &source.annotatable_segment {
+                return Some(ContentAnchor::Text {
+                    segment: segment.clone(),
+                    offset: target.word_range().map_or(0, |(start, _)| start),
+                });
+            }
+            return self.content_anchor(first, source.content_column_start);
+        }
+        None
+    }
+
+    fn resolve_content_anchor(&self, anchor: &ContentAnchor) -> Option<SelectionPoint> {
+        match anchor {
+            ContentAnchor::Text { segment, offset } => {
+                let (index, line) =
+                    self.rendered_content
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, l)| {
+                            l.annotatable_segment.as_ref() == Some(segment)
+                                && l.canonical_content_start
+                                    .is_some_and(|start| start <= *offset)
+                        })?;
+                let relative = offset.saturating_sub(line.canonical_content_start?);
+                let column = line.justify_map.as_ref().map_or(relative, |map| {
+                    map.iter()
+                        .position(|n| usize::from(*n) >= relative)
+                        .unwrap_or(map.len())
+                });
+                Some(SelectionPoint {
+                    line: index,
+                    column: (line.content_column_start + column).min(line.raw_text.chars().count()),
+                })
+            }
+            ContentAnchor::Code {
+                block,
+                line,
+                wrap,
+                column,
+            } => {
+                let (index, rendered) = self
+                    .rendered_content
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| {
+                        l.code_line
+                            .as_ref()
+                            .is_some_and(|c| c.block == *block && c.line_index == *line)
+                    })
+                    .nth(*wrap)?;
+                Some(SelectionPoint {
+                    line: index,
+                    column: (*column).min(rendered.raw_text.chars().count()),
+                })
+            }
+        }
+    }
+
+    pub(super) fn restore_annotation_layout(&mut self) {
+        let Some(anchor) = self.pending_annotation_layout.take() else {
+            return;
+        };
+        if let Some(top) = anchor
+            .top
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+        {
+            self.scroll_offset = top.line;
+            self.dual.last_synced_scroll = usize::MAX;
+        }
+        if let Some(cursor) = anchor
+            .cursor
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+        {
+            self.normal_mode.cursor =
+                super::normal_mode::CursorPosition::new(cursor.line, cursor.column);
+        }
+        self.normal_mode.visual_anchor = anchor
+            .visual
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+            .map(|p| super::normal_mode::CursorPosition::new(p.line, p.column));
+        self.text_selection.start = anchor
+            .mouse_start
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a));
+        self.text_selection.end = anchor
+            .mouse_end
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a));
+        if self.is_normal_mode_active() {
+            self.clamp_column_to_line_length();
+            self.ensure_cursor_visible();
+        }
+    }
+
+    fn source_lines_for_target(&self, target: &CommentTarget) -> Option<(usize, usize)> {
+        let mut matches = self
+            .rendered_content
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line_target(line).is_some_and(|t| t.overlaps(target)))
+            .map(|(index, _)| index);
+        let first = matches.next()?;
+        Some((first, matches.next_back().unwrap_or(first)))
+    }
+
+    fn comments_for_target(&self, target: &CommentTarget) -> Vec<Comment> {
+        let mut result = Vec::new();
+        for slice in target.slices() {
+            for comment in self.get_node_comments(Some(slice.block.node_index)) {
+                if comment.is_comment()
+                    && comment.target.overlaps(target)
+                    && !result.iter().any(|c: &Comment| c.id == comment.id)
+                {
+                    result.push(comment);
+                }
+            }
+        }
+        result
+    }
+
+    fn point_target(&self, point: &SelectionPoint) -> Option<CommentTarget> {
+        let line = self.rendered_content.lines.get(point.line)?;
+        if line.code_line.is_some() {
+            return line_target(line);
+        }
+        if point.column < line.content_column_start || point.column >= line.raw_text.chars().count()
+        {
+            return None;
+        }
+        let offset = canonical_column(line, point.column)?;
+        Some(segment_target(
+            line.annotatable_segment.as_ref()?,
+            Some((offset, offset + 1)),
+        ))
+    }
+
+    fn source_comments_at_selection(&self) -> Vec<Comment> {
+        let Some((_, _, start, end)) = self.cursor_selection_range() else {
+            return Vec::new();
+        };
+        let target = if start == end {
+            self.point_target(&start)
+        } else {
+            self.compute_selection_target(&start, &end)
+        };
+        target.map_or_else(Vec::new, |target| self.comments_for_target(&target))
+    }
+
+    fn peek_point(&self) -> Option<SelectionPoint> {
+        if self.is_normal_mode_active() {
+            Some(SelectionPoint {
+                line: self.normal_mode.cursor.line,
+                column: self.normal_mode.cursor.column,
+            })
+        } else {
+            self.text_selection
+                .get_selection_range()
+                .map(|(start, _)| start)
+        }
+    }
+
+    pub fn open_annotation_peek(&mut self) -> bool {
+        self.annotation_peek = self
+            .peek_point()
+            .and_then(|p| self.point_target(&p))
+            .and_then(|t| self.comments_for_target(&t).first().map(|c| c.id.clone()));
+        self.annotation_peek.is_some()
+    }
+
+    pub fn close_annotation_peek(&mut self) -> bool {
+        self.annotation_peek.take().is_some()
+    }
+
+    pub fn is_annotation_peek_open(&self) -> bool {
+        self.annotation_peek.is_some()
+    }
+
+    pub fn validate_annotation_peek(&mut self) {
+        if self.annotation_peek.is_none() {
+            return;
+        }
+        let valid = !self.show_raw_html
+            && !self.comment_input.is_active()
+            && self
+                .peek_point()
+                .and_then(|p| self.point_target(&p))
+                .is_some_and(|t| {
+                    self.comments_for_target(&t)
+                        .iter()
+                        .any(|c| Some(&c.id) == self.annotation_peek.as_ref())
+                });
+        if !valid {
+            self.annotation_peek = None;
+        }
+    }
+
+    pub fn render_annotation_peek(&mut self, frame: &mut ratatui::Frame) {
+        self.validate_annotation_peek();
+        let Some(id) = self.annotation_peek.as_ref() else {
+            return;
+        };
+        let Some(point) = self.peek_point() else {
+            return;
+        };
+        let Some(area) = self.last_content_area else {
+            return;
+        };
+        let Some(left) = self.last_inner_text_area else {
+            return;
+        };
+        let position = if self.dual.active {
+            self.dual
+                .left_rows
+                .iter()
+                .position(|line| *line == Some(point.line))
+                .map(|row| (left, row))
+                .or_else(|| {
+                    self.dual.right_column.and_then(|right| {
+                        self.dual
+                            .right_rows
+                            .iter()
+                            .position(|line| *line == Some(point.line))
+                            .map(|row| (right, row))
+                    })
+                })
+        } else {
+            point
+                .line
+                .checked_sub(self.scroll_offset)
+                .filter(|row| *row < left.height as usize)
+                .map(|row| (left, row))
+        };
+        let Some((column, row)) = position else {
+            self.annotation_peek = None;
+            return;
+        };
+        let comment = self.book_comments.as_ref().and_then(|book| {
+            book.lock()
+                .ok()
+                .and_then(|book| book.get_comment_by_id(id).cloned())
+        });
+        let Some(comment) = comment else {
+            self.annotation_peek = None;
+            return;
+        };
+        let text = &self.rendered_content.lines[point.line].raw_text;
+        let before: String = text.chars().take(point.column).collect();
+        let x = column
+            .x
+            .saturating_add(unicode_width::UnicodeWidthStr::width(before.as_str()) as u16);
+        let title = format!("// {}", comment.updated_at.format("%m-%d-%y %H:%M"));
+        crate::widget::annotation_peek::render(
+            frame,
+            area,
+            x,
+            column.y + row as u16,
+            &title,
+            &comment.content,
+        );
+    }
+
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
         self.book_comments = Some(comments);
         self.rebuild_chapter_comments();
@@ -147,7 +565,11 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                         return false;
                     }
                     let content = comment.content.clone();
-                    let comment_start_line = self.find_comment_visual_line(&comment.id);
+                    let comment_start_line =
+                        self.find_comment_visual_line(&comment.id).or_else(|| {
+                            self.source_lines_for_target(&comment.target)
+                                .map(|(_, last)| last)
+                        });
 
                     if let Some(start_line) = comment_start_line {
                         let mut textarea = TextArea::default();
@@ -620,6 +1042,14 @@ impl crate::markdown_text_reader::MarkdownTextReader {
             }
         }
 
+        if !self.show_inline_annotations {
+            return self
+                .source_comments_at_selection()
+                .first()
+                .map(|c| CommentSelection {
+                    comment_id: c.id.clone(),
+                });
+        }
         None
     }
 
@@ -665,6 +1095,15 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         };
 
         let mut results = self.find_comments_in_range(start_line, end_line, &start, &end);
+        if !self.show_inline_annotations {
+            for comment in self.source_comments_at_selection() {
+                if !results.iter().any(|entry| entry.comment_id == comment.id) {
+                    results.push(CommentSelection {
+                        comment_id: comment.id,
+                    });
+                }
+            }
+        }
         // Highlights render inline (not as their own lines), so the comment-line
         // scan above never sees them. Fold in any highlight under the cursor.
         for hit in self.highlight_hits_in_range(start_line, end_line, &start, &end) {
@@ -1065,6 +1504,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn has_rendered_comment_for_block(&self, block_address: Option<&BlockAddress>) -> bool {
+        if !self.show_inline_annotations {
+            return false;
+        }
         let Some(target_block) = block_address else {
             return false;
         };
@@ -1120,7 +1562,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         &self,
         block_address: Option<&BlockAddress>,
     ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(block_address, CommentScope::Node, slice_annotation_range)
+        self.collect_in_scope(block_address, CommentScope::Node, |c, s| {
+            slice_annotation_range(c, s, !self.show_inline_annotations)
+        })
     }
 
     pub fn get_highlight_ranges(
@@ -1134,11 +1578,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         &self,
         block_address: Option<&BlockAddress>,
     ) -> Vec<(usize, usize)> {
-        self.collect_in_scope(
-            block_address,
-            CommentScope::LegacyList,
-            slice_annotation_range,
-        )
+        self.collect_in_scope(block_address, CommentScope::LegacyList, |c, s| {
+            slice_annotation_range(c, s, !self.show_inline_annotations)
+        })
     }
 
     pub fn get_highlight_ranges_for_legacy_list(
@@ -1160,7 +1602,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         self.collect_in_scope(
             block_address,
             CommentScope::ListItemPath(list_path),
-            slice_annotation_range,
+            |c, s| slice_annotation_range(c, s, !self.show_inline_annotations),
         )
     }
 
@@ -1188,7 +1630,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                 item_index,
                 is_term,
             },
-            slice_annotation_range,
+            |c, s| slice_annotation_range(c, s, !self.show_inline_annotations),
         )
     }
 
@@ -1221,6 +1663,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         is_focused: bool,
         indent: usize,
     ) {
+        if !self.show_inline_annotations {
+            return;
+        }
         let Some(target_block) = block_address else {
             return;
         };

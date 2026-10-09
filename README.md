@@ -139,6 +139,13 @@ bookokrat --synctex-forward LINE:COLUMN:FILE path/to/document.pdf
 
 The `synctex_editor` setting can also be configured in the Settings popup (`Space+s`), under the Integrations tab.
 
+For EPUB reading, `show_inline_annotations: false` in `config.yaml` hides inline
+comment bodies while retaining their text markings. The default is `true`.
+`Space+i` toggles visibility for the current session without changing the config.
+In normal mode, `Space+k` peeks at the annotation under the cursor; moving out of
+its range or pressing `Esc` closes it. Mouse selections also support peeking.
+`Space+a` continues to open the full Comments Viewer.
+
 ## Documentation
 
 - Full usage and keyboard reference: [`readme.txt`](readme.txt)

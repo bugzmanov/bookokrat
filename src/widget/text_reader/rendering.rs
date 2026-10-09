@@ -2010,7 +2010,9 @@ impl crate::markdown_text_reader::MarkdownTextReader {
                             for count in coverage_counts.iter_mut().take(end + 1).skip(start) {
                                 *count = count.saturating_add(1);
                             }
-                            inline_comments[end].push(comment.clone());
+                            if self.show_inline_annotations {
+                                inline_comments[end].push(comment.clone());
+                            }
                         }
                     }
                 }
