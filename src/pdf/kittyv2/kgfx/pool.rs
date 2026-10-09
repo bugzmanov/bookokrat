@@ -39,13 +39,14 @@ impl PoolSlot {
             libc::shm_unlink(c_path.as_ptr());
         }
 
-        let fd = unsafe {
-            libc::shm_open(
-                c_path.as_ptr(),
-                libc::O_RDWR | libc::O_CREAT,
-                (libc::S_IRUSR | libc::S_IWUSR) as libc::c_uint,
-            )
-        };
+        // Apple declares shm_open as variadic, so mode must be promoted to c_uint;
+        // elsewhere it takes mode_t (u16 on FreeBSD, u32 on Linux).
+        #[cfg(target_vendor = "apple")]
+        let mode = (libc::S_IRUSR | libc::S_IWUSR) as libc::c_uint;
+        #[cfg(not(target_vendor = "apple"))]
+        let mode = libc::S_IRUSR | libc::S_IWUSR;
+
+        let fd = unsafe { libc::shm_open(c_path.as_ptr(), libc::O_RDWR | libc::O_CREAT, mode) };
 
         if fd < 0 {
             return Err(Error::last_os_error());
