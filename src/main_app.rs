@@ -5509,11 +5509,8 @@ impl App {
                 self.apply_theme_to_pdf_reader();
                 self.show_info(format!("Theme: {}", current_theme_name()));
 
-                // Refresh book list in case PDF support was toggled
-                self.book_manager.refresh();
-                self.navigation_panel
-                    .book_list
-                    .set_books(self.book_manager.get_books());
+                // Re-filter the book list in case PDF support was toggled
+                self.reload_book_list();
 
                 #[cfg(feature = "pdf")]
                 {
@@ -9024,5 +9021,104 @@ mod tests {
         app.goto_mark('a');
         draw_app(&mut app);
         assert_eq!(app.text_reader.get_current_node_index(), 6);
+    }
+
+    fn app_for_library(dir: &std::path::Path) -> App {
+        App::new_with_config(
+            Some(dir.to_str().unwrap()),
+            Some(dir.join("bookmarks.json").to_str().unwrap()),
+            false,
+            None,
+            Some(dir.join("img_cache")),
+        )
+    }
+
+    #[test]
+    fn settings_change_does_not_rescan_library() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let existing = dir.path().join("existing.epub");
+        std::fs::write(&existing, b"fake").unwrap();
+        let mut app = app_for_library(dir.path());
+
+        std::fs::write(dir.path().join("added_later.epub"), b"fake").unwrap();
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+
+        let listed: Vec<String> = app
+            .book_manager
+            .get_books()
+            .into_iter()
+            .map(|book| book.path)
+            .collect();
+        assert_eq!(
+            listed,
+            vec![existing.to_str().unwrap().to_string()],
+            "a settings change must not walk the library directory"
+        );
+    }
+
+    #[test]
+    fn settings_change_keeps_background_library_scan_running() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut app = app_for_library(dir.path());
+        let scan = app.book_manager.start_controlled_scan();
+
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+        assert!(
+            app.book_manager.is_scanning(),
+            "a settings change must not cancel the in-flight library scan"
+        );
+
+        let path = dir
+            .path()
+            .join("scanned.epub")
+            .to_str()
+            .unwrap()
+            .to_string();
+        scan.send(Ok(vec![crate::book_manager::BookInfo {
+            path: path.clone(),
+            display_name: "scanned".into(),
+            format: BookFormat::Epub,
+        }]))
+        .unwrap();
+        assert!(app.poll_library_scan());
+        assert_eq!(
+            app.navigation_panel
+                .book_list
+                .find_book_index_by_path(&path),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn settings_change_keeps_open_book_selected_in_book_list() {
+        let dir = tempfile::TempDir::new().unwrap();
+        for name in ["a", "b", "c"] {
+            create_fake_epub_file(
+                dir.path().join(format!("{name}.epub")),
+                &FakeBookConfig {
+                    title: name.into(),
+                    chapter_count: 1,
+                    words_per_chapter: 20,
+                },
+            )
+            .unwrap();
+        }
+        let mut app = app_for_library(dir.path());
+        let open_path = dir.path().join("c.epub").to_str().unwrap().to_string();
+        app.open_book_for_reading_by_path(&open_path, None).unwrap();
+        app.navigation_panel.switch_to_book_mode();
+        let open_index = app
+            .navigation_panel
+            .book_list
+            .find_book_index_by_path(&open_path)
+            .unwrap();
+        assert_eq!(app.navigation_panel.book_list.selected, open_index);
+        assert_ne!(open_index, 0);
+
+        app.handle_settings_action(SettingsAction::SettingsChanged);
+        assert_eq!(
+            app.navigation_panel.book_list.selected, open_index,
+            "a settings change must not move the book list cursor off the open book"
+        );
     }
 }

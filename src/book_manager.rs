@@ -3,9 +3,12 @@ use crate::settings::{BookSortOrder, RuntimeSettings};
 use epub::doc::EpubDoc;
 use log::{error, info};
 use std::io::{self, BufReader};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use walkdir::WalkDir;
+
+/// Calibre structure is always: Author/Book Title (id)/file.epub.
+const CALIBRE_MAX_DEPTH: usize = 3;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum LibraryMode {
@@ -121,6 +124,14 @@ impl BookManager {
         Some(result.map(|books| self.books = books))
     }
 
+    /// Enters the scanning state with a scan the caller finishes by sending its result.
+    #[cfg(test)]
+    pub(crate) fn start_controlled_scan(&mut self) -> mpsc::Sender<io::Result<Vec<BookInfo>>> {
+        let (tx, rx) = mpsc::channel();
+        self.pending_scan = Some(rx);
+        tx
+    }
+
     fn is_calibre_library(dir: &str) -> bool {
         Path::new(dir).join("metadata.db").exists()
     }
@@ -157,12 +168,11 @@ impl BookManager {
         let mut books = Vec::new();
         let mut files_visited: u64 = 0;
 
-        // Calibre structure is always: Author/Book Title (id)/file.epub — depth 3 max.
         // Without a limit, WalkDir would descend into temp_images/, .git/, cloud-synced
         // dirs, etc., which can stall or take minutes on large filesystems.
         let mut last_log_time = start;
         for entry in WalkDir::new(dir)
-            .max_depth(3)
+            .max_depth(CALIBRE_MAX_DEPTH)
             .into_iter()
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_file())
@@ -669,12 +679,25 @@ impl BookManager {
                         .is_some_and(|name| scan_dir.join(name).to_str() == Some(path))
                     && candidate.symlink_metadata().is_ok()
             }
+            // WalkDir doesn't follow symlinks, so every directory below the
+            // library root must be a real one.
             LibraryMode::Calibre => {
                 Self::calibre_book_format(path).is_some()
                     && candidate.strip_prefix(scan_dir).is_ok_and(|relative| {
-                        (1..=3).contains(&relative.components().count())
+                        (1..=CALIBRE_MAX_DEPTH).contains(&relative.components().count())
+                            && relative
+                                .components()
+                                .all(|component| matches!(component, Component::Normal(_)))
                             && scan_dir.join(relative).to_str() == Some(path)
                     })
+                    && candidate
+                        .ancestors()
+                        .skip(1)
+                        .take_while(|dir| *dir != scan_dir)
+                        .all(|dir| {
+                            dir.symlink_metadata()
+                                .is_ok_and(|metadata| metadata.is_dir())
+                        })
                     && candidate
                         .symlink_metadata()
                         .is_ok_and(|metadata| metadata.is_file())
@@ -706,6 +729,7 @@ impl BookManager {
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn write_file(path: &Path, contents: &str) {
@@ -860,5 +884,78 @@ mod tests {
 
         assert!(doc.get_num_chapters() >= 1);
         assert!(doc.get_current_str().is_some());
+    }
+
+    /// Paths where `contains_book` answers differently while a scan is running
+    /// than after the scan of `dir` has finished.
+    fn scan_prediction_mismatches(dir: &Path, candidates: &[PathBuf]) -> Vec<String> {
+        let dir = dir.to_str().unwrap();
+        let settings = RuntimeSettings::in_memory(crate::settings::Settings::default());
+        let scanned = BookManager::new_with_directory(dir, settings.clone());
+        let mut scanning = BookManager::without_books(dir, settings);
+        let _scan = scanning.start_controlled_scan();
+
+        let mut paths: Vec<String> = scanned.books.iter().map(|b| b.path.clone()).collect();
+        paths.extend(candidates.iter().map(|p| p.to_str().unwrap().to_string()));
+        paths
+            .into_iter()
+            .filter(|path| scanning.contains_book(path) != scanned.contains_book(path))
+            .collect()
+    }
+
+    #[test]
+    fn contains_book_while_scanning_matches_standard_scan() {
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+        write_file(&dir.join("novel.epub"), "fake");
+        write_file(&dir.join(".hidden.epub"), "fake");
+        write_file(&dir.join("notes.txt"), "fake");
+        write_file(&dir.join("nested/deep.epub"), "fake");
+        fs::create_dir_all(dir.join("exploded.epub")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(dir.join("gone.epub"), dir.join("dangling.epub")).unwrap();
+
+        let candidates = [
+            dir.join("notes.txt"),
+            dir.join("nested/deep.epub"),
+            dir.join("nested/../novel.epub"),
+            dir.join("missing.epub"),
+        ];
+        assert_eq!(
+            scan_prediction_mismatches(dir, &candidates),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn contains_book_while_scanning_matches_calibre_scan() {
+        let temp_dir = TempDir::new().unwrap();
+        let lib = temp_dir.path().join("library");
+        write_file(&lib.join("metadata.db"), "");
+        write_file(&lib.join("loose.epub"), "fake");
+        write_file(&lib.join("Author/Title (1)/book.epub"), "fake");
+        write_file(&lib.join("Author/Title (1)/book.html"), "fake");
+        write_file(&lib.join("Author/Title (1)/extra/too_deep.epub"), "fake");
+        #[cfg(unix)]
+        {
+            let outside = temp_dir.path().join("outside");
+            write_file(&outside.join("Title (2)/linked.epub"), "fake");
+            std::os::unix::fs::symlink(&outside, lib.join("Linked Author")).unwrap();
+            std::os::unix::fs::symlink(lib.join("loose.epub"), lib.join("Author/alias.epub"))
+                .unwrap();
+        }
+
+        let candidates = [
+            lib.join("Author/Title (1)/book.html"),
+            lib.join("Author/Title (1)/extra/too_deep.epub"),
+            lib.join("Author/../loose.epub"),
+            lib.join("Linked Author/Title (2)/linked.epub"),
+            lib.join("Author/alias.epub"),
+            lib.join("Author/missing.epub"),
+        ];
+        assert_eq!(
+            scan_prediction_mismatches(&lib, &candidates),
+            Vec::<String>::new()
+        );
     }
 }
