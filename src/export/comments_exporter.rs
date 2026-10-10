@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::comments::Comment;
+use crate::comments::{Comment, CommentTarget};
 use crate::markdown::{Document, Inline, TableCellContent};
 use crate::widget::comments_viewer::{ChapterDisplay, CommentEntry};
 
@@ -63,6 +63,12 @@ impl<'a> CommentsExporter<'a> {
                 let full_context = self
                     .extract_full_context_for_export(&entry.chapter_href, entry.primary_comment());
 
+                // PDF anchors: emit the page and rect so consumers can locate them.
+                if let Some(anchor) = Self::pdf_anchor_line(entry.primary_comment()) {
+                    output.push_str(&anchor);
+                    output.push_str("\n\n");
+                }
+
                 // Render the book fragment as a quote
                 for line in full_context.lines() {
                     output.push_str("> ");
@@ -84,6 +90,31 @@ impl<'a> CommentsExporter<'a> {
         }
 
         output
+    }
+
+    /// `*page N · box x0,y0 – x1,y1 pt*` for PDF comments (1-based page,
+    /// PDF points, origin top-left). Each rect includes its own page, joined with `;`.
+    /// `box` marks a drawn region; text anchors say `text`.
+    fn pdf_anchor_line(comment: &Comment) -> Option<String> {
+        let CommentTarget::Pdf { rects, region, .. } = &comment.target else {
+            return None;
+        };
+        let kind = if *region { "box" } else { "text" };
+        let coords = rects
+            .iter()
+            .map(|r| {
+                format!(
+                    "page {} · {kind} {},{} – {},{} pt",
+                    r.page + 1,
+                    r.topleft_x,
+                    r.topleft_y,
+                    r.bottomright_x,
+                    r.bottomright_y
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        Some(format!("*{coords}*"))
     }
 
     pub fn generate_filename(book_title: &str) -> String {
@@ -420,6 +451,95 @@ impl<'a> CommentsExporter<'a> {
 mod tests {
     use super::*;
     use crate::markdown::{Block, Node, TextNode, TextOrInline};
+
+    #[test]
+    fn test_export_pdf_comment_preserves_each_rect_page() {
+        use crate::comments::PdfSelectionRect;
+        use chrono::TimeZone;
+
+        let comment = Comment::with_quoted_text(
+            "document.pdf".to_string(),
+            CommentTarget::pdf(
+                2,
+                vec![
+                    PdfSelectionRect {
+                        page: 2,
+                        topleft_x: 10,
+                        topleft_y: 20,
+                        bottomright_x: 110,
+                        bottomright_y: 40,
+                    },
+                    PdfSelectionRect {
+                        page: 3,
+                        topleft_x: 30,
+                        topleft_y: 50,
+                        bottomright_x: 130,
+                        bottomright_y: 70,
+                    },
+                ],
+            ),
+            "Spans two pages".to_string(),
+            chrono::Utc.with_ymd_and_hms(2025, 1, 1, 8, 0, 0).unwrap(),
+            Some("End of one page and start of the next".to_string()),
+        );
+        let entries = vec![CommentEntry {
+            chapter_title: "Document".to_string(),
+            chapter_href: "document.pdf".to_string(),
+            quoted_text: comment.quoted_text.clone().unwrap(),
+            comments: vec![comment],
+            render_start_line: 0,
+            render_end_line: 0,
+        }];
+        let doc_cache = HashMap::new();
+        let exporter = CommentsExporter::new(&entries, &[], "PDF Book", &doc_cache);
+
+        let export = exporter.generate_markdown();
+
+        assert!(
+            export.contains("*page 3 · text 10,20 – 110,40 pt; page 4 · text 30,50 – 130,70 pt*")
+        );
+        assert!(export.contains("> End of one page and start of the next\n"));
+        assert!(export.contains("\nSpans two pages\n"));
+    }
+
+    #[test]
+    fn test_export_pdf_box_includes_page_and_point_coordinates() {
+        use crate::comments::PdfSelectionRect;
+        use chrono::TimeZone;
+
+        let comment = Comment::with_quoted_text(
+            "document.pdf".to_string(),
+            CommentTarget::pdf_region(
+                0,
+                vec![PdfSelectionRect {
+                    page: 0,
+                    topleft_x: 15,
+                    topleft_y: 25,
+                    bottomright_x: 215,
+                    bottomright_y: 125,
+                }],
+            ),
+            "Diagram note".to_string(),
+            chrono::Utc.with_ymd_and_hms(2025, 1, 1, 8, 0, 0).unwrap(),
+            Some("Figure 1".to_string()),
+        );
+        let entries = vec![CommentEntry {
+            chapter_title: "Document".to_string(),
+            chapter_href: "document.pdf".to_string(),
+            quoted_text: "Figure 1".to_string(),
+            comments: vec![comment],
+            render_start_line: 0,
+            render_end_line: 0,
+        }];
+        let doc_cache = HashMap::new();
+        let exporter = CommentsExporter::new(&entries, &[], "PDF Book", &doc_cache);
+
+        let export = exporter.generate_markdown();
+
+        assert!(export.contains("*page 1 · box 15,25 – 215,125 pt*"));
+        assert!(export.contains("> Figure 1\n"));
+        assert!(export.contains("\nDiagram note\n"));
+    }
 
     #[test]
     fn test_generate_filename() {

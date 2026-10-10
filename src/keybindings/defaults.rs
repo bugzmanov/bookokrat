@@ -44,6 +44,7 @@ pub fn default_keymap() -> Keymap {
     epub_normal_specifics(&mut keymap);
     pdf_specifics(&mut keymap);
     pdf_normal_specifics(&mut keymap);
+    pdf_box_specifics(&mut keymap);
     popup_help_specifics(&mut keymap);
     popup_history_specifics(&mut keymap);
     popup_search_specifics(&mut keymap);
@@ -134,6 +135,7 @@ fn global_specifics(keymap: &mut Keymap) {
     bind!(ctx, "<Space>S" => Action::TogglePdfRenderMode);
     bind!(ctx, "<Space>g" => Action::GoToPage);
     bind!(ctx, "<Space>l" => Action::LookupSelection);
+    bind!(ctx, "<Space>B" => Action::AddBoxAnnotation);
     bind!(ctx, "<Space><lt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<Space><gt>" => Action::ResetNavPanelWidth);
     bind!(ctx, "<C-l>" => Action::ForceRedraw);
@@ -230,6 +232,7 @@ fn pdf_specifics(keymap: &mut Keymap) {
     bind!(ctx, "p" => Action::ToggleProfiling);
     bind!(ctx, "x" => Action::DumpDebugState);
     bind!(ctx, "a" => Action::AddComment);
+    bind!(ctx, "b" => Action::AddBoxAnnotation);
     bind!(ctx, "z" => Action::ZoomReset);
     bind!(ctx, "Z" => Action::ZoomFitWidth);
     bind!(ctx, "e" => Action::ZoomEnhance);
@@ -259,6 +262,25 @@ fn pdf_normal_specifics(keymap: &mut Keymap) {
     // not via the keymap, because it enters a pending state that consumes the next char.
     bind!(ctx, "<S-Tab>" => Action::EnterCommentNav);
     bind!(ctx, "<CR>" => Action::FollowLink);
+}
+
+fn pdf_box_specifics(keymap: &mut Keymap) {
+    let ctx = keymap.context_mut(KeyContext::PdfBox);
+    bind!(ctx, "h" => Action::MoveLeft);
+    bind!(ctx, "<Left>" => Action::MoveLeft);
+    bind!(ctx, "H" => Action::MoveLeft);
+    bind!(ctx, "<S-Left>" => Action::MoveLeft);
+    bind!(ctx, "l" => Action::MoveRight);
+    bind!(ctx, "<Right>" => Action::MoveRight);
+    bind!(ctx, "L" => Action::MoveRight);
+    bind!(ctx, "<S-Right>" => Action::MoveRight);
+    bind!(ctx, "J" => Action::MoveDown);
+    bind!(ctx, "<S-Down>" => Action::MoveDown);
+    bind!(ctx, "K" => Action::MoveUp);
+    bind!(ctx, "<S-Up>" => Action::MoveUp);
+    bind!(ctx, "v" => Action::EnterVisualMode);
+    bind!(ctx, "<Space>" => Action::EnterVisualMode);
+    bind!(ctx, "<CR>" => Action::Select);
 }
 
 fn popup_help_specifics(keymap: &mut Keymap) {

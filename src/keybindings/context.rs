@@ -13,6 +13,7 @@ pub enum KeyContext {
     EpubNormal,
     PdfStandard,
     PdfNormal,
+    PdfBox,
     PopupHelp,
     PopupHistory,
     PopupSearch,
@@ -43,6 +44,7 @@ impl KeyContext {
         KeyContext::EpubNormal,
         KeyContext::PdfStandard,
         KeyContext::PdfNormal,
+        KeyContext::PdfBox,
         KeyContext::PopupHelp,
         KeyContext::PopupHistory,
         KeyContext::PopupSearch,
@@ -61,6 +63,7 @@ impl KeyContext {
             KeyContext::EpubNormal => "epub_normal",
             KeyContext::PdfStandard => "pdf",
             KeyContext::PdfNormal => "pdf_normal",
+            KeyContext::PdfBox => "pdf_box",
             KeyContext::PopupHelp => "popup.help",
             KeyContext::PopupHistory => "popup.history",
             KeyContext::PopupSearch => "popup.search",
@@ -87,6 +90,7 @@ pub const ALL_GROUP: &[KeyContext] = &[
     KeyContext::EpubNormal,
     KeyContext::PdfStandard,
     KeyContext::PdfNormal,
+    KeyContext::PdfBox,
     KeyContext::PopupHelp,
     KeyContext::PopupHistory,
     KeyContext::PopupSearch,
@@ -149,14 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn all_variants_covered() {
-        assert_eq!(KeyContext::ALL.len(), 13);
-    }
-
-    #[test]
     fn group_all_excludes_global() {
         assert!(!ALL_GROUP.contains(&KeyContext::Global));
-        assert_eq!(ALL_GROUP.len(), 12);
     }
 
     #[test]

@@ -99,6 +99,22 @@ pub struct HighlightOverlay {
     pub alpha: u8,
 }
 
+/// How a comment anchor is drawn on the page bitmap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommentMarker {
+    /// Underline beneath the anchored text (text-selection comments).
+    Underline,
+    /// Outline around a user-drawn region (box annotations).
+    Box,
+}
+
+/// A comment anchor in PDF-point coordinates plus how to draw it.
+#[derive(Clone, Debug)]
+pub struct CommentOverlay {
+    pub rect: SelectionRect,
+    pub marker: CommentMarker,
+}
+
 /// Request to extract text from selected regions
 #[derive(Clone, Debug)]
 pub struct ExtractionRequest {

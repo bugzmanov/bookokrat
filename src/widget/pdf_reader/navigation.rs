@@ -154,6 +154,7 @@ impl PdfReaderState {
         self.comment_input.is_active()
             || self.go_to_page_input.is_some()
             || self.page_search.is_input_active()
+            || self.box_draw.is_some()
     }
 
     pub fn save_bookmark_with_throttle(
@@ -393,6 +394,7 @@ impl PdfReaderState {
         &mut self,
         conversion_tx: Option<&flume::Sender<crate::pdf::ConversionCommand>>,
     ) {
+        self.cancel_pointer_interaction();
         let page = self.page;
         self.pending_enhance = None;
 
@@ -424,10 +426,17 @@ impl PdfReaderState {
     }
 
     pub fn handle_event(&mut self, ev: &Event) -> InputResponse {
+        if !matches!(ev, Event::Mouse(_)) {
+            self.dismiss_box_hover();
+            self.pending_box_click = None;
+        }
         match ev {
             Event::Key(key) => self.handle_key_event(*key),
             Event::Mouse(mouse) => InputResponse::handled(self.handle_mouse_event(*mouse)),
-            Event::Resize(_, _) => InputResponse::handled(Some(InputAction::Redraw)),
+            Event::Resize(_, _) => {
+                self.cancel_pointer_interaction();
+                InputResponse::handled(Some(InputAction::Redraw))
+            }
             Event::Paste(text) => InputResponse::handled(self.handle_paste(text)),
             _ => InputResponse::unhandled(),
         }
@@ -450,6 +459,8 @@ impl PdfReaderState {
             InputResponse::handled(self.handle_comment_nav_key(key))
         } else if self.comment_input.is_active() {
             InputResponse::handled(self.handle_comment_input_key(key))
+        } else if self.box_draw.is_some() {
+            InputResponse::handled(self.handle_box_draw_key(key))
         } else if self.comment_nav_active {
             InputResponse::handled(self.handle_comment_nav_key(key))
         } else if key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1111,6 +1122,7 @@ impl PdfReaderState {
                     InputResponse::handled(None)
                 }
             }
+            Action::AddBoxAnnotation => InputResponse::handled(self.start_box_annotation()),
             Action::OpenHighlightPalette => {
                 if self.normal_mode.is_visual_active() {
                     self.highlight_palette_active = true;
@@ -1263,6 +1275,7 @@ impl PdfReaderState {
             Action::ToggleProfiling => Some(InputAction::ToggleProfiling),
             Action::DumpDebugState => Some(InputAction::DumpDebugState),
             Action::AddComment => self.start_comment_input(),
+            Action::AddBoxAnnotation => self.start_box_annotation(),
             Action::ZoomReset => self.reset_zoom_to_fit(),
             Action::ZoomFitWidth => self.reset_zoom_to_fit_width(),
             Action::ZoomEnhance => self.enhance_zoom(),
@@ -1295,10 +1308,161 @@ impl PdfReaderState {
         }
     }
 
+    /// Drop only transient pointer state; never discard an open comment editor.
+    pub(crate) fn cancel_pointer_interaction(&mut self) {
+        self.dismiss_box_hover();
+        if self.box_draw.take().is_some() {
+            self.key_seq.clear();
+            self.force_redraw();
+        }
+        self.pending_box_click = None;
+    }
+
+    fn dismiss_box_hover(&mut self) -> bool {
+        if !self.comment_input.hover_preview {
+            return false;
+        }
+        self.comment_input.clear();
+        self.comment_nav_active = false;
+        self.force_redraw();
+        true
+    }
+
+    fn box_comment_at(&self, col: u16, row: u16) -> Option<(usize, usize)> {
+        if !self.comments_enabled {
+            return None;
+        }
+        let (_, font_size) = self.coord_info?;
+        let point = self.terminal_to_selection_point(col, row, font_size)?;
+        let scale = self.rendered.get(point.page)?.scale_factor.unwrap_or(1.0);
+        let x = point.pdf_x / scale;
+        let y = point.pdf_y / scale;
+        let comments = self.book_comments.as_ref()?.lock().ok()?;
+        comments
+            .get_page_comments(&self.comments_doc_id, point.page)
+            .into_iter()
+            .filter(|comment| comment.is_comment())
+            .enumerate()
+            .filter_map(|(index, comment)| {
+                let CommentTarget::Pdf {
+                    rects,
+                    region: true,
+                    ..
+                } = &comment.target
+                else {
+                    return None;
+                };
+                rects
+                    .iter()
+                    .filter(|rect| {
+                        rect.page == point.page
+                            && x >= rect.topleft_x as f32
+                            && x < rect.bottomright_x as f32
+                            && y >= rect.topleft_y as f32
+                            && y < rect.bottomright_y as f32
+                    })
+                    .map(|rect| {
+                        let area = u64::from(rect.bottomright_x.saturating_sub(rect.topleft_x))
+                            * u64::from(rect.bottomright_y.saturating_sub(rect.topleft_y));
+                        (area, index)
+                    })
+                    .min()
+            })
+            .min()
+            .map(|(_, index)| (point.page, index))
+    }
+
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Option<InputAction> {
         // SyncTeX inverse search (jump to source)
         if Self::is_synctex_inverse_mouse_trigger(mouse) {
             return self.handle_synctex_inverse_click(mouse.column, mouse.row);
+        }
+
+        if self.box_draw.is_some() {
+            return self.handle_box_draw_mouse(mouse);
+        }
+        if self.comment_input.is_active() && !self.comment_input.hover_preview {
+            return None;
+        }
+        if let Some(start) = self.pending_box_click {
+            let (col, row) = (start.term_col, start.term_row);
+            match mouse.kind {
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.pending_box_click = None;
+                    if (col, row) == (mouse.column, mouse.row) {
+                        if let Some((page, index)) = self.box_comment_at(col, row) {
+                            self.comment_nav_active = true;
+                            self.comment_nav_page = page;
+                            self.comment_nav_index = index;
+                            return self.start_comment_edit();
+                        }
+                        return None;
+                    }
+                }
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved => {
+                    if (col, row) == (mouse.column, mouse.row) {
+                        return None;
+                    }
+                    self.pending_box_click = None;
+                }
+                _ => {
+                    self.pending_box_click = None;
+                    return None;
+                }
+            }
+            self.mouse_down_seen = true;
+            let down = self.handle_selection_mouse_from(
+                col,
+                row,
+                MouseEventKind::Down(MouseButton::Left),
+                Some(start),
+            );
+            let kind = if matches!(mouse.kind, MouseEventKind::Up(_)) {
+                self.mouse_down_seen = false;
+                mouse.kind
+            } else {
+                MouseEventKind::Drag(MouseButton::Left)
+            };
+            return self
+                .handle_selection_mouse(mouse.column, mouse.row, kind)
+                .or(down);
+        }
+        if !self.selection.is_selecting
+            && !self.normal_mode.is_visual_active()
+            && matches!(
+                mouse.kind,
+                MouseEventKind::Moved | MouseEventKind::Down(MouseButton::Left)
+            )
+        {
+            if let Some((page, index)) = self.box_comment_at(mouse.column, mouse.row) {
+                let changed = !self.comment_input.hover_preview
+                    || self.comment_nav_page != page
+                    || self.comment_nav_index != index;
+                self.comment_nav_active = true;
+                self.comment_nav_page = page;
+                self.comment_nav_index = index;
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    self.dismiss_box_hover();
+                    self.comment_nav_active = false;
+                    let (_, font_size) = self.coord_info?;
+                    self.pending_box_click =
+                        self.terminal_to_selection_point(mouse.column, mouse.row, font_size);
+                    self.mouse_down_seen = false;
+                    self.force_redraw();
+                    return Some(InputAction::Redraw);
+                }
+                if changed {
+                    self.set_comment_preview_from_nav();
+                    self.comment_input.hover_preview = true;
+                    self.force_redraw();
+                    return Some(InputAction::Redraw);
+                }
+                return None;
+            }
+        }
+        let hover_dismissed = self.dismiss_box_hover();
+        if hover_dismissed && matches!(mouse.kind, MouseEventKind::Moved) {
+            return Some(InputAction::Redraw);
         }
 
         match mouse.kind {
@@ -3276,6 +3440,16 @@ impl PdfReaderState {
         row: u16,
         kind: MouseEventKind,
     ) -> Option<InputAction> {
+        self.handle_selection_mouse_from(col, row, kind, None)
+    }
+
+    fn handle_selection_mouse_from(
+        &mut self,
+        col: u16,
+        row: u16,
+        kind: MouseEventKind,
+        start: Option<crate::pdf::SelectionPoint>,
+    ) -> Option<InputAction> {
         let (_, font_size) = self.coord_info?;
 
         match kind {
@@ -3289,7 +3463,9 @@ impl PdfReaderState {
                     ClickType::Triple => 3,
                 };
 
-                if let Some(point) = self.terminal_to_selection_point(col, row, font_size) {
+                if let Some(point) =
+                    start.or_else(|| self.terminal_to_selection_point(col, row, font_size))
+                {
                     if click_count == 1 {
                         if let Some(target) = self.link_target_at_point(&point) {
                             if self.selection.has_selection() {
@@ -3466,6 +3642,23 @@ impl PdfReaderState {
         term_col: u16,
         term_row: u16,
         font_size: FontSize,
+    ) -> Option<crate::pdf::SelectionPoint> {
+        self.terminal_to_selection_point_with_subcell(
+            term_col,
+            term_row,
+            font_size,
+            crate::inputs::pixel_mouse::subcell_fraction(term_col, term_row),
+        )
+    }
+
+    /// Map a cell plus an explicit in-cell offset; box edges use (0, 0)
+    /// rather than the last mouse position, including when drawn by keyboard.
+    fn terminal_to_selection_point_with_subcell(
+        &self,
+        term_col: u16,
+        term_row: u16,
+        font_size: FontSize,
+        (frac_x, frac_y): (f32, f32),
     ) -> Option<crate::pdf::SelectionPoint> {
         use crate::pdf::SelectionPoint;
 
@@ -3834,12 +4027,8 @@ impl PdfReaderState {
                 )?
             };
 
-            // Sub-cell precision: when SGR-pixel mouse mode is active, the click
-            // lands somewhere inside the cell, not at its top-left corner.
-            // Adding the in-cell fraction (in source space, hence /page_zoom)
-            // lets small link clickboxes hit-test accurately. No-op (0,0) when
-            // pixel mode is off, preserving prior cell-quantized behavior.
-            let (frac_x, frac_y) = crate::inputs::pixel_mouse::subcell_fraction(term_col, term_row);
+            // Convert the in-cell offset to source space. Zero offsets preserve
+            // cell-aligned geometry while mouse hit-testing retains pixel precision.
             let source_x_cells = source_x_cells + frac_x / page_zoom;
             let source_y_cells = (page_local_y as f32 + frac_y) / page_zoom;
 
@@ -4593,17 +4782,20 @@ impl PdfReaderState {
             return Some(InputAction::SelectionChanged(Vec::new()));
         }
 
+        self.begin_comment(target, quoted_text);
+        Some(InputAction::Redraw)
+    }
+
+    fn begin_comment(&mut self, target: CommentTarget, quoted_text: Option<String>) {
+        self.comment_input.clear();
         let mut textarea = TextArea::default();
         textarea.set_placeholder_text("Type your comment here...");
         textarea.set_placeholder_style(Style::default().fg(self.palette.base_04));
-
         self.comment_input.textarea = Some(textarea);
         self.comment_input.target = Some(target);
         self.comment_input.edit_mode = Some(CommentEditMode::Creating);
         self.comment_input.quoted_text = quoted_text;
-        self.comment_input.read_only = false;
-
-        Some(InputAction::Redraw)
+        self.force_redraw();
     }
 
     fn has_overlapping_annotation(&self, target: &CommentTarget) -> bool {
@@ -4614,6 +4806,270 @@ impl PdfReaderState {
             return false;
         };
         locked.has_overlapping_annotation(&self.comments_doc_id, target)
+    }
+
+    // ── Box annotations ─────────────────────────────────────────────────
+
+    /// Enter box-drawing mode with the cursor at the centre of the page area.
+    pub(crate) fn start_box_annotation(&mut self) -> Option<InputAction> {
+        if !self.comments_enabled {
+            self.set_error_hud("Comments are not supported in this terminal".to_string());
+            return Some(InputAction::Redraw);
+        }
+        if self.comment_input.is_active() || self.box_draw.is_some() {
+            return None;
+        }
+        let (img_area, _) = self.coord_info?;
+        if img_area.width == 0 || img_area.height == 0 {
+            return None;
+        }
+        let cursor = (
+            img_area.x + img_area.width / 2,
+            img_area.y + img_area.height / 2,
+        );
+        self.key_seq.clear();
+        self.box_draw = Some(super::state::BoxDrawState {
+            cursor,
+            anchor: None,
+            dragging: false,
+        });
+        self.set_hud_message(
+            "BOX  hjkl/arrows move · HJKL fast · v/Space set corner · Enter confirm · Esc cancel"
+                .to_string(),
+            crate::widget::hud_message::HudMode::Normal,
+            std::time::Duration::from_secs(6),
+        );
+        self.force_redraw();
+        Some(InputAction::Redraw)
+    }
+
+    fn cancel_box_annotation(&mut self) -> Option<InputAction> {
+        self.box_draw = None;
+        self.key_seq.clear();
+        self.force_redraw();
+        Some(InputAction::Redraw)
+    }
+
+    fn handle_box_draw_key(&mut self, key: KeyEvent) -> Option<InputAction> {
+        use crate::keybindings::action::Action;
+        use crate::keybindings::context::KeyContext;
+        use crate::keybindings::keymap::LookupResult;
+        use crate::keybindings::notation::key_event_to_input;
+
+        let (img_area, _) = self.coord_info?;
+        let mut state = self.box_draw?;
+        let km = crate::keybindings::keymap();
+        let mut prospective: Vec<_> = self.key_seq.keys().iter().map(key_event_to_input).collect();
+        prospective.push(key_event_to_input(&key));
+        let mut lookup = km.lookup(KeyContext::PdfBox, &prospective);
+        if matches!(lookup, LookupResult::NoMatch) && !self.key_seq.is_empty() {
+            self.key_seq.clear();
+            lookup = km.lookup(KeyContext::PdfBox, &[key_event_to_input(&key)]);
+        }
+        let action = match lookup {
+            LookupResult::Found(action) => {
+                self.key_seq.clear();
+                action
+            }
+            LookupResult::Prefix => {
+                self.key_seq.push(key);
+                return None;
+            }
+            LookupResult::NoMatch => return None,
+        };
+        let fast = key.modifiers.contains(KeyModifiers::SHIFT);
+        let step: u16 = if fast { 5 } else { 1 };
+        let step_x: u16 = if fast { 10 } else { 2 };
+
+        let (cx, cy) = state.cursor;
+        match action {
+            Action::Cancel => return self.cancel_box_annotation(),
+            Action::MoveLeft => {
+                state.cursor = (cx.saturating_sub(step_x), cy);
+            }
+            Action::MoveRight => {
+                state.cursor = (cx.saturating_add(step_x), cy);
+            }
+            Action::MoveUp => {
+                state.cursor = (cx, cy.saturating_sub(step));
+            }
+            Action::MoveDown => {
+                state.cursor = (cx, cy.saturating_add(step));
+            }
+            Action::EnterVisualMode => {
+                state.anchor = match state.anchor {
+                    Some(_) => None,
+                    None => Some(state.cursor),
+                };
+            }
+            Action::Select => {
+                if state.anchor.is_none() {
+                    self.set_error_hud("Set the first corner with v or Space".to_string());
+                    return Some(InputAction::Redraw);
+                }
+                return self.confirm_box_annotation();
+            }
+            _ => return None,
+        }
+        state.clamp_cursor(img_area);
+        self.box_draw = Some(state);
+        self.force_redraw();
+        Some(InputAction::Redraw)
+    }
+
+    fn handle_box_draw_mouse(&mut self, mouse: MouseEvent) -> Option<InputAction> {
+        let (img_area, _) = self.coord_info?;
+        let mut state = self.box_draw?;
+        let inside = img_area.contains(ratatui::layout::Position::new(mouse.column, mouse.row));
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) if inside => {
+                state.anchor = Some((mouse.column, mouse.row));
+                state.cursor = (mouse.column, mouse.row);
+                state.dragging = true;
+            }
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Moved if state.dragging => {
+                state.cursor = (mouse.column, mouse.row);
+                state.clamp_cursor(img_area);
+            }
+            MouseEventKind::Up(MouseButton::Left) if state.dragging => {
+                state.cursor = (mouse.column, mouse.row);
+                state.clamp_cursor(img_area);
+                state.dragging = false;
+                self.box_draw = Some(state);
+                // A click without drag just drops the anchor; a drag confirms.
+                if state.anchor == Some(state.cursor) {
+                    self.force_redraw();
+                    return Some(InputAction::Redraw);
+                }
+                return self.confirm_box_annotation();
+            }
+            _ => return None,
+        }
+        self.box_draw = Some(state);
+        self.force_redraw();
+        Some(InputAction::Redraw)
+    }
+
+    /// Convert the drawn cell rect into a page-space region and open the
+    /// comment editor for it.
+    fn confirm_box_annotation(&mut self) -> Option<InputAction> {
+        let (_, font_size) = self.coord_info?;
+        let state = self.box_draw?;
+        let cells = state.cell_rect();
+
+        // Map the last selected cell, not a position outside the viewport.
+        // Expand its outer edge in rendered-page pixels below.
+        let tl =
+            self.terminal_to_selection_point_with_subcell(cells.x, cells.y, font_size, (0.0, 0.0));
+        let br = self.terminal_to_selection_point_with_subcell(
+            cells.right().saturating_sub(1),
+            cells.bottom().saturating_sub(1),
+            font_size,
+            (0.0, 0.0),
+        );
+        let (Some(tl), Some(br)) = (tl, br) else {
+            self.set_error_hud("Box must lie on a rendered page".to_string());
+            return Some(InputAction::Redraw);
+        };
+        if tl.page != br.page {
+            self.set_error_hud("Box must stay within a single page".to_string());
+            return Some(InputAction::Redraw);
+        }
+
+        let page = tl.page;
+        let rendered = self.rendered.get(page)?;
+        let (pw, ph) = (
+            rendered.pixel_w.unwrap_or(u32::MAX) as f32,
+            rendered.pixel_h.unwrap_or(u32::MAX) as f32,
+        );
+        let cell = rendered.full_cell_size;
+        let (px_x, px_y) = match (rendered.pixel_w, rendered.pixel_h, cell) {
+            (Some(w), Some(h), Some(cell)) if cell.width > 0 && cell.height > 0 => (
+                w as f32 / f32::from(cell.width),
+                h as f32 / f32::from(cell.height),
+            ),
+            _ => (f32::from(font_size.0), f32::from(font_size.1)),
+        };
+        let zoom = self
+            .zoom
+            .as_ref()
+            .map(|zoom| {
+                if self.settings.load().pdf_render_mode == PdfRenderMode::Scroll {
+                    self.display_zoom_for_effective(page, self.kitty_effective_zoom_factor)
+                } else {
+                    zoom.factor()
+                }
+            })
+            .unwrap_or(1.0);
+        let (dx, dy) = (px_x / zoom, px_y / zoom);
+        // Non-Kitty text hit-testing returns the row centre, not its top edge.
+        let y_offset = if self.zoom.is_some() { 0.0 } else { dy * 0.5 };
+        let x0 = tl.pdf_x.max(0.0);
+        let y0 = (tl.pdf_y - y_offset).max(0.0);
+        let x1 = (br.pdf_x + dx).min(pw);
+        let y1 = (br.pdf_y - y_offset + dy).min(ph);
+        if x1 <= x0 || y1 <= y0 {
+            self.set_error_hud("Box is empty".to_string());
+            return Some(InputAction::Redraw);
+        }
+
+        let rect = crate::pdf::SelectionRect {
+            page,
+            topleft_x: x0.round() as u32,
+            topleft_y: y0.round() as u32,
+            bottomright_x: x1.round() as u32,
+            bottomright_y: y1.round() as u32,
+        };
+        let quoted_text = self.extract_text_in_rect(&rect);
+        let target = self
+            .comment_target_from_selection_rects(vec![rect])
+            .map(|t| match t {
+                CommentTarget::Pdf { page, rects, .. } => CommentTarget::pdf_region(page, rects),
+                other => other,
+            })?;
+
+        self.box_draw = None;
+        self.key_seq.clear();
+
+        self.begin_comment(target, quoted_text);
+        Some(InputAction::Redraw)
+    }
+
+    /// Text of every character whose horizontal position falls inside `rect`
+    /// on a line that vertically overlaps it (rendered-pixel space).
+    fn extract_text_in_rect(&self, rect: &crate::pdf::SelectionRect) -> Option<String> {
+        let rendered = self.rendered.get(rect.page)?;
+        let (x0, y0, x1, y1) = (
+            rect.topleft_x as f32,
+            rect.topleft_y as f32,
+            rect.bottomright_x as f32,
+            rect.bottomright_y as f32,
+        );
+        let mut out = String::new();
+        for line in &rendered.line_bounds {
+            let line_mid = (line.y0 + line.y1) / 2.0;
+            if line_mid < y0 || line_mid > y1 || line.x1 < x0 || line.x0 > x1 {
+                continue;
+            }
+            let mut chars = line.chars.iter().peekable();
+            let mut line_text = String::new();
+            while let Some(ch) = chars.next() {
+                let next_x = chars.peek().map(|n| n.x).unwrap_or(line.x1);
+                let mid = (ch.x + next_x) / 2.0;
+                if mid >= x0 && mid <= x1 {
+                    line_text.push(ch.c);
+                }
+            }
+            let trimmed = line_text.trim();
+            if !trimmed.is_empty() {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(trimmed);
+            }
+        }
+        (!out.is_empty()).then_some(out)
     }
 
     fn handle_comment_input_key(&mut self, key: KeyEvent) -> Option<InputAction> {
@@ -4664,7 +5120,7 @@ impl PdfReaderState {
         Some(InputAction::Redraw)
     }
 
-    fn save_comment(&mut self) -> Option<Vec<crate::pdf::SelectionRect>> {
+    fn save_comment(&mut self) -> Option<Vec<crate::pdf::CommentOverlay>> {
         if !self.comments_enabled {
             return None;
         }
@@ -5347,7 +5803,7 @@ impl PdfReaderState {
         self.comment_rects = self.collect_comment_rects_normalized();
     }
 
-    pub fn initial_comment_rects(&mut self) -> Vec<crate::pdf::SelectionRect> {
+    pub fn initial_comment_rects(&mut self) -> Vec<crate::pdf::CommentOverlay> {
         // Return comment rects if book_comments exists, regardless of comments_enabled.
         // This allows underlines to be visible in ToC mode while UI interactions are zen-only.
         if self.book_comments.is_none() {
@@ -5377,7 +5833,8 @@ impl PdfReaderState {
         overlays
     }
 
-    fn collect_comment_rects_normalized(&self) -> Vec<crate::pdf::SelectionRect> {
+    fn collect_comment_rects_normalized(&self) -> Vec<crate::pdf::CommentOverlay> {
+        use crate::pdf::{CommentMarker, CommentOverlay};
         let Some(comments) = self.book_comments.as_ref() else {
             return Vec::new();
         };
@@ -5390,17 +5847,25 @@ impl PdfReaderState {
             .into_iter()
             .filter(|comment| comment.is_comment())
             .flat_map(|comment| {
-                let CommentTarget::Pdf { rects, .. } = &comment.target else {
+                let CommentTarget::Pdf { rects, region, .. } = &comment.target else {
                     return Vec::new();
+                };
+                let marker = if *region {
+                    CommentMarker::Box
+                } else {
+                    CommentMarker::Underline
                 };
                 rects
                     .iter()
-                    .map(|rect| crate::pdf::SelectionRect {
-                        page: rect.page,
-                        topleft_x: rect.topleft_x,
-                        topleft_y: rect.topleft_y,
-                        bottomright_x: rect.bottomright_x,
-                        bottomright_y: rect.bottomright_y,
+                    .map(|rect| CommentOverlay {
+                        rect: crate::pdf::SelectionRect {
+                            page: rect.page,
+                            topleft_x: rect.topleft_x,
+                            topleft_y: rect.topleft_y,
+                            bottomright_x: rect.bottomright_x,
+                            bottomright_y: rect.bottomright_y,
+                        },
+                        marker,
                     })
                     .collect()
             })
@@ -6727,15 +7192,17 @@ impl PdfReaderState {
             }
             InputAction::CommentSaved { rects, .. } => {
                 log::info!("CommentSaved: sending {} rects to converter", rects.len());
-                for (i, r) in rects.iter().enumerate() {
+                for (i, o) in rects.iter().enumerate() {
+                    let r = &o.rect;
                     log::info!(
-                        "  rect[{}]: page={} ({},{}) - ({},{})",
+                        "  rect[{}]: page={} ({},{}) - ({},{}) {:?}",
                         i,
                         r.page,
                         r.topleft_x,
                         r.topleft_y,
                         r.bottomright_x,
-                        r.bottomright_y
+                        r.bottomright_y,
+                        o.marker
                     );
                 }
                 send_conversion(crate::pdf::ConversionCommand::UpdateComments(rects));
@@ -6940,6 +7407,10 @@ pub(crate) fn should_route_mouse_to_ui(
 ) -> bool {
     if has_popup {
         return true;
+    }
+    // The reader must observe departures into the sidebar/help bar to dismiss hover previews.
+    if matches!(mouse_event.kind, MouseEventKind::Moved) {
+        return false;
     }
 
     if zen_mode {
@@ -7241,6 +7712,191 @@ mod tests {
             kind: KeyEventKind::Press,
             state: KeyEventState::empty(),
         }
+    }
+
+    #[test]
+    fn box_annotation_includes_last_viewport_cell() {
+        let mut state = non_kitty_reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
+        state.comments_enabled = true;
+        state.rendered[0].pixel_w = Some(100);
+        state.rendered[0].pixel_h = Some(100);
+        state.rendered[0].full_cell_size = Some(CellSize::new(10, 10));
+        state.coord_info = Some((Rect::new(0, 0, 10, 10), (10, 10)));
+        state.box_draw = Some(super::super::state::BoxDrawState {
+            anchor: Some((8, 8)),
+            cursor: (9, 9),
+            dragging: false,
+        });
+        state.confirm_box_annotation();
+        let Some(crate::comments::CommentTarget::Pdf {
+            rects,
+            region: true,
+            ..
+        }) = &state.comment_input.target
+        else {
+            panic!("valid edge box was rejected");
+        };
+        assert_eq!((rects[0].topleft_x, rects[0].topleft_y), (80, 80));
+        assert_eq!((rects[0].bottomright_x, rects[0].bottomright_y), (100, 100));
+    }
+
+    #[test]
+    fn box_annotation_resize_cancels_unconfirmed_geometry() {
+        let mut state = non_kitty_reader_with_lines(Vec::new());
+        state.comments_enabled = true;
+        state.start_box_annotation();
+        state.handle_event(&crossterm::event::Event::Resize(40, 20));
+        state.handle_key_event(key(KeyCode::Char('v')));
+        state.handle_key_event(key(KeyCode::Enter));
+        assert!(state.box_draw.is_none());
+        assert!(!state.comment_input.is_active());
+    }
+
+    #[test]
+    fn box_annotation_zoom_and_pan_preserve_pdf_coordinates() {
+        let mut state = reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
+        state.comments_enabled = true;
+        state.rendered[0].pixel_w = Some(200);
+        state.rendered[0].pixel_h = Some(200);
+        state.rendered[0].scale_factor = Some(2.0);
+        state.rendered[0].full_cell_size = Some(CellSize::new(20, 20));
+        state.coord_info = Some((Rect::new(0, 0, 10, 10), (10, 10)));
+        state.zoom = Some(crate::pdf::Zoom {
+            factor: 2.0,
+            cell_pan_from_left: 3,
+            global_scroll_offset: 4,
+        });
+        state.box_draw = Some(super::super::state::BoxDrawState {
+            anchor: Some((8, 8)),
+            cursor: (9, 9),
+            dragging: false,
+        });
+        state.confirm_box_annotation();
+        let Some(crate::comments::CommentTarget::Pdf {
+            rects,
+            region: true,
+            ..
+        }) = &state.comment_input.target
+        else {
+            panic!("zoomed edge box was rejected");
+        };
+        assert_eq!((rects[0].topleft_x, rects[0].topleft_y), (35, 30));
+        assert_eq!((rects[0].bottomright_x, rects[0].bottomright_y), (40, 35));
+    }
+
+    #[test]
+    fn box_annotation_uses_selected_pages_zoom_in_scroll_mode() {
+        let mut state = reader_with_lines(Vec::new());
+        state.settings = runtime_settings(PdfRenderMode::Scroll, PdfPageLayoutMode::Single);
+        state.comments_enabled = true;
+        state.rendered = vec![
+            kitty_rendered_page(20, 20, 1.0),
+            kitty_rendered_page(40, 40, 2.0),
+        ];
+        state.kitty_effective_zoom_factor = 2.0;
+        state.coord_info = Some((Rect::new(0, 0, 10, 10), (10, 10)));
+        state.zoom = Some(crate::pdf::Zoom {
+            factor: 2.0,
+            cell_pan_from_left: 3,
+            global_scroll_offset: 40 + u32::from(super::SEPARATOR_HEIGHT),
+        });
+        state.box_draw = Some(super::super::state::BoxDrawState {
+            anchor: Some((8, 8)),
+            cursor: (9, 9),
+            dragging: false,
+        });
+        state.confirm_box_annotation();
+        let Some(crate::comments::CommentTarget::Pdf {
+            page: 1,
+            rects,
+            region: true,
+        }) = &state.comment_input.target
+        else {
+            panic!("box on differently enhanced page was rejected");
+        };
+        assert_eq!((rects[0].topleft_x, rects[0].topleft_y), (55, 40));
+        assert_eq!((rects[0].bottomright_x, rects[0].bottomright_y), (65, 50));
+    }
+
+    fn reader_with_box_comment() -> (PdfReaderState, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.pdf");
+        std::fs::write(&path, b"annotation fixture").unwrap();
+        let mut comments = crate::comments::BookComments::new(&path, Some(dir.path())).unwrap();
+        comments
+            .add_comment(crate::comments::Comment::new(
+                "test.pdf".to_string(),
+                crate::comments::CommentTarget::pdf_region(
+                    0,
+                    vec![crate::comments::PdfSelectionRect {
+                        page: 0,
+                        topleft_x: 10,
+                        topleft_y: 10,
+                        bottomright_x: 90,
+                        bottomright_y: 90,
+                    }],
+                ),
+                "Saved box note".to_string(),
+                chrono::Utc::now(),
+            ))
+            .unwrap();
+        let mut text = line(10.0, 20.0);
+        text.x1 = 100.0;
+        text.chars = "abcdefghij"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| CharInfo {
+                x: i as f32 * 10.0,
+                c,
+            })
+            .collect();
+        let mut state = non_kitty_reader_with_lines(vec![text]);
+        state.comments_enabled = true;
+        state.comments_doc_id = "test.pdf".to_string();
+        state.book_comments = Some(std::sync::Arc::new(std::sync::Mutex::new(comments)));
+        state.rendered[0].pixel_w = Some(100);
+        state.rendered[0].pixel_h = Some(100);
+        state.rendered[0].full_cell_size = Some(CellSize::new(10, 10));
+        state.coord_info = Some((Rect::new(0, 0, 10, 10), (10, 10)));
+        (state, dir)
+    }
+
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        }
+    }
+
+    #[test]
+    fn box_annotation_click_edits_only_after_release() {
+        let (mut state, _dir) = reader_with_box_comment();
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
+        state.handle_mouse_event(mouse(MouseEventKind::Moved, 2, 1));
+        assert!(state.comment_input.read_only);
+        state.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+        assert!(!state.comment_input.is_active());
+        state.handle_mouse_event(mouse(MouseEventKind::Up(MouseButton::Left), 2, 1));
+        assert!(!state.comment_input.read_only);
+        assert_eq!(
+            state.comment_input.textarea.as_ref().unwrap().lines(),
+            &["Saved box note"]
+        );
+    }
+
+    #[test]
+    fn box_annotation_drag_selects_text_without_opening_editor() {
+        let (mut state, _dir) = reader_with_box_comment();
+        state.settings = runtime_settings(PdfRenderMode::Page, PdfPageLayoutMode::Single);
+        state.handle_mouse_event(mouse(MouseEventKind::Down(MouseButton::Left), 2, 1));
+        state.handle_mouse_event(mouse(MouseEventKind::Drag(MouseButton::Left), 5, 1));
+        state.handle_mouse_event(mouse(MouseEventKind::Up(MouseButton::Left), 5, 1));
+        assert!(!state.comment_input.is_active());
+        assert_eq!(state.extract_selection_text().as_deref(), Some("cdef"));
     }
 
     fn non_kitty_reader_with_lines(lines: Vec<LineBounds>) -> PdfReaderState {
