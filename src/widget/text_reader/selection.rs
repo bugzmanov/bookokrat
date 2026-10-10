@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 impl crate::markdown_text_reader::MarkdownTextReader {
     pub fn handle_mouse_down(&mut self, x: u16, y: u16) {
         self.mouse_down_screen_y = Some(y);
+        self.close_annotation_peek();
 
         if self.is_normal_mode_active() {
             self.text_selection.clear_selection();
@@ -107,6 +108,7 @@ impl crate::markdown_text_reader::MarkdownTextReader {
 
             if !self.is_visual_mode_active() {
                 self.normal_mode.visual_anchor = None;
+                self.peek_at_click(x, y, text_area, true);
             }
 
             return self.check_image_click(x, y);
@@ -125,8 +127,24 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         if self.text_selection.is_selecting {
             self.text_selection.end_selection();
         }
+        if !self.text_selection.has_selection() {
+            self.peek_at_click(x, y, text_area, false);
+        }
 
         self.check_image_click(x, y)
+    }
+
+    /// With note bodies hidden, a plain click on annotated text shows its note.
+    fn peek_at_click(&mut self, x: u16, y: u16, text_area: Rect, follow_cursor: bool) {
+        if self.show_inline_annotations {
+            return;
+        }
+        if let Some((line, column)) = self.screen_to_text_coords(x, y, text_area) {
+            self.open_annotation_peek_at(
+                super::text_selection::SelectionPoint { line, column },
+                follow_cursor,
+            );
+        }
     }
 
     pub fn handle_double_click(&mut self, x: u16, y: u16) {

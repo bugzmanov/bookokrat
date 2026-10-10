@@ -1,9 +1,184 @@
 use super::types::*;
+use crate::comments::BlockAddress;
 use crate::main_app::VimNavMotions;
+use crate::markdown_text_reader::text_selection::SelectionPoint;
 use crate::search::SearchMode;
 use std::time::Instant;
 
+#[derive(Clone)]
+enum ContentAnchor {
+    Text {
+        segment: AnnotatableSegment,
+        offset: usize,
+    },
+    Code {
+        block: BlockAddress,
+        line: usize,
+        wrap: usize,
+        column: usize,
+    },
+}
+
+pub(super) struct ReflowAnchor {
+    top: Option<ContentAnchor>,
+    cursor: Option<ContentAnchor>,
+    visual: Option<ContentAnchor>,
+    mouse_start: Option<ContentAnchor>,
+    mouse_end: Option<ContentAnchor>,
+}
+
 impl crate::markdown_text_reader::MarkdownTextReader {
+    /// Remembers the viewport top, cursor and selections by content position,
+    /// so a re-render that inserts or removes non-text lines can put them back.
+    pub(super) fn capture_reflow_anchor(&mut self) {
+        if self.pending_reflow_anchor.is_some() {
+            return;
+        }
+        self.pending_reflow_anchor = Some(ReflowAnchor {
+            top: (self.scroll_offset..self.rendered_content.lines.len())
+                .find_map(|line| self.content_anchor(line, 0)),
+            cursor: self
+                .content_anchor(self.normal_mode.cursor.line, self.normal_mode.cursor.column),
+            visual: self
+                .normal_mode
+                .visual_anchor
+                .as_ref()
+                .and_then(|p| self.content_anchor(p.line, p.column)),
+            mouse_start: self
+                .text_selection
+                .start
+                .as_ref()
+                .and_then(|p| self.content_anchor(p.line, p.column)),
+            mouse_end: self
+                .text_selection
+                .end
+                .as_ref()
+                .and_then(|p| self.content_anchor(p.line, p.column)),
+        });
+    }
+
+    fn content_anchor(&self, index: usize, column: usize) -> Option<ContentAnchor> {
+        let line = self.rendered_content.lines.get(index)?;
+        if let Some(segment) = &line.annotatable_segment {
+            return Some(ContentAnchor::Text {
+                segment: segment.clone(),
+                offset: super::comments::canonical_column(line, column)?,
+            });
+        }
+        if let Some(code) = &line.code_line {
+            let wrap = self.rendered_content.lines[..index]
+                .iter()
+                .rev()
+                .take_while(|l| {
+                    l.code_line
+                        .as_ref()
+                        .is_some_and(|c| c.block == code.block && c.line_index == code.line_index)
+                })
+                .count();
+            return Some(ContentAnchor::Code {
+                block: code.block.clone(),
+                line: code.line_index,
+                wrap,
+                column,
+            });
+        }
+        if let LineType::Comment { target, .. } = &line.line_type {
+            let (first, _) = self.source_lines_for_target(target)?;
+            let source = &self.rendered_content.lines[first];
+            if let Some(segment) = &source.annotatable_segment {
+                return Some(ContentAnchor::Text {
+                    segment: segment.clone(),
+                    offset: target.word_range().map_or(0, |(start, _)| start),
+                });
+            }
+            return self.content_anchor(first, source.content_column_start);
+        }
+        None
+    }
+
+    fn resolve_content_anchor(&self, anchor: &ContentAnchor) -> Option<SelectionPoint> {
+        match anchor {
+            ContentAnchor::Text { segment, offset } => {
+                let (index, line) =
+                    self.rendered_content
+                        .lines
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, l)| {
+                            l.annotatable_segment.as_ref() == Some(segment)
+                                && l.canonical_content_start
+                                    .is_some_and(|start| start <= *offset)
+                        })?;
+                Some(SelectionPoint {
+                    line: index,
+                    column: super::comments::display_column(line, *offset),
+                })
+            }
+            ContentAnchor::Code {
+                block,
+                line,
+                wrap,
+                column,
+            } => {
+                let (index, rendered) = self
+                    .rendered_content
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, l)| {
+                        l.code_line
+                            .as_ref()
+                            .is_some_and(|c| c.block == *block && c.line_index == *line)
+                    })
+                    .nth(*wrap)?;
+                Some(SelectionPoint {
+                    line: index,
+                    column: (*column).min(rendered.raw_text.chars().count()),
+                })
+            }
+        }
+    }
+
+    pub(super) fn restore_reflow_anchor(&mut self) {
+        let Some(anchor) = self.pending_reflow_anchor.take() else {
+            return;
+        };
+        if let Some(top) = anchor
+            .top
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+        {
+            self.scroll_offset = top.line;
+            self.dual.last_synced_scroll = usize::MAX;
+        }
+        if let Some(cursor) = anchor
+            .cursor
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+        {
+            self.normal_mode.cursor =
+                super::normal_mode::CursorPosition::new(cursor.line, cursor.column);
+        }
+        self.normal_mode.visual_anchor = anchor
+            .visual
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a))
+            .map(|p| super::normal_mode::CursorPosition::new(p.line, p.column));
+        self.text_selection.start = anchor
+            .mouse_start
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a));
+        self.text_selection.end = anchor
+            .mouse_end
+            .as_ref()
+            .and_then(|a| self.resolve_content_anchor(a));
+        if self.is_normal_mode_active() {
+            self.clamp_column_to_line_length();
+            self.ensure_cursor_visible();
+        }
+    }
+
     pub(super) fn dual_line_to_vrow_for(
         line: usize,
         page_height: usize,

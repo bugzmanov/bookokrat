@@ -86,8 +86,8 @@ at the bottom of this document for the syntax.
 │  Space+S       Toggle scroll / page render mode (PDF, Kitty only)           │
 │  Space+g       Jump to page number (PDF)                                    │
 │  Space+a       Open comments/annotations viewer                             │
-│  Space+i       Show / hide inline annotation bodies (EPUB, session only)    │
-│  Space+k       Peek at annotation under cursor (EPUB); Esc closes          │
+│  Space+i       Show / hide inline annotation bodies (EPUB)                  │
+│  Space+k       Peek at the annotation under the cursor (EPUB)               │
 │  < / >         Shrink / grow sidebar panel width                            │
 │  Space+< / >   Reset sidebar panel width to default                         │
 │  Ctrl+l        Force full screen redraw                                     │
@@ -177,6 +177,7 @@ at the bottom of this document for the syntax.
 │  Space+z       Copy debug transcript                                        │
 │  a             Add/edit comment on selection                                │
 │  dd            Delete comment or highlight under cursor                     │
+│  K             Peek at the annotation under the cursor (normal mode)        │
 │  ss            Toggle raw HTML view (EPUB/HTML only)                        │
 │  Enter         Open image popup (when cursor on image)                      │
 │  p             Toggle performance profiler overlay (`profile` builds)       │
@@ -282,6 +283,14 @@ Add notes directly to your books:
   [3] Type your note in the popup editor
   [4] Press Esc to save the comment
   [5] Press 'dd' when on a commented or highlighted passage to delete it
+
+Pages with many notes (vocabulary glosses, for example) can hide the bodies:
+
+  ▸ Space+i hides or shows inline note bodies; the underlines stay
+  ▸ The choice is saved (Settings > General > EPUB Annotations)
+  ▸ K in normal mode, or Space+k, peeks at the note under the cursor
+  ▸ With bodies hidden, clicking an underlined word peeks as well
+  ▸ Esc, or moving off the word, closes the peek
 
 Code block annotations:
 

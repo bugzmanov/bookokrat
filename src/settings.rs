@@ -691,6 +691,10 @@ fn app_managed_key_values(settings: &Settings) -> Vec<(String, String)> {
         ),
         ("justify_text".into(), format!("{}", settings.justify_text)),
         (
+            "show_inline_annotations".into(),
+            format!("{}", settings.show_inline_annotations),
+        ),
+        (
             "invert_scroll_direction".into(),
             format!("{}", settings.invert_scroll_direction),
         ),
@@ -784,8 +788,6 @@ fn generate_settings_yaml(settings: &Settings) -> String {
         BookSortOrder::ByType => "by_type",
     };
     content.push_str(&format!("justify_text: {}\n", settings.justify_text));
-    content
-        .push_str("# Initial EPUB annotation visibility; Space+i toggles it for this session.\n");
     content.push_str(&format!(
         "show_inline_annotations: {}\n",
         settings.show_inline_annotations
@@ -928,8 +930,9 @@ mod tests {
     use std::sync::{Mutex, OnceLock};
 
     #[test]
-    fn inline_annotation_default_and_session_override() {
-        let legacy: Settings = serde_yaml::from_str("justify_text: true\n").unwrap();
+    fn inline_annotations_default_on_and_persist() {
+        let legacy_file = "# my notes\njustify_text: true\n";
+        let legacy: Settings = serde_yaml::from_str(legacy_file).unwrap();
         assert!(legacy.show_inline_annotations);
         let configured: Settings =
             serde_yaml::from_str("show_inline_annotations: false\n").unwrap();
@@ -938,17 +941,15 @@ mod tests {
             generate_settings_yaml(&Settings::default()).contains("show_inline_annotations: true")
         );
 
-        let persistence = Arc::new(RecordingPersistence::default());
-        let settings = RuntimeSettings::with_persistence(configured, persistence.clone());
-        let mut reader = crate::markdown_text_reader::MarkdownTextReader::new_without_image_support(
-            settings.clone(),
-        );
-        assert!(!reader.show_inline_annotations());
-        assert!(reader.toggle_inline_annotations());
-        assert!(!settings.load().show_inline_annotations);
-        assert!(persistence.writes.lock().unwrap().is_empty());
-        settings.update(|s| s.justify_text = true);
-        assert!(!persistence.writes.lock().unwrap()[0].show_inline_annotations);
+        let hidden = Settings {
+            show_inline_annotations: false,
+            ..legacy
+        };
+        let updated = update_settings_values(legacy_file, &hidden);
+        assert!(updated.starts_with("# my notes\n"));
+        assert!(updated.contains("\nshow_inline_annotations: false\n"));
+        let reloaded: Settings = serde_yaml::from_str(&updated).unwrap();
+        assert!(!reloaded.show_inline_annotations);
     }
 
     #[derive(Default)]

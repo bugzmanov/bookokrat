@@ -392,7 +392,7 @@ impl Action {
             ToggleProfiling => "Toggle the performance profiler overlay",
             ToggleRawHtml => "Toggle raw HTML view (EPUB)",
             ToggleJustifyText => "Toggle justified text rendering (EPUB)",
-            ToggleInlineAnnotations => "Show or hide inline annotations for this session (EPUB)",
+            ToggleInlineAnnotations => "Show or hide inline annotation bodies (EPUB)",
             ToggleZenBorder => "Toggle the border/frame in zen mode",
             IncreaseMargin => "Increase content margin",
             DecreaseMargin => "Decrease content margin",

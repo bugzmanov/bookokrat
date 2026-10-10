@@ -237,8 +237,8 @@ pub struct MarkdownTextReader {
     /// Whether to justify text (distribute extra spaces between words)
     justify_text: bool,
     show_inline_annotations: bool,
-    annotation_peek: Option<String>,
-    pending_annotation_layout: Option<comments::AnnotationLayoutAnchor>,
+    annotation_peek: Option<comments::AnnotationPeek>,
+    pending_reflow_anchor: Option<navigation::ReflowAnchor>,
 
     /// Whether the terminal understands the colored-underline SGR. When false
     /// (Apple Terminal), annotation underlines drop the color and render as a
@@ -392,7 +392,7 @@ impl MarkdownTextReader {
             justify_text: false,
             show_inline_annotations,
             annotation_peek: None,
-            pending_annotation_layout: None,
+            pending_reflow_anchor: None,
             underline_color_enabled: true,
             images_disabled: false,
             dual: DualState::default(),
@@ -433,6 +433,11 @@ impl MarkdownTextReader {
 
     pub fn set_error_hud(&mut self, message: impl Into<String>) {
         self.set_hud_message(message, HudMode::Error, HUD_ERROR_DURATION);
+    }
+
+    #[doc(hidden)]
+    pub fn testing_hud_message(&self) -> Option<&str> {
+        self.hud_message.as_ref().map(|hud| hud.message.as_str())
     }
 
     pub fn update_hud_message(&mut self) -> bool {
@@ -650,7 +655,7 @@ impl MarkdownTextReader {
                 self.total_wrapped_lines = self.rendered_content.total_height;
                 self.last_width = width;
                 self.last_focus_state = is_focused;
-                self.restore_annotation_layout();
+                self.restore_reflow_anchor();
 
                 if let Some((node_index, char_offset)) = self.pending_node_restore.take() {
                     match char_offset {
@@ -853,8 +858,16 @@ impl MarkdownTextReader {
             .wrap(ratatui::widgets::Wrap { trim: false });
         frame.render_widget(paragraph, area);
 
-        self.validate_annotation_peek();
-        let suppress_images = suppress_images || self.annotation_peek.is_some();
+        if is_focused {
+            self.validate_annotation_peek();
+        } else {
+            self.close_annotation_peek();
+        }
+        // Elsewhere only images under the peek card are skipped; terminals that
+        // need the delete-all workaround get the whole-popup treatment.
+        let suppress_images = suppress_images
+            || (self.annotation_peek.is_some()
+                && terminal_overlay::kitty_delete_overlay_hack_enabled());
 
         // Clear overlay images when suppressing (e.g., popup is shown).
         if suppress_images {
@@ -904,6 +917,7 @@ impl MarkdownTextReader {
             let inner_text_paragraph =
                 Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
             frame.render_widget(inner_text_paragraph, left_rect);
+            self.layout_annotation_peek(left_rect, palette);
 
             let mut current_image_rects = HashMap::new();
             if !self.show_raw_html && !suppress_images {
@@ -926,6 +940,8 @@ impl MarkdownTextReader {
                 }
             }
         }
+
+        self.draw_annotation_peek(frame, palette);
     }
 
     /// The content rectangle inside the reader's border (single-column text
@@ -990,6 +1006,7 @@ impl MarkdownTextReader {
         }
 
         line_spans = self.apply_search_highlighting(line_idx, line_spans, palette);
+        line_spans = self.apply_peek_highlight(line_idx, line_spans, palette);
 
         // Apply yank highlight (before cursor so cursor shows on top)
         line_spans = self.apply_yank_highlight(line_idx, line_spans, palette);
@@ -1164,6 +1181,7 @@ impl MarkdownTextReader {
 
         self.dual.left_rows = left_rows;
         self.dual.right_rows = right_rows;
+        self.layout_annotation_peek(base_inner, palette);
 
         let mut current_image_rects = HashMap::new();
         if !self.show_raw_html && !suppress_images {
@@ -1323,6 +1341,12 @@ impl MarkdownTextReader {
                     width: image_display_width,
                     height: render_height,
                 };
+                if self
+                    .annotation_peek_rect()
+                    .is_some_and(|peek| peek.intersects(image_area))
+                {
+                    continue;
+                }
 
                 let y_offset_pixels = (image_top_clipped as f32 * font_size.1 as f32) as u32;
                 let image_widget = StatefulImage::new().resize(Resize::Viewport(ViewportOptions {
@@ -1428,6 +1452,13 @@ impl MarkdownTextReader {
                                 x_offset: 0, // No horizontal scrolling for now
                                 settled: self.images_render_settled(),
                             };
+
+                            if self
+                                .annotation_peek_rect()
+                                .is_some_and(|peek| peek.intersects(image_area))
+                            {
+                                continue;
+                            }
 
                             let image_widget =
                                 StatefulImage::new().resize(Resize::Viewport(viewport_options));
@@ -1765,7 +1796,7 @@ impl MarkdownTextReader {
 
     pub fn clear_content(&mut self) {
         self.annotation_peek = None;
-        self.pending_annotation_layout = None;
+        self.pending_reflow_anchor = None;
         self.scroll_offset = 0;
         self.text_selection.clear_selection();
 

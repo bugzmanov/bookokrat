@@ -4,31 +4,27 @@ use crate::comments::{BlockAddress, BookComments, Comment, CommentTarget};
 use crate::markdown_text_reader::text_selection::SelectionPoint;
 use crate::theme::Base16Palette;
 use crate::vendored::tui_textarea::{Input, Key, TextArea};
+use crate::widget::annotation_peek::{self, PeekNote};
 use log::{debug, warn};
+use ratatui::Frame;
+use ratatui::layout::Rect;
 use ratatui::style::Style as RatatuiStyle;
-use ratatui::text::Span;
+use ratatui::text::{Line, Span};
 use std::sync::{Arc, Mutex};
+use unicode_width::UnicodeWidthStr;
 
-#[derive(Clone)]
-enum ContentAnchor {
-    Text {
-        segment: AnnotatableSegment,
-        offset: usize,
-    },
-    Code {
-        block: BlockAddress,
-        line: usize,
-        wrap: usize,
-        column: usize,
-    },
+pub(super) struct AnnotationPeek {
+    comment_ids: Vec<String>,
+    targets: Vec<CommentTarget>,
+    point: SelectionPoint,
+    // Keyboard peeks track the normal-mode cursor; mouse peeks stay put.
+    follow_cursor: bool,
+    layout: Option<PeekLayout>,
 }
 
-pub(super) struct AnnotationLayoutAnchor {
-    top: Option<ContentAnchor>,
-    cursor: Option<ContentAnchor>,
-    visual: Option<ContentAnchor>,
-    mouse_start: Option<ContentAnchor>,
-    mouse_end: Option<ContentAnchor>,
+struct PeekLayout {
+    rect: Rect,
+    lines: Vec<Line<'static>>,
 }
 
 fn segment_target(
@@ -62,7 +58,18 @@ fn segment_target(
     CommentTarget::from_slices(vec![TextSlice::new_at(segment.block.clone(), subtarget)])
 }
 
-fn canonical_column(line: &RenderedLine, column: usize) -> Option<usize> {
+/// Inverse of [`canonical_column`]: the display column of a canonical offset.
+pub(super) fn display_column(line: &RenderedLine, canonical: usize) -> usize {
+    let relative = canonical.saturating_sub(line.canonical_content_start.unwrap_or(0));
+    let column = line.justify_map.as_ref().map_or(relative, |map| {
+        map.iter()
+            .position(|n| usize::from(*n) >= relative)
+            .unwrap_or(map.len())
+    });
+    (line.content_column_start + column).min(line.raw_text.chars().count())
+}
+
+pub(super) fn canonical_column(line: &RenderedLine, column: usize) -> Option<usize> {
     let start = line.canonical_content_start?;
     let relative = column.saturating_sub(line.content_column_start);
     let relative = line.justify_map.as_ref().map_or(relative, |map| {
@@ -194,165 +201,22 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn toggle_inline_annotations(&mut self) -> bool {
-        // Preserve source positions: hiding bodies changes every later buffer line.
-        if self.pending_annotation_layout.is_none() {
-            self.pending_annotation_layout = Some(AnnotationLayoutAnchor {
-                top: (self.scroll_offset..self.rendered_content.lines.len())
-                    .find_map(|line| self.content_anchor(line, 0)),
-                cursor: self
-                    .content_anchor(self.normal_mode.cursor.line, self.normal_mode.cursor.column),
-                visual: self
-                    .normal_mode
-                    .visual_anchor
-                    .as_ref()
-                    .and_then(|p| self.content_anchor(p.line, p.column)),
-                mouse_start: self
-                    .text_selection
-                    .start
-                    .as_ref()
-                    .and_then(|p| self.content_anchor(p.line, p.column)),
-                mouse_end: self
-                    .text_selection
-                    .end
-                    .as_ref()
-                    .and_then(|p| self.content_anchor(p.line, p.column)),
-            });
-        }
-        self.annotation_peek = None;
-        self.show_inline_annotations = !self.show_inline_annotations;
-        self.cache_generation += 1;
+        self.set_show_inline_annotations(!self.show_inline_annotations);
         self.show_inline_annotations
     }
 
-    fn content_anchor(&self, index: usize, column: usize) -> Option<ContentAnchor> {
-        let line = self.rendered_content.lines.get(index)?;
-        if let Some(segment) = &line.annotatable_segment {
-            return Some(ContentAnchor::Text {
-                segment: segment.clone(),
-                offset: canonical_column(line, column)?,
-            });
-        }
-        if let Some(code) = &line.code_line {
-            let wrap = self.rendered_content.lines[..index]
-                .iter()
-                .rev()
-                .take_while(|l| {
-                    l.code_line
-                        .as_ref()
-                        .is_some_and(|c| c.block == code.block && c.line_index == code.line_index)
-                })
-                .count();
-            return Some(ContentAnchor::Code {
-                block: code.block.clone(),
-                line: code.line_index,
-                wrap,
-                column,
-            });
-        }
-        if let LineType::Comment { target, .. } = &line.line_type {
-            let (first, _) = self.source_lines_for_target(target)?;
-            let source = &self.rendered_content.lines[first];
-            if let Some(segment) = &source.annotatable_segment {
-                return Some(ContentAnchor::Text {
-                    segment: segment.clone(),
-                    offset: target.word_range().map_or(0, |(start, _)| start),
-                });
-            }
-            return self.content_anchor(first, source.content_column_start);
-        }
-        None
-    }
-
-    fn resolve_content_anchor(&self, anchor: &ContentAnchor) -> Option<SelectionPoint> {
-        match anchor {
-            ContentAnchor::Text { segment, offset } => {
-                let (index, line) =
-                    self.rendered_content
-                        .lines
-                        .iter()
-                        .enumerate()
-                        .rev()
-                        .find(|(_, l)| {
-                            l.annotatable_segment.as_ref() == Some(segment)
-                                && l.canonical_content_start
-                                    .is_some_and(|start| start <= *offset)
-                        })?;
-                let relative = offset.saturating_sub(line.canonical_content_start?);
-                let column = line.justify_map.as_ref().map_or(relative, |map| {
-                    map.iter()
-                        .position(|n| usize::from(*n) >= relative)
-                        .unwrap_or(map.len())
-                });
-                Some(SelectionPoint {
-                    line: index,
-                    column: (line.content_column_start + column).min(line.raw_text.chars().count()),
-                })
-            }
-            ContentAnchor::Code {
-                block,
-                line,
-                wrap,
-                column,
-            } => {
-                let (index, rendered) = self
-                    .rendered_content
-                    .lines
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, l)| {
-                        l.code_line
-                            .as_ref()
-                            .is_some_and(|c| c.block == *block && c.line_index == *line)
-                    })
-                    .nth(*wrap)?;
-                Some(SelectionPoint {
-                    line: index,
-                    column: (*column).min(rendered.raw_text.chars().count()),
-                })
-            }
-        }
-    }
-
-    pub(super) fn restore_annotation_layout(&mut self) {
-        let Some(anchor) = self.pending_annotation_layout.take() else {
+    pub fn set_show_inline_annotations(&mut self, show: bool) {
+        if self.show_inline_annotations == show {
             return;
-        };
-        if let Some(top) = anchor
-            .top
-            .as_ref()
-            .and_then(|a| self.resolve_content_anchor(a))
-        {
-            self.scroll_offset = top.line;
-            self.dual.last_synced_scroll = usize::MAX;
         }
-        if let Some(cursor) = anchor
-            .cursor
-            .as_ref()
-            .and_then(|a| self.resolve_content_anchor(a))
-        {
-            self.normal_mode.cursor =
-                super::normal_mode::CursorPosition::new(cursor.line, cursor.column);
-        }
-        self.normal_mode.visual_anchor = anchor
-            .visual
-            .as_ref()
-            .and_then(|a| self.resolve_content_anchor(a))
-            .map(|p| super::normal_mode::CursorPosition::new(p.line, p.column));
-        self.text_selection.start = anchor
-            .mouse_start
-            .as_ref()
-            .and_then(|a| self.resolve_content_anchor(a));
-        self.text_selection.end = anchor
-            .mouse_end
-            .as_ref()
-            .and_then(|a| self.resolve_content_anchor(a));
-        if self.is_normal_mode_active() {
-            self.clamp_column_to_line_length();
-            self.ensure_cursor_visible();
-        }
+        // Showing or hiding note bodies inserts/removes buffer lines.
+        self.capture_reflow_anchor();
+        self.annotation_peek = None;
+        self.show_inline_annotations = show;
+        self.cache_generation += 1;
     }
 
-    fn source_lines_for_target(&self, target: &CommentTarget) -> Option<(usize, usize)> {
+    pub(super) fn source_lines_for_target(&self, target: &CommentTarget) -> Option<(usize, usize)> {
         let mut matches = self
             .rendered_content
             .lines
@@ -420,12 +284,48 @@ impl crate::markdown_text_reader::MarkdownTextReader {
         }
     }
 
+    fn comments_at(&self, point: &SelectionPoint) -> (Vec<String>, Vec<CommentTarget>) {
+        self.point_target(point)
+            .map(|target| self.comments_for_target(&target))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|comment| (comment.id, comment.target))
+            .unzip()
+    }
+
     pub fn open_annotation_peek(&mut self) -> bool {
-        self.annotation_peek = self
-            .peek_point()
-            .and_then(|p| self.point_target(&p))
-            .and_then(|t| self.comments_for_target(&t).first().map(|c| c.id.clone()));
+        match self.peek_point() {
+            Some(point) => {
+                let follow_cursor = self.is_normal_mode_active();
+                self.open_annotation_peek_at(point, follow_cursor)
+            }
+            None => {
+                self.annotation_peek = None;
+                false
+            }
+        }
+    }
+
+    pub(super) fn open_annotation_peek_at(
+        &mut self,
+        point: SelectionPoint,
+        follow_cursor: bool,
+    ) -> bool {
+        let (comment_ids, targets) = self.comments_at(&point);
+        self.annotation_peek = (!comment_ids.is_empty()).then_some(AnnotationPeek {
+            comment_ids,
+            targets,
+            point,
+            follow_cursor,
+            layout: None,
+        });
         self.annotation_peek.is_some()
+    }
+
+    /// Closes an open peek, otherwise opens one at the cursor. Returns false
+    /// only when there was nothing to open.
+    pub fn toggle_annotation_peek(&mut self) -> bool {
+        self.close_annotation_peek() || self.open_annotation_peek()
     }
 
     pub fn close_annotation_peek(&mut self) -> bool {
@@ -437,87 +337,279 @@ impl crate::markdown_text_reader::MarkdownTextReader {
     }
 
     pub fn validate_annotation_peek(&mut self) {
-        if self.annotation_peek.is_none() {
+        let Some(peek) = self.annotation_peek.as_ref() else {
             return;
-        }
-        let valid = !self.show_raw_html
-            && !self.comment_input.is_active()
-            && self
-                .peek_point()
-                .and_then(|p| self.point_target(&p))
-                .is_some_and(|t| {
-                    self.comments_for_target(&t)
-                        .iter()
-                        .any(|c| Some(&c.id) == self.annotation_peek.as_ref())
-                });
-        if !valid {
+        };
+        let point = if !peek.follow_cursor {
+            Some(peek.point.clone())
+        } else if self.is_normal_mode_active() {
+            Some(SelectionPoint {
+                line: self.normal_mode.cursor.line,
+                column: self.normal_mode.cursor.column,
+            })
+        } else {
+            None
+        };
+        let blocked = self.show_raw_html
+            || self.comment_input.is_active()
+            || self.search_state.mode == crate::search::SearchMode::InputMode;
+        let Some(point) = point.filter(|_| !blocked) else {
+            self.annotation_peek = None;
+            return;
+        };
+        let (comment_ids, targets) = self.comments_at(&point);
+        let still_on_note = comment_ids.iter().any(|id| peek.comment_ids.contains(id));
+        if still_on_note {
+            if let Some(peek) = self.annotation_peek.as_mut() {
+                peek.point = point;
+                peek.comment_ids = comment_ids;
+                peek.targets = targets;
+            }
+        } else {
             self.annotation_peek = None;
         }
     }
 
-    pub fn render_annotation_peek(&mut self, frame: &mut ratatui::Frame) {
-        self.validate_annotation_peek();
-        let Some(id) = self.annotation_peek.as_ref() else {
-            return;
+    /// Display-column ranges on `line_idx` covered by the peeked notes.
+    fn peek_ranges_on_line(&self, line_idx: usize) -> Vec<(usize, usize)> {
+        let Some(peek) = self.annotation_peek.as_ref() else {
+            return Vec::new();
         };
-        let Some(point) = self.peek_point() else {
-            return;
+        let Some(line) = self.rendered_content.lines.get(line_idx) else {
+            return Vec::new();
         };
-        let Some(area) = self.last_content_area else {
-            return;
+        let Some(line_target) = line_target(line) else {
+            return Vec::new();
         };
+        let line_end = line.raw_text.chars().count();
+        peek.targets
+            .iter()
+            .flat_map(|target| target.slices())
+            .filter(|slice| {
+                CommentTarget::from_slices(vec![(*slice).clone()]).overlaps(&line_target)
+            })
+            .filter_map(|slice| {
+                if line.code_line.is_some() {
+                    return Some((line.content_column_start.min(line_end), line_end));
+                }
+                let start = line.canonical_content_start?;
+                let end = start + canonical_content_len(line, line.content_column_start);
+                let (from, to) = slice.subtarget.word_range().unwrap_or((0, usize::MAX));
+                let (from, to) = (from.max(start), to.min(end));
+                (from < to).then(|| (display_column(line, from), display_column(line, to)))
+            })
+            .collect()
+    }
+
+    /// Recolors the text of the peeked notes so the card visibly belongs to it.
+    pub(super) fn apply_peek_highlight(
+        &self,
+        line_idx: usize,
+        spans: Vec<Span<'static>>,
+        palette: &Base16Palette,
+    ) -> Vec<Span<'static>> {
+        let ranges = self.peek_ranges_on_line(line_idx);
+        if ranges.is_empty() {
+            return spans;
+        }
+        let highlighted = |column: usize| ranges.iter().any(|(s, e)| (*s..*e).contains(&column));
+        let mut result = Vec::with_capacity(spans.len());
+        let mut column = 0;
+        for span in spans {
+            let chars: Vec<char> = span.content.chars().collect();
+            let mut start = 0;
+            while start < chars.len() {
+                let on = highlighted(column + start);
+                let mut end = start + 1;
+                while end < chars.len() && highlighted(column + end) == on {
+                    end += 1;
+                }
+                let style = if on {
+                    span.style.fg(palette.base_0e)
+                } else {
+                    span.style
+                };
+                result.push(Span::styled(
+                    chars[start..end].iter().collect::<String>(),
+                    style,
+                ));
+                start = end;
+            }
+            column += chars.len();
+        }
+        result
+    }
+
+    pub(super) fn annotation_peek_rect(&self) -> Option<Rect> {
+        self.annotation_peek
+            .as_ref()
+            .and_then(|peek| peek.layout.as_ref())
+            .map(|layout| annotation_peek::with_gutter(layout.rect))
+    }
+
+    /// Screen column rect and row of a buffer line, if it is visible.
+    fn visible_line_position(&self, line: usize) -> Option<(Rect, u16)> {
+        let left = self.last_inner_text_area?;
+        let row_in = |rows: &[Option<usize>]| rows.iter().position(|row| *row == Some(line));
+        if self.dual.active {
+            if let Some(row) = row_in(&self.dual.left_rows) {
+                return Some((left, row as u16));
+            }
+            let right = self.dual.right_column?;
+            return row_in(&self.dual.right_rows).map(|row| (right, row as u16));
+        }
+        line.checked_sub(self.scroll_offset)
+            .filter(|row| *row < left.height as usize)
+            .map(|row| (left, row as u16))
+    }
+
+    fn screen_rows_show_image(&self, rect: Rect) -> bool {
         let Some(left) = self.last_inner_text_area else {
+            return false;
+        };
+        let overlaps = |column: Rect| column.x < rect.right() && rect.x < column.right();
+        (rect.y..rect.bottom()).any(|y| {
+            let mut lines = Vec::with_capacity(2);
+            if self.dual.active {
+                let row = y.saturating_sub(left.y) as usize;
+                if overlaps(left) {
+                    lines.push(self.dual.left_rows.get(row).copied().flatten());
+                }
+                if self.dual.right_column.is_some_and(overlaps) {
+                    lines.push(self.dual.right_rows.get(row).copied().flatten());
+                }
+            } else if y >= left.y {
+                lines.push(Some(self.scroll_offset + (y - left.y) as usize));
+            }
+            lines
+                .into_iter()
+                .flatten()
+                .any(|line| self.is_image_line(line))
+        })
+    }
+
+    /// Places the peek card for this frame. Runs before inline images are
+    /// drawn so images under the card can be skipped.
+    pub(super) fn layout_annotation_peek(&mut self, area: Rect, palette: &Base16Palette) {
+        let Some(peek) = self.annotation_peek.as_ref() else {
             return;
         };
-        let position = if self.dual.active {
-            self.dual
-                .left_rows
+        let point = peek.point.clone();
+        let Some((column, row)) = self.visible_line_position(point.line) else {
+            self.annotation_peek = None;
+            return;
+        };
+        let notes: Vec<PeekNote> = self.book_comments.as_ref().map_or_else(Vec::new, |book| {
+            let Ok(book) = book.lock() else {
+                return Vec::new();
+            };
+            peek.comment_ids
                 .iter()
-                .position(|line| *line == Some(point.line))
-                .map(|row| (left, row))
-                .or_else(|| {
-                    self.dual.right_column.and_then(|right| {
-                        self.dual
-                            .right_rows
-                            .iter()
-                            .position(|line| *line == Some(point.line))
-                            .map(|row| (right, row))
-                    })
+                .filter_map(|id| book.get_comment_by_id(id))
+                .map(|comment| PeekNote {
+                    updated_at: comment.updated_at.format("%m-%d-%y %H:%M").to_string(),
+                    content: comment.content.clone(),
                 })
-        } else {
-            point
-                .line
-                .checked_sub(self.scroll_offset)
-                .filter(|row| *row < left.height as usize)
-                .map(|row| (left, row))
-        };
-        let Some((column, row)) = position else {
-            self.annotation_peek = None;
-            return;
-        };
-        let comment = self.book_comments.as_ref().and_then(|book| {
-            book.lock()
-                .ok()
-                .and_then(|book| book.get_comment_by_id(id).cloned())
+                .collect()
         });
-        let Some(comment) = comment else {
+        if notes.is_empty() {
             self.annotation_peek = None;
             return;
+        }
+
+        // Align the card with where the annotation starts on this line, and
+        // keep the whole annotated passage uncovered.
+        let anchor_column = self
+            .peek_ranges_on_line(point.line)
+            .iter()
+            .map(|(start, _)| *start)
+            .min()
+            .unwrap_or(point.column);
+        let anchor_x = self
+            .rendered_content
+            .lines
+            .get(point.line)
+            .map_or(column.x, |line| {
+                let before: String = line.raw_text.chars().take(anchor_column).collect();
+                column.x + UnicodeWidthStr::width(before.as_str()) as u16
+            });
+        let passage_row = |line: usize| {
+            self.visible_line_position(line)
+                .filter(|(rect, _)| *rect == column)
+                .map(|(_, row)| column.y + row)
         };
-        let text = &self.rendered_content.lines[point.line].raw_text;
-        let before: String = text.chars().take(point.column).collect();
-        let x = column
-            .x
-            .saturating_add(unicode_width::UnicodeWidthStr::width(before.as_str()) as u16);
-        let title = format!("// {}", comment.updated_at.format("%m-%d-%y %H:%M"));
-        crate::widget::annotation_peek::render(
-            frame,
-            area,
-            x,
-            column.y + row as u16,
-            &title,
-            &comment.content,
+        const MAX_PASSAGE_SCAN: usize = 64;
+        let first_line = (point.line.saturating_sub(MAX_PASSAGE_SCAN)..point.line)
+            .rev()
+            .take_while(|line| !self.peek_ranges_on_line(*line).is_empty())
+            .last()
+            .unwrap_or(point.line);
+        let last_line = (point.line + 1..point.line + MAX_PASSAGE_SCAN)
+            .take_while(|line| !self.peek_ranges_on_line(*line).is_empty())
+            .last()
+            .unwrap_or(point.line);
+        let anchor_y = column.y + row;
+        let top_y = passage_row(first_line).unwrap_or(anchor_y);
+        let bottom_y = passage_row(last_line).unwrap_or(anchor_y);
+
+        // The text rect runs one column into the right border; keep clear of it.
+        let area = Rect {
+            width: area.width.saturating_sub(1),
+            ..area
+        };
+        let width = annotation_peek::width_for(&notes, area.width.saturating_sub(2));
+        let lines = annotation_peek::card_lines(&notes, width, palette);
+        let wanted = annotation_peek::height_for(lines.len());
+        let space_below = area.bottom().saturating_sub(bottom_y + 1);
+        let space_above = top_y.saturating_sub(area.y);
+        // The accent bar and padding sit left of the text column.
+        let x = anchor_x.saturating_sub(annotation_peek::TEXT_INDENT).clamp(
+            area.x + 1,
+            area.right().saturating_sub(width + 1).max(area.x + 1),
         );
+        let below = |height: u16| Rect::new(x, bottom_y + 1, width, height.min(space_below));
+        let above = |height: u16| {
+            let height = height.min(space_above);
+            Rect::new(x, top_y - height, width, height)
+        };
+        let clear_of_images =
+            |rect: Rect| !self.screen_rows_show_image(annotation_peek::with_gutter(rect));
+        let min_height = annotation_peek::MIN_HEIGHT.min(wanted);
+        let (roomier, tighter) = if space_below >= space_above {
+            (below(wanted), above(wanted))
+        } else {
+            (above(wanted), below(wanted))
+        };
+        // Prefer the whole note; then a shorter card on the roomier side that
+        // leaves images visible; only then cover an image.
+        let rect = [
+            Some(below(wanted)).filter(|r| r.height == wanted && clear_of_images(*r)),
+            Some(above(wanted)).filter(|r| r.height == wanted && clear_of_images(*r)),
+            Some(roomier).filter(|r| r.height >= min_height && clear_of_images(*r)),
+            Some(tighter).filter(|r| r.height >= min_height && clear_of_images(*r)),
+            Some(below(wanted)).filter(|r| r.height == wanted),
+            Some(above(wanted)).filter(|r| r.height == wanted),
+        ]
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap_or(roomier);
+
+        if let Some(peek) = self.annotation_peek.as_mut() {
+            peek.layout = Some(PeekLayout { rect, lines });
+        }
+    }
+
+    pub(super) fn draw_annotation_peek(&mut self, frame: &mut Frame, palette: &Base16Palette) {
+        let Some(layout) = self
+            .annotation_peek
+            .as_mut()
+            .and_then(|peek| peek.layout.take())
+        else {
+            return;
+        };
+        let page_background = self.theme_background();
+        annotation_peek::render(frame, layout.rect, layout.lines, palette, page_background);
     }
 
     pub fn set_book_comments(&mut self, comments: Arc<Mutex<BookComments>>) {
