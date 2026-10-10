@@ -1861,6 +1861,11 @@ impl PdfReaderState {
             .map(|size| ((f32::from(size.height) * zoom_factor).ceil() as u16).max(1))
             .unwrap_or(0);
         let has_right = right_dest_w > 0 && right_dest_h > 0;
+        // Normalize the stored view only when the strip is complete. If the
+        // right page's image is transiently missing (e.g. dropped while its
+        // enhanced re-render is in flight), the degraded single-page strip
+        // would clamp away a valid pan/scroll.
+        let strip_complete = has_right || right_page >= rendered.len();
         let gap = if has_right {
             DUAL_PAGE_GAP_CELLS.min(img_area.width.saturating_sub(1))
         } else {
@@ -1869,7 +1874,9 @@ impl PdfReaderState {
         let content_dest_h = left_dest_h.max(right_dest_h);
         let max_scroll = content_dest_h.saturating_sub(img_area.height);
         let scroll_offset = (zoom.global_scroll_offset as u16).min(max_scroll);
-        zoom.global_scroll_offset = u32::from(scroll_offset);
+        if strip_complete {
+            zoom.global_scroll_offset = u32::from(scroll_offset);
+        }
         let group_width = if has_right {
             left_dest_w.saturating_add(gap).saturating_add(right_dest_w)
         } else {
@@ -1897,11 +1904,15 @@ impl PdfReaderState {
         };
         let viewport_source_w = (f32::from(img_area.width) / zoom_factor).ceil() as u16;
         let max_pan = total_source_w.saturating_sub(viewport_source_w);
-        zoom.cell_pan_from_left = zoom.cell_pan_from_left.min(max_pan);
-        if group_fits {
-            zoom.cell_pan_from_left = 0;
+        let pan = if group_fits {
+            0
+        } else {
+            zoom.cell_pan_from_left.min(max_pan)
+        };
+        if strip_complete {
+            zoom.cell_pan_from_left = pan;
         }
-        let vis_start = zoom.cell_pan_from_left;
+        let vis_start = pan;
         let vis_end = vis_start.saturating_add(viewport_source_w);
 
         let display_y_offset = if content_dest_h < img_area.height {

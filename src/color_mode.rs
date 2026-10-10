@@ -3,7 +3,9 @@ use ratatui::style::Color;
 
 /// Detect if the terminal supports true color (24-bit RGB)
 pub fn supports_true_color() -> bool {
-    terminal::supports_true_color()
+    // Unit tests share one process and must not depend on the host's COLORTERM
+    // (unset in sandboxed builds like nix, and set mid-run by test_utils).
+    cfg!(test) || terminal::supports_true_color()
 }
 
 /// Convert RGB color to nearest 256-color palette index
